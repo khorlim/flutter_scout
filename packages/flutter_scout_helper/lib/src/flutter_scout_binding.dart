@@ -842,6 +842,7 @@ class FlutterScoutRuntime {
     binding.handlePointerEvent(
       PointerAddedEvent(
         pointer: pointer,
+        device: pointer,
         position: point,
         kind: PointerDeviceKind.mouse,
         viewId: viewId,
@@ -850,6 +851,7 @@ class FlutterScoutRuntime {
     binding.handlePointerEvent(
       PointerDownEvent(
         pointer: pointer,
+        device: pointer,
         position: point,
         kind: PointerDeviceKind.mouse,
         buttons: kPrimaryMouseButton,
@@ -860,6 +862,7 @@ class FlutterScoutRuntime {
     binding.handlePointerEvent(
       PointerUpEvent(
         pointer: pointer,
+        device: pointer,
         position: point,
         kind: PointerDeviceKind.mouse,
         viewId: viewId,
@@ -868,6 +871,7 @@ class FlutterScoutRuntime {
     binding.handlePointerEvent(
       PointerRemovedEvent(
         pointer: pointer,
+        device: pointer,
         position: point,
         kind: PointerDeviceKind.mouse,
         viewId: viewId,
@@ -882,6 +886,7 @@ class FlutterScoutRuntime {
     binding.handlePointerEvent(
       PointerAddedEvent(
         pointer: pointer,
+        device: pointer,
         position: start,
         kind: PointerDeviceKind.mouse,
         viewId: viewId,
@@ -890,6 +895,7 @@ class FlutterScoutRuntime {
     binding.handlePointerEvent(
       PointerDownEvent(
         pointer: pointer,
+        device: pointer,
         position: start,
         kind: PointerDeviceKind.mouse,
         buttons: kPrimaryMouseButton,
@@ -902,6 +908,7 @@ class FlutterScoutRuntime {
       binding.handlePointerEvent(
         PointerMoveEvent(
           pointer: pointer,
+          device: pointer,
           position: start + delta * (i / steps),
           delta: delta / steps.toDouble(),
           kind: PointerDeviceKind.mouse,
@@ -914,6 +921,7 @@ class FlutterScoutRuntime {
     binding.handlePointerEvent(
       PointerUpEvent(
         pointer: pointer,
+        device: pointer,
         position: start + delta,
         kind: PointerDeviceKind.mouse,
         viewId: viewId,
@@ -922,6 +930,7 @@ class FlutterScoutRuntime {
     binding.handlePointerEvent(
       PointerRemovedEvent(
         pointer: pointer,
+        device: pointer,
         position: start + delta,
         kind: PointerDeviceKind.mouse,
         viewId: viewId,
