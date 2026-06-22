@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flutter Scout"
+  short_description: "Use Flutter Scout to verify Flutter apps"
+  default_prompt: "Use $flutter-scout to verify my Flutter feature on a simulator."
