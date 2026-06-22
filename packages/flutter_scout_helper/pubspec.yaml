@@ -1,6 +1,7 @@
 name: flutter_scout_helper
 description: Flutter helper bridge that gives Flutter Scout VM-service eyes and hands inside debug apps.
 version: 0.0.1
+repository: https://github.com/khorlim/flutter_scout
 
 environment:
   sdk: ^3.12.2
