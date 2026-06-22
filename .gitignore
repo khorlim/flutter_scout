@@ -1,0 +1,24 @@
+# System files
+.DS_Store
+*.swp
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+
+# Dart and Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+coverage/
+**/doc/api/
+
+# Flutter Scout runtime sessions
+.flutter_scout/
+
+# Logs and local output
+*.log
+*.tmp
