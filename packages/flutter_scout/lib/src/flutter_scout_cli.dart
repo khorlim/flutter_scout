@@ -98,7 +98,7 @@ class FlutterScoutCli {
     final flutterArgs = <String>[
       'run',
       '-d',
-      device,
+      resolvedDevice.id,
       if (parsed.option('target') != null) ...[
         '--target',
         parsed.option('target')!,
@@ -363,9 +363,19 @@ class FlutterScoutCli {
         : await _pidForListeningVmPort(vmUri);
     var stopped = false;
     var processExisted = false;
+    String? pidKillSkippedReason;
     if (pid != null) {
-      processExisted = Process.killPid(pid);
-      stopped = processExisted;
+      final trustedPid =
+          listenerPid == pid || await _looksLikeScoutFlutterRun(pid);
+      if (trustedPid) {
+        processExisted = Process.killPid(pid);
+        stopped = processExisted;
+      } else {
+        processExisted = await _processExists(pid);
+        pidKillSkippedReason = processExisted
+            ? 'pid_identity_mismatch'
+            : 'process_not_found';
+      }
     }
     var listenerExisted = false;
     if (listenerPid != null && listenerPid != pid) {
@@ -376,6 +386,7 @@ class FlutterScoutCli {
     if (parsed.flag('clear-session')) {
       _clearVmUriFile();
       _deleteFileIfExists(_deviceFile);
+      _deleteFileIfExists(_sessionFile);
     }
     stdout.writeln(
       jsonEncode({
@@ -385,6 +396,7 @@ class FlutterScoutCli {
         'processExisted': processExisted,
         'vmServiceListenerExisted': listenerExisted,
         'stopped': stopped,
+        'pidKillSkippedReason': ?pidKillSkippedReason,
         'pidFileCleared': true,
         if (parsed.flag('clear-session')) 'sessionCleared': true,
       }),
@@ -608,6 +620,7 @@ class FlutterScoutCli {
     final parsed = parser.parse(args);
     return _callAndPrint(
       'ext.flutter_scout.back',
+      record: const {'cmd': 'back'},
       compact: !parsed.flag('verbose'),
     );
   }
@@ -853,6 +866,7 @@ class FlutterScoutCli {
         }),
         'scroll' => await _call('ext.flutter_scout.scroll', _stringMap(item)),
         'swipe' => await _call('ext.flutter_scout.swipe', _stringMap(item)),
+        'back' => await _call('ext.flutter_scout.back'),
         'deeplink' => await _replayDeeplink(item['url']?.toString()),
         _ => {'ok': false, 'error': 'unknown replay cmd: $cmd'},
       };
@@ -1467,6 +1481,36 @@ class FlutterScoutCli {
       if (result.exitCode != 0) return null;
       final firstLine = (result.stdout as String).trim().split('\n').first;
       return int.tryParse(firstLine);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _looksLikeScoutFlutterRun(int pid) async {
+    final command = await _processCommand(pid);
+    if (command == null) return false;
+    final lower = command.toLowerCase();
+    final hasFlutterTool =
+        lower.contains('flutter_tools') ||
+        RegExp(r'(^|[/\s])flutter(\s|$)').hasMatch(lower);
+    final hasRunCommand = RegExp(r'(^|\s)run(\s|$)').hasMatch(lower);
+    return hasFlutterTool && hasRunCommand;
+  }
+
+  Future<bool> _processExists(int pid) async {
+    return await _processCommand(pid) != null;
+  }
+
+  Future<String?> _processCommand(int pid) async {
+    try {
+      final result = await Process.run('ps', ['-p', '$pid', '-o', 'command='])
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => ProcessResult(0, 1, '', ''),
+          );
+      if (result.exitCode != 0) return null;
+      final command = (result.stdout as String).trim();
+      return command.isEmpty ? null : command;
     } catch (_) {
       return null;
     }

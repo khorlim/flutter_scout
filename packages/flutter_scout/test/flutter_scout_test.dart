@@ -32,6 +32,38 @@ void main() {
     });
   });
 
+  test('stop skips unrelated stored pid', () async {
+    await _withTempCwd(() async {
+      Directory('.flutter_scout').createSync();
+      final pidFile = File('.flutter_scout/flutter.pid')
+        ..writeAsStringSync(pid.toString());
+
+      final exitCode = await FlutterScoutCli().run(['stop']);
+
+      expect(exitCode, 0);
+      expect(pidFile.existsSync(), isFalse);
+    });
+  });
+
+  test('stop clear-session removes session files', () async {
+    await _withTempCwd(() async {
+      Directory('.flutter_scout').createSync();
+      final vmFile = File('.flutter_scout/vm_uri.txt')
+        ..writeAsStringSync('ws://127.0.0.1:1/test/ws');
+      final deviceFile = File('.flutter_scout/device.txt')
+        ..writeAsStringSync('test-device');
+      final sessionFile = File('.flutter_scout/session.json')
+        ..writeAsStringSync('[]');
+
+      final exitCode = await FlutterScoutCli().run(['stop', '--clear-session']);
+
+      expect(exitCode, 0);
+      expect(vmFile.existsSync(), isFalse);
+      expect(deviceFile.existsSync(), isFalse);
+      expect(sessionFile.existsSync(), isFalse);
+    });
+  });
+
   test('doctor succeeds without a running session', () async {
     await _withTempCwd(() async {
       final exitCode = await FlutterScoutCli().run(['doctor']);
