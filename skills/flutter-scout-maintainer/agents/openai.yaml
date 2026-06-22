@@ -1,4 +1,0 @@
-interface:
-  display_name: "Flutter Scout Maintainer"
-  short_description: "Modify and debug Flutter Scout itself"
-  default_prompt: "Use $flutter-scout-maintainer to add a Flutter Scout feature or fix a bug."
