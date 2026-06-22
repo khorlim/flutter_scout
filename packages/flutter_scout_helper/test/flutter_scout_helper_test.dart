@@ -6,4 +6,9 @@ void main() {
     FlutterScoutBinding.ensureInitialized();
     FlutterScoutBinding.ensureInitialized();
   });
+
+  test('ensureRegistered can be called more than once', () {
+    FlutterScoutHelper.ensureRegistered();
+    FlutterScoutHelper.ensureRegistered();
+  });
 }

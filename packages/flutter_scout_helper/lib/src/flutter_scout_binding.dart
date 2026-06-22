@@ -10,13 +10,21 @@ import 'package:flutter/material.dart';
 class FlutterScoutBinding {
   FlutterScoutBinding._();
 
-  static bool _initialized = false;
-  static final FlutterScoutRuntime _runtime = FlutterScoutRuntime();
-
   static void ensureInitialized() {
     WidgetsFlutterBinding.ensureInitialized();
-    if (_initialized) return;
-    _initialized = true;
+    FlutterScoutHelper.ensureRegistered();
+  }
+}
+
+class FlutterScoutHelper {
+  FlutterScoutHelper._();
+
+  static bool _registered = false;
+  static final FlutterScoutRuntime _runtime = FlutterScoutRuntime();
+
+  static void ensureRegistered() {
+    if (_registered) return;
+    _registered = true;
     _runtime.install();
   }
 }

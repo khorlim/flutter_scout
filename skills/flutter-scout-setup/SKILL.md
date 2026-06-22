@@ -46,6 +46,18 @@ void main() {
 }
 ```
 
+If the app already uses another debug binding, keep it and register Scout after it:
+
+```dart
+import 'package:flutter_scout_helper/flutter_scout_helper.dart';
+
+void main() {
+  ExistingDebugBinding.ensureInitialized();
+  FlutterScoutHelper.ensureRegistered();
+  runApp(const MyApp());
+}
+```
+
 Do not add screen wrappers, action wrappers, or test-only widgets.
 
 ## Install Or Run The CLI
@@ -110,19 +122,26 @@ flutter-scout launch --device <simulator-id> --project <flutter-app-path>
 Confirm the bridge:
 
 ```bash
+flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
 flutter-scout status
 flutter-scout inspect
 ```
 
 Successful setup means `status` reports running and `inspect` returns visible text, interactables, fields, and no setup error.
 
+`launch` and `attach` also report `ready`. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
+
 ## Troubleshooting
 
 - `not_attached`: run `attach` or `launch` first.
 - `vm_service_uri_not_found`: run the app in debug/profile mode, copy the VM service URL, then use `attach --debug-url`.
+- `helper_extension_missing`: the VM service is reachable but Flutter Scout was not registered; add the helper initializer shown in `expected`.
+- `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable; run `attach` or `launch` again.
+- `device_not_found`: pass an exact device ID or name from `flutter devices`.
+- `flutter_scout_helper_not_registered`: add `flutter_scout_helper` and call `FlutterScoutBinding.ensureInitialized()` before `runApp`, or `FlutterScoutHelper.ensureRegistered()` after an existing debug binding.
 - `flutter-scout: command not found`: use `dart run bin/flutter_scout.dart` from the CLI package or fix pub global `PATH`.
 - No Flutter Scout extensions: confirm `FlutterScoutBinding.ensureInitialized()` runs before `runApp`.
-- Stale connection: delete `.flutter_scout/vm_uri.txt`, attach again, then run `status`.
+- Scout-owned run still active: run `flutter-scout stop --clear-session`.
 - Simulator screenshot/crop failures: confirm `xcrun simctl` can see the booted simulator.
 
 After setup works, use `$flutter-scout` for the normal inspect/act/replay workflow.

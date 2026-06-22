@@ -24,6 +24,30 @@ void main() {
     });
   });
 
+  test('stop succeeds without a stored pid', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run(['stop']);
+
+      expect(exitCode, 0);
+    });
+  });
+
+  test('doctor succeeds without a running session', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run(['doctor']);
+
+      expect(exitCode, 0);
+    });
+  });
+
+  test('logs summary succeeds without a log file', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run(['logs', '--summary']);
+
+      expect(exitCode, 0);
+    });
+  });
+
   test('help exits successfully', () async {
     final exitCode = await FlutterScoutCli().run(['--help']);
 
