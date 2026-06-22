@@ -248,16 +248,36 @@ class FlutterScoutCli {
   }
 
   Future<int> _tap(List<String> args) async {
-    if (args.isEmpty) {
+    final parser = ArgParser()
+      ..addOption('x')
+      ..addOption('y')
+      ..addOption('wait-ms', defaultsTo: '1500');
+    final parsed = parser.parse(args);
+    final target = parsed.rest.isEmpty ? null : parsed.rest.first;
+    final x = parsed.option('x');
+    final y = parsed.option('y');
+    if ((target == null || target.isEmpty) && (x == null || y == null)) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout tap <target>',
+        'Usage: flutter-scout tap <target> or flutter-scout tap --x <x> --y <y>',
       );
+    }
+    final params = <String, String>{
+      'waitMs': parsed.option('wait-ms') ?? '1500',
+    };
+    if (target != null && target.isNotEmpty) {
+      params['target'] = target;
+    }
+    if (x != null) {
+      params['x'] = x;
+    }
+    if (y != null) {
+      params['y'] = y;
     }
     return _callAndPrint(
       'ext.flutter_scout.tap',
-      params: {'target': args.first},
-      record: {'cmd': 'tap', 'target': args.first},
+      params: params,
+      record: {'cmd': 'tap', ...params},
     );
   }
 
@@ -587,9 +607,7 @@ class FlutterScoutCli {
       if (item is! Map<String, dynamic>) continue;
       final cmd = item['cmd'];
       final result = switch (cmd) {
-        'tap' => await _call('ext.flutter_scout.tap', {
-          'target': item['target'].toString(),
-        }),
+        'tap' => await _call('ext.flutter_scout.tap', _stringMap(item)),
         'input' => await _call('ext.flutter_scout.input', {
           'target': item['target'].toString(),
           'value': item['value'].toString(),
@@ -893,7 +911,7 @@ Usage:
   flutter-scout launch --device <simulator-id> [--project <path>]
   flutter-scout status
   flutter-scout inspect
-  flutter-scout tap <target>
+  flutter-scout tap <target> | --x <x> --y <y>
   flutter-scout long-press <target>
   flutter-scout input [--target <field>] <value>
   flutter-scout fill --json <object>

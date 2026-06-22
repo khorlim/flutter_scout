@@ -23,6 +23,7 @@ class FlutterScoutBinding {
 
 class FlutterScoutRuntime {
   final List<Map<String, Object?>> _errors = <Map<String, Object?>>[];
+  int _nextSyntheticPointer = 1000000;
   FlutterExceptionHandler? _previousFlutterError;
   ui.ErrorCallback? _previousPlatformError;
 
@@ -144,10 +145,11 @@ class FlutterScoutRuntime {
       }
 
       await _dispatchTap(point);
-      await _waitStable();
+      final stable = await _waitStableForAction(params);
       final after = _snapshot();
       return _ok({
         'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
+        'stable': stable,
         'result': _changed(before, after) ? 'changed' : 'unchanged',
         'target': node?.toJson(),
         'before': before.summaryJson(),
@@ -173,10 +175,11 @@ class FlutterScoutRuntime {
         return _fail('field_not_found', 'No editable field matched `$target`.');
       }
       _setEditableText(editable, value);
-      await _waitStable();
+      final stable = await _waitStableForAction(params);
       final after = _snapshot();
       return _ok({
         'action': 'input ${target ?? 'focused'}',
+        'stable': stable,
         'result': _changed(before, after) ? 'changed' : 'unchanged',
         'before': before.summaryJson(),
         'after': after.summaryJson(),
@@ -202,10 +205,11 @@ class FlutterScoutRuntime {
       }
 
       await _dispatchPress(point, hold: Duration(milliseconds: durationMs));
-      await _waitStable();
+      final stable = await _waitStableForAction(params);
       final after = _snapshot();
       return _ok({
         'action': 'longPress ${target ?? '${point.dx},${point.dy}'}',
+        'stable': stable,
         'result': _changed(before, after) ? 'changed' : 'unchanged',
         'before': before.summaryJson(),
         'after': after.summaryJson(),
@@ -244,10 +248,11 @@ class FlutterScoutRuntime {
         filled.add(entry.key);
       }
 
-      await _waitStable();
+      final stable = await _waitStableForAction(params);
       final after = _snapshot();
       return _ok({
         'action': 'fill',
+        'stable': stable,
         'filled': filled,
         'failed': failed,
         'result': failed.isEmpty ? 'success' : 'partial',
@@ -311,10 +316,11 @@ class FlutterScoutRuntime {
       }
       final navigator = _findActiveNavigator(rootContext);
       final popped = await navigator?.maybePop() ?? false;
-      await _waitStable();
+      final stable = await _waitStableForAction(params);
       final after = _snapshot();
       return _ok({
         'action': 'back',
+        'stable': stable,
         'popped': popped,
         'result': _changed(before, after) ? 'changed' : 'unchanged',
         'before': before.summaryJson(),
@@ -345,7 +351,10 @@ class FlutterScoutRuntime {
   }
 
   Future<void> _waitForFrame() async {
-    await WidgetsBinding.instance.endOfFrame;
+    await WidgetsBinding.instance.endOfFrame.timeout(
+      const Duration(milliseconds: 500),
+      onTimeout: () {},
+    );
   }
 
   Future<bool> _waitStable({
@@ -354,7 +363,15 @@ class FlutterScoutRuntime {
     final deadline = DateTime.now().add(timeout);
     var quietFrames = 0;
     while (DateTime.now().isBefore(deadline)) {
-      await WidgetsBinding.instance.endOfFrame;
+      final remaining = deadline.difference(DateTime.now());
+      final frameTimeout = remaining < const Duration(milliseconds: 200)
+          ? remaining
+          : const Duration(milliseconds: 200);
+      if (frameTimeout <= Duration.zero) break;
+      await WidgetsBinding.instance.endOfFrame.timeout(
+        frameTimeout,
+        onTimeout: () {},
+      );
       if (!WidgetsBinding.instance.hasScheduledFrame) {
         quietFrames++;
         if (quietFrames >= 2) return true;
@@ -364,6 +381,12 @@ class FlutterScoutRuntime {
       await Future<void>.delayed(const Duration(milliseconds: 40));
     }
     return !WidgetsBinding.instance.hasScheduledFrame;
+  }
+
+  Future<bool> _waitStableForAction(Map<String, String> params) {
+    final waitMs = int.tryParse(params['waitMs'] ?? '') ?? 1500;
+    if (waitMs <= 0) return Future.value(false);
+    return _waitStable(timeout: Duration(milliseconds: waitMs));
   }
 
   Future<developer.ServiceExtensionResponse> _drag({
@@ -377,10 +400,11 @@ class FlutterScoutRuntime {
     final start = _pointForTarget(params['target'], params) ?? _screenCenter();
     final delta = _dragDelta(direction, distance, scrollGesture: scrollGesture);
     await _dispatchDrag(start, delta);
-    await _waitStable();
+    final stable = await _waitStableForAction(params);
     final after = _snapshot();
     return _ok({
       'action': action,
+      'stable': stable,
       'result': _changed(before, after) ? 'changed' : 'unchanged',
       'before': before.summaryJson(),
       'after': after.summaryJson(),
@@ -813,21 +837,70 @@ class FlutterScoutRuntime {
 
   Future<void> _dispatchPress(Offset point, {required Duration hold}) async {
     final binding = GestureBinding.instance;
-    final pointer = DateTime.now().microsecondsSinceEpoch % 100000;
+    final pointer = _nextSyntheticPointer++;
+    final viewId = _primaryViewId;
     binding.handlePointerEvent(
-      PointerDownEvent(pointer: pointer, position: point),
+      PointerAddedEvent(
+        pointer: pointer,
+        device: pointer,
+        position: point,
+        kind: PointerDeviceKind.mouse,
+        viewId: viewId,
+      ),
+    );
+    binding.handlePointerEvent(
+      PointerDownEvent(
+        pointer: pointer,
+        device: pointer,
+        position: point,
+        kind: PointerDeviceKind.mouse,
+        buttons: kPrimaryMouseButton,
+        viewId: viewId,
+      ),
     );
     await Future<void>.delayed(hold);
     binding.handlePointerEvent(
-      PointerUpEvent(pointer: pointer, position: point),
+      PointerUpEvent(
+        pointer: pointer,
+        device: pointer,
+        position: point,
+        kind: PointerDeviceKind.mouse,
+        viewId: viewId,
+      ),
+    );
+    binding.handlePointerEvent(
+      PointerRemovedEvent(
+        pointer: pointer,
+        device: pointer,
+        position: point,
+        kind: PointerDeviceKind.mouse,
+        viewId: viewId,
+      ),
     );
   }
 
   Future<void> _dispatchDrag(Offset start, Offset delta) async {
     final binding = GestureBinding.instance;
-    final pointer = DateTime.now().microsecondsSinceEpoch % 100000;
+    final pointer = _nextSyntheticPointer++;
+    final viewId = _primaryViewId;
     binding.handlePointerEvent(
-      PointerDownEvent(pointer: pointer, position: start),
+      PointerAddedEvent(
+        pointer: pointer,
+        device: pointer,
+        position: start,
+        kind: PointerDeviceKind.mouse,
+        viewId: viewId,
+      ),
+    );
+    binding.handlePointerEvent(
+      PointerDownEvent(
+        pointer: pointer,
+        device: pointer,
+        position: start,
+        kind: PointerDeviceKind.mouse,
+        buttons: kPrimaryMouseButton,
+        viewId: viewId,
+      ),
     );
     const steps = 8;
     for (var i = 1; i <= steps; i++) {
@@ -835,15 +908,39 @@ class FlutterScoutRuntime {
       binding.handlePointerEvent(
         PointerMoveEvent(
           pointer: pointer,
+          device: pointer,
           position: start + delta * (i / steps),
           delta: delta / steps.toDouble(),
+          kind: PointerDeviceKind.mouse,
+          buttons: kPrimaryMouseButton,
+          viewId: viewId,
         ),
       );
     }
     await Future<void>.delayed(const Duration(milliseconds: 16));
     binding.handlePointerEvent(
-      PointerUpEvent(pointer: pointer, position: start + delta),
+      PointerUpEvent(
+        pointer: pointer,
+        device: pointer,
+        position: start + delta,
+        kind: PointerDeviceKind.mouse,
+        viewId: viewId,
+      ),
     );
+    binding.handlePointerEvent(
+      PointerRemovedEvent(
+        pointer: pointer,
+        device: pointer,
+        position: start + delta,
+        kind: PointerDeviceKind.mouse,
+        viewId: viewId,
+      ),
+    );
+  }
+
+  int get _primaryViewId {
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    return views.isEmpty ? 0 : views.first.viewId;
   }
 
   void _walk(Element element, void Function(Element element) visitor) {
