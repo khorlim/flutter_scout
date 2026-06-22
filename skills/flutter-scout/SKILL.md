@@ -24,6 +24,8 @@ void main() {
 
 If the app does not include it, add `flutter_scout_helper` and call the initializer before `runApp`. Do not add per-screen wrappers or test-only widgets.
 
+If the app already initializes another debug binding, keep that initializer and call `FlutterScoutHelper.ensureRegistered()` after it instead of replacing the binding.
+
 ## Command Form
 
 From the CLI package source:
@@ -54,6 +56,14 @@ flutter-scout attach --debug-url <vm-service-url>
 flutter-scout launch --device <simulator-id> --project <flutter-app-path>
 ```
 
+Launch validates the exact requested device and emits compact progress events. If launch was interrupted or you need to stop a Scout-owned run:
+
+```bash
+flutter-scout stop --clear-session
+```
+
+Launch and attach responses include `ready`. If `ready` is false, fix the reported setup reason before inspecting or acting.
+
 3. Inspect before acting:
 
 ```bash
@@ -72,14 +82,17 @@ flutter-scout tap btn.save_supplier
 
 After every action, read `result`, `delta`, `fieldValues`, and `recentErrors`. Do not run a separate screenshot or full inspect unless the delta is unclear.
 
+Action output is compact by default. Add `--verbose` only when full before/after summaries are needed.
+
 5. Use targeted visual evidence when layout matters:
 
 ```bash
+flutter-scout bounds btn.save_supplier
 flutter-scout crop btn.save_supplier -o /tmp/save_button.png
 flutter-scout screenshot -o /tmp/current_screen.png
 ```
 
-Prefer crops over full screenshots when inspecting one control or dialog.
+Prefer `bounds` and crops over full screenshots when inspecting one control or dialog.
 
 6. Replay after a fix:
 
@@ -93,6 +106,7 @@ Replay should be the first check after changing code for a flow you already test
 
 ```bash
 flutter-scout status
+flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
 flutter-scout wait stable
 flutter-scout input --target field.search "query"
 flutter-scout long-press btn.more
@@ -100,7 +114,9 @@ flutter-scout scroll down --distance 300
 flutter-scout swipe left --distance 240
 flutter-scout back
 flutter-scout deeplink myapp://route
-flutter-scout logs --last 80
+flutter-scout logs --summary
+flutter-scout logs --last 20
+flutter-scout stop --clear-session
 ```
 
 ## Agent Rules
@@ -110,6 +126,7 @@ flutter-scout logs --last 80
 - Start with `inspect`; avoid blind screenshots.
 - Prefer `fill` for forms instead of tap/type/tap/type.
 - Trust action deltas for next-step planning.
+- Trust `status` to clear stale VM session files; reattach if it reports `staleCleared`.
 - Stop and fix code when `recentErrors` reports Flutter/platform errors.
 - Use coordinates only when no semantic handle works.
 - Keep `.flutter_scout/` as runtime state; do not commit it.

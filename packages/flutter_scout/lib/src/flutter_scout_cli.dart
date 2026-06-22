@@ -22,14 +22,18 @@ class FlutterScoutCli {
         'launch' => _launch(rest),
         'attach' => _attach(rest),
         'status' => _status(),
+        'doctor' => _doctor(rest),
+        'stop' => _stop(rest),
+        'cleanup' => _stop(rest),
         'inspect' => _callAndPrint('ext.flutter_scout.inspect'),
+        'bounds' => _bounds(rest),
         'tap' => _tap(rest),
         'long-press' => _longPress(rest),
         'input' => _input(rest),
         'fill' => _fill(rest),
         'scroll' => _scroll(rest),
         'swipe' => _swipe(rest),
-        'back' => _callAndPrint('ext.flutter_scout.back'),
+        'back' => _back(rest),
         'wait' => _wait(rest),
         'deeplink' => _deeplink(rest),
         'logs' => _logs(rest),
@@ -79,6 +83,14 @@ class FlutterScoutCli {
     if (!projectDir.existsSync()) {
       throw ScoutCliException('project_missing', 'Project not found: $project');
     }
+    _writeProgress('resolve_device', {'requestedDevice': device});
+    final resolvedDevice = await _resolveFlutterDevice(device);
+    if (resolvedDevice == null) {
+      throw ScoutCliException(
+        'device_not_found',
+        'No connected Flutter device exactly matched `$device`.',
+      );
+    }
 
     _ensureSessionDir();
     Directory(p.dirname(_logFile)).createSync(recursive: true);
@@ -86,7 +98,7 @@ class FlutterScoutCli {
     final flutterArgs = <String>[
       'run',
       '-d',
-      device,
+      resolvedDevice.id,
       if (parsed.option('target') != null) ...[
         '--target',
         parsed.option('target')!,
@@ -106,14 +118,20 @@ class FlutterScoutCli {
       if (parsed.flag('verbose')) '--verbose',
     ];
 
+    _writeProgress('start_flutter_run', {
+      'device': resolvedDevice.id,
+      'deviceName': resolvedDevice.name,
+      'project': project,
+    });
     final process = await Process.start(
       'flutter',
       flutterArgs,
       workingDirectory: project,
       mode: ProcessStartMode.detachedWithStdio,
     );
-    File(_deviceFile).writeAsStringSync(device);
+    File(_deviceFile).writeAsStringSync(resolvedDevice.id);
     File(_pidFile).writeAsStringSync(process.pid.toString());
+    final signalSubscriptions = _installLaunchSignalHandlers(process);
 
     final completer = Completer<String?>();
     final lines = <String>[];
@@ -123,6 +141,7 @@ class FlutterScoutCli {
       if (logOpen) {
         logSink.writeln(line);
       }
+      _writeLaunchProgressFromLine(line);
       final uri = _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
       if (uri != null && !completer.isCompleted) {
         completer.complete(uri);
@@ -145,6 +164,9 @@ class FlutterScoutCli {
       const Duration(minutes: 5),
       onTimeout: () => null,
     );
+    for (final subscription in signalSubscriptions) {
+      await subscription.cancel();
+    }
     await stdoutSub.cancel();
     await stderrSub.cancel();
     await logSink.flush();
@@ -167,18 +189,24 @@ class FlutterScoutCli {
 
     final wsUri = _normalizeVmUri(vmUri);
     File(_vmUriFile).writeAsStringSync(wsUri);
-    await _connect(wsUri).then((VmService service) => service.dispose());
+    _writeProgress('verify_vm_service', {'vmServiceUri': wsUri});
+    final ready = await _checkScoutReady(wsUri);
     stdout.writeln(
       jsonEncode({
         'launched': true,
-        'device': device,
+        'ready': ready.ready,
+        if (!ready.ready) 'reason': ready.reason,
+        if (!ready.ready) 'expected': ready.expected,
+        'device': resolvedDevice.id,
+        'deviceName': resolvedDevice.name,
+        'deviceCategory': resolvedDevice.category,
         'project': project,
         'pid': process.pid,
         'vmServiceUri': wsUri,
         'logFile': _logFile,
       }),
     );
-    return 0;
+    return ready.ready ? 0 : 1;
   }
 
   Future<int> _attach(List<String> args) async {
@@ -188,17 +216,18 @@ class FlutterScoutCli {
       ..addFlag('json', defaultsTo: true);
     final parsed = parser.parse(args);
     final explicit = parsed.option('debug-url');
-    final discovered =
-        explicit ??
-        await _discoverVmUriFromSimulatorLogs(
-          device: parsed.option('device'),
-        ) ??
-        _readVmUri();
-    if (discovered == null || discovered.isEmpty) {
+    final discovered = await _discoverAttachVmUri(
+      explicit: explicit,
+      device: parsed.option('device'),
+    );
+    if (discovered.uri == null || discovered.uri!.isEmpty) {
       stdout.writeln(
         jsonEncode({
           'attached': false,
-          'reason': 'vm_service_uri_not_found',
+          'reason': discovered.reason ?? 'vm_service_uri_not_found',
+          if (discovered.staleUri != null)
+            'staleVmServiceUri': discovered.staleUri,
+          if (discovered.staleCleared) 'staleCleared': true,
           'nextBestActions': [
             'Run the app in debug/profile mode and copy the VM Service URL',
             'flutter-scout attach --debug-url <url>',
@@ -209,8 +238,7 @@ class FlutterScoutCli {
       return 1;
     }
 
-    final wsUri = _normalizeVmUri(discovered);
-    await _connect(wsUri).then((VmService service) => service.dispose());
+    final wsUri = discovered.uri!;
     _ensureSessionDir();
     File(_vmUriFile).writeAsStringSync(wsUri);
     final device = parsed.option('device');
@@ -223,11 +251,17 @@ class FlutterScoutCli {
       'vmServiceUri': wsUri,
       'appStatePreserved': true,
     };
+    final ready = await _checkScoutReady(wsUri);
+    output['ready'] = ready.ready;
+    if (!ready.ready) {
+      output['reason'] = ready.reason;
+      output['expected'] = ready.expected;
+    }
     if (device != null) {
       output['device'] = device;
     }
     stdout.writeln(jsonEncode(output));
-    return 0;
+    return ready.ready ? 0 : 1;
   }
 
   Future<int> _status() async {
@@ -236,22 +270,187 @@ class FlutterScoutCli {
       stdout.writeln(jsonEncode({'running': false}));
       return 0;
     }
-    try {
-      final service = await _connect(vmUri);
-      await service.dispose();
+    final stale = await _validateVmUri(vmUri);
+    if (stale.ok) {
       stdout.writeln(jsonEncode({'running': true, 'vmServiceUri': vmUri}));
       return 0;
-    } catch (_) {
-      stdout.writeln(jsonEncode({'running': false, 'vmServiceUri': vmUri}));
+    }
+    _clearVmUriFile();
+    stdout.writeln(
+      jsonEncode({
+        'running': false,
+        'staleVmServiceUri': vmUri,
+        'staleCleared': true,
+        if (stale.error != null) 'reason': stale.error,
+      }),
+    );
+    return 0;
+  }
+
+  Future<int> _doctor(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('project', defaultsTo: Directory.current.path)
+      ..addOption('device');
+    final parsed = parser.parse(args);
+    final project = p.normalize(p.absolute(parsed.option('project')!));
+    final projectDir = Directory(project);
+    final pubspec = File(p.join(project, 'pubspec.yaml'));
+    final mainFile = File(p.join(project, 'lib', 'main.dart'));
+    final device = parsed.option('device');
+    final resolvedDevice = device == null || device.isEmpty
+        ? null
+        : await _resolveFlutterDevice(device);
+    final vmUri = _readVmUri();
+    final session = vmUri == null
+        ? const _VmUriValidation(ok: false, error: 'no_session_vm_uri')
+        : await _validateVmUri(vmUri);
+
+    var helperExtensionRegistered = false;
+    String? helperExtensionError;
+    if (session.ok && vmUri != null) {
+      final ready = await _checkScoutReady(vmUri);
+      helperExtensionRegistered = ready.ready;
+      helperExtensionError = ready.ready ? null : ready.reason;
+    }
+
+    final pubspecText = pubspec.existsSync() ? pubspec.readAsStringSync() : '';
+    final mainText = mainFile.existsSync() ? mainFile.readAsStringSync() : '';
+    stdout.writeln(
+      const JsonEncoder.withIndent('  ').convert({
+        'ok': true,
+        'cli': {'available': true, 'sessionDir': _sessionDir.path},
+        'project': {
+          'path': project,
+          'exists': projectDir.existsSync(),
+          'pubspecExists': pubspec.existsSync(),
+          'mainExists': mainFile.existsSync(),
+          'hasHelperDependency': pubspecText.contains('flutter_scout_helper'),
+          'hasBindingInitializer': mainText.contains(
+            'FlutterScoutBinding.ensureInitialized',
+          ),
+          'hasRegistrationInitializer': mainText.contains(
+            'FlutterScoutHelper.ensureRegistered',
+          ),
+        },
+        'device': {
+          'requested': device,
+          'resolved': resolvedDevice?.toJson(),
+          if (device != null && device.isNotEmpty)
+            'exactMatch': resolvedDevice != null,
+        },
+        'session': {
+          'vmServiceUri': vmUri,
+          'valid': session.ok,
+          if (session.error != null) 'error': session.error,
+          'helperExtensionRegistered': helperExtensionRegistered,
+          ...helperExtensionError == null
+              ? const <String, Object?>{}
+              : {'helperExtensionError': helperExtensionError},
+        },
+      }),
+    );
+    return 0;
+  }
+
+  Future<int> _stop(List<String> args) async {
+    final parser = ArgParser()
+      ..addFlag('clear-session', defaultsTo: false, negatable: false);
+    final parsed = parser.parse(args);
+    final pid = _readPid();
+    final vmUri = _readVmUri();
+    final listenerPid = vmUri == null
+        ? null
+        : await _pidForListeningVmPort(vmUri);
+    var stopped = false;
+    var processExisted = false;
+    String? pidKillSkippedReason;
+    if (pid != null) {
+      final trustedPid =
+          listenerPid == pid || await _looksLikeScoutFlutterRun(pid);
+      if (trustedPid) {
+        processExisted = Process.killPid(pid);
+        stopped = processExisted;
+      } else {
+        processExisted = await _processExists(pid);
+        pidKillSkippedReason = processExisted
+            ? 'pid_identity_mismatch'
+            : 'process_not_found';
+      }
+    }
+    var listenerExisted = false;
+    if (listenerPid != null && listenerPid != pid) {
+      listenerExisted = Process.killPid(listenerPid);
+      stopped = stopped || listenerExisted;
+    }
+    _deleteFileIfExists(_pidFile);
+    if (parsed.flag('clear-session')) {
+      _clearVmUriFile();
+      _deleteFileIfExists(_deviceFile);
+      _deleteFileIfExists(_sessionFile);
+    }
+    stdout.writeln(
+      jsonEncode({
+        'ok': true,
+        'pid': pid,
+        'vmServiceListenerPid': listenerPid,
+        'processExisted': processExisted,
+        'vmServiceListenerExisted': listenerExisted,
+        'stopped': stopped,
+        'pidKillSkippedReason': ?pidKillSkippedReason,
+        'pidFileCleared': true,
+        if (parsed.flag('clear-session')) 'sessionCleared': true,
+      }),
+    );
+    return 0;
+  }
+
+  Future<int> _bounds(List<String> args) async {
+    final parser = ArgParser()..addOption('target');
+    final parsed = parser.parse(args);
+    final target =
+        parsed.option('target') ??
+        (parsed.rest.isEmpty ? null : parsed.rest.first);
+    final inspect = await _call('ext.flutter_scout.inspect');
+    final nodes = [
+      ..._nodesFromInspect(inspect, 'interactables'),
+      ..._nodesFromInspect(inspect, 'fields'),
+    ];
+    final dpr = (inspect['devicePixelRatio'] as num?)?.toDouble() ?? 1;
+    if (target != null && target.isNotEmpty) {
+      final node = _findNodeInInspect(inspect, target);
+      if (node == null) {
+        throw ScoutCliException(
+          'target_not_found',
+          'No inspect target matched `$target`.',
+        );
+      }
+      stdout.writeln(
+        const JsonEncoder.withIndent('  ').convert({
+          'ok': true,
+          'target': target,
+          'devicePixelRatio': dpr,
+          'bounds': _boundsForNode(node, dpr),
+        }),
+      );
       return 0;
     }
+    stdout.writeln(
+      const JsonEncoder.withIndent('  ').convert({
+        'ok': true,
+        'devicePixelRatio': dpr,
+        'logicalSize': inspect['logicalSize'],
+        'bounds': [for (final node in nodes) _boundsForNode(node, dpr)],
+      }),
+    );
+    return 0;
   }
 
   Future<int> _tap(List<String> args) async {
     final parser = ArgParser()
       ..addOption('x')
       ..addOption('y')
-      ..addOption('wait-ms', defaultsTo: '1500');
+      ..addOption('wait-ms', defaultsTo: '1500')
+      ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final target = parsed.rest.isEmpty ? null : parsed.rest.first;
     final x = parsed.option('x');
@@ -278,11 +477,14 @@ class FlutterScoutCli {
       'ext.flutter_scout.tap',
       params: params,
       record: {'cmd': 'tap', ...params},
+      compact: !parsed.flag('verbose'),
     );
   }
 
   Future<int> _input(List<String> args) async {
-    final parser = ArgParser()..addOption('target');
+    final parser = ArgParser()
+      ..addOption('target')
+      ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final valueArgs = parsed.rest;
     if (valueArgs.isEmpty) {
@@ -297,6 +499,7 @@ class FlutterScoutCli {
       'ext.flutter_scout.input',
       params: {'target': target, 'value': value},
       record: {'cmd': 'input', 'target': target, 'value': value},
+      compact: !parsed.flag('verbose'),
     );
   }
 
@@ -304,7 +507,8 @@ class FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('duration-ms', defaultsTo: '600')
       ..addOption('x')
-      ..addOption('y');
+      ..addOption('y')
+      ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final target = parsed.rest.isEmpty ? null : parsed.rest.first;
     if (target == null &&
@@ -330,11 +534,14 @@ class FlutterScoutCli {
       'ext.flutter_scout.longPress',
       params: params,
       record: {'cmd': 'long-press', ...params},
+      compact: !parsed.flag('verbose'),
     );
   }
 
   Future<int> _fill(List<String> args) async {
-    final parser = ArgParser()..addOption('json');
+    final parser = ArgParser()
+      ..addOption('json')
+      ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final raw = parsed.option('json');
     if (raw == null || raw.isEmpty) {
@@ -348,6 +555,7 @@ class FlutterScoutCli {
       'ext.flutter_scout.fill',
       params: {'values': raw},
       record: {'cmd': 'fill', 'values': jsonDecode(raw)},
+      compact: !parsed.flag('verbose'),
     );
   }
 
@@ -387,7 +595,8 @@ class FlutterScoutCli {
   }) async {
     final parser = ArgParser()
       ..addOption('target')
-      ..addOption('distance');
+      ..addOption('distance')
+      ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final direction = parsed.rest.isEmpty
         ? defaultDirection
@@ -402,6 +611,17 @@ class FlutterScoutCli {
       method,
       params: params,
       record: {'cmd': command, ...params},
+      compact: !parsed.flag('verbose'),
+    );
+  }
+
+  Future<int> _back(List<String> args) async {
+    final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    return _callAndPrint(
+      'ext.flutter_scout.back',
+      record: const {'cmd': 'back'},
+      compact: !parsed.flag('verbose'),
     );
   }
 
@@ -421,19 +641,39 @@ class FlutterScoutCli {
 
   Future<int> _logs(List<String> args) async {
     final parser = ArgParser()
-      ..addOption('last', defaultsTo: '80')
-      ..addOption('contains');
+      ..addOption('last', defaultsTo: '20')
+      ..addOption('contains')
+      ..addFlag('summary', defaultsTo: false, negatable: false);
     final parsed = parser.parse(args);
     final file = File(_logFile);
     if (!file.existsSync()) {
       stdout.writeln(
-        jsonEncode({'ok': true, 'path': _logFile, 'lines': const <String>[]}),
+        jsonEncode({
+          'ok': true,
+          'path': _logFile,
+          if (parsed.flag('summary')) ...{
+            'errors': 0,
+            'warnings': 0,
+            'vmServiceUri': null,
+            'lastImportantLines': const <String>[],
+          } else
+            'lines': const <String>[],
+        }),
       );
       return 0;
     }
     final contains = parsed.option('contains');
-    final last = int.tryParse(parsed.option('last') ?? '') ?? 80;
+    final last = int.tryParse(parsed.option('last') ?? '') ?? 20;
     var lines = file.readAsLinesSync();
+    if (parsed.flag('summary')) {
+      final summary = _summarizeLogLines(lines, last: last);
+      stdout.writeln(
+        const JsonEncoder.withIndent(
+          '  ',
+        ).convert({'ok': true, 'path': _logFile, ...summary}),
+      );
+      return 0;
+    }
     if (contains != null && contains.isNotEmpty) {
       lines = lines
           .where((line) => line.contains(contains))
@@ -588,7 +828,11 @@ class FlutterScoutCli {
   }
 
   Future<int> _replay(List<String> args) async {
-    final file = args.isEmpty ? File(_sessionFile) : File(args.first);
+    final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    final file = parsed.rest.isEmpty
+        ? File(_sessionFile)
+        : File(parsed.rest.first);
     if (!file.existsSync()) {
       throw ScoutCliException(
         'replay_missing',
@@ -622,10 +866,15 @@ class FlutterScoutCli {
         }),
         'scroll' => await _call('ext.flutter_scout.scroll', _stringMap(item)),
         'swipe' => await _call('ext.flutter_scout.swipe', _stringMap(item)),
+        'back' => await _call('ext.flutter_scout.back'),
         'deeplink' => await _replayDeeplink(item['url']?.toString()),
         _ => {'ok': false, 'error': 'unknown replay cmd: $cmd'},
       };
-      results.add(result);
+      results.add(
+        parsed.flag('verbose') || result['ok'] == false
+            ? result
+            : _compactActionResult(result),
+      );
     }
     stdout.writeln(
       const JsonEncoder.withIndent(
@@ -651,13 +900,65 @@ class FlutterScoutCli {
     String method, {
     Map<String, String> params = const {},
     Map<String, Object?>? record,
+    bool compact = false,
   }) async {
     final result = await _call(method, params);
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
+    final output = compact ? _compactActionResult(result) : result;
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
     if (record != null && result['ok'] == true) {
       _recordAction(record);
     }
     return result['ok'] == false ? 1 : 0;
+  }
+
+  Map<String, dynamic> _compactActionResult(Map<String, dynamic> result) {
+    if (result['ok'] == false) {
+      return {
+        ...result,
+        if (result['recentErrors'] is List)
+          'recentErrors': _lastItems(result['recentErrors'] as List, 3),
+      };
+    }
+    final after = result['after'];
+    return {
+      'ok': result['ok'],
+      if (result['action'] != null) 'action': result['action'],
+      if (result['stable'] != null) 'stable': result['stable'],
+      if (result['result'] != null) 'result': result['result'],
+      if (result['filled'] != null) 'filled': result['filled'],
+      if (result['failed'] != null) 'failed': result['failed'],
+      if (result['popped'] != null) 'popped': result['popped'],
+      if (result['target'] is Map<String, dynamic>)
+        'target': _compactNode(result['target'] as Map<String, dynamic>),
+      if (after is Map<String, dynamic>) 'afterSummary': _compactSummary(after),
+      if (result['delta'] != null) 'delta': result['delta'],
+      if (result['recentErrors'] is List)
+        'recentErrors': _lastItems(result['recentErrors'] as List, 3),
+    };
+  }
+
+  Map<String, Object?> _compactNode(Map<String, dynamic> node) {
+    return {
+      'id': node['id'],
+      if (node['label'] != null) 'label': node['label'],
+      if (node['kind'] != null) 'kind': node['kind'],
+      if (node['enabled'] != null) 'enabled': node['enabled'],
+    };
+  }
+
+  Map<String, Object?> _compactSummary(Map<String, dynamic> summary) {
+    return {
+      if (summary['screen'] != null) 'screen': summary['screen'],
+      if (summary['idle'] != null) 'idle': summary['idle'],
+      if (summary['visibleText'] is List)
+        'visibleText': _lastItems(summary['visibleText'] as List, 12),
+      if (summary['fieldValues'] != null) 'fieldValues': summary['fieldValues'],
+    };
+  }
+
+  List<Object?> _lastItems(List<dynamic> items, int count) {
+    if (items.length <= count) return List<Object?>.from(items);
+    return items.sublist(items.length - count);
   }
 
   Future<Map<String, dynamic>> _call(
@@ -674,9 +975,24 @@ class FlutterScoutCli {
     final service = await _connect(uri);
     try {
       final isolateId = await _findMainIsolate(service);
-      final response = await service
-          .callServiceExtension(method, isolateId: isolateId, args: params)
-          .timeout(const Duration(seconds: 20));
+      final Response response;
+      try {
+        response = await service
+            .callServiceExtension(method, isolateId: isolateId, args: params)
+            .timeout(const Duration(seconds: 20));
+      } on RPCError catch (error) {
+        if (_looksLikeMissingScoutExtension(error)) {
+          throw const ScoutCliException(
+            'flutter_scout_helper_not_registered',
+            'VM service is reachable, but ext.flutter_scout is not registered. '
+                'Add flutter_scout_helper and call '
+                'FlutterScoutBinding.ensureInitialized() before runApp(), or '
+                'FlutterScoutHelper.ensureRegistered() after an existing debug '
+                'binding is initialized.',
+          );
+        }
+        rethrow;
+      }
       final json = response.json;
       if (json == null) return {'ok': false, 'error': 'empty VM response'};
       if (json.containsKey('ok')) {
@@ -695,10 +1011,96 @@ class FlutterScoutCli {
     }
   }
 
+  bool _looksLikeMissingScoutExtension(RPCError error) {
+    final message = error.message;
+    return message.contains('ext.flutter_scout') ||
+        message.contains('Unknown service extension') ||
+        message.contains('Service extension not found') ||
+        error.code == -32601;
+  }
+
   Future<VmService> _connect(String uri) {
     return vmServiceConnectUri(
       _normalizeVmUri(uri),
     ).timeout(const Duration(seconds: 5));
+  }
+
+  Future<_AttachDiscovery> _discoverAttachVmUri({
+    required String? explicit,
+    required String? device,
+  }) async {
+    if (explicit != null && explicit.isNotEmpty) {
+      final uri = _normalizeVmUri(explicit);
+      final validation = await _validateVmUri(uri);
+      if (validation.ok) return _AttachDiscovery(uri: uri);
+      return _AttachDiscovery(
+        reason: 'vm_service_uri_unreachable',
+        staleUri: uri,
+        staleCleared: false,
+      );
+    }
+
+    final fromLogs = await _discoverVmUriFromSimulatorLogs(device: device);
+    if (fromLogs != null && fromLogs.isNotEmpty) {
+      final uri = _normalizeVmUri(fromLogs);
+      final validation = await _validateVmUri(uri);
+      if (validation.ok) return _AttachDiscovery(uri: uri);
+    }
+
+    final fromSession = _readVmUri();
+    if (fromSession != null && fromSession.isNotEmpty) {
+      final uri = _normalizeVmUri(fromSession);
+      final validation = await _validateVmUri(uri);
+      if (validation.ok) return _AttachDiscovery(uri: uri);
+      _clearVmUriFile();
+      return _AttachDiscovery(
+        reason: 'stale_vm_service_uri',
+        staleUri: uri,
+        staleCleared: true,
+      );
+    }
+
+    return const _AttachDiscovery(reason: 'vm_service_uri_not_found');
+  }
+
+  Future<_VmUriValidation> _validateVmUri(String uri) async {
+    try {
+      final service = await _connect(uri);
+      await service.dispose();
+      return const _VmUriValidation(ok: true);
+    } catch (error) {
+      return _VmUriValidation(ok: false, error: error.toString());
+    }
+  }
+
+  Future<_ScoutReady> _checkScoutReady(String uri) async {
+    try {
+      final service = await _connect(uri);
+      try {
+        final isolateId = await _findMainIsolate(service);
+        final isolate = await service
+            .getIsolate(isolateId)
+            .timeout(const Duration(seconds: 5));
+        final extensions = isolate.extensionRPCs ?? const <String>[];
+        if (extensions.contains('ext.flutter_scout.inspect')) {
+          return const _ScoutReady(ready: true);
+        }
+        return const _ScoutReady(
+          ready: false,
+          reason: 'helper_extension_missing',
+          expected: 'FlutterScoutBinding.ensureInitialized()',
+        );
+      } finally {
+        await service.dispose();
+      }
+    } catch (error) {
+      return _ScoutReady(
+        ready: false,
+        reason: 'helper_extension_check_failed',
+        expected: 'FlutterScoutBinding.ensureInitialized()',
+        detail: error.toString(),
+      );
+    }
   }
 
   Future<void> _captureScreenshot(String output) async {
@@ -735,6 +1137,84 @@ class FlutterScoutCli {
         (result.stderr as String).trim(),
       );
     }
+  }
+
+  Map<String, Object?> _summarizeLogLines(
+    List<String> lines, {
+    required int last,
+  }) {
+    final important = <String>[];
+    var errors = 0;
+    var warnings = 0;
+    String? vmServiceUri;
+    for (final line in lines) {
+      final lower = line.toLowerCase();
+      final isError =
+          lower.contains('error') ||
+          lower.contains('exception') ||
+          lower.contains('failed') ||
+          lower.contains('fatal');
+      final isWarning = lower.contains('warning') || lower.contains('warn ');
+      final uri = _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
+      if (isError) errors++;
+      if (isWarning) warnings++;
+      if (uri != null) vmServiceUri = _normalizeVmUri(uri);
+      if (isError || isWarning || uri != null) {
+        important.add(line);
+      }
+    }
+    final limit = last <= 0 ? 20 : last;
+    return {
+      'errors': errors,
+      'warnings': warnings,
+      'vmServiceUri': vmServiceUri,
+      'lastImportantLines': important.length > limit
+          ? important.sublist(important.length - limit)
+          : important,
+    };
+  }
+
+  List<Map<String, dynamic>> _nodesFromInspect(
+    Map<String, dynamic> inspect,
+    String groupName,
+  ) {
+    final group = inspect[groupName];
+    if (group is! List) return const <Map<String, dynamic>>[];
+    return [
+      for (final node in group)
+        if (node is Map<String, dynamic>) node,
+    ];
+  }
+
+  Map<String, Object?> _boundsForNode(Map<String, dynamic> node, double dpr) {
+    final rect = node['rect'];
+    if (rect is! List || rect.length < 4) {
+      return {
+        'id': node['id'],
+        'label': node['label'],
+        'kind': node['kind'],
+        'rect': null,
+      };
+    }
+    final left = (rect[0] as num).toDouble();
+    final top = (rect[1] as num).toDouble();
+    final width = (rect[2] as num).toDouble();
+    final height = (rect[3] as num).toDouble();
+    return {
+      'id': node['id'],
+      'fallbackId': node['fallbackId'],
+      'label': node['label'],
+      'kind': node['kind'],
+      'enabled': node['enabled'],
+      'rect': [left, top, width, height],
+      'center': [left + width / 2, top + height / 2],
+      'pixelRect': [
+        (left * dpr).round(),
+        (top * dpr).round(),
+        (width * dpr).round(),
+        (height * dpr).round(),
+      ],
+    };
   }
 
   Map<String, dynamic>? _findNodeInInspect(
@@ -825,6 +1305,42 @@ class FlutterScoutCli {
     }
   }
 
+  Future<_FlutterDevice?> _resolveFlutterDevice(String requested) async {
+    final result = await Process.run('flutter', ['devices', '--machine'])
+        .timeout(
+          const Duration(seconds: 20),
+          onTimeout: () => ProcessResult(0, 1, '', 'flutter devices timed out'),
+        );
+    if (result.exitCode != 0) {
+      throw ScoutCliException(
+        'device_discovery_failed',
+        (result.stderr as String).trim(),
+      );
+    }
+    final decoded = jsonDecode(result.stdout as String);
+    if (decoded is! List) {
+      throw const ScoutCliException(
+        'device_discovery_failed',
+        'flutter devices --machine returned an unexpected payload.',
+      );
+    }
+    for (final item in decoded) {
+      if (item is! Map<String, dynamic>) continue;
+      final id = item['id']?.toString();
+      final name = item['name']?.toString();
+      if (id == requested || name == requested) {
+        return _FlutterDevice(
+          id: id ?? requested,
+          name: name ?? requested,
+          platform: item['platform']?.toString(),
+          category: item['category']?.toString(),
+          emulator: item['emulator'] == true,
+        );
+      }
+    }
+    return null;
+  }
+
   String? _extractVmUri(String text) {
     final lines = text.split('\n').reversed;
     final pattern = RegExp(
@@ -882,6 +1398,52 @@ class FlutterScoutCli {
     file.writeAsStringSync(const JsonEncoder.withIndent('  ').convert(list));
   }
 
+  List<StreamSubscription<ProcessSignal>> _installLaunchSignalHandlers(
+    Process process,
+  ) {
+    void stopProcess(ProcessSignal signal) {
+      process.kill();
+      _deleteFileIfExists(_pidFile);
+      _writeProgress('stopped_child_process', {
+        'signal': signal.toString(),
+        'pid': process.pid,
+      });
+    }
+
+    return [
+      ProcessSignal.sigint.watch().listen(stopProcess),
+      ProcessSignal.sigterm.watch().listen(stopProcess),
+    ];
+  }
+
+  void _writeProgress(String phase, [Map<String, Object?> data = const {}]) {
+    stderr.writeln(
+      jsonEncode({
+        'progress': phase,
+        'timestamp': DateTime.now().toIso8601String(),
+        ...data,
+      }),
+    );
+  }
+
+  void _writeLaunchProgressFromLine(String line) {
+    final lower = line.toLowerCase();
+    if (lower.contains('resolving dependencies')) {
+      _writeProgress('pub_get');
+    } else if (lower.contains('launching lib/main.dart') ||
+        lower.contains('launching')) {
+      _writeProgress('launching_app');
+    } else if (lower.contains('xcode build done') ||
+        lower.contains('built build/')) {
+      _writeProgress('build_done');
+    } else if (lower.contains('syncing files to device')) {
+      _writeProgress('syncing_files');
+    } else if (_extractVmUri(line) != null ||
+        _extractFlutterToolVmUri(line) != null) {
+      _writeProgress('vm_service_found');
+    }
+  }
+
   String? _readVmUri() {
     final file = File(_vmUriFile);
     if (!file.existsSync()) return null;
@@ -889,11 +1451,76 @@ class FlutterScoutCli {
     return value.isEmpty ? null : value;
   }
 
+  void _clearVmUriFile() {
+    _deleteFileIfExists(_vmUriFile);
+  }
+
   String? _readDevice() {
     final file = File(_deviceFile);
     if (!file.existsSync()) return null;
     final value = file.readAsStringSync().trim();
     return value.isEmpty ? null : value;
+  }
+
+  int? _readPid() {
+    final file = File(_pidFile);
+    if (!file.existsSync()) return null;
+    return int.tryParse(file.readAsStringSync().trim());
+  }
+
+  Future<int?> _pidForListeningVmPort(String vmUri) async {
+    final uri = Uri.tryParse(_normalizeVmUri(vmUri));
+    final port = uri?.port;
+    if (port == null || port <= 0) return null;
+    try {
+      final result = await Process.run('lsof', ['-tiTCP:$port', '-sTCP:LISTEN'])
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => ProcessResult(0, 1, '', ''),
+          );
+      if (result.exitCode != 0) return null;
+      final firstLine = (result.stdout as String).trim().split('\n').first;
+      return int.tryParse(firstLine);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _looksLikeScoutFlutterRun(int pid) async {
+    final command = await _processCommand(pid);
+    if (command == null) return false;
+    final lower = command.toLowerCase();
+    final hasFlutterTool =
+        lower.contains('flutter_tools') ||
+        RegExp(r'(^|[/\s])flutter(\s|$)').hasMatch(lower);
+    final hasRunCommand = RegExp(r'(^|\s)run(\s|$)').hasMatch(lower);
+    return hasFlutterTool && hasRunCommand;
+  }
+
+  Future<bool> _processExists(int pid) async {
+    return await _processCommand(pid) != null;
+  }
+
+  Future<String?> _processCommand(int pid) async {
+    try {
+      final result = await Process.run('ps', ['-p', '$pid', '-o', 'command='])
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => ProcessResult(0, 1, '', ''),
+          );
+      if (result.exitCode != 0) return null;
+      final command = (result.stdout as String).trim();
+      return command.isEmpty ? null : command;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _deleteFileIfExists(String path) {
+    final file = File(path);
+    if (file.existsSync()) {
+      file.deleteSync();
+    }
   }
 
   int _unknown(String command) {
@@ -910,20 +1537,23 @@ Usage:
   flutter-scout attach [--debug-url <url>] [--device <simulator-id>]
   flutter-scout launch --device <simulator-id> [--project <path>]
   flutter-scout status
+  flutter-scout doctor [--project <path>] [--device <simulator-id>]
+  flutter-scout stop [--clear-session]
   flutter-scout inspect
-  flutter-scout tap <target> | --x <x> --y <y>
-  flutter-scout long-press <target>
-  flutter-scout input [--target <field>] <value>
-  flutter-scout fill --json <object>
-  flutter-scout scroll [up|down|left|right] [--target <target>] [--distance <px>]
-  flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>]
-  flutter-scout back
+  flutter-scout bounds [target]
+  flutter-scout tap <target> | --x <x> --y <y> [--verbose]
+  flutter-scout long-press <target> [--verbose]
+  flutter-scout input [--target <field>] <value> [--verbose]
+  flutter-scout fill --json <object> [--verbose]
+  flutter-scout scroll [up|down|left|right] [--target <target>] [--distance <px>] [--verbose]
+  flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--verbose]
+  flutter-scout back [--verbose]
   flutter-scout wait stable
   flutter-scout deeplink <url>
-  flutter-scout logs [--last <n>] [--contains <text>]
+  flutter-scout logs [--last <n>] [--contains <text>] [--summary]
   flutter-scout screenshot [-o <path>] [--target <target>]
   flutter-scout crop <target> [-o <path>]
-  flutter-scout replay [session.json]
+  flutter-scout replay [session.json] [--verbose]
 ''');
   }
 }
@@ -933,6 +1563,67 @@ class ScoutCliException implements Exception {
 
   final String code;
   final String message;
+}
+
+class _AttachDiscovery {
+  const _AttachDiscovery({
+    this.uri,
+    this.reason,
+    this.staleUri,
+    this.staleCleared = false,
+  });
+
+  final String? uri;
+  final String? reason;
+  final String? staleUri;
+  final bool staleCleared;
+}
+
+class _VmUriValidation {
+  const _VmUriValidation({required this.ok, this.error});
+
+  final bool ok;
+  final String? error;
+}
+
+class _ScoutReady {
+  const _ScoutReady({
+    required this.ready,
+    this.reason,
+    this.expected,
+    this.detail,
+  });
+
+  final bool ready;
+  final String? reason;
+  final String? expected;
+  final String? detail;
+}
+
+class _FlutterDevice {
+  const _FlutterDevice({
+    required this.id,
+    required this.name,
+    required this.platform,
+    required this.category,
+    required this.emulator,
+  });
+
+  final String id;
+  final String name;
+  final String? platform;
+  final String? category;
+  final bool emulator;
+
+  Map<String, Object?> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'platform': platform,
+      'category': category,
+      'emulator': emulator,
+    };
+  }
 }
 
 Directory get _sessionDir =>

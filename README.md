@@ -5,8 +5,13 @@ Flutter Scout is an agent-oriented eyes-and-hands bridge for Flutter simulator a
 The current vertical slice implements:
 
 - a main-only Flutter helper initializer
+- a registration initializer for apps that already create a custom debug binding
 - VM service extensions for inspect, tap, long press, input, fill, scroll, swipe, back, and wait-stable
 - a Dart CLI that can launch or attach to a simulator app
+- stale session validation and exact device resolution for launch/attach
+- `doctor`, `status`, `stop`, and `bounds` commands for setup and cleanup
+- extension readiness preflight after launch/attach
+- compact default action output, with full before/after data behind `--verbose`
 - compact inspect snapshots
 - before/after action deltas
 - screenshot capture and targeted crops through `xcrun simctl`
@@ -35,6 +40,16 @@ void main() {
 }
 ```
 
+If another debug binding is already initialized, keep it and register Scout after it:
+
+```dart
+void main() {
+  ExistingDebugBinding.ensureInitialized();
+  FlutterScoutHelper.ensureRegistered();
+  runApp(const MyApp());
+}
+```
+
 No per-screen or per-widget wrappers are required.
 
 ## Verified Simulator Flow
@@ -46,10 +61,19 @@ cd packages/flutter_scout
 dart run bin/flutter_scout.dart launch --device <simulator-id> --project ../../apps/scout_test_app
 ```
 
+Successful launch and attach responses include `ready`. If the VM service is available but the helper extension is missing, the command returns `ready:false` with `reason:"helper_extension_missing"` and the expected initializer.
+
 Or attach to an already running app:
 
 ```bash
 dart run bin/flutter_scout.dart attach --device <simulator-id> --debug-url <vm-service-url>
+```
+
+Check setup and the current session:
+
+```bash
+dart run bin/flutter_scout.dart doctor --project ../../apps/scout_test_app --device <simulator-id>
+dart run bin/flutter_scout.dart status
 ```
 
 Drive the sample flow:
@@ -59,14 +83,29 @@ dart run bin/flutter_scout.dart inspect
 dart run bin/flutter_scout.dart tap btn.add_supplier
 dart run bin/flutter_scout.dart fill --json '{"Supplier name":"Replay Supplier","Phone":"555"}'
 dart run bin/flutter_scout.dart tap btn.save_supplier
+dart run bin/flutter_scout.dart bounds btn.add_supplier
 dart run bin/flutter_scout.dart screenshot -o /tmp/flutter_scout_test.png
 dart run bin/flutter_scout.dart crop btn.add_supplier -o /tmp/flutter_scout_add_button_crop.png
 dart run bin/flutter_scout.dart replay .flutter_scout/session.json
 ```
 
+Action commands return compact JSON by default: result, stability, delta, recent errors, and a small after summary. Add `--verbose` to action commands or `replay` when full before/after payloads are needed.
+
+Use compact logs for triage:
+
+```bash
+dart run bin/flutter_scout.dart logs --summary
+dart run bin/flutter_scout.dart logs --last 20
+```
+
+Stop a Scout-owned launch process:
+
+```bash
+dart run bin/flutter_scout.dart stop --clear-session
+```
+
 ## Current Limits
 
-- Launch keeps a `flutter run` process alive and records its PID, but there is not yet a polished `kill` command.
 - Attach log discovery works with the helper marker on iOS Simulator, but explicit `--debug-url` remains the most deterministic path.
 - Targeted crop is implemented for current inspect handles; changed-region crop is not implemented yet.
 - Runtime hard-signal collection covers Flutter/platform errors and needs more coverage for image load failures and visible error banners.
