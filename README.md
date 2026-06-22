@@ -22,6 +22,7 @@ packages/flutter_scout_helper   Flutter helper package
 packages/flutter_scout          CLI package
 apps/scout_test_app             Verification app
 skills/flutter-scout            Codex skill for agents using Flutter Scout
+skills/flutter-scout-setup      Codex skill for installing Flutter Scout
 goal.md                         Product goals
 ```
 

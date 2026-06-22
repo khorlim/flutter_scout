@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flutter Scout Setup"
+  short_description: "Install and wire Flutter Scout"
+  default_prompt: "Use $flutter-scout-setup to install Flutter Scout in my Flutter app."
