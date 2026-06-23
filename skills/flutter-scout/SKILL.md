@@ -70,7 +70,11 @@ Launch and attach responses include `ready`. If `ready` is false, fix the report
 flutter-scout inspect
 ```
 
-Use `visibleText`, `interactables`, `fields`, `fieldValues`, `overlays`, `keyboard`, and `recentErrors` to orient yourself. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
+Use `visibleText`, `interactables`, `fields`, `fieldValues`, `fieldsById`, `scrollables`, `overlays`, `keyboard`, and `recentErrors` to orient yourself. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
+
+Read viewport facts before tapping: `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, and `hitTestable`. If a control is partially visible, prefer the Scout handle because Scout taps the visible safe point. If a control is offscreen, scroll first.
+
+Duplicate unkeyed fields are suffixed in inspect output, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Use the exact `fieldsById` key when filling or inputting duplicate labels.
 
 4. Act in feature-sized steps:
 
@@ -109,9 +113,12 @@ flutter-scout status
 flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
 flutter-scout wait stable
 flutter-scout input --target field.search "query"
+flutter-scout tap-text "GoodJob"
 flutter-scout long-press btn.more
 flutter-scout scroll down --distance 300
+flutter-scout scroll down --from 220,760 --distance 520
 flutter-scout swipe left --distance 240
+flutter-scout swipe left --from 380,500 --to 80,500
 flutter-scout back
 flutter-scout deeplink myapp://route
 flutter-scout logs --summary
@@ -124,9 +131,11 @@ flutter-scout stop --clear-session
 - Treat Flutter Scout as eyes and hands, not a QA judge.
 - Prefer `attach` to preserve human-in-the-loop state.
 - Start with `inspect`; avoid blind screenshots.
-- Prefer `fill` for forms instead of tap/type/tap/type.
+- Prefer `fill` for forms instead of tap/type/tap/type, but read per-field results and warnings.
 - Trust action deltas for next-step planning.
+- Treat `delta.changedGeometry` as a real change for scrolling or layout movement even when text and field values are unchanged.
 - Trust `status` to clear stale VM session files; reattach if it reports `staleCleared`.
 - Stop and fix code when `recentErrors` reports Flutter/platform errors.
-- Use coordinates only when no semantic handle works.
+- Use `tap-text` for visible text rows or picker rows when generic row handles are ambiguous.
+- Use coordinate scroll/swipe starts when the default gesture may hit the wrong layer.
 - Keep `.flutter_scout/` as runtime state; do not commit it.

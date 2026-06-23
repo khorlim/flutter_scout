@@ -39,6 +39,7 @@ class FlutterScoutRuntime {
     _installErrorHooks();
     _registerExtension('ext.flutter_scout.inspect', _handleInspect);
     _registerExtension('ext.flutter_scout.tap', _handleTap);
+    _registerExtension('ext.flutter_scout.tapText', _handleTapText);
     _registerExtension('ext.flutter_scout.longPress', _handleLongPress);
     _registerExtension('ext.flutter_scout.input', _handleInput);
     _registerExtension('ext.flutter_scout.fill', _handleFill);
@@ -140,7 +141,7 @@ class FlutterScoutRuntime {
       ScoutNode? node;
       if (target != null && target.isNotEmpty) {
         node = _snapshot().findNode(target);
-        point = node?.rect?.center;
+        point = node?.suggestedTapPoint ?? node?.rect?.center;
       } else if (x != null && y != null) {
         point = Offset(x, y);
       }
@@ -167,6 +168,43 @@ class FlutterScoutRuntime {
       });
     } catch (error) {
       return _fail('tap_failed', error.toString());
+    }
+  }
+
+  Future<developer.ServiceExtensionResponse> _handleTapText(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final before = _snapshot();
+      final text = params['text'] ?? params['target'];
+      if (text == null || text.trim().isEmpty) {
+        return _fail('missing_text', 'Expected text to tap.');
+      }
+      final match = _findVisibleText(text);
+      if (match == null) {
+        return _fail('text_not_found', 'No visible text matched `$text`.');
+      }
+      final rect = match.rect;
+      if (rect == null) {
+        return _fail('text_has_no_rect', 'Text `$text` has no usable rect.');
+      }
+      final point = match.suggestedTapPoint ?? rect.center;
+      await _dispatchTap(point);
+      final stable = await _waitStableForAction(params);
+      final after = _snapshot();
+      return _ok({
+        'action': 'tap-text $text',
+        'stable': stable,
+        'result': _changed(before, after) ? 'changed' : 'unchanged',
+        'target': match.toJson(),
+        'before': before.summaryJson(),
+        'after': after.summaryJson(),
+        'delta': _delta(before, after),
+        'recentErrors': _errors,
+      });
+    } catch (error) {
+      return _fail('tap_text_failed', error.toString());
     }
   }
 
@@ -246,14 +284,49 @@ class FlutterScoutRuntime {
 
       final filled = <String>[];
       final failed = <String>[];
+      final results = <Map<String, Object?>>[];
+      final warnings = <String>[];
       for (final entry in decoded.entries) {
+        final fieldBefore = _snapshot();
         final editable = _findEditable(target: entry.key);
         if (editable == null) {
           failed.add(entry.key);
+          results.add({
+            'target': entry.key,
+            'ok': false,
+            'reason': 'field_not_found',
+          });
           continue;
         }
         _setEditableText(editable, entry.value?.toString() ?? '');
+        final fieldStable = await _waitStableForAction(params);
+        final fieldAfter = _snapshot();
+        final fieldDelta = _delta(fieldBefore, fieldAfter);
+        final changedFields = fieldDelta['changedFields'];
+        final changedFieldCount = changedFields is List
+            ? changedFields.length
+            : 0;
+        final screenChanged = fieldDelta['screenChanged'] == true;
+        final newInteractables = fieldDelta['newInteractables'];
+        final removedInteractables = fieldDelta['removedInteractables'];
+        final actionStateChanged =
+            (newInteractables is List && newInteractables.isNotEmpty) ||
+            (removedInteractables is List && removedInteractables.isNotEmpty);
+        final changed = _changed(fieldBefore, fieldAfter);
+        if (changed &&
+            changedFieldCount == 0 &&
+            !screenChanged &&
+            !actionStateChanged) {
+          warnings.add('filled `${entry.key}` changed visible state only');
+        }
         filled.add(entry.key);
+        results.add({
+          'target': entry.key,
+          'ok': true,
+          'stable': fieldStable,
+          'changed': changed,
+          'delta': fieldDelta,
+        });
       }
 
       final stable = await _waitStableForAction(params);
@@ -263,6 +336,8 @@ class FlutterScoutRuntime {
         'stable': stable,
         'filled': filled,
         'failed': failed,
+        'fieldResults': results,
+        if (warnings.isNotEmpty) 'warnings': warnings,
         'result': failed.isEmpty ? 'success' : 'partial',
         'before': before.summaryJson(),
         'after': after.summaryJson(),
@@ -406,14 +481,23 @@ class FlutterScoutRuntime {
   }) async {
     final before = _snapshot();
     final start = _pointForTarget(params['target'], params) ?? _screenCenter();
-    final delta = _dragDelta(direction, distance, scrollGesture: scrollGesture);
+    final explicitEnd = _pointFromParams(params, prefix: 'to');
+    final delta = explicitEnd == null
+        ? _dragDelta(direction, distance, scrollGesture: scrollGesture)
+        : explicitEnd - start;
     await _dispatchDrag(start, delta);
     final stable = await _waitStableForAction(params);
     final after = _snapshot();
+    final changed = _changed(before, after);
     return _ok({
       'action': action,
       'stable': stable,
-      'result': _changed(before, after) ? 'changed' : 'unchanged',
+      'result': changed ? 'changed' : 'unchanged',
+      'gestureStart': [start.dx, start.dy],
+      if (!changed)
+        'unchangedReason': _viewportRect().contains(start)
+            ? 'no_visible_change_after_gesture'
+            : 'gesture_start_outside_viewport',
       'before': before.summaryJson(),
       'after': after.summaryJson(),
       'delta': _delta(before, after),
@@ -424,10 +508,13 @@ class FlutterScoutRuntime {
   ScoutSnapshot _snapshot() {
     final root = WidgetsBinding.instance.rootElement;
     final nodes = <ScoutNode>[];
+    final scrollables = <Map<String, Object?>>[];
     final visibleText = <String>{};
     var screen = 'RootWidget';
+    final logicalSize = _logicalSize();
     if (root != null) {
       _walk(root, (Element element) {
+        if (_isHiddenByAncestor(element)) return;
         final widgetType = element.widget.runtimeType.toString();
         if (screen == 'RootWidget' && widgetType.endsWith('Screen')) {
           screen = widgetType;
@@ -436,6 +523,25 @@ class FlutterScoutRuntime {
         if (node != null) {
           nodes.add(node);
         }
+        if (element.widget is Scrollable) {
+          final rect = _rectFor(element);
+          if (rect != null) {
+            final visibleRect = _visibleRectFor(rect);
+            scrollables.add({
+              'widgetType': element.widget.runtimeType.toString(),
+              'rect': [rect.left, rect.top, rect.width, rect.height],
+              'visibleRect': visibleRect == null
+                  ? null
+                  : [
+                      visibleRect.left,
+                      visibleRect.top,
+                      visibleRect.width,
+                      visibleRect.height,
+                    ],
+              'visibleFraction': _visibleFraction(rect, visibleRect),
+            });
+          }
+        }
         final text = _ownText(element.widget);
         if (text != null && _isUsefulVisibleText(text)) {
           visibleText.add(text.trim());
@@ -443,7 +549,7 @@ class FlutterScoutRuntime {
       });
     }
 
-    final compactNodes = _compactNodes(nodes);
+    final compactNodes = _disambiguateIds(_compactNodes(nodes));
     final interactables = compactNodes
         .where((node) => node.kind != 'text' && node.kind != 'field')
         .toList(growable: false);
@@ -461,22 +567,17 @@ class FlutterScoutRuntime {
           .views
           .first
           .devicePixelRatio,
-      logicalSize:
-          WidgetsBinding.instance.platformDispatcher.views.first.physicalSize /
-          WidgetsBinding
-              .instance
-              .platformDispatcher
-              .views
-              .first
-              .devicePixelRatio,
+      logicalSize: logicalSize,
       visibleText: visibleText.toList(growable: false),
       interactables: interactables,
       fields: fields,
+      scrollables: scrollables,
       recentErrors: List<Map<String, Object?>>.from(_errors),
     );
   }
 
   ScoutNode? _nodeFromElement(Element element) {
+    if (_isHiddenByAncestor(element)) return null;
     final widget = element.widget;
     final rect = _rectFor(element);
     if (rect == null || rect.width < 1 || rect.height < 1) return null;
@@ -485,22 +586,32 @@ class FlutterScoutRuntime {
     if (kind == null) return null;
 
     final label = _labelFor(element, widget);
-    final id = _stableId(
+    final baseId = _stableId(
       kind,
       label,
       widget.key,
       element.widget.runtimeType.toString(),
     );
+    final visibleRect = _visibleRectFor(rect);
+    final suggestedTapPoint = _visibleCenter(rect);
     return ScoutNode(
-      id: id,
+      id: baseId,
+      baseId: baseId,
+      ordinal: 1,
       fallbackId:
-          'i${id.hashCode.abs().toString().padLeft(8, '0').substring(0, 6)}',
+          'i${baseId.hashCode.abs().toString().padLeft(8, '0').substring(0, 6)}',
       kind: kind,
       label: label,
       value: kind == 'field' ? _editableValueBelow(element) : null,
       widgetType: widget.runtimeType.toString(),
       key: _keyLabel(widget.key),
       rect: rect,
+      visibleRect: visibleRect,
+      visibleFraction: _visibleFraction(rect, visibleRect),
+      suggestedTapPoint: suggestedTapPoint,
+      hitTestable: suggestedTapPoint == null
+          ? false
+          : _hitTestable(suggestedTapPoint),
       enabled: _enabledFor(widget),
       confidence: label == null ? 0.65 : 0.94,
     );
@@ -537,6 +648,31 @@ class FlutterScoutRuntime {
       return true;
     });
     return result;
+  }
+
+  bool _isHiddenByAncestor(Element element) {
+    var hidden = false;
+    element.visitAncestorElements((Element ancestor) {
+      final widget = ancestor.widget;
+      if (widget is Offstage && widget.offstage) {
+        hidden = true;
+        return false;
+      }
+      if (widget is Visibility && !widget.visible && !widget.maintainSize) {
+        hidden = true;
+        return false;
+      }
+      if (widget is TickerMode && !widget.enabled) {
+        hidden = true;
+        return false;
+      }
+      if (widget is IgnorePointer && widget.ignoring) {
+        hidden = true;
+        return false;
+      }
+      return true;
+    });
+    return hidden;
   }
 
   bool _enabledFor(Widget widget) {
@@ -626,17 +762,68 @@ class FlutterScoutRuntime {
   }
 
   Offset? _pointForTarget(String? target, Map<String, String> params) {
-    final x = double.tryParse(params['x'] ?? '');
-    final y = double.tryParse(params['y'] ?? '');
-    if (x != null && y != null) return Offset(x, y);
+    final explicitPoint = _pointFromParams(params);
+    if (explicitPoint != null) return explicitPoint;
     if (target == null || target.isEmpty) return null;
-    return _snapshot().findNode(target)?.rect?.center;
+    final node = _snapshot().findNode(target);
+    return node?.suggestedTapPoint ?? node?.rect?.center;
+  }
+
+  Offset? _pointFromParams(Map<String, String> params, {String prefix = ''}) {
+    final xKey = prefix.isEmpty ? 'x' : '${prefix}X';
+    final yKey = prefix.isEmpty ? 'y' : '${prefix}Y';
+    final x = double.tryParse(params[xKey] ?? '');
+    final y = double.tryParse(params[yKey] ?? '');
+    if (x != null && y != null) return Offset(x, y);
+    final pointKey = prefix.isEmpty ? 'point' : prefix;
+    final point = params[pointKey];
+    if (point == null || !point.contains(',')) return null;
+    final parts = point.split(',');
+    if (parts.length != 2) return null;
+    final px = double.tryParse(parts[0].trim());
+    final py = double.tryParse(parts[1].trim());
+    return px == null || py == null ? null : Offset(px, py);
   }
 
   Offset _screenCenter() {
-    final view = WidgetsBinding.instance.platformDispatcher.views.first;
-    final logicalSize = view.physicalSize / view.devicePixelRatio;
+    final logicalSize = _logicalSize();
     return Offset(logicalSize.width / 2, logicalSize.height / 2);
+  }
+
+  Size _logicalSize() {
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    return view.physicalSize / view.devicePixelRatio;
+  }
+
+  Rect _viewportRect() => Offset.zero & _logicalSize();
+
+  Rect? _visibleRectFor(Rect rect) {
+    final visible = rect.intersect(_viewportRect());
+    if (visible.width <= 0 || visible.height <= 0) return null;
+    return visible;
+  }
+
+  double _visibleFraction(Rect rect, Rect? visibleRect) {
+    if (visibleRect == null) return 0;
+    final area = rect.width * rect.height;
+    if (area <= 0) return 0;
+    return (visibleRect.width * visibleRect.height / area).clamp(0, 1);
+  }
+
+  Offset? _visibleCenter(Rect rect) {
+    final visible = _visibleRectFor(rect);
+    if (visible == null) return null;
+    return visible.center;
+  }
+
+  bool _hitTestable(Offset point) {
+    try {
+      final result = HitTestResult();
+      WidgetsBinding.instance.hitTestInView(result, point, _primaryViewId);
+      return result.path.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
   }
 
   Offset _dragDelta(
@@ -691,6 +878,31 @@ class FlutterScoutRuntime {
       return (a.rect?.left ?? 0).compareTo(b.rect?.left ?? 0);
     });
     return result;
+  }
+
+  List<ScoutNode> _disambiguateIds(List<ScoutNode> nodes) {
+    final counts = <String, int>{};
+    return [
+      for (final node in nodes)
+        _disambiguateNode(
+          node,
+          counts.update(node.id, (value) => value + 1, ifAbsent: () => 1),
+        ),
+    ];
+  }
+
+  ScoutNode _disambiguateNode(ScoutNode node, int ordinal) {
+    if (ordinal == 1) {
+      return node.copyWith(baseId: node.id, ordinal: ordinal);
+    }
+    final id = '${node.id}_$ordinal';
+    return node.copyWith(
+      id: id,
+      baseId: node.id,
+      ordinal: ordinal,
+      fallbackId:
+          'i${id.hashCode.abs().toString().padLeft(8, '0').substring(0, 6)}',
+    );
   }
 
   List<ScoutNode> _mergeNestedControls(List<ScoutNode> nodes) {
@@ -767,16 +979,28 @@ class FlutterScoutRuntime {
     final snapshot = _snapshot();
     final matchedNode = snapshot.findField(target);
     if (matchedNode != null) {
-      EditableTextState? result;
+      final candidates = <_EditableCandidate>[];
       _walk(root, (Element element) {
-        if (result != null) return;
         final node = _nodeFromElement(element);
-        if (node != null &&
-            (node.id == matchedNode.id || node.label == matchedNode.label)) {
-          result = _editableStateBelow(element);
+        if (node == null) return;
+        final sameBase =
+            node.id == matchedNode.id || node.id == matchedNode.baseId;
+        final sameLabel = node.label != null && node.label == matchedNode.label;
+        if (!sameBase && !sameLabel) return;
+        final editable = _editableStateBelow(element);
+        if (editable != null) {
+          candidates.add(_EditableCandidate(node: node, state: editable));
         }
       });
-      if (result != null) return result;
+      for (final candidate in candidates) {
+        if (_sameRect(candidate.node.rect, matchedNode.rect)) {
+          return candidate.state;
+        }
+      }
+      if (matchedNode.ordinal > 0 && matchedNode.ordinal <= candidates.length) {
+        return candidates[matchedNode.ordinal - 1].state;
+      }
+      if (candidates.isNotEmpty) return candidates.first.state;
     }
 
     EditableTextState? result;
@@ -788,6 +1012,58 @@ class FlutterScoutRuntime {
       }
     });
     return result;
+  }
+
+  bool _sameRect(Rect? a, Rect? b) {
+    if (a == null || b == null) return false;
+    return (a.left - b.left).abs() < 0.5 &&
+        (a.top - b.top).abs() < 0.5 &&
+        (a.width - b.width).abs() < 0.5 &&
+        (a.height - b.height).abs() < 0.5;
+  }
+
+  ScoutNode? _findVisibleText(String text) {
+    final root = WidgetsBinding.instance.rootElement;
+    if (root == null) return null;
+    final wanted = text.trim();
+    ScoutNode? exact;
+    ScoutNode? contains;
+    _walk(root, (Element element) {
+      if (exact != null) return;
+      final own = _ownText(element.widget)?.trim();
+      if (own == null || own.isEmpty) return;
+      final rect = _rectFor(element);
+      if (rect == null || _visibleRectFor(rect) == null) return;
+      final id = 'text.${_slug(own)}';
+      final node = ScoutNode(
+        id: id,
+        baseId: id,
+        ordinal: 1,
+        fallbackId:
+            'i${id.hashCode.abs().toString().padLeft(8, '0').substring(0, 6)}',
+        kind: 'text',
+        label: own,
+        value: null,
+        widgetType: element.widget.runtimeType.toString(),
+        key: _keyLabel(element.widget.key),
+        rect: rect,
+        visibleRect: _visibleRectFor(rect),
+        visibleFraction: _visibleFraction(rect, _visibleRectFor(rect)),
+        suggestedTapPoint: _visibleCenter(rect),
+        hitTestable: _visibleCenter(rect) == null
+            ? false
+            : _hitTestable(_visibleCenter(rect)!),
+        enabled: true,
+        confidence: own == wanted ? 0.95 : 0.75,
+      );
+      if (own == wanted) {
+        exact = node;
+      } else if (contains == null &&
+          own.toLowerCase().contains(wanted.toLowerCase())) {
+        contains = node;
+      }
+    });
+    return exact ?? contains;
   }
 
   EditableTextState? _focusedEditable(Element root) {
@@ -852,7 +1128,7 @@ class FlutterScoutRuntime {
         pointer: pointer,
         device: pointer,
         position: point,
-        kind: PointerDeviceKind.mouse,
+        kind: PointerDeviceKind.touch,
         viewId: viewId,
       ),
     );
@@ -861,8 +1137,8 @@ class FlutterScoutRuntime {
         pointer: pointer,
         device: pointer,
         position: point,
-        kind: PointerDeviceKind.mouse,
-        buttons: kPrimaryMouseButton,
+        kind: PointerDeviceKind.touch,
+        buttons: kPrimaryButton,
         viewId: viewId,
       ),
     );
@@ -872,7 +1148,7 @@ class FlutterScoutRuntime {
         pointer: pointer,
         device: pointer,
         position: point,
-        kind: PointerDeviceKind.mouse,
+        kind: PointerDeviceKind.touch,
         viewId: viewId,
       ),
     );
@@ -881,7 +1157,7 @@ class FlutterScoutRuntime {
         pointer: pointer,
         device: pointer,
         position: point,
-        kind: PointerDeviceKind.mouse,
+        kind: PointerDeviceKind.touch,
         viewId: viewId,
       ),
     );
@@ -896,7 +1172,7 @@ class FlutterScoutRuntime {
         pointer: pointer,
         device: pointer,
         position: start,
-        kind: PointerDeviceKind.mouse,
+        kind: PointerDeviceKind.touch,
         viewId: viewId,
       ),
     );
@@ -905,8 +1181,8 @@ class FlutterScoutRuntime {
         pointer: pointer,
         device: pointer,
         position: start,
-        kind: PointerDeviceKind.mouse,
-        buttons: kPrimaryMouseButton,
+        kind: PointerDeviceKind.touch,
+        buttons: kPrimaryButton,
         viewId: viewId,
       ),
     );
@@ -919,8 +1195,8 @@ class FlutterScoutRuntime {
           device: pointer,
           position: start + delta * (i / steps),
           delta: delta / steps.toDouble(),
-          kind: PointerDeviceKind.mouse,
-          buttons: kPrimaryMouseButton,
+          kind: PointerDeviceKind.touch,
+          buttons: kPrimaryButton,
           viewId: viewId,
         ),
       );
@@ -931,7 +1207,7 @@ class FlutterScoutRuntime {
         pointer: pointer,
         device: pointer,
         position: start + delta,
-        kind: PointerDeviceKind.mouse,
+        kind: PointerDeviceKind.touch,
         viewId: viewId,
       ),
     );
@@ -940,7 +1216,7 @@ class FlutterScoutRuntime {
         pointer: pointer,
         device: pointer,
         position: start + delta,
-        kind: PointerDeviceKind.mouse,
+        kind: PointerDeviceKind.touch,
         viewId: viewId,
       ),
     );
@@ -957,7 +1233,12 @@ class FlutterScoutRuntime {
   }
 
   bool _changed(ScoutSnapshot before, ScoutSnapshot after) =>
-      jsonEncode(before.summaryJson()) != jsonEncode(after.summaryJson());
+      jsonEncode(before.summaryJson()) != jsonEncode(after.summaryJson()) ||
+      _geometryChanged(before, after);
+
+  bool _geometryChanged(ScoutSnapshot before, ScoutSnapshot after) {
+    return _changedGeometryIds(before, after).isNotEmpty;
+  }
 
   Map<String, Object?> _delta(ScoutSnapshot before, ScoutSnapshot after) {
     final beforeText = before.visibleText.toSet();
@@ -972,6 +1253,7 @@ class FlutterScoutRuntime {
     final afterFieldValues = {
       for (final node in after.fields) node.id: node.value,
     };
+    final changedGeometry = _changedGeometryIds(before, after);
     return {
       'screenChanged': before.screen != after.screen,
       'newText': afterText.difference(beforeText).toList(growable: false),
@@ -984,6 +1266,7 @@ class FlutterScoutRuntime {
         for (final id in afterFields.intersection(beforeFields))
           if (beforeFieldValues[id] != afterFieldValues[id]) id,
       ],
+      'changedGeometry': changedGeometry,
       'newInteractables': afterActions
           .difference(beforeActions)
           .toList(growable: false),
@@ -991,6 +1274,28 @@ class FlutterScoutRuntime {
           .difference(afterActions)
           .toList(growable: false),
     };
+  }
+
+  List<String> _changedGeometryIds(ScoutSnapshot before, ScoutSnapshot after) {
+    final beforeNodes = {
+      for (final node in [...before.fields, ...before.interactables])
+        node.id: node,
+    };
+    final afterNodes = {
+      for (final node in [...after.fields, ...after.interactables])
+        node.id: node,
+    };
+    final changed = <String>[];
+    for (final id in beforeNodes.keys) {
+      final previous = beforeNodes[id];
+      final current = afterNodes[id];
+      if (previous == null || current == null) continue;
+      if (!_sameRect(previous.rect, current.rect) ||
+          (previous.visibleFraction - current.visibleFraction).abs() > 0.01) {
+        changed.add(id);
+      }
+    }
+    return changed;
   }
 
   developer.ServiceExtensionResponse _ok(Map<String, Object?> value) {
@@ -1020,6 +1325,7 @@ class ScoutSnapshot {
     required this.visibleText,
     required this.interactables,
     required this.fields,
+    required this.scrollables,
     required this.recentErrors,
   });
 
@@ -1031,6 +1337,7 @@ class ScoutSnapshot {
   final List<String> visibleText;
   final List<ScoutNode> interactables;
   final List<ScoutNode> fields;
+  final List<Map<String, Object?>> scrollables;
   final List<Map<String, Object?>> recentErrors;
 
   ScoutNode? findNode(String target) {
@@ -1056,6 +1363,15 @@ class ScoutSnapshot {
       'logicalSize': [logicalSize.width, logicalSize.height],
       'visibleText': visibleText,
       'fieldValues': {for (final field in fields) field.id: field.value},
+      'fieldsById': {
+        for (final field in fields)
+          field.id: {
+            'label': field.label,
+            'value': field.value,
+            'baseId': field.baseId,
+            'ordinal': field.ordinal,
+          },
+      },
     };
   }
 
@@ -1066,6 +1382,7 @@ class ScoutSnapshot {
           .map((node) => node.toJson())
           .toList(growable: false),
       'fields': fields.map((node) => node.toJson()).toList(growable: false),
+      'scrollables': scrollables,
       'overlays': const <Object?>[],
       'keyboard': {'visible': false},
       'recentErrors': recentErrors,
@@ -1076,6 +1393,8 @@ class ScoutSnapshot {
 class ScoutNode {
   const ScoutNode({
     required this.id,
+    required this.baseId,
+    required this.ordinal,
     required this.fallbackId,
     required this.kind,
     required this.label,
@@ -1083,11 +1402,17 @@ class ScoutNode {
     required this.widgetType,
     required this.key,
     required this.rect,
+    required this.visibleRect,
+    required this.visibleFraction,
+    required this.suggestedTapPoint,
+    required this.hitTestable,
     required this.enabled,
     required this.confidence,
   });
 
   final String id;
+  final String baseId;
+  final int ordinal;
   final String fallbackId;
   final String kind;
   final String? label;
@@ -1095,19 +1420,37 @@ class ScoutNode {
   final String widgetType;
   final String? key;
   final Rect? rect;
+  final Rect? visibleRect;
+  final double visibleFraction;
+  final Offset? suggestedTapPoint;
+  final bool hitTestable;
   final bool enabled;
   final double confidence;
 
-  ScoutNode copyWith({String? label, String? value, double? confidence}) {
+  ScoutNode copyWith({
+    String? id,
+    String? baseId,
+    int? ordinal,
+    String? fallbackId,
+    String? label,
+    String? value,
+    double? confidence,
+  }) {
     return ScoutNode(
-      id: id,
-      fallbackId: fallbackId,
+      id: id ?? this.id,
+      baseId: baseId ?? this.baseId,
+      ordinal: ordinal ?? this.ordinal,
+      fallbackId: fallbackId ?? this.fallbackId,
       kind: kind,
       label: label ?? this.label,
       value: value ?? this.value,
       widgetType: widgetType,
       key: key,
       rect: rect,
+      visibleRect: visibleRect,
+      visibleFraction: visibleFraction,
+      suggestedTapPoint: suggestedTapPoint,
+      hitTestable: hitTestable,
       enabled: enabled,
       confidence: confidence ?? this.confidence,
     );
@@ -1132,6 +1475,8 @@ class ScoutNode {
   Map<String, Object?> toJson() {
     return {
       'id': id,
+      'baseId': baseId,
+      'ordinal': ordinal,
       'fallbackId': fallbackId,
       'kind': kind,
       'label': label,
@@ -1141,8 +1486,30 @@ class ScoutNode {
       'rect': rect == null
           ? null
           : [rect!.left, rect!.top, rect!.width, rect!.height],
+      'visibleRect': visibleRect == null
+          ? null
+          : [
+              visibleRect!.left,
+              visibleRect!.top,
+              visibleRect!.width,
+              visibleRect!.height,
+            ],
+      'visibleFraction': visibleFraction,
+      'partiallyOffscreen': visibleFraction > 0 && visibleFraction < 1,
+      'offscreen': visibleFraction == 0,
+      'suggestedTapPoint': suggestedTapPoint == null
+          ? null
+          : [suggestedTapPoint!.dx, suggestedTapPoint!.dy],
+      'hitTestable': hitTestable,
       'enabled': enabled,
       'confidence': confidence,
     };
   }
+}
+
+class _EditableCandidate {
+  const _EditableCandidate({required this.node, required this.state});
+
+  final ScoutNode node;
+  final EditableTextState state;
 }

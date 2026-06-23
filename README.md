@@ -6,14 +6,17 @@ The current vertical slice implements:
 
 - a main-only Flutter helper initializer
 - a registration initializer for apps that already create a custom debug binding
-- VM service extensions for inspect, tap, long press, input, fill, scroll, swipe, back, and wait-stable
+- VM service extensions for inspect, tap, tap-text, long press, input, fill, scroll, swipe, back, and wait-stable
 - a Dart CLI that can launch or attach to a simulator app
 - stale session validation and exact device resolution for launch/attach
 - `doctor`, `status`, `stop`, and `bounds` commands for setup and cleanup
 - extension readiness preflight after launch/attach
 - compact default action output, with full before/after data behind `--verbose`
 - compact inspect snapshots
-- before/after action deltas
+- duplicate-safe field handles and field values
+- viewport-aware inspect metadata for offscreen or partially visible controls
+- coordinate-aware scroll and swipe gestures
+- per-field fill results and before/after action deltas
 - screenshot capture and targeted crops through `xcrun simctl`
 - log capture for Flutter Scout launches
 - hard runtime signal capture through Flutter/platform error hooks
@@ -89,7 +92,19 @@ dart run bin/flutter_scout.dart crop btn.add_supplier -o /tmp/flutter_scout_add_
 dart run bin/flutter_scout.dart replay .flutter_scout/session.json
 ```
 
+Drive the smoke-regression screen when changing form, text, row, or scroll behavior:
+
+```bash
+dart run bin/flutter_scout.dart tap btn.smoke_issues
+dart run bin/flutter_scout.dart fill --json '{"field.enter_duplicate_note":"One","field.enter_duplicate_note_2":"Two","field.committed_answer":"Committed"}'
+dart run bin/flutter_scout.dart tap btn.select_staff
+dart run bin/flutter_scout.dart tap-text GoodJob
+dart run bin/flutter_scout.dart scroll down --from 220,760 --distance 520
+```
+
 Action commands return compact JSON by default: result, stability, delta, recent errors, and a small after summary. Add `--verbose` to action commands or `replay` when full before/after payloads are needed.
+
+`inspect` includes `fieldsById`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, and `scrollables` so agents can avoid stale, hidden, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`.
 
 Use compact logs for triage:
 

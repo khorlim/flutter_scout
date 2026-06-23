@@ -127,7 +127,7 @@ flutter-scout status
 flutter-scout inspect
 ```
 
-Successful setup means `status` reports running and `inspect` returns visible text, interactables, fields, and no setup error.
+Successful setup means `status` reports running and `inspect` returns visible text, interactables, fields, field geometry, and no setup error.
 
 `launch` and `attach` also report `ready`. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
 
@@ -136,6 +136,7 @@ Successful setup means `status` reports running and `inspect` returns visible te
 - `not_attached`: run `attach` or `launch` first.
 - `vm_service_uri_not_found`: run the app in debug/profile mode, copy the VM service URL, then use `attach --debug-url`.
 - `helper_extension_missing`: the VM service is reachable but Flutter Scout was not registered; add the helper initializer shown in `expected`.
+- `helper_extension_check_failed`: retry `status` and `inspect`; if `inspect` works, the app is reachable and the readiness check likely raced startup. If `inspect` fails, relaunch or fix the reported helper initializer.
 - `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable; run `attach` or `launch` again.
 - `device_not_found`: pass an exact device ID or name from `flutter devices`.
 - `flutter_scout_helper_not_registered`: add `flutter_scout_helper` and call `FlutterScoutBinding.ensureInitialized()` before `runApp`, or `FlutterScoutHelper.ensureRegistered()` after an existing debug binding.

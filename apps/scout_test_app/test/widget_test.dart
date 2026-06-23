@@ -20,4 +20,40 @@ void main() {
 
     expect(find.text('QA Supplier'), findsOneWidget);
   });
+
+  testWidgets('smoke issues screen covers duplicate fields and picker', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const ScoutTestApp());
+
+    await tester.tap(find.text('Smoke issues'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Smoke issues'), findsOneWidget);
+    expect(find.text('Enter the remark'), findsNWidgets(2));
+    expect(find.text('Enter duplicate note'), findsNWidgets(2));
+
+    await tester.enterText(
+      find.byKey(const ValueKey('choice_remark')),
+      'Choice remark',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('overall_remark')),
+      'Overall remark',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('committed_answer')),
+      'Committed answer',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Committed answer: Committed answer'), findsOneWidget);
+
+    await tester.tap(find.text('Select Staff'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('GoodJob'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Selected staff: GoodJob'), findsOneWidget);
+  });
 }

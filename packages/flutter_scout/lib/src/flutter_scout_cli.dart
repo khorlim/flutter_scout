@@ -28,6 +28,7 @@ class FlutterScoutCli {
         'inspect' => _callAndPrint('ext.flutter_scout.inspect'),
         'bounds' => _bounds(rest),
         'tap' => _tap(rest),
+        'tap-text' => _tapText(rest),
         'long-press' => _longPress(rest),
         'input' => _input(rest),
         'fill' => _fill(rest),
@@ -503,6 +504,30 @@ class FlutterScoutCli {
     );
   }
 
+  Future<int> _tapText(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('wait-ms', defaultsTo: '1500')
+      ..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    if (parsed.rest.isEmpty) {
+      throw const ScoutCliException(
+        'usage',
+        'Usage: flutter-scout tap-text <visible text>',
+      );
+    }
+    final text = parsed.rest.join(' ');
+    final params = <String, String>{
+      'text': text,
+      'waitMs': parsed.option('wait-ms') ?? '1500',
+    };
+    return _callAndPrint(
+      'ext.flutter_scout.tapText',
+      params: params,
+      record: {'cmd': 'tap-text', ...params},
+      compact: !parsed.flag('verbose'),
+    );
+  }
+
   Future<int> _longPress(List<String> args) async {
     final parser = ArgParser()
       ..addOption('duration-ms', defaultsTo: '600')
@@ -596,6 +621,10 @@ class FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('target')
       ..addOption('distance')
+      ..addOption('x')
+      ..addOption('y')
+      ..addOption('from')
+      ..addOption('to')
       ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final direction = parsed.rest.isEmpty
@@ -606,6 +635,10 @@ class FlutterScoutCli {
       if (parsed.option('target') != null) 'target': parsed.option('target')!,
       if (parsed.option('distance') != null)
         'distance': parsed.option('distance')!,
+      if (parsed.option('x') != null) 'x': parsed.option('x')!,
+      if (parsed.option('y') != null) 'y': parsed.option('y')!,
+      if (parsed.option('from') != null) 'point': parsed.option('from')!,
+      if (parsed.option('to') != null) 'to': parsed.option('to')!,
     };
     return _callAndPrint(
       method,
@@ -852,6 +885,10 @@ class FlutterScoutCli {
       final cmd = item['cmd'];
       final result = switch (cmd) {
         'tap' => await _call('ext.flutter_scout.tap', _stringMap(item)),
+        'tap-text' => await _call('ext.flutter_scout.tapText', {
+          'text': item['text'].toString(),
+          if (item['waitMs'] != null) 'waitMs': item['waitMs'].toString(),
+        }),
         'input' => await _call('ext.flutter_scout.input', {
           'target': item['target'].toString(),
           'value': item['value'].toString(),
@@ -930,6 +967,9 @@ class FlutterScoutCli {
       if (result['popped'] != null) 'popped': result['popped'],
       if (result['target'] is Map<String, dynamic>)
         'target': _compactNode(result['target'] as Map<String, dynamic>),
+      if (result['fieldResults'] != null)
+        'fieldResults': result['fieldResults'],
+      if (result['warnings'] != null) 'warnings': result['warnings'],
       if (after is Map<String, dynamic>) 'afterSummary': _compactSummary(after),
       if (result['delta'] != null) 'delta': result['delta'],
       if (result['recentErrors'] is List)
@@ -953,6 +993,7 @@ class FlutterScoutCli {
       if (summary['visibleText'] is List)
         'visibleText': _lastItems(summary['visibleText'] as List, 12),
       if (summary['fieldValues'] != null) 'fieldValues': summary['fieldValues'],
+      if (summary['fieldsById'] != null) 'fieldsById': summary['fieldsById'],
     };
   }
 
@@ -1542,11 +1583,12 @@ Usage:
   flutter-scout inspect
   flutter-scout bounds [target]
   flutter-scout tap <target> | --x <x> --y <y> [--verbose]
+  flutter-scout tap-text <visible text> [--verbose]
   flutter-scout long-press <target> [--verbose]
   flutter-scout input [--target <field>] <value> [--verbose]
   flutter-scout fill --json <object> [--verbose]
-  flutter-scout scroll [up|down|left|right] [--target <target>] [--distance <px>] [--verbose]
-  flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--verbose]
+  flutter-scout scroll [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--verbose]
+  flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--to x,y] [--verbose]
   flutter-scout back [--verbose]
   flutter-scout wait stable
   flutter-scout deeplink <url>
