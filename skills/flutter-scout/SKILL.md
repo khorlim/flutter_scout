@@ -8,7 +8,7 @@ description: Use Flutter Scout to give AI agents eyes and hands for Flutter apps
 Use Flutter Scout to verify Flutter changes on a simulator with a compact agent loop:
 
 ```text
-attach or launch -> inspect -> act -> read delta/errors -> crop if needed -> replay
+ensure or attach -> inspect -> act -> reload/restart after edits -> read delta/errors -> crop if needed -> replay
 ```
 
 ## Setup Check
@@ -43,14 +43,17 @@ flutter-scout <command>
 
 ## Preferred Workflow
 
-1. Prefer reusing the human's running simulator app:
+1. Prefer reusing an existing simulator app:
 
 ```bash
+flutter-scout ensure --device <simulator-id> --project <flutter-app-path>
 flutter-scout attach --device <simulator-id>
 flutter-scout attach --debug-url <vm-service-url>
 ```
 
-2. Launch only when no reusable debug session exists:
+`ensure` is the default for agent loops: it reuses a ready Scout VM service when possible and launches only when needed.
+
+2. Launch directly only when you intentionally need a new Scout-owned Flutter run:
 
 ```bash
 flutter-scout launch --device <simulator-id> --project <flutter-app-path>
@@ -62,7 +65,7 @@ Launch validates the exact requested device and emits compact progress events. I
 flutter-scout stop --clear-session
 ```
 
-Launch and attach responses include `ready`. If `ready` is false, fix the reported setup reason before inspecting or acting.
+Launch, ensure, and attach responses include `ready` when they start or connect to a VM service. If `ready` is false, fix the reported setup reason before inspecting or acting.
 
 3. Inspect before acting:
 
@@ -88,7 +91,16 @@ After every action, read `result`, `delta`, `fieldValues`, and `recentErrors`. D
 
 Action output is compact by default. Add `--verbose` only when full before/after summaries are needed.
 
-5. Use targeted visual evidence when layout matters:
+5. After Dart-only code edits, hot update instead of relaunching:
+
+```bash
+flutter-scout reload
+flutter-scout restart
+```
+
+Prefer `reload` first because it preserves app state. Use `restart` when reload is rejected or state must reset. `restart` requires a Scout-owned `launch`/`ensure` process; attach-only sessions should use `reload` or run `ensure` to launch when needed. Native, plugin, asset, and `pubspec.yaml` changes can still require a full rebuild.
+
+6. Use targeted visual evidence when layout matters:
 
 ```bash
 flutter-scout bounds btn.save_supplier
@@ -98,7 +110,7 @@ flutter-scout screenshot -o /tmp/current_screen.png
 
 Prefer `bounds` and crops over full screenshots when inspecting one control or dialog.
 
-6. Replay after a fix:
+7. Replay after a fix:
 
 ```bash
 flutter-scout replay .flutter_scout/session.json
@@ -110,8 +122,11 @@ Replay should be the first check after changing code for a flow you already test
 
 ```bash
 flutter-scout status
+flutter-scout ensure --device <simulator-id> --project <flutter-app-path>
 flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
 flutter-scout wait stable
+flutter-scout reload
+flutter-scout restart
 flutter-scout input --target field.search "query"
 flutter-scout tap-text "GoodJob"
 flutter-scout long-press btn.more
@@ -130,7 +145,9 @@ flutter-scout stop --clear-session
 
 - Treat Flutter Scout as eyes and hands, not a QA judge.
 - Prefer `attach` to preserve human-in-the-loop state.
+- Prefer `ensure` over repeated `launch`; repeated full launch causes slow native rebuilds.
 - Start with `inspect`; avoid blind screenshots.
+- After Dart-only edits, run `reload` or `restart` before replaying flows.
 - Prefer `fill` for forms instead of tap/type/tap/type, but read per-field results and warnings.
 - Trust action deltas for next-step planning.
 - Treat `delta.changedGeometry` as a real change for scrolling or layout movement even when text and field values are unchanged.

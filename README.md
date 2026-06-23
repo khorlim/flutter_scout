@@ -7,10 +7,11 @@ The current vertical slice implements:
 - a main-only Flutter helper initializer
 - a registration initializer for apps that already create a custom debug binding
 - VM service extensions for inspect, tap, tap-text, long press, input, fill, scroll, swipe, back, and wait-stable
-- a Dart CLI that can launch or attach to a simulator app
+- a Dart CLI that can ensure, launch, or attach to a simulator app
 - stale session validation and exact device resolution for launch/attach
 - `doctor`, `status`, `stop`, and `bounds` commands for setup and cleanup
 - extension readiness preflight after launch/attach
+- attach-first `ensure`, hot reload, and hot restart commands to avoid rebuilds
 - compact default action output, with full before/after data behind `--verbose`
 - compact inspect snapshots
 - duplicate-safe field handles and field values
@@ -57,10 +58,16 @@ No per-screen or per-widget wrappers are required.
 
 ## Verified Simulator Flow
 
-Launch the test app through Flutter Scout:
+Prefer `ensure` for day-to-day verification. It reuses a running Scout session when possible and launches only when needed:
 
 ```bash
 cd packages/flutter_scout
+dart run bin/flutter_scout.dart ensure --device <simulator-id> --project ../../apps/scout_test_app
+```
+
+Use `launch` when you explicitly need Scout to start a new Flutter run:
+
+```bash
 dart run bin/flutter_scout.dart launch --device <simulator-id> --project ../../apps/scout_test_app
 ```
 
@@ -91,6 +98,15 @@ dart run bin/flutter_scout.dart screenshot -o /tmp/flutter_scout_test.png
 dart run bin/flutter_scout.dart crop btn.add_supplier -o /tmp/flutter_scout_add_button_crop.png
 dart run bin/flutter_scout.dart replay .flutter_scout/session.json
 ```
+
+After Dart-only code changes, avoid a full rebuild:
+
+```bash
+dart run bin/flutter_scout.dart reload
+dart run bin/flutter_scout.dart restart
+```
+
+`reload` preserves app state. `restart` resets Dart state without reinstalling, and requires a Scout-owned `launch`/`ensure` process so Scout can signal the Flutter tool. Native, plugin, asset, or `pubspec.yaml` changes can still require a full relaunch/rebuild.
 
 Drive the smoke-regression screen when changing form, text, row, or scroll behavior:
 

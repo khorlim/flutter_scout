@@ -20,6 +20,7 @@ class FlutterScoutCli {
     try {
       return await switch (command) {
         'launch' => _launch(rest),
+        'ensure' => _ensure(rest),
         'attach' => _attach(rest),
         'status' => _status(),
         'doctor' => _doctor(rest),
@@ -36,6 +37,8 @@ class FlutterScoutCli {
         'swipe' => _swipe(rest),
         'back' => _back(rest),
         'wait' => _wait(rest),
+        'reload' => _reload(rest),
+        'restart' => _restart(rest),
         'deeplink' => _deeplink(rest),
         'logs' => _logs(rest),
         'screenshot' => _screenshot(rest),
@@ -95,7 +98,7 @@ class FlutterScoutCli {
 
     _ensureSessionDir();
     Directory(p.dirname(_logFile)).createSync(recursive: true);
-    final logSink = File(_logFile).openWrite(mode: FileMode.write);
+    File(_logFile).writeAsStringSync('');
     final flutterArgs = <String>[
       'run',
       '-d',
@@ -124,55 +127,43 @@ class FlutterScoutCli {
       'deviceName': resolvedDevice.name,
       'project': project,
     });
-    final process = await Process.start(
-      'flutter',
-      flutterArgs,
-      workingDirectory: project,
-      mode: ProcessStartMode.detachedWithStdio,
-    );
+    final process = await Process.start('/bin/bash', [
+      '-lc',
+      'cd ${_shellQuote(project)} && exec flutter ${flutterArgs.map(_shellQuote).join(' ')} >> ${_shellQuote(_logFile)} 2>&1',
+    ], mode: ProcessStartMode.detached);
     File(_deviceFile).writeAsStringSync(resolvedDevice.id);
     File(_pidFile).writeAsStringSync(process.pid.toString());
     final signalSubscriptions = _installLaunchSignalHandlers(process);
 
-    final completer = Completer<String?>();
     final lines = <String>[];
-    var logOpen = true;
     void handleLine(String line) {
       lines.add(line);
-      if (logOpen) {
-        logSink.writeln(line);
-      }
       _writeLaunchProgressFromLine(line);
-      final uri = _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
-      if (uri != null && !completer.isCompleted) {
-        completer.complete(uri);
-      }
-      if (lines.length > 200 && !completer.isCompleted) {
+      if (lines.length > 200) {
         lines.removeAt(0);
       }
     }
 
-    final stdoutSub = process.stdout
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(handleLine);
-    final stderrSub = process.stderr
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(handleLine);
-
-    final vmUri = await completer.future.timeout(
-      const Duration(minutes: 5),
-      onTimeout: () => null,
-    );
+    String? vmUri;
+    var readLineCount = 0;
+    final deadline = DateTime.now().add(const Duration(minutes: 5));
+    while (DateTime.now().isBefore(deadline)) {
+      final logFile = File(_logFile);
+      if (logFile.existsSync()) {
+        final currentLines = logFile.readAsLinesSync();
+        for (final line in currentLines.skip(readLineCount)) {
+          handleLine(line);
+          vmUri ??= _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
+        }
+        readLineCount = currentLines.length;
+        if (vmUri != null) break;
+      }
+      if (!await _processExists(process.pid)) break;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
     for (final subscription in signalSubscriptions) {
       await subscription.cancel();
     }
-    await stdoutSub.cancel();
-    await stderrSub.cancel();
-    await logSink.flush();
-    logOpen = false;
-    await logSink.close();
 
     if (vmUri == null) {
       stdout.writeln(
@@ -191,7 +182,7 @@ class FlutterScoutCli {
     final wsUri = _normalizeVmUri(vmUri);
     File(_vmUriFile).writeAsStringSync(wsUri);
     _writeProgress('verify_vm_service', {'vmServiceUri': wsUri});
-    final ready = await _checkScoutReady(wsUri);
+    final ready = await _waitScoutReady(wsUri);
     stdout.writeln(
       jsonEncode({
         'launched': true,
@@ -252,7 +243,7 @@ class FlutterScoutCli {
       'vmServiceUri': wsUri,
       'appStatePreserved': true,
     };
-    final ready = await _checkScoutReady(wsUri);
+    final ready = await _waitScoutReady(wsUri);
     output['ready'] = ready.ready;
     if (!ready.ready) {
       output['reason'] = ready.reason;
@@ -263,6 +254,75 @@ class FlutterScoutCli {
     }
     stdout.writeln(jsonEncode(output));
     return ready.ready ? 0 : 1;
+  }
+
+  Future<int> _ensure(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('debug-url')
+      ..addOption('device')
+      ..addOption('project', defaultsTo: Directory.current.path)
+      ..addOption('target')
+      ..addOption('flavor')
+      ..addMultiOption('dart-define')
+      ..addMultiOption('dart-define-from-file')
+      ..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    final device = parsed.option('device');
+    final discovered = await _discoverAttachVmUri(
+      explicit: parsed.option('debug-url'),
+      device: device,
+    );
+    if (discovered.uri != null && discovered.uri!.isNotEmpty) {
+      final ready = await _waitScoutReady(discovered.uri!);
+      if (ready.ready) {
+        _ensureSessionDir();
+        File(_vmUriFile).writeAsStringSync(discovered.uri!);
+        if (device != null && device.isNotEmpty) {
+          File(_deviceFile).writeAsStringSync(device);
+        }
+        stdout.writeln(
+          jsonEncode({
+            'ensured': true,
+            'reusedRunningApp': true,
+            'appStatePreserved': true,
+            'ready': true,
+            'vmServiceUri': discovered.uri,
+            'device': ?device,
+          }),
+        );
+        return 0;
+      }
+    }
+
+    final launchArgs = <String>[
+      if (device != null && device.isNotEmpty) ...['--device', device],
+      '--project',
+      parsed.option('project')!,
+      if (parsed.option('target') != null) ...[
+        '--target',
+        parsed.option('target')!,
+      ],
+      if (parsed.option('flavor') != null) ...[
+        '--flavor',
+        parsed.option('flavor')!,
+      ],
+      for (final value in parsed.multiOption('dart-define')) ...[
+        '--dart-define',
+        value,
+      ],
+      for (final value in parsed.multiOption('dart-define-from-file')) ...[
+        '--dart-define-from-file',
+        value,
+      ],
+      if (parsed.flag('verbose')) '--verbose',
+    ];
+    if (device == null || device.isEmpty) {
+      throw const ScoutCliException(
+        'missing_device',
+        'Usage: flutter-scout ensure --device <simulator-id> [--project <path>]',
+      );
+    }
+    return _launch(launchArgs);
   }
 
   Future<int> _status() async {
@@ -309,7 +369,7 @@ class FlutterScoutCli {
     var helperExtensionRegistered = false;
     String? helperExtensionError;
     if (session.ok && vmUri != null) {
-      final ready = await _checkScoutReady(vmUri);
+      final ready = await _waitScoutReady(vmUri);
       helperExtensionRegistered = ready.ready;
       helperExtensionError = ready.ready ? null : ready.reason;
     }
@@ -592,6 +652,44 @@ class FlutterScoutCli {
       );
     }
     return _callAndPrint('ext.flutter_scout.waitStable');
+  }
+
+  Future<int> _reload(List<String> args) async {
+    final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    final result = await _hotUpdate(
+      action: 'reload',
+      signal: ProcessSignal.sigusr1,
+      fullRestart: false,
+    );
+    stdout.writeln(
+      const JsonEncoder.withIndent(
+        '  ',
+      ).convert(parsed.flag('verbose') ? result : _compactActionResult(result)),
+    );
+    if (result['ok'] == true) {
+      _recordAction(const {'cmd': 'reload'});
+    }
+    return result['ok'] == false ? 1 : 0;
+  }
+
+  Future<int> _restart(List<String> args) async {
+    final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    final result = await _hotUpdate(
+      action: 'restart',
+      signal: ProcessSignal.sigusr2,
+      fullRestart: true,
+    );
+    stdout.writeln(
+      const JsonEncoder.withIndent(
+        '  ',
+      ).convert(parsed.flag('verbose') ? result : _compactActionResult(result)),
+    );
+    if (result['ok'] == true) {
+      _recordAction(const {'cmd': 'restart'});
+    }
+    return result['ok'] == false ? 1 : 0;
   }
 
   Future<int> _scroll(List<String> args) {
@@ -904,6 +1002,16 @@ class FlutterScoutCli {
         'scroll' => await _call('ext.flutter_scout.scroll', _stringMap(item)),
         'swipe' => await _call('ext.flutter_scout.swipe', _stringMap(item)),
         'back' => await _call('ext.flutter_scout.back'),
+        'reload' => await _hotUpdate(
+          action: 'reload',
+          signal: ProcessSignal.sigusr1,
+          fullRestart: false,
+        ),
+        'restart' => await _hotUpdate(
+          action: 'restart',
+          signal: ProcessSignal.sigusr2,
+          fullRestart: true,
+        ),
         'deeplink' => await _replayDeeplink(item['url']?.toString()),
         _ => {'ok': false, 'error': 'unknown replay cmd: $cmd'},
       };
@@ -962,6 +1070,13 @@ class FlutterScoutCli {
       if (result['action'] != null) 'action': result['action'],
       if (result['stable'] != null) 'stable': result['stable'],
       if (result['result'] != null) 'result': result['result'],
+      if (result['method'] != null) 'method': result['method'],
+      if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
+      if (result['message'] != null) 'message': result['message'],
+      if (result['fullRebuildRequired'] != null)
+        'fullRebuildRequired': result['fullRebuildRequired'],
+      if (result['nextBestActions'] != null)
+        'nextBestActions': result['nextBestActions'],
       if (result['filled'] != null) 'filled': result['filled'],
       if (result['failed'] != null) 'failed': result['failed'],
       if (result['popped'] != null) 'popped': result['popped'],
@@ -1050,6 +1165,220 @@ class FlutterScoutCli {
     } finally {
       await service.dispose();
     }
+  }
+
+  Future<Map<String, dynamic>> _hotUpdate({
+    required String action,
+    required ProcessSignal signal,
+    required bool fullRestart,
+  }) async {
+    final started = DateTime.now();
+    final before = await _tryInspect();
+    final pid = _readPid();
+    if (pid != null && await _looksLikeScoutFlutterRun(pid)) {
+      final sent = Process.killPid(pid, signal);
+      if (!sent) {
+        return {
+          'ok': false,
+          'action': action,
+          'error': {
+            'code': '${action}_signal_failed',
+            'message': 'Could not send ${signal.toString()} to pid $pid.',
+          },
+          'fullRebuildRequired': false,
+        };
+      }
+      final after = await _waitForInspectAfterHotUpdate(
+        timeout: fullRestart
+            ? const Duration(seconds: 15)
+            : const Duration(seconds: 8),
+      );
+      final elapsedMs = DateTime.now().difference(started).inMilliseconds;
+      return {
+        'ok': after != null,
+        'action': action,
+        'method': fullRestart ? 'sigusr2_hot_restart' : 'sigusr1_hot_reload',
+        'pid': pid,
+        'stable': after?['idle'],
+        'result': _inspectChanged(before, after) ? 'changed' : 'unchanged',
+        'elapsedMs': elapsedMs,
+        'before': before,
+        'after': after,
+        'delta': _inspectDelta(before, after),
+        'recentErrors': after?['recentErrors'] ?? const <Object?>[],
+        if (after == null)
+          'error': {
+            'code': '${action}_timeout',
+            'message': 'Timed out waiting for Flutter Scout after $action.',
+          },
+        if (after == null)
+          'nextBestActions': [
+            'Run flutter-scout status',
+            'Run flutter-scout inspect',
+            'If the app is not reachable, run flutter-scout launch --device <sim-id> --project <path>',
+          ],
+      };
+    }
+
+    if (!fullRestart) {
+      return _vmServiceReload(started: started, before: before);
+    }
+
+    return {
+      'ok': false,
+      'action': action,
+      'method': 'unavailable_without_scout_owned_flutter_run',
+      'fullRebuildRequired': false,
+      'error': {
+        'code': 'hot_restart_unavailable',
+        'message':
+            'Hot restart requires a Scout-owned flutter run process. Attach-only sessions can inspect and act, but cannot restart the Flutter tool process.',
+      },
+      'nextBestActions': [
+        'Use flutter-scout reload for Dart-only changes that preserve state',
+        'Start the app with flutter-scout launch to enable flutter-scout restart',
+        'Use flutter-scout ensure --device <sim-id> --project <path> to reuse when possible and launch only when needed',
+      ],
+    };
+  }
+
+  Future<Map<String, dynamic>> _vmServiceReload({
+    required DateTime started,
+    required Map<String, dynamic>? before,
+  }) async {
+    final uri = _readVmUri();
+    if (uri == null || uri.isEmpty) {
+      return {
+        'ok': false,
+        'action': 'reload',
+        'method': 'vm_service_reload_sources',
+        'error': {
+          'code': 'not_attached',
+          'message': 'Run flutter-scout attach or launch first.',
+        },
+      };
+    }
+    try {
+      final service = await _connect(uri);
+      try {
+        final isolateId = await _findMainIsolate(service);
+        final report = await service
+            .reloadSources(isolateId, force: false, pause: false)
+            .timeout(const Duration(seconds: 20));
+        try {
+          await service
+              .callServiceExtension(
+                'ext.flutter.reassemble',
+                isolateId: isolateId,
+              )
+              .timeout(const Duration(seconds: 5));
+        } catch (_) {
+          // Some embedder/tool combinations reassemble as part of reloadSources.
+        }
+        final after = await _waitForInspectAfterHotUpdate(
+          timeout: const Duration(seconds: 8),
+        );
+        final elapsedMs = DateTime.now().difference(started).inMilliseconds;
+        return {
+          'ok': report.success == true && after != null,
+          'action': 'reload',
+          'method': 'vm_service_reload_sources',
+          'stable': after?['idle'],
+          'result': _inspectChanged(before, after) ? 'changed' : 'unchanged',
+          'elapsedMs': elapsedMs,
+          'before': before,
+          'after': after,
+          'delta': _inspectDelta(before, after),
+          'recentErrors': after?['recentErrors'] ?? const <Object?>[],
+          if (report.success != true)
+            'error': {
+              'code': 'reload_sources_failed',
+              'message': 'VM service reloadSources reported failure.',
+            },
+          if (after == null)
+            'error': {
+              'code': 'reload_inspect_timeout',
+              'message': 'Reload completed but Flutter Scout did not respond.',
+            },
+        };
+      } finally {
+        await service.dispose();
+      }
+    } catch (error) {
+      return {
+        'ok': false,
+        'action': 'reload',
+        'method': 'vm_service_reload_sources',
+        'fullRebuildRequired': false,
+        'error': {'code': 'vm_reload_unavailable', 'message': error.toString()},
+        'nextBestActions': [
+          'Start the app with flutter-scout launch to enable signal-based reload',
+          'Use flutter-scout ensure --device <sim-id> --project <path> to reuse when possible and launch only when needed',
+          'If Dart reload is rejected, run flutter-scout restart or relaunch after native/pubspec changes',
+        ],
+      };
+    }
+  }
+
+  Future<Map<String, dynamic>?> _tryInspect() async {
+    try {
+      return await _call('ext.flutter_scout.inspect');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>?> _waitForInspectAfterHotUpdate({
+    required Duration timeout,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final inspect = await _tryInspect();
+      if (inspect != null && inspect['ok'] == true) return inspect;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return null;
+  }
+
+  bool _inspectChanged(
+    Map<String, dynamic>? before,
+    Map<String, dynamic>? after,
+  ) {
+    if (before == null || after == null) return before != after;
+    return jsonEncode(_compactSummary(before)) !=
+        jsonEncode(_compactSummary(after));
+  }
+
+  Map<String, Object?> _inspectDelta(
+    Map<String, dynamic>? before,
+    Map<String, dynamic>? after,
+  ) {
+    if (before == null || after == null) {
+      return {'available': false};
+    }
+    final beforeText = _stringSet(before['visibleText']);
+    final afterText = _stringSet(after['visibleText']);
+    final beforeFields = _stringKeySet(before['fieldValues']);
+    final afterFields = _stringKeySet(after['fieldValues']);
+    return {
+      'screenChanged': before['screen'] != after['screen'],
+      'newText': afterText.difference(beforeText).toList(growable: false),
+      'removedText': beforeText.difference(afterText).toList(growable: false),
+      'newFields': afterFields.difference(beforeFields).toList(growable: false),
+      'removedFields': beforeFields
+          .difference(afterFields)
+          .toList(growable: false),
+    };
+  }
+
+  Set<String> _stringSet(Object? value) {
+    if (value is! List) return const <String>{};
+    return value.map((item) => item.toString()).toSet();
+  }
+
+  Set<String> _stringKeySet(Object? value) {
+    if (value is! Map) return const <String>{};
+    return value.keys.map((item) => item.toString()).toSet();
   }
 
   bool _looksLikeMissingScoutExtension(RPCError error) {
@@ -1142,6 +1471,25 @@ class FlutterScoutCli {
         detail: error.toString(),
       );
     }
+  }
+
+  Future<_ScoutReady> _waitScoutReady(
+    String uri, {
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    _ScoutReady? last;
+    while (DateTime.now().isBefore(deadline)) {
+      last = await _checkScoutReady(uri);
+      if (last.ready) return last;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return last ??
+        const _ScoutReady(
+          ready: false,
+          reason: 'helper_extension_check_failed',
+          expected: 'FlutterScoutBinding.ensureInitialized()',
+        );
   }
 
   Future<void> _captureScreenshot(String output) async {
@@ -1422,6 +1770,8 @@ class FlutterScoutCli {
   String _safeFileName(String value) =>
       _slug(value).isEmpty ? 'target' : _slug(value);
 
+  String _shellQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";
+
   String _slug(String value) => value
       .toLowerCase()
       .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
@@ -1577,6 +1927,7 @@ Flutter Scout
 Usage:
   flutter-scout attach [--debug-url <url>] [--device <simulator-id>]
   flutter-scout launch --device <simulator-id> [--project <path>]
+  flutter-scout ensure --device <simulator-id> [--project <path>]
   flutter-scout status
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
@@ -1591,6 +1942,8 @@ Usage:
   flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--to x,y] [--verbose]
   flutter-scout back [--verbose]
   flutter-scout wait stable
+  flutter-scout reload [--verbose]
+  flutter-scout restart [--verbose]
   flutter-scout deeplink <url>
   flutter-scout logs [--last <n>] [--contains <text>] [--summary]
   flutter-scout screenshot [-o <path>] [--target <target>]

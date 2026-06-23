@@ -113,7 +113,13 @@ If attach cannot discover the VM service URL, copy it from Flutter/IDE/DevTools 
 flutter-scout attach --debug-url http://127.0.0.1:XXXXX/...
 ```
 
-Launch through Flutter Scout when no app is running:
+Use `ensure` when you want Scout to reuse a running app if possible and launch only when needed:
+
+```bash
+flutter-scout ensure --device <simulator-id> --project <flutter-app-path>
+```
+
+Launch through Flutter Scout when you intentionally need a new Scout-owned run:
 
 ```bash
 flutter-scout launch --device <simulator-id> --project <flutter-app-path>
@@ -129,7 +135,9 @@ flutter-scout inspect
 
 Successful setup means `status` reports running and `inspect` returns visible text, interactables, fields, field geometry, and no setup error.
 
-`launch` and `attach` also report `ready`. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
+`ensure`, `launch`, and `attach` report `ready` when they connect to or start a VM service. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
+
+After setup, use `flutter-scout reload` for Dart-only edits and `flutter-scout restart` when Dart state must reset. `restart` requires a Scout-owned `ensure` or `launch` process; attach-only sessions can still inspect and act, but cannot signal the Flutter tool for restart.
 
 ## Troubleshooting
 
@@ -137,6 +145,8 @@ Successful setup means `status` reports running and `inspect` returns visible te
 - `vm_service_uri_not_found`: run the app in debug/profile mode, copy the VM service URL, then use `attach --debug-url`.
 - `helper_extension_missing`: the VM service is reachable but Flutter Scout was not registered; add the helper initializer shown in `expected`.
 - `helper_extension_check_failed`: retry `status` and `inspect`; if `inspect` works, the app is reachable and the readiness check likely raced startup. If `inspect` fails, relaunch or fix the reported helper initializer.
+- `hot_restart_unavailable`: start or reconnect through `flutter-scout ensure --device <simulator-id> --project <path>` so Scout owns the Flutter tool process, or perform a normal relaunch.
+- `vm_reload_unavailable`: the attached session cannot hot reload through VM service; use a Scout-owned `ensure`/`launch` session or relaunch after non-Dart changes.
 - `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable; run `attach` or `launch` again.
 - `device_not_found`: pass an exact device ID or name from `flutter devices`.
 - `flutter_scout_helper_not_registered`: add `flutter_scout_helper` and call `FlutterScoutBinding.ensureInitialized()` before `runApp`, or `FlutterScoutHelper.ensureRegistered()` after an existing debug binding.
