@@ -32,6 +32,7 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
   final List<String> _suppliers = <String>[];
   int _duplicateActions = 0;
   int _glyphDuplicateActions = 0;
+  String _customPhone = 'Not set';
 
   Future<void> _openAddSupplierDialog() async {
     final supplier = await showDialog<String>(
@@ -58,6 +59,17 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _openCustomPhoneDialog() async {
+    final phone = await showDialog<String>(
+      context: context,
+      builder: (context) => const CustomPhoneDialog(),
+    );
+    if (phone == null || phone.isEmpty) return;
+    setState(() {
+      _customPhone = phone;
+    });
   }
 
   @override
@@ -135,12 +147,18 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                     onPressed: _showOkDialog,
                     child: const Text('Show OK dialog'),
                   ),
+                  TextButton(
+                    key: const ValueKey('custom_phone'),
+                    onPressed: _openCustomPhoneDialog,
+                    child: const Text('Custom phone'),
+                  ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
             Text('Duplicate actions: $_duplicateActions'),
             Text('Glyph duplicate actions: $_glyphDuplicateActions'),
+            Text('Custom phone: $_customPhone'),
             const SizedBox(height: 16),
             Expanded(
               child: _suppliers.isEmpty
@@ -162,6 +180,100 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
       ),
     );
   }
+}
+
+class CustomPhoneDialog extends StatefulWidget {
+  const CustomPhoneDialog({super.key});
+
+  @override
+  State<CustomPhoneDialog> createState() => _CustomPhoneDialogState();
+}
+
+class _CustomPhoneDialogState extends State<CustomPhoneDialog> {
+  String _value = '60';
+
+  void _append(String digit) {
+    setState(() {
+      _value += digit;
+    });
+  }
+
+  void _save() {
+    Navigator.of(context).pop(_value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Phone Number'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(_formatPhone(_value), key: const ValueKey('custom_phone_value')),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: 240,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final row in const [
+                  ['1', '2', '3'],
+                  ['4', '5', '6'],
+                  ['7', '8', '9'],
+                  ['', '0', ''],
+                ])
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      children: [
+                        for (final digit in row)
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 4,
+                              ),
+                              child: digit.isEmpty
+                                  ? const SizedBox(height: 44)
+                                  : OutlinedButton(
+                                      key: ValueKey('custom_digit_$digit'),
+                                      onPressed: () => _append(digit),
+                                      child: Text(digit),
+                                    ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          key: const ValueKey('custom_phone_cancel'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const ValueKey('custom_phone_save'),
+          onPressed: _save,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+String _formatPhone(String value) {
+  if (value.length <= 2) return value;
+  if (value.length <= 4) {
+    return value;
+  }
+  if (value.length <= 7) {
+    return '(${value.substring(0, 4)}) ${value.substring(4)}';
+  }
+  return '(${value.substring(0, 4)}) ${value.substring(4, 7)}-${value.substring(7)}';
 }
 
 class SmokeIssuesScreen extends StatefulWidget {

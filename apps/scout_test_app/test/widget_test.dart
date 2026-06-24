@@ -56,4 +56,25 @@ void main() {
 
     expect(find.text('Selected staff: GoodJob'), findsOneWidget);
   });
+
+  testWidgets('custom phone dialog uses visible digit buttons', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const ScoutTestApp());
+
+    await tester.tap(find.text('Custom phone'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Phone Number'), findsOneWidget);
+    expect(find.text('60'), findsOneWidget);
+
+    for (final digit in '151234567'.split('')) {
+      await tester.tap(find.byKey(ValueKey('custom_digit_$digit')));
+      await tester.pumpAndSettle();
+    }
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Custom phone: 60151234567'), findsOneWidget);
+  });
 }

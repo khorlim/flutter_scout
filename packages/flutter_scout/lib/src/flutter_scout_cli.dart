@@ -43,6 +43,7 @@ class FlutterScoutCli {
         'logs' => _logs(rest),
         'screenshot' => _screenshot(rest),
         'crop' => _crop(rest),
+        'evidence' => _evidence(rest),
         'replay' => _replay(rest),
         _ => _unknown(command),
       };
@@ -185,6 +186,14 @@ class FlutterScoutCli {
 
     final wsUri = _normalizeVmUri(vmUri);
     File(_vmUriFile).writeAsStringSync(wsUri);
+    _writeSessionMeta({
+      'mode': 'scout_owned_flutter_run',
+      'pid': process.pid,
+      'logFile': _logFile,
+      'project': project,
+      'device': resolvedDevice.id,
+      'createdAt': DateTime.now().toIso8601String(),
+    });
     _writeProgress('verify_vm_service', {'vmServiceUri': wsUri});
     final ready = await _waitScoutReady(wsUri);
     launchTiming.readyAt = DateTime.now();
@@ -239,6 +248,12 @@ class FlutterScoutCli {
     final wsUri = discovered.uri!;
     _ensureSessionDir();
     File(_vmUriFile).writeAsStringSync(wsUri);
+    _writeSessionMeta({
+      'mode': 'attach_only',
+      'vmServiceUri': wsUri,
+      if (parsed.option('device') != null) 'device': parsed.option('device'),
+      'createdAt': DateTime.now().toIso8601String(),
+    });
     final output = <String, Object?>{
       'attached': true,
       'reusedRunningApp': true,
@@ -292,6 +307,16 @@ class FlutterScoutCli {
       if (ready.ready) {
         _ensureSessionDir();
         File(_vmUriFile).writeAsStringSync(discovered.uri!);
+        final pid = _readPid();
+        final scoutOwned = pid != null && await _looksLikeScoutFlutterRun(pid);
+        _writeSessionMeta({
+          'mode': scoutOwned ? 'scout_owned_flutter_run' : 'attach_only',
+          'vmServiceUri': discovered.uri,
+          'pid': ?pid,
+          if (scoutOwned) 'logFile': _logFile,
+          'device': ?device,
+          'createdAt': DateTime.now().toIso8601String(),
+        });
         if (device != null && device.isNotEmpty) {
           File(_deviceFile).writeAsStringSync(device);
           final resolvedDevice = await _resolveFlutterDevice(device);
@@ -347,33 +372,34 @@ class FlutterScoutCli {
   }
 
   Future<int> _status() async {
+    stdout.writeln(jsonEncode(await _statusPayload()));
+    return 0;
+  }
+
+  Future<Map<String, Object?>> _statusPayload() async {
     final vmUri = _readVmUri();
     if (vmUri == null) {
-      stdout.writeln(jsonEncode({'running': false}));
-      return 0;
+      return {'running': false, 'session': _sessionModeInfo()};
     }
     final stale = await _validateVmUri(vmUri);
     if (stale.ok) {
-      stdout.writeln(
-        jsonEncode({
-          'running': true,
-          'vmServiceUri': vmUri,
-          if (_readDevice() != null) 'device': _readDevice(),
-          if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
-        }),
-      );
-      return 0;
+      return {
+        'running': true,
+        'vmServiceUri': vmUri,
+        if (_readDevice() != null) 'device': _readDevice(),
+        if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
+        'session': _sessionModeInfo(),
+        'hotUpdate': await _hotUpdateCapability(vmUri),
+      };
     }
     _clearVmUriFile();
-    stdout.writeln(
-      jsonEncode({
-        'running': false,
-        'staleVmServiceUri': vmUri,
-        'staleCleared': true,
-        if (stale.error != null) 'reason': stale.error,
-      }),
-    );
-    return 0;
+    return {
+      'running': false,
+      'staleVmServiceUri': vmUri,
+      'staleCleared': true,
+      'session': _sessionModeInfo(),
+      if (stale.error != null) 'reason': stale.error,
+    };
   }
 
   Future<int> _doctor(List<String> args) async {
@@ -477,6 +503,7 @@ class FlutterScoutCli {
       _deleteFileIfExists(_deviceFile);
       _deleteFileIfExists(_deviceInfoFile);
       _deleteFileIfExists(_sessionFile);
+      _deleteFileIfExists(_sessionMetaFile);
     }
     stdout.writeln(
       jsonEncode({
@@ -617,6 +644,7 @@ class FlutterScoutCli {
   Future<int> _tapText(List<String> args) async {
     final parser = ArgParser()
       ..addOption('wait-ms', defaultsTo: '1500')
+      ..addFlag('allow-mismatch', defaultsTo: false, negatable: false)
       ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     if (parsed.rest.isEmpty) {
@@ -629,6 +657,7 @@ class FlutterScoutCli {
     final params = <String, String>{
       'text': text,
       'waitMs': parsed.option('wait-ms') ?? '1500',
+      if (parsed.flag('allow-mismatch')) 'allowMismatch': 'true',
     };
     var result = await _call('ext.flutter_scout.tapText', params);
     result = await _tapTextFallbackIfNeeded(result, params);
@@ -832,47 +861,61 @@ class FlutterScoutCli {
       ..addOption('contains')
       ..addFlag('summary', defaultsTo: false, negatable: false);
     final parsed = parser.parse(args);
+    final payload = await _logsPayload(
+      last: int.tryParse(parsed.option('last') ?? '') ?? 20,
+      contains: parsed.option('contains'),
+      summary: parsed.flag('summary'),
+    );
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(payload));
+    return 0;
+  }
+
+  Future<Map<String, Object?>> _logsPayload({
+    required int last,
+    required String? contains,
+    required bool summary,
+  }) async {
     final file = File(_logFile);
-    if (!file.existsSync()) {
-      stdout.writeln(
-        jsonEncode({
-          'ok': true,
-          'path': _logFile,
-          'available': false,
-          'source': 'scout_owned_flutter_run',
-          'message':
-              'No Scout-owned flutter run log file exists. Attach-only sessions cannot read the owning terminal or IDE console logs.',
-          if (parsed.flag('summary')) ...{
-            'errors': 0,
-            'warnings': 0,
-            'vmServiceUri': null,
-            'lastImportantLines': const <String>[],
-          } else
-            'lines': const <String>[],
-        }),
-      );
-      return 0;
+    final attachOnly = await _isAttachOnlySession();
+    if (attachOnly || !file.existsSync()) {
+      return {
+        'ok': true,
+        'path': _logFile,
+        'available': false,
+        'source': attachOnly
+            ? 'attach_only_session'
+            : 'scout_owned_flutter_run',
+        'session': _sessionModeInfo(),
+        'message': attachOnly
+            ? 'This is an attach-only session. Scout can inspect and act through the VM service, but it cannot read the owning VS Code, IDE, or terminal console logs. Use that owner console, run flutter logs separately, or start with flutter-scout ensure/launch when Scout should own log capture.'
+            : 'No Scout-owned flutter run log file exists. Attach-only sessions cannot read the owning terminal or IDE console logs.',
+        if (summary) ...{
+          'errors': 0,
+          'warnings': 0,
+          'vmServiceUri': _readVmUri(),
+          'lastImportantLines': const <String>[],
+        } else
+          'lines': const <String>[],
+      };
     }
-    final contains = parsed.option('contains');
-    final last = int.tryParse(parsed.option('last') ?? '') ?? 20;
     final allLines = file.readAsLinesSync();
-    var lines = allLines;
-    if (parsed.flag('summary')) {
+    if (summary) {
       final summary = _summarizeLogLines(allLines, last: last);
-      stdout.writeln(
-        const JsonEncoder.withIndent('  ').convert({
-          'ok': true,
-          'path': _logFile,
-          'available': allLines.isNotEmpty,
-          if (allLines.isEmpty) 'source': 'empty_scout_log',
-          if (allLines.isEmpty)
-            'message':
-                'The Scout-owned log file exists, but no Flutter tool output has been captured yet.',
-          ...summary,
-        }),
-      );
-      return 0;
+      return {
+        'ok': true,
+        'path': _logFile,
+        'available': allLines.isNotEmpty,
+        'source': allLines.isEmpty
+            ? 'empty_scout_log'
+            : 'scout_owned_flutter_run',
+        'session': _sessionModeInfo(),
+        if (allLines.isEmpty)
+          'message':
+              'The Scout-owned log file exists, but no Flutter tool output has been captured yet.',
+        ...summary,
+      };
     }
+    var lines = allLines;
     if (contains != null && contains.isNotEmpty) {
       lines = lines
           .where((line) => line.contains(contains))
@@ -881,23 +924,23 @@ class FlutterScoutCli {
     if (lines.length > last) {
       lines = lines.sublist(lines.length - last);
     }
-    stdout.writeln(
-      const JsonEncoder.withIndent('  ').convert({
-        'ok': true,
-        'path': _logFile,
-        'available': allLines.isNotEmpty,
-        if (contains != null && contains.isNotEmpty) 'contains': contains,
-        if (contains != null && contains.isNotEmpty) 'matched': lines.length,
-        if (allLines.isEmpty) 'source': 'empty_scout_log',
-        if (allLines.isEmpty)
-          'message':
-              'The Scout-owned log file exists, but no Flutter tool output has been captured yet.',
-        if (allLines.isNotEmpty && lines.isEmpty)
-          'message': 'No Scout-owned log lines matched the requested filter.',
-        'lines': lines,
-      }),
-    );
-    return 0;
+    return {
+      'ok': true,
+      'path': _logFile,
+      'available': allLines.isNotEmpty,
+      'source': allLines.isEmpty
+          ? 'empty_scout_log'
+          : 'scout_owned_flutter_run',
+      'session': _sessionModeInfo(),
+      if (contains != null && contains.isNotEmpty) 'contains': contains,
+      if (contains != null && contains.isNotEmpty) 'matched': lines.length,
+      if (allLines.isEmpty)
+        'message':
+            'The Scout-owned log file exists, but no Flutter tool output has been captured yet.',
+      if (allLines.isNotEmpty && lines.isEmpty)
+        'message': 'No Scout-owned log lines matched the requested filter.',
+      'lines': lines,
+    };
   }
 
   Future<int> _screenshot(List<String> args) async {
@@ -1026,6 +1069,128 @@ class FlutterScoutCli {
         'pixelRect': [left, top, width, height],
       }),
     );
+    return 0;
+  }
+
+  Future<int> _evidence(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('output', abbr: 'o')
+      ..addOption('last', defaultsTo: '120');
+    final parsed = parser.parse(args);
+    _ensureSessionDir();
+    final output =
+        parsed.option('output') ??
+        p.join(
+          _sessionDir.path,
+          'evidence',
+          'evidence_${DateTime.now().millisecondsSinceEpoch}',
+        );
+    final dir = Directory(output);
+    dir.createSync(recursive: true);
+
+    final last = int.tryParse(parsed.option('last') ?? '') ?? 120;
+    final status = await _statusPayload();
+    final logs = await _logsPayload(last: last, contains: null, summary: false);
+    final logsSummary = await _logsPayload(
+      last: 40,
+      contains: null,
+      summary: true,
+    );
+    Map<String, dynamic>? inspect;
+    Object? inspectError;
+    try {
+      inspect = await _call('ext.flutter_scout.inspect');
+      File(
+        p.join(dir.path, 'inspect.json'),
+      ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(inspect));
+    } on ScoutCliException catch (error) {
+      inspectError = {'code': error.code, 'message': error.message};
+    } catch (error) {
+      inspectError = error.toString();
+    }
+
+    Map<String, Object?> screenshot = const {
+      'ok': false,
+      'skipped': true,
+      'reason': 'not_attempted',
+    };
+    final screenshotPath = p.join(dir.path, 'screenshot.png');
+    try {
+      screenshot = {
+        'ok': true,
+        'path': screenshotPath,
+        ...await _captureScreenshot(screenshotPath),
+      };
+    } on ScoutCliException catch (error) {
+      screenshot = {
+        'ok': false,
+        'error': {'code': error.code, 'message': error.message},
+      };
+    } catch (error) {
+      screenshot = {
+        'ok': false,
+        'error': {'code': 'screenshot_failed', 'message': error.toString()},
+      };
+    }
+
+    final sessionActions = _readSessionActions();
+    final summary = {
+      'ok': true,
+      'path': dir.path,
+      'createdAt': DateTime.now().toIso8601String(),
+      'status': status,
+      'inspect': inspect == null
+          ? {'ok': false, 'error': inspectError ?? 'inspect_unavailable'}
+          : {
+              'ok': true,
+              'screen': inspect['screen'],
+              'visibleText': _lastItems(
+                (inspect['visibleText'] as List?) ?? const [],
+                20,
+              ),
+              'recentErrors': _lastItems(
+                (inspect['recentErrors'] as List?) ?? const [],
+                5,
+              ),
+            },
+      'screenshot': screenshot,
+      'logs': {
+        'available': logs['available'],
+        'source': logs['source'],
+        if (logs['message'] != null) 'message': logs['message'],
+        'summary': logsSummary,
+      },
+      'sessionActions': {
+        'path': _sessionFile,
+        'count': sessionActions.length,
+        'last': _lastItems(sessionActions, 20),
+      },
+      'files': {
+        'summary': p.join(dir.path, 'summary.json'),
+        if (inspect != null) 'inspect': p.join(dir.path, 'inspect.json'),
+        'logs': p.join(dir.path, 'logs.json'),
+        'status': p.join(dir.path, 'status.json'),
+        if (sessionActions.isNotEmpty)
+          'session': p.join(dir.path, 'session.json'),
+        if (screenshot['ok'] == true) 'screenshot': screenshotPath,
+      },
+    };
+
+    File(
+      p.join(dir.path, 'status.json'),
+    ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(status));
+    File(
+      p.join(dir.path, 'logs.json'),
+    ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(logs));
+    if (sessionActions.isNotEmpty) {
+      File(p.join(dir.path, 'session.json')).writeAsStringSync(
+        const JsonEncoder.withIndent('  ').convert(sessionActions),
+      );
+    }
+    File(
+      p.join(dir.path, 'summary.json'),
+    ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(summary));
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(summary));
     return 0;
   }
 
@@ -1355,6 +1520,11 @@ class FlutterScoutCli {
         'offscreenText': _lastItems(summary['offscreenText'] as List, 8),
       if (summary['fieldValues'] != null) 'fieldValues': summary['fieldValues'],
       if (summary['fieldsById'] != null) 'fieldsById': summary['fieldsById'],
+      if (summary['visualTree'] != null) 'visualTree': summary['visualTree'],
+      if (summary['controlGroups'] != null)
+        'controlGroups': summary['controlGroups'],
+      if (summary['suggestedActions'] != null)
+        'suggestedActions': summary['suggestedActions'],
     };
   }
 
@@ -1992,11 +2162,14 @@ print(String(data: data, encoding: .utf8)!)
     String? vmServiceUri;
     for (final line in lines) {
       final lower = line.toLowerCase();
+      final negatedError =
+          lower.contains('no error') || lower.contains('0 errors');
       final isError =
-          lower.contains('error') ||
-          lower.contains('exception') ||
-          lower.contains('failed') ||
-          lower.contains('fatal');
+          !negatedError &&
+          (lower.contains('error') ||
+              lower.contains('exception') ||
+              lower.contains('failed') ||
+              lower.contains('fatal'));
       final isWarning = lower.contains('warning') || lower.contains('warn ');
       final uri = _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
       if (isError) errors++;
@@ -2288,6 +2461,18 @@ print(String(data: data, encoding: .utf8)!)
     file.writeAsStringSync(const JsonEncoder.withIndent('  ').convert(list));
   }
 
+  List<Object?> _readSessionActions() {
+    final file = File(_sessionFile);
+    if (!file.existsSync()) return const <Object?>[];
+    try {
+      final decoded = jsonDecode(file.readAsStringSync());
+      if (decoded is List) return decoded;
+    } catch (_) {
+      return const <Object?>[];
+    }
+    return const <Object?>[];
+  }
+
   List<StreamSubscription<ProcessSignal>> _installLaunchSignalHandlers(
     Process process,
   ) {
@@ -2374,6 +2559,82 @@ print(String(data: data, encoding: .utf8)!)
     final file = File(_pidFile);
     if (!file.existsSync()) return null;
     return int.tryParse(file.readAsStringSync().trim());
+  }
+
+  void _writeSessionMeta(Map<String, Object?> meta) {
+    _ensureSessionDir();
+    File(
+      _sessionMetaFile,
+    ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(meta));
+  }
+
+  Map<String, dynamic>? _readSessionMeta() {
+    final file = File(_sessionMetaFile);
+    if (!file.existsSync()) return null;
+    try {
+      final decoded = jsonDecode(file.readAsStringSync());
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
+  Map<String, Object?> _sessionModeInfo() {
+    final meta = _readSessionMeta();
+    final pid = _readPid();
+    return {
+      'mode': meta?['mode'] ?? (pid == null ? 'unknown' : 'legacy'),
+      'pid': ?pid,
+      'createdAt': ?meta?['createdAt'],
+      'logFile': ?meta?['logFile'],
+    };
+  }
+
+  Future<bool> _isAttachOnlySession() async {
+    final meta = _readSessionMeta();
+    if (meta?['mode'] == 'attach_only') return true;
+    if (meta?['mode'] == 'scout_owned_flutter_run') return false;
+    final pid = _readPid();
+    if (pid != null && await _looksLikeScoutFlutterRun(pid)) return false;
+    if (pid == null) return false;
+    return true;
+  }
+
+  Future<Map<String, Object?>> _hotUpdateCapability(String vmUri) async {
+    final pid = _readPid();
+    final scoutOwned = pid != null && await _looksLikeScoutFlutterRun(pid);
+    final listenerPid = await _pidForListeningVmPort(vmUri);
+    return {
+      'reload': {
+        'available': true,
+        'method': scoutOwned
+            ? 'sigusr1_hot_reload'
+            : 'vm_service_reload_sources',
+        'preservesState': true,
+      },
+      'restart': {
+        'available': scoutOwned,
+        'method': scoutOwned
+            ? 'sigusr2_hot_restart'
+            : 'unavailable_without_scout_owned_flutter_run',
+        'requiresScoutOwnedRun': true,
+      },
+      'attachOnly': !scoutOwned,
+      'scoutPid': ?pid,
+      'vmServiceListenerPid': ?listenerPid,
+      'nextBestActions': scoutOwned
+          ? const [
+              'Use flutter-scout reload for Dart-only edits',
+              'Use flutter-scout restart when Dart state must reset',
+            ]
+          : const [
+              'Use flutter-scout reload for Dart-only edits through the VM service',
+              'Use the owning Flutter terminal or IDE for hot restart',
+              'Run flutter-scout ensure --device <sim-id> --project <path> when Scout should own restart/log capture',
+            ],
+    };
   }
 
   Future<int?> _pidForListeningVmPort(String vmUri) async {
@@ -2485,7 +2746,7 @@ Usage:
   flutter-scout inspect
   flutter-scout bounds [target]
   flutter-scout tap <target> | tap <x> <y> | --x <x> --y <y> [--verbose]
-  flutter-scout tap-text <visible text> [--verbose]
+  flutter-scout tap-text <visible text> [--allow-mismatch] [--verbose]
   flutter-scout long-press <target> [--verbose]
   flutter-scout input [--target <field>] <value> [--verbose]
   flutter-scout fill --json <object> [--verbose]
@@ -2499,6 +2760,7 @@ Usage:
   flutter-scout logs [--last <n>] [--contains <text>] [--summary]
   flutter-scout screenshot [-o <path>] [--target <target>]
   flutter-scout crop <target> [-o <path>]
+  flutter-scout evidence [-o <dir>] [--last <n>]
   flutter-scout replay [session.json] [--verbose]
 ''');
   }
@@ -2671,6 +2933,7 @@ String get _deviceInfoFile => p.join(_sessionDir.path, 'device_info.json');
 String get _sessionFile => p.join(_sessionDir.path, 'session.json');
 String get _pidFile => p.join(_sessionDir.path, 'flutter.pid');
 String get _logFile => p.join(_sessionDir.path, 'logs.txt');
+String get _sessionMetaFile => p.join(_sessionDir.path, 'session_meta.json');
 
 void _ensureSessionDir() {
   _sessionDir.createSync(recursive: true);

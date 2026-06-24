@@ -80,6 +80,51 @@ void main() {
     });
   });
 
+  test(
+    'logs reports attach-only sessions without using stale log files',
+    () async {
+      await _withTempCwd(() async {
+        Directory('.flutter_scout').createSync();
+        File(
+          '.flutter_scout/session_meta.json',
+        ).writeAsStringSync('{"mode":"attach_only"}');
+        File('.flutter_scout/logs.txt').writeAsStringSync('stale launch log');
+
+        final exitCode = await FlutterScoutCli().run(['logs', '--summary']);
+
+        expect(exitCode, 0);
+      });
+    },
+  );
+
+  test('logs preserves scout-owned session classification', () async {
+    await _withTempCwd(() async {
+      Directory('.flutter_scout').createSync();
+      File('.flutter_scout/session_meta.json').writeAsStringSync(
+        '{"mode":"scout_owned_flutter_run","logFile":".flutter_scout/logs.txt"}',
+      );
+
+      final exitCode = await FlutterScoutCli().run(['logs', '--summary']);
+
+      expect(exitCode, 0);
+    });
+  });
+
+  test('evidence succeeds without an attached session', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run(['evidence']);
+
+      expect(exitCode, 0);
+      expect(
+        Directory('.flutter_scout/evidence')
+            .listSync(recursive: true)
+            .whereType<File>()
+            .any((file) => file.path.endsWith('summary.json')),
+        isTrue,
+      );
+    });
+  });
+
   test('help exits successfully', () async {
     final exitCode = await FlutterScoutCli().run(['--help']);
 

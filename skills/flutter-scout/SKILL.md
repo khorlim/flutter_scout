@@ -67,6 +67,8 @@ flutter-scout stop --clear-session
 
 Launch, ensure, and attach responses include `ready` when they start or connect to a VM service. If `ready` is false, fix the reported setup reason before inspecting or acting. When `ensure` or `launch` starts a Scout-owned Flutter run, read the `timing` object if present; it reports launch cost such as `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`.
 
+Use `status` when session ownership is unclear. It reports `session.mode` and `hotUpdate` capability so you know whether `reload` can use the VM service, whether `restart` can signal a Scout-owned Flutter run, or whether the owning IDE/terminal must perform restart.
+
 3. Inspect before acting:
 
 ```bash
@@ -82,6 +84,8 @@ Read viewport facts before tapping: `visibleRect`, `visibleFraction`, `offscreen
 Icon-only controls can expose handles from keys, tooltips, semantics, common Material icon widgets, or common Material glyph text. Try handles such as `btn.duplicate`, `btn.save`, `btn.delete`, `btn.download`, `btn.back`, or `btn.search` before falling back to coordinates; Scout can match a kind-prefixed guess like `btn.duplicate` to a custom tappable exposed as `tap.duplicate`. Unlabeled gesture targets with clear contained action text can also appear as `btn.*` handles, such as `btn.payment`, `btn.confirm_payment`, `btn.done`, `btn.create_order`, or `btn.save_smoke`.
 
 Duplicate unkeyed fields are suffixed in inspect output, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Use the exact `fieldsById` key when filling or inputting duplicate labels.
+
+Use `fill` and `input` only for real editable text fields. If inspect shows `visualTree` or `controlGroups` for a custom control such as a numeric keypad, operate it explicitly with `tap` commands. Control group children can expose aliases such as `key.1`, `key.5`, and commit actions such as `btn.save`; tap them in the order a human would.
 
 4. Act in feature-sized steps:
 
@@ -118,7 +122,9 @@ flutter-scout screenshot -o /tmp/current_screen.png
 
 Prefer `bounds` and crops over full screenshots when inspecting one control or dialog on iOS Simulator. Full screenshots are supported for iOS Simulator sessions and macOS app-window attach sessions. Targeted crops are currently iOS Simulator-only; macOS attach returns `crop_unsupported_target` for crops instead of producing misaligned visual evidence.
 
-`tap-text` activates the nearest actionable ancestor and returns both `target` and `textTarget`. Short labels like `OK` require exact matches. If a broad ancestor would be unsafe, Scout can tap the visible text point and report `activation.strategy:"broad_ancestor_text_point"`; if no actionable ancestor exists but the text point is hit-testable, it reports `activation.strategy:"visible_text_point"`.
+`tap-text` activates the nearest safe actionable ancestor and returns both `target` and `textTarget`. Short labels like `OK` require exact matches. If the matched text maps to a different semantic action, Scout returns `tap_text_target_mismatch` instead of tapping. Use the explicit handle reported in the error, coordinates, or `tap-text --allow-mismatch` only when that mismatch is intentional. If a broad ancestor would be unsafe, Scout can tap the visible text point and report `activation.strategy:"broad_ancestor_text_point"`; if no actionable ancestor exists but the text point is hit-testable, it reports `activation.strategy:"visible_text_point"`.
+
+When a submit reveals validation, read `delta.newValidationMessages` and `delta.validationCandidates`; they identify the field id, label, and validation message that appeared.
 
 If `inspect` or `tap-text` reports `helperProtocol.status:"stale_or_old_helper"`, the attached app is still running an older helper extension. Try `flutter-scout reload`; if helper behavior does not change, hot restart from the owning Flutter terminal/IDE or relaunch the app.
 
@@ -151,12 +157,15 @@ flutter-scout back
 flutter-scout deeplink myapp://route
 flutter-scout logs --summary
 flutter-scout logs --last 20
+flutter-scout evidence -o /tmp/flutter_scout_evidence
 flutter-scout stop --clear-session
 ```
 
-If `logs` reports `available:false`, the session is attach-only or has no Scout-owned Flutter tool log. Use the owning terminal or IDE console for those app logs, especially for API/server validation failures that only print to the original Flutter process.
+If `logs` reports `source:"attach_only_session"` and `available:false`, Scout is attached to a VS Code/Cursor/terminal-owned Flutter run. Scout can still inspect and act, but cannot read that owner console. Use the owning terminal or IDE console for those app logs, run `flutter logs` separately, or start with `flutter-scout ensure`/`launch` when Scout should own log capture.
 
 If `logs --contains <text>` reports `available:true` and `matched:0`, Scout did read a non-empty Scout-owned log but no lines matched that filter. Broaden the search or inspect the app's own logging path.
+
+Use `evidence` at the end of a significant run to collect `summary.json`, `status.json`, `logs.json`, optional `inspect.json`, optional `session.json`, and a screenshot when supported. Missing attach logs or unsupported screenshots are recorded as structured evidence rather than making the command fail.
 
 `recentErrors` entries include severity facts such as `severity`, `blocking`, `phase`, `ageMs`, and `stale`. Treat fresh `blocking:true` errors as hard failures. Older or non-blocking startup/network entries may be relevant context, but they do not automatically mean the current flow failed.
 
@@ -167,9 +176,12 @@ If `logs --contains <text>` reports `available:true` and `matched:0`, Scout did 
 - Prefer `ensure` over repeated `launch`; repeated full launch causes slow native rebuilds.
 - Start with `inspect`; avoid blind screenshots.
 - After Dart-only edits, run `reload` or `restart` before replaying flows.
-- Prefer `fill` for forms instead of tap/type/tap/type, but read per-field results and warnings.
+- Prefer `fill` for real text fields, but do not use it for custom pickers, keypads, steppers, calendars, or segmented controls.
+- For custom controls, read `visualTree`, `controlGroups`, and `suggestedActions`, then use explicit `tap`/`tap-text`/scroll commands.
 - Trust action deltas for next-step planning.
 - Read `activation` and `warnings` when an action reports `activated_no_observed_change`.
+- Treat `tap_text_target_mismatch` as a safety stop; do not retry blindly. Use an explicit handle or `--allow-mismatch` only after confirming the target is intended.
+- Read `delta.newValidationMessages` after save/confirm actions before guessing which required field is missing.
 - Treat `lateChangeObserved:true` as a real observed post-action change, not a stale screen.
 - Treat `delta.changedGeometry` as a real change for scrolling or layout movement even when text and field values are unchanged.
 - Treat drag `result:"navigated"` as a real route/screen transition caused by the gesture, not a plain scroll.

@@ -249,6 +249,24 @@ class FlutterScoutRuntime {
         return _fail('text_not_found', 'No visible text matched `$text`.');
       }
       final targetNode = match.actionable ?? match.text;
+      if (_unsafeTapTextActivation(match, text) &&
+          params['allowMismatch'] != 'true') {
+        return _fail(
+          'tap_text_target_mismatch',
+          'Text `$text` matched `${match.text.label}`, but the actionable target is `${targetNode.label ?? targetNode.id}`. Use `tap ${targetNode.id}` if that is intended, or pass allowMismatch=true to tap-text.',
+          extra: {
+            'target': targetNode.toJson(),
+            'textTarget': match.text.toJson(),
+            'activation': {
+              'dispatched': false,
+              'strategy': 'semantic_mismatch_blocked',
+            },
+            'warnings': [
+              'tap-text refused to tap a different semantic action than the visible text. This prevents accidentally submitting or confirming when selecting a row label.',
+            ],
+          },
+        );
+      }
       final point = _tapPointForTextMatch(match);
       if (point == null) {
         return _fail(
@@ -318,6 +336,23 @@ class FlutterScoutRuntime {
     return 'nearest_actionable_ancestor';
   }
 
+  bool _unsafeTapTextActivation(_TextTargetMatch match, String requestedText) {
+    final actionable = match.actionable;
+    if (actionable == null) return false;
+    if (actionable.id == match.text.id) return false;
+    if (actionable.kind != 'btn') return false;
+    final actionLabel = actionable.label;
+    if (actionLabel == null || actionLabel.trim().isEmpty) return false;
+    final requestedSlug = _slug(requestedText);
+    final textSlug = _slug(match.text.label ?? requestedText);
+    final actionSlug = _slug(actionLabel);
+    final actionIdSlug = _slug(actionable.id);
+    return !actionSlug.contains(requestedSlug) &&
+        !actionSlug.contains(textSlug) &&
+        !actionIdSlug.contains(requestedSlug) &&
+        !actionIdSlug.contains(textSlug);
+  }
+
   Future<developer.ServiceExtensionResponse> _handleInput(
     String method,
     Map<String, String> params,
@@ -328,7 +363,11 @@ class FlutterScoutRuntime {
       final value = params['value'] ?? '';
       final editable = _findEditable(target: target);
       if (editable == null) {
-        return _fail('field_not_found', 'No editable field matched `$target`.');
+        return _fail(
+          'field_not_found',
+          'No editable text field matched `$target`. Custom controls are exposed through inspect visualTree/controlGroups and must be operated with tap commands.',
+          extra: {'suggestedActions': _inputRecoverySuggestions(target)},
+        );
       }
       _setEditableText(editable, value);
       final stable = await _waitStableForAction(params);
@@ -405,6 +444,9 @@ class FlutterScoutRuntime {
             'target': entry.key,
             'ok': false,
             'reason': 'field_not_found',
+            'message':
+                'No editable text field matched `${entry.key}`. Custom controls are exposed through inspect visualTree/controlGroups and must be operated with tap commands.',
+            'suggestedActions': _inputRecoverySuggestions(entry.key),
           });
           continue;
         }
@@ -730,7 +772,7 @@ class FlutterScoutRuntime {
         .where((node) => node.kind == 'text')
         .toList(growable: false);
     final route = root == null ? null : ModalRoute.of(root)?.settings.name;
-    return ScoutSnapshot(
+    final snapshot = ScoutSnapshot(
       screen: route != null && route.isNotEmpty ? route : screen,
       routeGuess: route,
       idle: !WidgetsBinding.instance.hasScheduledFrame,
@@ -749,7 +791,25 @@ class FlutterScoutRuntime {
       textTargets: textTargets,
       scrollables: scrollables,
       overlays: overlays,
+      visualTree: null,
+      controlGroups: const [],
+      suggestedActions: const [],
       recentErrors: _recentErrors(),
+    );
+    final controlGroups = _buildControlGroups(snapshot);
+    return snapshot.copyWith(
+      controlGroups: controlGroups,
+      visualTree: _buildVisualTree(snapshot, controlGroups),
+      suggestedActions: controlGroups.isEmpty
+          ? const []
+          : const [
+              {
+                'intent': 'enterValue',
+                'method': 'tapSequence',
+                'reason':
+                    'A custom control group is visible. It is not a text field; operate it by tapping the exposed child controls in order, then tap the commit action if needed.',
+              },
+            ],
     );
   }
 
@@ -780,6 +840,9 @@ class FlutterScoutRuntime {
       kind: kind,
       label: label,
       value: kind == 'field' ? _editableValueBelow(element) : null,
+      validationMessage: kind == 'field'
+          ? _validationMessageForFieldWidget(widget)
+          : null,
       widgetType: widget.runtimeType.toString(),
       key: _keyLabel(widget.key),
       rect: rect,
@@ -893,6 +956,13 @@ class FlutterScoutRuntime {
     }
     final icon = _iconLabelBelow(element);
     if (icon != null && icon.isNotEmpty) return icon;
+    return null;
+  }
+
+  String? _validationMessageForFieldWidget(Widget widget) {
+    if (widget is TextField) {
+      return widget.decoration?.errorText;
+    }
     return null;
   }
 
@@ -1469,6 +1539,351 @@ class FlutterScoutRuntime {
     return exact ?? contains;
   }
 
+  List<Map<String, Object?>> _buildControlGroups(ScoutSnapshot snapshot) {
+    final surface = _detectCustomInputSurface(snapshot);
+    if (surface == null) return const [];
+    return [surface.toControlGroupJson()];
+  }
+
+  Map<String, Object?> _buildVisualTree(
+    ScoutSnapshot snapshot,
+    List<Map<String, Object?>> controlGroups,
+  ) {
+    final children = <Map<String, Object?>>[];
+    if (controlGroups.isNotEmpty) {
+      children.add(_visualRegionForControlGroups(snapshot, controlGroups));
+    } else if (snapshot.overlays.isNotEmpty) {
+      for (final overlay in snapshot.overlays) {
+        children.add(_visualRegionForOverlay(snapshot, overlay, controlGroups));
+      }
+    } else {
+      children.addAll(_visualRows(snapshot));
+    }
+    return {
+      'kind': 'screen',
+      'label': snapshot.screen,
+      'rect': [0, 0, snapshot.logicalSize.width, snapshot.logicalSize.height],
+      'children': children,
+    };
+  }
+
+  Map<String, Object?> _visualRegionForControlGroups(
+    ScoutSnapshot snapshot,
+    List<Map<String, Object?>> controlGroups,
+  ) {
+    final groupRects = [
+      for (final group in controlGroups) ?_rectFromJsonList(group['rect']),
+    ];
+    final bounds = groupRects.reduce(
+      (value, element) => value.expandToInclude(element),
+    );
+    final region = Rect.fromLTRB(
+      (bounds.left - 96).clamp(0, snapshot.logicalSize.width),
+      (bounds.top - 120).clamp(0, snapshot.logicalSize.height),
+      (bounds.right + 96).clamp(0, snapshot.logicalSize.width),
+      (bounds.bottom + 96).clamp(0, snapshot.logicalSize.height),
+    );
+    final horizontalBand = Rect.fromLTRB(
+      region.left,
+      0,
+      region.right,
+      snapshot.logicalSize.height,
+    );
+    final titleCandidates = [
+      for (final node in snapshot.textTargets)
+        if (node.rect case final rect?)
+          if (rect.center.dy < bounds.top &&
+              region.contains(rect.center) &&
+              horizontalBand.contains(rect.center) &&
+              rect.width >= bounds.width * 0.5 &&
+              !_looksLikePureValue(node.label))
+            node,
+    ]..sort(_compareNodesByPosition);
+    final displayCandidates = [
+      for (final node in snapshot.textTargets)
+        if (node.rect case final rect?)
+          if (rect.center.dy < bounds.top &&
+              region.contains(rect.center) &&
+              _looksLikePureValue(node.label))
+            node,
+    ]..sort(_compareNodesByPosition);
+    final actionNodes = [
+      for (final node in snapshot.interactables)
+        if (node.kind == 'btn' && node.label != null)
+          if (node.rect case final rect?)
+            if (rect.center.dy > bounds.bottom - 8 &&
+                region.contains(rect.center))
+              _visualNode(node, role: 'action'),
+    ];
+    final children = <Map<String, Object?>>[
+      if (titleCandidates.isNotEmpty)
+        _visualNode(titleCandidates.first, role: 'title'),
+      for (final node in displayCandidates) _visualNode(node, role: 'display'),
+      ...controlGroups,
+      if (actionNodes.isNotEmpty) {'kind': 'actions', 'children': actionNodes},
+    ];
+    return {
+      'kind': 'dialog',
+      'label': titleCandidates.isEmpty
+          ? 'custom control'
+          : titleCandidates.first.label,
+      'rect': _rectToJson(region),
+      'children': children,
+    };
+  }
+
+  Map<String, Object?> _visualRegionForOverlay(
+    ScoutSnapshot snapshot,
+    Map<String, Object?> overlay,
+    List<Map<String, Object?>> controlGroups,
+  ) {
+    final rect = _rectFromJsonList(overlay['rect']);
+    final textNodes = [
+      for (final node in snapshot.textTargets)
+        if (rect == null || _nodeInsideRect(node, rect)) node,
+    ];
+    textNodes.sort(_compareNodesByPosition);
+    final containedGroups = [
+      for (final group in controlGroups)
+        if (rect == null || _rectContainsJsonRect(rect, group['rect'])) group,
+    ];
+    final groupedNodeIds = _nodeIdsInControlGroups(containedGroups);
+    final actions = [
+      for (final node in snapshot.interactables)
+        if ((rect == null || _nodeInsideRect(node, rect)) &&
+            node.kind == 'btn' &&
+            node.label != null &&
+            !groupedNodeIds.contains(node.id))
+          _visualNode(node, role: 'action'),
+    ];
+    final children = <Map<String, Object?>>[];
+    if (textNodes.isNotEmpty) {
+      children.add(_visualNode(textNodes.first, role: 'title'));
+    }
+    for (final node in textNodes.skip(1)) {
+      if (groupedNodeIds.contains(node.id)) continue;
+      final label = node.label ?? '';
+      children.add(
+        _visualNode(
+          node,
+          role: _digitsOnly(label).length >= 2 ? 'display' : 'text',
+        ),
+      );
+    }
+    children.addAll(containedGroups);
+    if (actions.isNotEmpty) {
+      children.add({'kind': 'actions', 'children': actions});
+    }
+    return {
+      'kind': overlay['kind'] ?? 'region',
+      'label': textNodes.isEmpty ? overlay['label'] : textNodes.first.label,
+      'rect': overlay['rect'],
+      'children': children,
+    };
+  }
+
+  List<Map<String, Object?>> _visualRows(ScoutSnapshot snapshot) {
+    final nodes =
+        [
+            ...snapshot.fields,
+            ...snapshot.interactables,
+            ...snapshot.textTargets,
+          ].where((node) => node.visibleFraction > 0).toList(growable: false)
+          ..sort(_compareNodesByPosition);
+    return [for (final node in nodes.take(60)) _visualNode(node)];
+  }
+
+  Map<String, Object?> _visualNode(ScoutNode node, {String? role}) {
+    return {
+      'kind': node.kind == 'btn' || node.kind == 'tap' ? 'button' : node.kind,
+      'role': ?role,
+      'label': node.label,
+      'id': node.id,
+      if (node.label != null && RegExp(r'^\d$').hasMatch(node.label!.trim()))
+        'tapAlias': 'key.${node.label!.trim()}',
+      'rect': _rectToJson(node.rect),
+      'hitTestable': node.hitTestable,
+      'enabled': node.enabled,
+    };
+  }
+
+  bool _looksLikePureValue(String? label) {
+    if (label == null) return false;
+    final trimmed = label.trim();
+    if (trimmed.isEmpty) return false;
+    return RegExp(r'^[\d\s()+\-.]+$').hasMatch(trimmed) &&
+        _digitsOnly(trimmed).isNotEmpty;
+  }
+
+  Set<String> _nodeIdsInControlGroups(List<Map<String, Object?>> groups) {
+    final ids = <String>{};
+    for (final group in groups) {
+      final children = group['children'];
+      if (children is! List) continue;
+      for (final child in children) {
+        if (child is Map && child['targetId'] is String) {
+          ids.add(child['targetId'] as String);
+        }
+      }
+    }
+    return ids;
+  }
+
+  int _compareNodesByPosition(ScoutNode a, ScoutNode b) {
+    final top = (a.rect?.top ?? 0).compareTo(b.rect?.top ?? 0);
+    if (top != 0) return top;
+    return (a.rect?.left ?? 0).compareTo(b.rect?.left ?? 0);
+  }
+
+  List<double>? _rectToJson(Rect? rect) {
+    if (rect == null) return null;
+    return [rect.left, rect.top, rect.width, rect.height];
+  }
+
+  Rect? _rectFromJsonList(Object? value) {
+    if (value is! List || value.length != 4) return null;
+    final left = _numberToDouble(value[0]);
+    final top = _numberToDouble(value[1]);
+    final width = _numberToDouble(value[2]);
+    final height = _numberToDouble(value[3]);
+    if (left == null || top == null || width == null || height == null) {
+      return null;
+    }
+    return Rect.fromLTWH(left, top, width, height);
+  }
+
+  bool _nodeInsideRect(ScoutNode node, Rect rect) {
+    final nodeRect = node.rect;
+    if (nodeRect == null) return false;
+    return rect.contains(nodeRect.center);
+  }
+
+  bool _rectContainsJsonRect(Rect container, Object? value) {
+    final rect = _rectFromJsonList(value);
+    if (rect == null) return false;
+    return container.contains(rect.center);
+  }
+
+  double? _numberToDouble(Object? value) {
+    if (value is int) return value.toDouble();
+    if (value is double) return value;
+    return null;
+  }
+
+  _CustomInputSurface? _detectCustomInputSurface(
+    ScoutSnapshot snapshot, {
+    String? target,
+  }) {
+    final digitText = <String, ScoutNode>{};
+    for (final node in [...snapshot.textTargets, ...snapshot.interactables]) {
+      final label = node.label?.trim();
+      if (label == null || !RegExp(r'^\d$').hasMatch(label)) continue;
+      if (node.visibleFraction <= 0 || !node.hitTestable) continue;
+      digitText[label] = node;
+    }
+    if (digitText.length < 8) return null;
+    if (!_looksLikeKeyGrid(digitText.values.toList(growable: false))) {
+      return null;
+    }
+
+    final targetFound =
+        target == null ||
+        target.trim().isEmpty ||
+        snapshot.textTargets.any((node) => node.matches(target)) ||
+        snapshot.interactables.any((node) => node.matches(target)) ||
+        snapshot.visibleText.any((text) => _slug(text) == _slug(target));
+    if (!targetFound && snapshot.overlays.isEmpty) return null;
+
+    final commitAction = _customInputCommitAction(snapshot);
+    return _CustomInputSurface(
+      kind: 'custom_numeric_keypad',
+      label: target,
+      currentValue: _visibleInputValue(snapshot, digitText.values),
+      keys: digitText,
+      commitAction: commitAction,
+      targetMatched: targetFound,
+    );
+  }
+
+  bool _looksLikeKeyGrid(List<ScoutNode> keys) {
+    final centers = [
+      for (final key in keys)
+        if (key.rect case final rect?) rect.center,
+    ];
+    if (centers.length < 8) return false;
+    final rows = <int>{};
+    final cols = <int>{};
+    for (final center in centers) {
+      rows.add((center.dy / 24).round());
+      cols.add((center.dx / 24).round());
+    }
+    return rows.length >= 3 && cols.length >= 3;
+  }
+
+  ScoutNode? _customInputCommitAction(ScoutSnapshot snapshot) {
+    const commitSlugs = {
+      'save',
+      'done',
+      'ok',
+      'confirm',
+      'submit',
+      'continue',
+      'apply',
+    };
+    final candidates = [
+      for (final node in [...snapshot.interactables, ...snapshot.textTargets])
+        if (node.label case final label?)
+          if (commitSlugs.contains(_slug(label)) &&
+              node.visibleFraction > 0 &&
+              (node.suggestedTapPoint != null || node.rect != null))
+            node,
+    ];
+    if (candidates.isEmpty) return null;
+    candidates.sort(
+      (a, b) => (b.kind == 'btn' ? 1 : 0).compareTo(a.kind == 'btn' ? 1 : 0),
+    );
+    return candidates.first;
+  }
+
+  String? _visibleInputValue(
+    ScoutSnapshot snapshot,
+    Iterable<ScoutNode> keyNodes,
+  ) {
+    final keyRects = [for (final key in keyNodes) ?key.rect];
+    final values = <String>[];
+    for (final node in snapshot.textTargets) {
+      final label = node.label?.trim();
+      final rect = node.rect;
+      if (label == null || rect == null) continue;
+      if (RegExp(r'^\d$').hasMatch(label)) continue;
+      final digits = _digitsOnly(label);
+      if (digits.length < 2) continue;
+      final overlapsKey = keyRects.any(
+        (keyRect) => _overlapRatio(rect, keyRect) > 0.2,
+      );
+      if (!overlapsKey) values.add(label);
+    }
+    if (values.isEmpty) return null;
+    values.sort(
+      (a, b) => _digitsOnly(b).length.compareTo(_digitsOnly(a).length),
+    );
+    return values.first;
+  }
+
+  String _digitsOnly(String value) => value.replaceAll(RegExp(r'\D'), '');
+
+  List<Map<String, Object?>> _inputRecoverySuggestions(String? target) {
+    return [
+      {
+        'intent': 'enterValue',
+        if (target != null && target.isNotEmpty) 'target': target,
+        'method': 'inspectThenTapControls',
+        'reason':
+            'No EditableText matched. If the app uses a custom keypad, picker, stepper, or similar control, use inspect visualTree/controlGroups to identify the visible buttons and tap them explicitly.',
+      },
+    ];
+  }
+
   ScoutNode? _nearestActionableAncestor(Element element) {
     ScoutNode? result;
     element.visitAncestorElements((Element ancestor) {
@@ -1695,6 +2110,12 @@ class FlutterScoutRuntime {
     final afterFieldValues = {
       for (final node in after.fields) node.id: node.value,
     };
+    final beforeValidationMessages = {
+      for (final node in before.fields) node.id: node.validationMessage,
+    };
+    final afterValidationMessages = {
+      for (final node in after.fields) node.id: node.validationMessage,
+    };
     final changedGeometry = _changedGeometryIds(before, after);
     return {
       'screenChanged': before.screen != after.screen,
@@ -1707,6 +2128,25 @@ class FlutterScoutRuntime {
       'changedFields': [
         for (final id in afterFields.intersection(beforeFields))
           if (beforeFieldValues[id] != afterFieldValues[id]) id,
+      ],
+      'newValidationMessages': [
+        for (final id in afterFields)
+          if ((afterValidationMessages[id] ?? '').isNotEmpty &&
+              beforeValidationMessages[id] != afterValidationMessages[id])
+            {
+              'field': id,
+              'label': after.fields.firstWhere((node) => node.id == id).label,
+              'message': afterValidationMessages[id],
+            },
+      ],
+      'validationCandidates': [
+        for (final id in afterFields)
+          if ((afterValidationMessages[id] ?? '').isNotEmpty)
+            {
+              'field': id,
+              'label': after.fields.firstWhere((node) => node.id == id).label,
+              'message': afterValidationMessages[id],
+            },
       ],
       'changedGeometry': changedGeometry,
       'newInteractables': afterActions
@@ -1746,11 +2186,16 @@ class FlutterScoutRuntime {
     );
   }
 
-  developer.ServiceExtensionResponse _fail(String code, String message) {
+  developer.ServiceExtensionResponse _fail(
+    String code,
+    String message, {
+    Map<String, Object?> extra = const {},
+  }) {
     return developer.ServiceExtensionResponse.result(
       jsonEncode({
         'ok': false,
         'error': {'code': code, 'message': message},
+        ...extra,
         'recentErrors': _recentErrors(),
       }),
     );
@@ -1772,6 +2217,9 @@ class ScoutSnapshot {
     required this.textTargets,
     required this.scrollables,
     required this.overlays,
+    required this.visualTree,
+    required this.controlGroups,
+    required this.suggestedActions,
     required this.recentErrors,
   });
 
@@ -1788,7 +2236,36 @@ class ScoutSnapshot {
   final List<ScoutNode> textTargets;
   final List<Map<String, Object?>> scrollables;
   final List<Map<String, Object?>> overlays;
+  final Map<String, Object?>? visualTree;
+  final List<Map<String, Object?>> controlGroups;
+  final List<Map<String, Object?>> suggestedActions;
   final List<Map<String, Object?>> recentErrors;
+
+  ScoutSnapshot copyWith({
+    Map<String, Object?>? visualTree,
+    List<Map<String, Object?>>? controlGroups,
+    List<Map<String, Object?>>? suggestedActions,
+  }) {
+    return ScoutSnapshot(
+      screen: screen,
+      routeGuess: routeGuess,
+      idle: idle,
+      devicePixelRatio: devicePixelRatio,
+      logicalSize: logicalSize,
+      visibleText: visibleText,
+      hitTestableText: hitTestableText,
+      offscreenText: offscreenText,
+      interactables: interactables,
+      fields: fields,
+      textTargets: textTargets,
+      scrollables: scrollables,
+      overlays: overlays,
+      visualTree: visualTree ?? this.visualTree,
+      controlGroups: controlGroups ?? this.controlGroups,
+      suggestedActions: suggestedActions ?? this.suggestedActions,
+      recentErrors: recentErrors,
+    );
+  }
 
   ScoutNode? findNode(String target) {
     for (final node in [...interactables, ...fields, ...textTargets]) {
@@ -1814,12 +2291,17 @@ class ScoutSnapshot {
       'visibleText': visibleText,
       'hitTestableText': hitTestableText,
       'offscreenText': offscreenText,
+      if (visualTree != null) 'visualTree': visualTree,
+      if (controlGroups.isNotEmpty) 'controlGroups': controlGroups,
+      if (suggestedActions.isNotEmpty) 'suggestedActions': suggestedActions,
       'fieldValues': {for (final field in fields) field.id: field.value},
       'fieldsById': {
         for (final field in fields)
           field.id: {
             'label': field.label,
             'value': field.value,
+            if (field.validationMessage != null)
+              'validationMessage': field.validationMessage,
             'baseId': field.baseId,
             'ordinal': field.ordinal,
           },
@@ -1839,6 +2321,9 @@ class ScoutSnapshot {
           .toList(growable: false),
       'scrollables': scrollables,
       'overlays': overlays,
+      if (visualTree != null) 'visualTree': visualTree,
+      if (controlGroups.isNotEmpty) 'controlGroups': controlGroups,
+      if (suggestedActions.isNotEmpty) 'suggestedActions': suggestedActions,
       'keyboard': {'visible': false},
       'recentErrors': recentErrors,
     };
@@ -1854,6 +2339,7 @@ class ScoutNode {
     required this.kind,
     required this.label,
     required this.value,
+    required this.validationMessage,
     required this.widgetType,
     required this.key,
     required this.rect,
@@ -1872,6 +2358,7 @@ class ScoutNode {
   final String kind;
   final String? label;
   final String? value;
+  final String? validationMessage;
   final String widgetType;
   final String? key;
   final Rect? rect;
@@ -1890,6 +2377,7 @@ class ScoutNode {
     String? kind,
     String? label,
     String? value,
+    String? validationMessage,
     double? confidence,
   }) {
     return ScoutNode(
@@ -1900,6 +2388,7 @@ class ScoutNode {
       kind: kind ?? this.kind,
       label: label ?? this.label,
       value: value ?? this.value,
+      validationMessage: validationMessage ?? this.validationMessage,
       widgetType: widgetType,
       key: key,
       rect: rect,
@@ -1924,6 +2413,11 @@ class ScoutNode {
     final kindlessSlug = _scoutSlug(
       normalized.contains('.') ? normalized.split('.').last : normalized,
     );
+    if (label != null &&
+        RegExp(r'^\d$').hasMatch(label!.trim()) &&
+        normalized == 'key.${label!.trim()}') {
+      return true;
+    }
     return id.endsWith('.$slug') || id.endsWith('.$kindlessSlug');
   }
 
@@ -1936,6 +2430,8 @@ class ScoutNode {
       'kind': kind,
       'label': label,
       if (kind == 'field') 'value': value,
+      if (kind == 'field' && validationMessage != null)
+        'validationMessage': validationMessage,
       'widgetType': widgetType,
       'key': key,
       'rect': rect == null
@@ -1974,6 +2470,99 @@ class _TextTargetMatch {
 
   final ScoutNode text;
   final ScoutNode? actionable;
+}
+
+class _CustomInputSurface {
+  const _CustomInputSurface({
+    required this.kind,
+    required this.label,
+    required this.currentValue,
+    required this.keys,
+    required this.commitAction,
+    required this.targetMatched,
+  });
+
+  final String kind;
+  final String? label;
+  final String? currentValue;
+  final Map<String, ScoutNode> keys;
+  final ScoutNode? commitAction;
+  final bool targetMatched;
+
+  Map<String, Object?> toControlGroupJson() {
+    final keyNodes = keys.values.toList(growable: false)
+      ..sort((a, b) {
+        final top = (a.rect?.top ?? 0).compareTo(b.rect?.top ?? 0);
+        if (top != 0) return top;
+        return (a.rect?.left ?? 0).compareTo(b.rect?.left ?? 0);
+      });
+    final allRects = [
+      for (final node in [...keyNodes, ?commitAction])
+        if (node.rect != null) node.rect!,
+    ];
+    final bounds = allRects.isEmpty
+        ? null
+        : allRects.reduce((value, element) => value.expandToInclude(element));
+    return {
+      'id': 'group.${kind.replaceAll('_', '.')}',
+      'kind': 'controlGroup',
+      'subtype': 'numeric_keypad',
+      if (label != null && label!.isNotEmpty) 'label': label,
+      'layout': 'grid',
+      if (bounds != null)
+        'rect': [bounds.left, bounds.top, bounds.width, bounds.height],
+      if (currentValue != null && currentValue!.isNotEmpty)
+        'currentValue': currentValue,
+      'acceptedCharacters': 'digits',
+      'targetMatched': targetMatched,
+      'children': [
+        for (final node in keyNodes)
+          {
+            'kind': 'button',
+            'role': 'key',
+            'label': node.label,
+            'id': 'key.${node.label}',
+            'targetId': node.id,
+            'rect': node.rect == null
+                ? null
+                : [
+                    node.rect!.left,
+                    node.rect!.top,
+                    node.rect!.width,
+                    node.rect!.height,
+                  ],
+            if (node.suggestedTapPoint != null)
+              'suggestedTapPoint': [
+                node.suggestedTapPoint!.dx,
+                node.suggestedTapPoint!.dy,
+              ],
+          },
+      ],
+      if (commitAction != null)
+        'actions': [
+          {
+            'kind': 'button',
+            'role': 'commit',
+            'label': commitAction!.label,
+            'id': commitAction!.id,
+            'rect': commitAction!.rect == null
+                ? null
+                : [
+                    commitAction!.rect!.left,
+                    commitAction!.rect!.top,
+                    commitAction!.rect!.width,
+                    commitAction!.rect!.height,
+                  ],
+          },
+        ],
+      'suggestedAction': {
+        'intent': 'enterValue',
+        'method': 'tapSequence',
+        'description':
+            'Tap the key children matching the desired value, then tap the commit action if present.',
+      },
+    };
+  }
 }
 
 class _ActionSnapshotResult {
