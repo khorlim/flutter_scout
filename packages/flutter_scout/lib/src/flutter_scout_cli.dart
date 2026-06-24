@@ -132,6 +132,7 @@ class FlutterScoutCli {
       'cd ${_shellQuote(project)} && exec flutter ${flutterArgs.map(_shellQuote).join(' ')} >> ${_shellQuote(_logFile)} 2>&1',
     ], mode: ProcessStartMode.detached);
     File(_deviceFile).writeAsStringSync(resolvedDevice.id);
+    _writeDeviceInfo(resolvedDevice);
     File(_pidFile).writeAsStringSync(process.pid.toString());
     final signalSubscriptions = _installLaunchSignalHandlers(process);
 
@@ -233,16 +234,25 @@ class FlutterScoutCli {
     final wsUri = discovered.uri!;
     _ensureSessionDir();
     File(_vmUriFile).writeAsStringSync(wsUri);
-    final device = parsed.option('device');
-    if (device != null && device.isNotEmpty) {
-      File(_deviceFile).writeAsStringSync(device);
-    }
     final output = <String, Object?>{
       'attached': true,
       'reusedRunningApp': true,
       'vmServiceUri': wsUri,
       'appStatePreserved': true,
     };
+    final device = parsed.option('device');
+    if (device != null && device.isNotEmpty) {
+      File(_deviceFile).writeAsStringSync(device);
+      final resolvedDevice = await _resolveFlutterDevice(device);
+      if (resolvedDevice != null) {
+        _writeDeviceInfo(resolvedDevice);
+        output['deviceName'] = resolvedDevice.name;
+        output['devicePlatform'] = resolvedDevice.platform;
+        output['deviceCategory'] = resolvedDevice.category;
+      } else {
+        _deleteFileIfExists(_deviceInfoFile);
+      }
+    }
     final ready = await _waitScoutReady(wsUri);
     output['ready'] = ready.ready;
     if (!ready.ready) {
@@ -279,6 +289,12 @@ class FlutterScoutCli {
         File(_vmUriFile).writeAsStringSync(discovered.uri!);
         if (device != null && device.isNotEmpty) {
           File(_deviceFile).writeAsStringSync(device);
+          final resolvedDevice = await _resolveFlutterDevice(device);
+          if (resolvedDevice != null) {
+            _writeDeviceInfo(resolvedDevice);
+          } else {
+            _deleteFileIfExists(_deviceInfoFile);
+          }
         }
         stdout.writeln(
           jsonEncode({
@@ -333,7 +349,14 @@ class FlutterScoutCli {
     }
     final stale = await _validateVmUri(vmUri);
     if (stale.ok) {
-      stdout.writeln(jsonEncode({'running': true, 'vmServiceUri': vmUri}));
+      stdout.writeln(
+        jsonEncode({
+          'running': true,
+          'vmServiceUri': vmUri,
+          if (_readDevice() != null) 'device': _readDevice(),
+          if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
+        }),
+      );
       return 0;
     }
     _clearVmUriFile();
@@ -447,6 +470,7 @@ class FlutterScoutCli {
     if (parsed.flag('clear-session')) {
       _clearVmUriFile();
       _deleteFileIfExists(_deviceFile);
+      _deleteFileIfExists(_deviceInfoFile);
       _deleteFileIfExists(_sessionFile);
     }
     stdout.writeln(
@@ -475,6 +499,7 @@ class FlutterScoutCli {
     final nodes = [
       ..._nodesFromInspect(inspect, 'interactables'),
       ..._nodesFromInspect(inspect, 'fields'),
+      ..._nodesFromInspect(inspect, 'textTargets'),
     ];
     final dpr = (inspect['devicePixelRatio'] as num?)?.toDouble() ?? 1;
     if (target != null && target.isNotEmpty) {
@@ -516,7 +541,27 @@ class FlutterScoutCli {
     final target = parsed.rest.isEmpty ? null : parsed.rest.first;
     final x = parsed.option('x');
     final y = parsed.option('y');
-    if ((target == null || target.isEmpty) && (x == null || y == null)) {
+    String? resolvedTarget = target;
+    String? resolvedX = x;
+    String? resolvedY = y;
+    if (parsed.rest.length == 2 &&
+        _isNumeric(parsed.rest[0]) &&
+        _isNumeric(parsed.rest[1]) &&
+        x == null &&
+        y == null) {
+      resolvedTarget = null;
+      resolvedX = parsed.rest[0];
+      resolvedY = parsed.rest[1];
+    } else if (parsed.rest.length > 1 && target != null) {
+      throw ScoutCliException(
+        'usage',
+        _isNumeric(target)
+            ? 'For coordinates, use: flutter-scout tap --x $target --y ${parsed.rest[1]} or flutter-scout tap $target ${parsed.rest[1]}.'
+            : 'Usage: flutter-scout tap <target> or flutter-scout tap --x <x> --y <y>',
+      );
+    }
+    if ((resolvedTarget == null || resolvedTarget.isEmpty) &&
+        (resolvedX == null || resolvedY == null)) {
       throw const ScoutCliException(
         'usage',
         'Usage: flutter-scout tap <target> or flutter-scout tap --x <x> --y <y>',
@@ -525,14 +570,14 @@ class FlutterScoutCli {
     final params = <String, String>{
       'waitMs': parsed.option('wait-ms') ?? '1500',
     };
-    if (target != null && target.isNotEmpty) {
-      params['target'] = target;
+    if (resolvedTarget != null && resolvedTarget.isNotEmpty) {
+      params['target'] = resolvedTarget;
     }
-    if (x != null) {
-      params['x'] = x;
+    if (resolvedX != null) {
+      params['x'] = resolvedX;
     }
-    if (y != null) {
-      params['y'] = y;
+    if (resolvedY != null) {
+      params['y'] = resolvedY;
     }
     return _callAndPrint(
       'ext.flutter_scout.tap',
@@ -782,6 +827,10 @@ class FlutterScoutCli {
         jsonEncode({
           'ok': true,
           'path': _logFile,
+          'available': false,
+          'source': 'scout_owned_flutter_run',
+          'message':
+              'No Scout-owned flutter run log file exists. Attach-only sessions cannot read the owning terminal or IDE console logs.',
           if (parsed.flag('summary')) ...{
             'errors': 0,
             'warnings': 0,
@@ -799,9 +848,16 @@ class FlutterScoutCli {
     if (parsed.flag('summary')) {
       final summary = _summarizeLogLines(lines, last: last);
       stdout.writeln(
-        const JsonEncoder.withIndent(
-          '  ',
-        ).convert({'ok': true, 'path': _logFile, ...summary}),
+        const JsonEncoder.withIndent('  ').convert({
+          'ok': true,
+          'path': _logFile,
+          'available': lines.isNotEmpty,
+          if (lines.isEmpty) 'source': 'attach_only_or_empty_scout_log',
+          if (lines.isEmpty)
+            'message':
+                'No Scout-owned Flutter tool output has been captured for this session. Attach-only sessions cannot read the owning terminal or IDE console logs.',
+          ...summary,
+        }),
       );
       return 0;
     }
@@ -814,9 +870,16 @@ class FlutterScoutCli {
       lines = lines.sublist(lines.length - last);
     }
     stdout.writeln(
-      const JsonEncoder.withIndent(
-        '  ',
-      ).convert({'ok': true, 'path': _logFile, 'lines': lines}),
+      const JsonEncoder.withIndent('  ').convert({
+        'ok': true,
+        'path': _logFile,
+        'available': lines.isNotEmpty,
+        if (lines.isEmpty) 'source': 'attach_only_or_empty_scout_log',
+        if (lines.isEmpty)
+          'message':
+              'No Scout-owned Flutter tool output has been captured for this session. Attach-only sessions cannot read the owning terminal or IDE console logs.',
+        'lines': lines,
+      }),
     );
     return 0;
   }
@@ -846,8 +909,7 @@ class FlutterScoutCli {
           'screenshot_${DateTime.now().millisecondsSinceEpoch}.png',
         );
     Directory(p.dirname(output)).createSync(recursive: true);
-    final device = _readDevice();
-    final simTarget = device == null || device.isEmpty ? 'booted' : device;
+    final simTarget = _requireSimulatorScreenshotTarget();
     final result = await Process.run('xcrun', [
       'simctl',
       'io',
@@ -1071,10 +1133,15 @@ class FlutterScoutCli {
       if (result['stable'] != null) 'stable': result['stable'],
       if (result['result'] != null) 'result': result['result'],
       if (result['method'] != null) 'method': result['method'],
+      if (result['state'] != null) 'state': result['state'],
+      if (result['appReachable'] != null)
+        'appReachable': result['appReachable'],
       if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
       if (result['message'] != null) 'message': result['message'],
       if (result['fullRebuildRequired'] != null)
         'fullRebuildRequired': result['fullRebuildRequired'],
+      if (result['reloadReport'] != null)
+        'reloadReport': result['reloadReport'],
       if (result['nextBestActions'] != null)
         'nextBestActions': result['nextBestActions'],
       if (result['filled'] != null) 'filled': result['filled'],
@@ -1082,6 +1149,11 @@ class FlutterScoutCli {
       if (result['popped'] != null) 'popped': result['popped'],
       if (result['target'] is Map<String, dynamic>)
         'target': _compactNode(result['target'] as Map<String, dynamic>),
+      if (result['textTarget'] is Map<String, dynamic>)
+        'textTarget': _compactNode(
+          result['textTarget'] as Map<String, dynamic>,
+        ),
+      if (result['activation'] != null) 'activation': result['activation'],
       if (result['fieldResults'] != null)
         'fieldResults': result['fieldResults'],
       if (result['warnings'] != null) 'warnings': result['warnings'],
@@ -1186,6 +1258,7 @@ class FlutterScoutCli {
             'message': 'Could not send ${signal.toString()} to pid $pid.',
           },
           'fullRebuildRequired': false,
+          'appReachable': before != null,
         };
       }
       final after = await _waitForInspectAfterHotUpdate(
@@ -1229,15 +1302,20 @@ class FlutterScoutCli {
       'action': action,
       'method': 'unavailable_without_scout_owned_flutter_run',
       'fullRebuildRequired': false,
+      'attachOnly': true,
+      'vmServiceUri': _readVmUri(),
+      'vmServiceListenerPid': _readVmUri() == null
+          ? null
+          : await _pidForListeningVmPort(_readVmUri()!),
       'error': {
         'code': 'hot_restart_unavailable',
         'message':
             'Hot restart requires a Scout-owned flutter run process. Attach-only sessions can inspect and act, but cannot restart the Flutter tool process.',
       },
       'nextBestActions': [
-        'Use flutter-scout reload for Dart-only changes that preserve state',
-        'Start the app with flutter-scout launch to enable flutter-scout restart',
-        'Use flutter-scout ensure --device <sim-id> --project <path> to reuse when possible and launch only when needed',
+        'Use the owning Flutter terminal or IDE debug session to hot restart this attached app',
+        'Run flutter-scout reload for Dart-only changes that can be applied through the VM service',
+        'If reload is rejected, relaunch from the owning terminal or start a Scout-owned run with flutter-scout ensure --device <sim-id> --project <path>',
       ],
     };
   }
@@ -1265,6 +1343,7 @@ class FlutterScoutCli {
         final report = await service
             .reloadSources(isolateId, force: false, pause: false)
             .timeout(const Duration(seconds: 20));
+        final reloadSucceeded = report.success == true;
         try {
           await service
               .callServiceExtension(
@@ -1280,20 +1359,30 @@ class FlutterScoutCli {
         );
         final elapsedMs = DateTime.now().difference(started).inMilliseconds;
         return {
-          'ok': report.success == true && after != null,
+          'ok': reloadSucceeded && after != null,
           'action': 'reload',
           'method': 'vm_service_reload_sources',
+          'reloadReport': report.toJson(),
+          'appReachable': after != null,
+          if (!reloadSucceeded)
+            'state':
+                'reload_rejected_running_app_still_available_with_previous_code',
           'stable': after?['idle'],
-          'result': _inspectChanged(before, after) ? 'changed' : 'unchanged',
+          'result': !reloadSucceeded
+              ? 'reload_rejected'
+              : _inspectChanged(before, after)
+              ? 'changed'
+              : 'unchanged',
           'elapsedMs': elapsedMs,
           'before': before,
           'after': after,
           'delta': _inspectDelta(before, after),
           'recentErrors': after?['recentErrors'] ?? const <Object?>[],
-          if (report.success != true)
+          if (!reloadSucceeded)
             'error': {
               'code': 'reload_sources_failed',
-              'message': 'VM service reloadSources reported failure.',
+              'message':
+                  'VM service reloadSources reported failure. The app remained inspectable, so it is likely still running the previous code.',
             },
           if (after == null)
             'error': {
@@ -1310,11 +1399,12 @@ class FlutterScoutCli {
         'action': 'reload',
         'method': 'vm_service_reload_sources',
         'fullRebuildRequired': false,
+        'appReachable': await _tryInspect() != null,
         'error': {'code': 'vm_reload_unavailable', 'message': error.toString()},
         'nextBestActions': [
-          'Start the app with flutter-scout launch to enable signal-based reload',
-          'Use flutter-scout ensure --device <sim-id> --project <path> to reuse when possible and launch only when needed',
-          'If Dart reload is rejected, run flutter-scout restart or relaunch after native/pubspec changes',
+          'Use the owning Flutter terminal or IDE debug session to hot reload this attached app',
+          'Start the app with flutter-scout launch to enable signal-based reload/restart',
+          'If Dart reload is rejected, relaunch after native, plugin, asset, or pubspec changes',
         ],
       };
     }
@@ -1494,8 +1584,7 @@ class FlutterScoutCli {
 
   Future<void> _captureScreenshot(String output) async {
     Directory(p.dirname(output)).createSync(recursive: true);
-    final device = _readDevice();
-    final simTarget = device == null || device.isEmpty ? 'booted' : device;
+    final simTarget = _requireSimulatorScreenshotTarget();
     final result = await Process.run('xcrun', [
       'simctl',
       'io',
@@ -1509,6 +1598,36 @@ class FlutterScoutCli {
         (result.stderr as String).trim(),
       );
     }
+  }
+
+  String _requireSimulatorScreenshotTarget() {
+    final device = _readDevice();
+    final deviceInfo = _readDeviceInfo();
+    final platform = deviceInfo?['platform']?.toString().toLowerCase();
+    final category = deviceInfo?['category']?.toString().toLowerCase();
+    final emulator = deviceInfo?['emulator'] == true;
+    if (device == null || device.isEmpty) {
+      throw const ScoutCliException(
+        'screenshot_unsupported_target',
+        'No simulator device is recorded for this session. Attach with --device <ios-simulator-id> or launch/ensure through Flutter Scout before taking screenshots.',
+      );
+    }
+    if (device == 'macos' ||
+        platform == 'macos' ||
+        category == 'desktop' ||
+        emulator == false) {
+      throw ScoutCliException(
+        'screenshot_unsupported_target',
+        'Screenshots and crops currently use xcrun simctl and are only supported for iOS Simulator sessions. The attached target is `${deviceInfo?['name'] ?? device}`.',
+      );
+    }
+    if (platform != null && !platform.contains('ios')) {
+      throw ScoutCliException(
+        'screenshot_unsupported_target',
+        'Screenshots and crops currently use xcrun simctl and are only supported for iOS Simulator sessions. The attached target platform is `$platform`.',
+      );
+    }
+    return device;
   }
 
   Future<void> _openDeeplink(String url) async {
@@ -1610,7 +1729,7 @@ class FlutterScoutCli {
     Map<String, dynamic> inspect,
     String target,
   ) {
-    for (final groupName in ['interactables', 'fields']) {
+    for (final groupName in ['interactables', 'fields', 'textTargets']) {
       final group = inspect[groupName];
       if (group is! List) continue;
       for (final node in group) {
@@ -1853,6 +1972,24 @@ class FlutterScoutCli {
     return value.isEmpty ? null : value;
   }
 
+  void _writeDeviceInfo(_FlutterDevice device) {
+    _ensureSessionDir();
+    File(_deviceInfoFile).writeAsStringSync(jsonEncode(device.toJson()));
+  }
+
+  Map<String, dynamic>? _readDeviceInfo() {
+    final file = File(_deviceInfoFile);
+    if (!file.existsSync()) return null;
+    try {
+      final decoded = jsonDecode(file.readAsStringSync());
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
   int? _readPid() {
     final file = File(_pidFile);
     if (!file.existsSync()) return null;
@@ -1951,6 +2088,8 @@ Usage:
   flutter-scout replay [session.json] [--verbose]
 ''');
   }
+
+  bool _isNumeric(String value) => double.tryParse(value) != null;
 }
 
 class ScoutCliException implements Exception {
@@ -2025,6 +2164,7 @@ Directory get _sessionDir =>
     Directory(p.join(Directory.current.path, '.flutter_scout'));
 String get _vmUriFile => p.join(_sessionDir.path, 'vm_uri.txt');
 String get _deviceFile => p.join(_sessionDir.path, 'device.txt');
+String get _deviceInfoFile => p.join(_sessionDir.path, 'device_info.json');
 String get _sessionFile => p.join(_sessionDir.path, 'session.json');
 String get _pidFile => p.join(_sessionDir.path, 'flutter.pid');
 String get _logFile => p.join(_sessionDir.path, 'logs.txt');

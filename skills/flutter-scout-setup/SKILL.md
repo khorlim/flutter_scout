@@ -137,7 +137,7 @@ Successful setup means `status` reports running and `inspect` returns visible te
 
 `ensure`, `launch`, and `attach` report `ready` when they connect to or start a VM service. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
 
-After setup, use `flutter-scout reload` for Dart-only edits and `flutter-scout restart` when Dart state must reset. `restart` requires a Scout-owned `ensure` or `launch` process; attach-only sessions can still inspect and act, but cannot signal the Flutter tool for restart.
+After setup, use `flutter-scout reload` for Dart-only edits and `flutter-scout restart` when Dart state must reset. If `reload` returns `reload_rejected`, the app is still reachable but is likely running previous code. `restart` requires a Scout-owned `ensure` or `launch` process; attach-only sessions can still inspect and act, but cannot signal the Flutter tool for restart. Use the owning Flutter terminal or IDE hot restart when attached to a human-started session.
 
 ## Troubleshooting
 
@@ -146,13 +146,15 @@ After setup, use `flutter-scout reload` for Dart-only edits and `flutter-scout r
 - `helper_extension_missing`: the VM service is reachable but Flutter Scout was not registered; add the helper initializer shown in `expected`.
 - `helper_extension_check_failed`: retry `status` and `inspect`; if `inspect` works, the app is reachable and the readiness check likely raced startup. If `inspect` fails, relaunch or fix the reported helper initializer.
 - `hot_restart_unavailable`: start or reconnect through `flutter-scout ensure --device <simulator-id> --project <path>` so Scout owns the Flutter tool process, or perform a normal relaunch.
-- `vm_reload_unavailable`: the attached session cannot hot reload through VM service; use a Scout-owned `ensure`/`launch` session or relaunch after non-Dart changes.
+- `reload_sources_failed` or `reload_rejected`: VM reload was rejected and the app is likely still running previous code; use the owning Flutter terminal/IDE hot reload, or relaunch/start a Scout-owned `ensure`/`launch` session.
+- `vm_reload_unavailable`: the attached session cannot hot reload through VM service; use the owning Flutter terminal/IDE, use a Scout-owned `ensure`/`launch` session, or relaunch after non-Dart changes.
 - `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable; run `attach` or `launch` again.
 - `device_not_found`: pass an exact device ID or name from `flutter devices`.
 - `flutter_scout_helper_not_registered`: add `flutter_scout_helper` and call `FlutterScoutBinding.ensureInitialized()` before `runApp`, or `FlutterScoutHelper.ensureRegistered()` after an existing debug binding.
 - `flutter-scout: command not found`: use `dart run bin/flutter_scout.dart` from the CLI package or fix pub global `PATH`.
 - No Flutter Scout extensions: confirm `FlutterScoutBinding.ensureInitialized()` runs before `runApp`.
 - Scout-owned run still active: run `flutter-scout stop --clear-session`.
-- Simulator screenshot/crop failures: confirm `xcrun simctl` can see the booted simulator.
+- `screenshot_unsupported_target`: screenshots/crops currently use `xcrun simctl` and only support iOS Simulator sessions; macOS attach cannot be screenshotted by Scout yet.
+- Simulator screenshot/crop failures: confirm `xcrun simctl` can see the booted simulator and that the session was attached/launched with the iOS Simulator device id.
 
 After setup works, use `$flutter-scout` for the normal inspect/act/replay workflow.

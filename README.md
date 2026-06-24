@@ -12,13 +12,15 @@ The current vertical slice implements:
 - `doctor`, `status`, `stop`, and `bounds` commands for setup and cleanup
 - extension readiness preflight after launch/attach
 - attach-first `ensure`, hot reload, and hot restart commands to avoid rebuilds
+- reload diagnostics that distinguish rejected VM reloads from reachable apps still running old code
 - compact default action output, with full before/after data behind `--verbose`
 - compact inspect snapshots
+- addressable text targets for bounds/crops and safer `tap-text` activation through nearest actionable ancestors
 - duplicate-safe field handles and field values
 - viewport-aware inspect metadata for offscreen or partially visible controls
 - coordinate-aware scroll and swipe gestures
 - per-field fill results and before/after action deltas
-- screenshot capture and targeted crops through `xcrun simctl`
+- screenshot capture and targeted crops through `xcrun simctl` for iOS Simulator sessions
 - log capture for Flutter Scout launches
 - hard runtime signal capture through Flutter/platform error hooks
 - replayable sessions
@@ -120,7 +122,11 @@ dart run bin/flutter_scout.dart scroll down --from 220,760 --distance 520
 
 Action commands return compact JSON by default: result, stability, delta, recent errors, and a small after summary. Add `--verbose` to action commands or `replay` when full before/after payloads are needed.
 
-`inspect` includes `fieldsById`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, and `scrollables` so agents can avoid stale, hidden, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`.
+`inspect` includes `fieldsById`, `textTargets`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, and `overlays` so agents can avoid stale, hidden, modal-blocked, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`.
+
+`tap-text` activates the nearest actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Very short text such as `OK` must match exactly. If no actionable ancestor exists, Scout returns `text_not_actionable` instead of reporting a misleading success.
+
+Coordinate taps accept either `tap --x <x> --y <y>` or the shorthand `tap <x> <y>`.
 
 Use compact logs for triage:
 
@@ -138,5 +144,8 @@ dart run bin/flutter_scout.dart stop --clear-session
 ## Current Limits
 
 - Attach log discovery works with the helper marker on iOS Simulator, but explicit `--debug-url` remains the most deterministic path.
+- Full screenshots and crops currently use `xcrun simctl`; macOS attach sessions return `screenshot_unsupported_target` instead of capturing an unrelated simulator.
+- Attach-only sessions cannot read the owning IDE or terminal console logs. `logs` reports that limitation unless Scout owns the `flutter run` process.
+- Attach-only hot restart still requires the owning Flutter tool or a Scout-owned `ensure`/`launch`; Scout reports the VM listener process and next actions when restart is unavailable.
 - Targeted crop is implemented for current inspect handles; changed-region crop is not implemented yet.
 - Runtime hard-signal collection covers Flutter/platform errors and needs more coverage for image load failures and visible error banners.

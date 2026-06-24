@@ -156,11 +156,23 @@ class FlutterScoutRuntime {
       await _dispatchTap(point);
       final stable = await _waitStableForAction(params);
       final after = _snapshot();
+      final changed = _changed(before, after);
       return _ok({
         'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
         'stable': stable,
-        'result': _changed(before, after) ? 'changed' : 'unchanged',
+        'result': changed ? 'changed' : 'activated_no_observed_change',
         'target': node?.toJson(),
+        'activation': {
+          'dispatched': true,
+          'observedChange': changed,
+          'note': changed
+              ? null
+              : 'Tap was dispatched, but no synchronous Flutter tree, field, text, or geometry change was observed before the wait timeout.',
+        },
+        if (!changed)
+          'warnings': const [
+            'Tap dispatched without an observed synchronous UI change; check recentErrors, overlays, logs, or increase --wait-ms if the action is async.',
+          ],
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
@@ -181,23 +193,42 @@ class FlutterScoutRuntime {
       if (text == null || text.trim().isEmpty) {
         return _fail('missing_text', 'Expected text to tap.');
       }
-      final match = _findVisibleText(text);
+      final match = _findVisibleTextMatch(text);
       if (match == null) {
         return _fail('text_not_found', 'No visible text matched `$text`.');
       }
-      final rect = match.rect;
+      if (match.actionable == null) {
+        return _fail(
+          'text_not_actionable',
+          'Text `$text` is visible, but no actionable ancestor was found.',
+        );
+      }
+      final rect = match.actionable!.rect;
       if (rect == null) {
         return _fail('text_has_no_rect', 'Text `$text` has no usable rect.');
       }
-      final point = match.suggestedTapPoint ?? rect.center;
+      final point = match.actionable!.suggestedTapPoint ?? rect.center;
       await _dispatchTap(point);
       final stable = await _waitStableForAction(params);
       final after = _snapshot();
+      final changed = _changed(before, after);
       return _ok({
         'action': 'tap-text $text',
         'stable': stable,
-        'result': _changed(before, after) ? 'changed' : 'unchanged',
-        'target': match.toJson(),
+        'result': changed ? 'changed' : 'activated_no_observed_change',
+        'target': match.actionable!.toJson(),
+        'textTarget': match.text.toJson(),
+        'activation': {
+          'dispatched': true,
+          'observedChange': changed,
+          'strategy': match.actionable!.id == match.text.id
+              ? 'text_target'
+              : 'nearest_actionable_ancestor',
+        },
+        if (!changed)
+          'warnings': const [
+            'tap-text activated the nearest actionable target, but no synchronous UI change was observed before the wait timeout.',
+          ],
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
@@ -509,6 +540,7 @@ class FlutterScoutRuntime {
     final root = WidgetsBinding.instance.rootElement;
     final nodes = <ScoutNode>[];
     final scrollables = <Map<String, Object?>>[];
+    final overlays = <Map<String, Object?>>[];
     final visibleText = <String>{};
     var screen = 'RootWidget';
     final logicalSize = _logicalSize();
@@ -542,6 +574,10 @@ class FlutterScoutRuntime {
             });
           }
         }
+        final overlay = _overlayFor(element);
+        if (overlay != null) {
+          overlays.add(overlay);
+        }
         final text = _ownText(element.widget);
         if (text != null && _isUsefulVisibleText(text)) {
           visibleText.add(text.trim());
@@ -555,6 +591,9 @@ class FlutterScoutRuntime {
         .toList(growable: false);
     final fields = compactNodes
         .where((node) => node.kind == 'field')
+        .toList(growable: false);
+    final textTargets = compactNodes
+        .where((node) => node.kind == 'text')
         .toList(growable: false);
     final route = root == null ? null : ModalRoute.of(root)?.settings.name;
     return ScoutSnapshot(
@@ -571,7 +610,9 @@ class FlutterScoutRuntime {
       visibleText: visibleText.toList(growable: false),
       interactables: interactables,
       fields: fields,
+      textTargets: textTargets,
       scrollables: scrollables,
+      overlays: overlays,
       recentErrors: List<Map<String, Object?>>.from(_errors),
     );
   }
@@ -625,6 +666,9 @@ class FlutterScoutRuntime {
         return null;
       }
       return 'field';
+    }
+    if (widget is Text || widget is RichText) {
+      return 'text';
     }
     if (widget is ButtonStyleButton ||
         widget is IconButton ||
@@ -689,12 +733,32 @@ class FlutterScoutRuntime {
     if (widget is FloatingActionButton && widget.tooltip != null) {
       return widget.tooltip;
     }
+    if (widget is IconButton && widget.tooltip != null) {
+      return widget.tooltip;
+    }
     if (widget is TextField) {
       return widget.decoration?.labelText ?? widget.decoration?.hintText;
     }
+    final tooltip = _tooltipBelow(element);
+    if (tooltip != null && tooltip.isNotEmpty) return tooltip;
     final own = _ownText(widget);
     if (own != null && own.trim().isNotEmpty) return own.trim();
     return _textBelow(element);
+  }
+
+  String? _tooltipBelow(Element element, {int depth = 0}) {
+    if (depth > 4) return null;
+    final widget = element.widget;
+    if (widget is Tooltip &&
+        widget.message != null &&
+        widget.message!.isNotEmpty) {
+      return widget.message;
+    }
+    String? result;
+    element.visitChildElements((Element child) {
+      result ??= _tooltipBelow(child, depth: depth + 1);
+    });
+    return result;
   }
 
   String? _ownText(Widget widget) {
@@ -726,6 +790,37 @@ class FlutterScoutRuntime {
       result ??= _textBelow(child, depth: depth + 1);
     });
     return result;
+  }
+
+  Map<String, Object?>? _overlayFor(Element element) {
+    final widget = element.widget;
+    final String? kind;
+    if (widget is AlertDialog || widget is SimpleDialog || widget is Dialog) {
+      kind = 'dialog';
+    } else if (widget is BottomSheet) {
+      kind = 'bottomSheet';
+    } else {
+      kind = null;
+    }
+    if (kind == null) return null;
+    final rect = _rectFor(element);
+    final visibleRect = rect == null ? null : _visibleRectFor(rect);
+    return {
+      'kind': kind,
+      'widgetType': widget.runtimeType.toString(),
+      'label': _textBelow(element),
+      'rect': rect == null
+          ? null
+          : [rect.left, rect.top, rect.width, rect.height],
+      'visibleRect': visibleRect == null
+          ? null
+          : [
+              visibleRect.left,
+              visibleRect.top,
+              visibleRect.width,
+              visibleRect.height,
+            ],
+    };
   }
 
   String _stableId(String kind, String? label, Key? key, String widgetType) {
@@ -848,7 +943,7 @@ class FlutterScoutRuntime {
       final areaKey = rect == null
           ? node.id
           : [
-              node.kind == 'field' ? 'field' : 'act',
+              node.kind,
               rect.left.round(),
               rect.top.round(),
               rect.width.round(),
@@ -1022,48 +1117,70 @@ class FlutterScoutRuntime {
         (a.height - b.height).abs() < 0.5;
   }
 
-  ScoutNode? _findVisibleText(String text) {
+  _TextTargetMatch? _findVisibleTextMatch(String text) {
     final root = WidgetsBinding.instance.rootElement;
     if (root == null) return null;
     final wanted = text.trim();
-    ScoutNode? exact;
-    ScoutNode? contains;
+    _TextTargetMatch? exact;
+    _TextTargetMatch? contains;
     _walk(root, (Element element) {
       if (exact != null) return;
       final own = _ownText(element.widget)?.trim();
       if (own == null || own.isEmpty) return;
       final rect = _rectFor(element);
       if (rect == null || _visibleRectFor(rect) == null) return;
-      final id = 'text.${_slug(own)}';
-      final node = ScoutNode(
-        id: id,
-        baseId: id,
-        ordinal: 1,
-        fallbackId:
-            'i${id.hashCode.abs().toString().padLeft(8, '0').substring(0, 6)}',
-        kind: 'text',
-        label: own,
-        value: null,
-        widgetType: element.widget.runtimeType.toString(),
-        key: _keyLabel(element.widget.key),
-        rect: rect,
-        visibleRect: _visibleRectFor(rect),
-        visibleFraction: _visibleFraction(rect, _visibleRectFor(rect)),
-        suggestedTapPoint: _visibleCenter(rect),
-        hitTestable: _visibleCenter(rect) == null
-            ? false
-            : _hitTestable(_visibleCenter(rect)!),
-        enabled: true,
-        confidence: own == wanted ? 0.95 : 0.75,
-      );
+      final node = _nodeFromElement(element);
+      if (node == null) return;
+      final actionable = _nearestActionableAncestor(element);
+      final match = _TextTargetMatch(text: node, actionable: actionable);
       if (own == wanted) {
-        exact = node;
-      } else if (contains == null &&
+        exact = match;
+      } else if (wanted.length >= 3 &&
+          contains == null &&
           own.toLowerCase().contains(wanted.toLowerCase())) {
-        contains = node;
+        contains = match;
       }
     });
     return exact ?? contains;
+  }
+
+  ScoutNode? _nearestActionableAncestor(Element element) {
+    ScoutNode? result;
+    element.visitAncestorElements((Element ancestor) {
+      final node = _nodeFromElement(ancestor);
+      if (node != null && node.kind != 'text' && node.kind != 'field') {
+        result = node;
+        return false;
+      }
+      return true;
+    });
+    return result == null ? null : _canonicalInteractable(result!);
+  }
+
+  ScoutNode _canonicalInteractable(ScoutNode target) {
+    final snapshot = _snapshot();
+    for (final node in snapshot.interactables) {
+      if (node.label != null &&
+          node.label == target.label &&
+          node.rect != null &&
+          target.rect != null &&
+          _overlapRatio(node.rect!, target.rect!) > 0.7) {
+        return node;
+      }
+    }
+    for (final node in snapshot.interactables) {
+      if (node.kind == target.kind &&
+          node.label == target.label &&
+          _sameRect(node.rect, target.rect)) {
+        return node;
+      }
+    }
+    for (final node in snapshot.interactables) {
+      if (_sameRect(node.rect, target.rect)) {
+        return node;
+      }
+    }
+    return target;
   }
 
   EditableTextState? _focusedEditable(Element root) {
@@ -1325,7 +1442,9 @@ class ScoutSnapshot {
     required this.visibleText,
     required this.interactables,
     required this.fields,
+    required this.textTargets,
     required this.scrollables,
+    required this.overlays,
     required this.recentErrors,
   });
 
@@ -1337,11 +1456,13 @@ class ScoutSnapshot {
   final List<String> visibleText;
   final List<ScoutNode> interactables;
   final List<ScoutNode> fields;
+  final List<ScoutNode> textTargets;
   final List<Map<String, Object?>> scrollables;
+  final List<Map<String, Object?>> overlays;
   final List<Map<String, Object?>> recentErrors;
 
   ScoutNode? findNode(String target) {
-    for (final node in [...interactables, ...fields]) {
+    for (final node in [...interactables, ...fields, ...textTargets]) {
       if (node.matches(target)) return node;
     }
     return null;
@@ -1382,8 +1503,11 @@ class ScoutSnapshot {
           .map((node) => node.toJson())
           .toList(growable: false),
       'fields': fields.map((node) => node.toJson()).toList(growable: false),
+      'textTargets': textTargets
+          .map((node) => node.toJson())
+          .toList(growable: false),
       'scrollables': scrollables,
-      'overlays': const <Object?>[],
+      'overlays': overlays,
       'keyboard': {'visible': false},
       'recentErrors': recentErrors,
     };
@@ -1512,4 +1636,11 @@ class _EditableCandidate {
 
   final ScoutNode node;
   final EditableTextState state;
+}
+
+class _TextTargetMatch {
+  const _TextTargetMatch({required this.text, required this.actionable});
+
+  final ScoutNode text;
+  final ScoutNode? actionable;
 }

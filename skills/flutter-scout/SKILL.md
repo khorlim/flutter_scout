@@ -73,7 +73,7 @@ Launch, ensure, and attach responses include `ready` when they start or connect 
 flutter-scout inspect
 ```
 
-Use `visibleText`, `interactables`, `fields`, `fieldValues`, `fieldsById`, `scrollables`, `overlays`, `keyboard`, and `recentErrors` to orient yourself. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
+Use `visibleText`, `interactables`, `fields`, `textTargets`, `fieldValues`, `fieldsById`, `scrollables`, `overlays`, `keyboard`, and `recentErrors` to orient yourself. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
 
 Read viewport facts before tapping: `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, and `hitTestable`. If a control is partially visible, prefer the Scout handle because Scout taps the visible safe point. If a control is offscreen, scroll first.
 
@@ -91,6 +91,8 @@ After every action, read `result`, `delta`, `fieldValues`, and `recentErrors`. D
 
 Action output is compact by default. Add `--verbose` only when full before/after summaries are needed.
 
+When an action reports `activated_no_observed_change`, Scout dispatched the gesture but did not observe a synchronous Flutter tree, field, text, or geometry change before the wait timeout. Check `activation`, `warnings`, `recentErrors`, overlays, and logs before retrying.
+
 5. After Dart-only code edits, hot update instead of relaunching:
 
 ```bash
@@ -98,7 +100,7 @@ flutter-scout reload
 flutter-scout restart
 ```
 
-Prefer `reload` first because it preserves app state. Use `restart` when reload is rejected or state must reset. `restart` requires a Scout-owned `launch`/`ensure` process; attach-only sessions should use `reload` or run `ensure` to launch when needed. Native, plugin, asset, and `pubspec.yaml` changes can still require a full rebuild.
+Prefer `reload` first because it preserves app state. Use `restart` when reload is rejected or state must reset. If `reload` returns `reload_rejected`, treat the app as still running previous code unless the owning Flutter tool reports otherwise. `restart` requires a Scout-owned `launch`/`ensure` process; attach-only sessions should use `reload`, use the owning Flutter terminal or IDE hot restart, or run `ensure` to launch when needed. Native, plugin, asset, and `pubspec.yaml` changes can still require a full rebuild.
 
 6. Use targeted visual evidence when layout matters:
 
@@ -108,7 +110,9 @@ flutter-scout crop btn.save_supplier -o /tmp/save_button.png
 flutter-scout screenshot -o /tmp/current_screen.png
 ```
 
-Prefer `bounds` and crops over full screenshots when inspecting one control or dialog.
+Prefer `bounds` and crops over full screenshots when inspecting one control or dialog. Full screenshots and crops are supported for iOS Simulator sessions; macOS attach returns `screenshot_unsupported_target` instead of capturing a different simulator.
+
+`tap-text` activates the nearest actionable ancestor and returns both `target` and `textTarget`. Short labels like `OK` require exact matches. If no actionable ancestor exists, Scout returns `text_not_actionable`.
 
 7. Replay after a fix:
 
@@ -129,6 +133,7 @@ flutter-scout reload
 flutter-scout restart
 flutter-scout input --target field.search "query"
 flutter-scout tap-text "GoodJob"
+flutter-scout tap 1036 589
 flutter-scout long-press btn.more
 flutter-scout scroll down --distance 300
 flutter-scout scroll down --from 220,760 --distance 520
@@ -141,6 +146,8 @@ flutter-scout logs --last 20
 flutter-scout stop --clear-session
 ```
 
+If `logs` reports `available:false`, the session is attach-only or has no Scout-owned Flutter tool log. Use the owning terminal or IDE console for those app logs.
+
 ## Agent Rules
 
 - Treat Flutter Scout as eyes and hands, not a QA judge.
@@ -150,9 +157,11 @@ flutter-scout stop --clear-session
 - After Dart-only edits, run `reload` or `restart` before replaying flows.
 - Prefer `fill` for forms instead of tap/type/tap/type, but read per-field results and warnings.
 - Trust action deltas for next-step planning.
+- Read `activation` and `warnings` when an action reports `activated_no_observed_change`.
 - Treat `delta.changedGeometry` as a real change for scrolling or layout movement even when text and field values are unchanged.
 - Trust `status` to clear stale VM session files; reattach if it reports `staleCleared`.
 - Stop and fix code when `recentErrors` reports Flutter/platform errors.
-- Use `tap-text` for visible text rows or picker rows when generic row handles are ambiguous.
+- Use `tap-text` for visible text rows or picker rows when generic row handles are ambiguous; it returns an actionable `target` and the matched `textTarget`.
 - Use coordinate scroll/swipe starts when the default gesture may hit the wrong layer.
+- Use `tap <x> <y>` or `tap --x <x> --y <y>` for coordinate taps.
 - Keep `.flutter_scout/` as runtime state; do not commit it.
