@@ -65,7 +65,7 @@ Launch validates the exact requested device and emits compact progress events. I
 flutter-scout stop --clear-session
 ```
 
-Launch, ensure, and attach responses include `ready` when they start or connect to a VM service. If `ready` is false, fix the reported setup reason before inspecting or acting.
+Launch, ensure, and attach responses include `ready` when they start or connect to a VM service. If `ready` is false, fix the reported setup reason before inspecting or acting. When `ensure` or `launch` starts a Scout-owned Flutter run, read the `timing` object if present; it reports launch cost such as `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`.
 
 3. Inspect before acting:
 
@@ -73,11 +73,13 @@ Launch, ensure, and attach responses include `ready` when they start or connect 
 flutter-scout inspect
 ```
 
-Use `visibleText`, `interactables`, `fields`, `textTargets`, `fieldValues`, `fieldsById`, `scrollables`, `overlays`, `keyboard`, and `recentErrors` to orient yourself. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
+Use `visibleText`, `hitTestableText`, `offscreenText`, `interactables`, `fields`, `textTargets`, `fieldValues`, `fieldsById`, `scrollables`, `overlays`, `keyboard`, and `recentErrors` to orient yourself. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
 
-Read viewport facts before tapping: `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, and `hitTestable`. If a control is partially visible, prefer the Scout handle because Scout taps the visible safe point. If a control is offscreen, scroll first.
+Treat `hitTestableText` as the safest text set for immediate `tap-text`. `offscreenText` is useful for planning, but it is not directly tappable until you scroll it into view.
 
-Icon-only controls can expose handles from keys, tooltips, semantics, common Material icon widgets, or common Material glyph text. Try handles such as `btn.duplicate`, `btn.save`, `btn.delete`, `btn.download`, `btn.back`, or `btn.search` before falling back to coordinates; Scout can match a kind-prefixed guess like `btn.duplicate` to a custom tappable exposed as `tap.duplicate`.
+Read viewport facts before tapping: `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, and `hitTestable`. If a control is partially visible, prefer the Scout handle because Scout taps the visible safe point. If a control is offscreen, scroll first. Target taps require a visible safe point; if a handle exists but is offscreen, Scout returns `target_not_visible` instead of tapping an offscreen rect center.
+
+Icon-only controls can expose handles from keys, tooltips, semantics, common Material icon widgets, or common Material glyph text. Try handles such as `btn.duplicate`, `btn.save`, `btn.delete`, `btn.download`, `btn.back`, or `btn.search` before falling back to coordinates; Scout can match a kind-prefixed guess like `btn.duplicate` to a custom tappable exposed as `tap.duplicate`. Unlabeled gesture targets with clear contained action text can also appear as `btn.*` handles, such as `btn.payment`, `btn.confirm_payment`, `btn.done`, `btn.create_order`, or `btn.save_smoke`.
 
 Duplicate unkeyed fields are suffixed in inspect output, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Use the exact `fieldsById` key when filling or inputting duplicate labels.
 
@@ -126,7 +128,7 @@ If `inspect` or `tap-text` reports `helperProtocol.status:"stale_or_old_helper"`
 flutter-scout replay .flutter_scout/session.json
 ```
 
-Replay should be the first check after changing code for a flow you already tested.
+Replay should be the first check after changing code for a flow you already tested. Replay output includes a `transcript` array plus structured `results`; use the transcript for concise reporting and the results for evidence.
 
 ## Useful Commands
 
@@ -156,6 +158,8 @@ If `logs` reports `available:false`, the session is attach-only or has no Scout-
 
 If `logs --contains <text>` reports `available:true` and `matched:0`, Scout did read a non-empty Scout-owned log but no lines matched that filter. Broaden the search or inspect the app's own logging path.
 
+`recentErrors` entries include severity facts such as `severity`, `blocking`, `phase`, `ageMs`, and `stale`. Treat fresh `blocking:true` errors as hard failures. Older or non-blocking startup/network entries may be relevant context, but they do not automatically mean the current flow failed.
+
 ## Agent Rules
 
 - Treat Flutter Scout as eyes and hands, not a QA judge.
@@ -171,6 +175,7 @@ If `logs --contains <text>` reports `available:true` and `matched:0`, Scout did 
 - Treat drag `result:"navigated"` as a real route/screen transition caused by the gesture, not a plain scroll.
 - Trust `status` to clear stale VM session files; reattach if it reports `staleCleared`.
 - Stop and fix code when `recentErrors` reports Flutter/platform errors.
+- Treat fresh `recentErrors` with `blocking:true` as hard failures; separate stale/non-blocking startup errors from the current flow.
 - Use `tap-text` for visible text rows or picker rows when generic row handles are ambiguous; it returns an actionable `target` and the matched `textTarget`.
 - When `tap-text` falls back because the helper is stale, follow the warning and restart/reload the attached app before relying on further text-target behavior.
 - Use coordinate scroll/swipe starts when the default gesture may hit the wrong layer.

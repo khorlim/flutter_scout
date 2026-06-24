@@ -127,6 +127,7 @@ class FlutterScoutCli {
       'deviceName': resolvedDevice.name,
       'project': project,
     });
+    final launchTiming = _LaunchTiming(startedAt: DateTime.now());
     final process = await Process.start('/bin/bash', [
       '-lc',
       'cd ${_shellQuote(project)} && exec flutter ${flutterArgs.map(_shellQuote).join(' ')} >> ${_shellQuote(_logFile)} 2>&1',
@@ -139,6 +140,7 @@ class FlutterScoutCli {
     final lines = <String>[];
     void handleLine(String line) {
       lines.add(line);
+      launchTiming.observeLine(line);
       _writeLaunchProgressFromLine(line);
       if (lines.length > 200) {
         lines.removeAt(0);
@@ -172,6 +174,7 @@ class FlutterScoutCli {
           'launched': false,
           'reason': 'vm_service_uri_not_found',
           'pid': process.pid,
+          'timing': launchTiming.toJson(completedAt: DateTime.now()),
           'tailLogLines': lines.length > 20
               ? lines.sublist(lines.length - 20)
               : lines,
@@ -184,6 +187,7 @@ class FlutterScoutCli {
     File(_vmUriFile).writeAsStringSync(wsUri);
     _writeProgress('verify_vm_service', {'vmServiceUri': wsUri});
     final ready = await _waitScoutReady(wsUri);
+    launchTiming.readyAt = DateTime.now();
     stdout.writeln(
       jsonEncode({
         'launched': true,
@@ -197,6 +201,7 @@ class FlutterScoutCli {
         'pid': process.pid,
         'vmServiceUri': wsUri,
         'logFile': _logFile,
+        'timing': launchTiming.toJson(completedAt: launchTiming.readyAt),
       }),
     );
     return ready.ready ? 0 : 1;
@@ -1044,6 +1049,7 @@ class FlutterScoutCli {
       );
     }
     final results = <Object?>[];
+    final transcript = <String>[];
     for (final item in decoded) {
       if (item is! Map<String, dynamic>) continue;
       final cmd = item['cmd'];
@@ -1086,13 +1092,48 @@ class FlutterScoutCli {
             ? result
             : _compactActionResult(result),
       );
+      transcript.add(_transcriptStep(item, result));
     }
     stdout.writeln(
       const JsonEncoder.withIndent(
         '  ',
-      ).convert({'ok': true, 'results': results}),
+      ).convert({'ok': true, 'transcript': transcript, 'results': results}),
     );
     return 0;
+  }
+
+  String _transcriptStep(
+    Map<String, dynamic> item,
+    Map<String, Object?> result,
+  ) {
+    final cmd = item['cmd']?.toString() ?? 'unknown';
+    final action = switch (cmd) {
+      'tap-text' => 'tap-text "${item['text']}"',
+      'tap' =>
+        item['target'] != null
+            ? 'tap ${item['target']}'
+            : 'tap ${item['x']},${item['y']}',
+      'input' => 'input ${item['target'] ?? 'focused'}',
+      'fill' => 'fill ${_filledKeys(item['values'])}',
+      'long-press' => 'long-press ${item['target']}',
+      'scroll' => 'scroll ${item['direction'] ?? ''}'.trim(),
+      'swipe' => 'swipe ${item['direction'] ?? ''}'.trim(),
+      'back' => 'back',
+      'reload' => 'reload',
+      'restart' => 'restart',
+      'deeplink' => 'deeplink ${item['url']}',
+      _ => cmd,
+    };
+    final ok = result['ok'] == false ? 'failed' : 'ok';
+    final outcome = result['result'] ?? result['state'] ?? ok;
+    final after = result['after'];
+    final screen = after is Map ? after['screen'] : null;
+    return [action, outcome, if (screen != null) 'screen=$screen'].join(' -> ');
+  }
+
+  String _filledKeys(Object? values) {
+    if (values is Map) return values.keys.join(', ');
+    return 'fields';
   }
 
   Future<Map<String, Object?>> _replayDeeplink(String? url) async {
@@ -1308,6 +1349,10 @@ class FlutterScoutCli {
       if (summary['idle'] != null) 'idle': summary['idle'],
       if (summary['visibleText'] is List)
         'visibleText': _lastItems(summary['visibleText'] as List, 12),
+      if (summary['hitTestableText'] is List)
+        'hitTestableText': _lastItems(summary['hitTestableText'] as List, 12),
+      if (summary['offscreenText'] is List)
+        'offscreenText': _lastItems(summary['offscreenText'] as List, 8),
       if (summary['fieldValues'] != null) 'fieldValues': summary['fieldValues'],
       if (summary['fieldsById'] != null) 'fieldsById': summary['fieldsById'],
     };
@@ -2501,6 +2546,67 @@ class _ScoutReady {
   final String? reason;
   final String? expected;
   final String? detail;
+}
+
+class _LaunchTiming {
+  _LaunchTiming({required this.startedAt});
+
+  final DateTime startedAt;
+  DateTime? buildStartedAt;
+  DateTime? buildDoneAt;
+  DateTime? firstSyncAt;
+  DateTime? vmServiceFoundAt;
+  DateTime? readyAt;
+
+  void observeLine(String line) {
+    final lower = line.toLowerCase();
+    final now = DateTime.now();
+    if ((lower.contains('running xcode build') ||
+            lower.contains('building ') ||
+            lower.contains('gradle task')) &&
+        buildStartedAt == null) {
+      buildStartedAt = now;
+    }
+    if ((lower.contains('xcode build done') ||
+            lower.contains('built build/') ||
+            (lower.contains('gradle task') && lower.contains('done'))) &&
+        buildDoneAt == null) {
+      buildDoneAt = now;
+    }
+    if (lower.contains('syncing files to device') && firstSyncAt == null) {
+      firstSyncAt = now;
+    }
+    if ((line.contains('[FLUTTER_SCOUT_VM_URI]') ||
+            line.contains('Dart VM Service') ||
+            line.contains('vmservice') ||
+            line.contains('/ws')) &&
+        vmServiceFoundAt == null) {
+      vmServiceFoundAt = now;
+    }
+  }
+
+  Map<String, Object?> toJson({DateTime? completedAt}) {
+    final completed = completedAt ?? readyAt ?? DateTime.now();
+    return {
+      'totalMs': completed.difference(startedAt).inMilliseconds,
+      if (buildStartedAt != null)
+        'buildStartMs': buildStartedAt!.difference(startedAt).inMilliseconds,
+      if (buildStartedAt != null && buildDoneAt != null)
+        'buildDurationMs': buildDoneAt!
+            .difference(buildStartedAt!)
+            .inMilliseconds,
+      if (buildDoneAt != null)
+        'buildDoneMs': buildDoneAt!.difference(startedAt).inMilliseconds,
+      if (firstSyncAt != null)
+        'firstSyncMs': firstSyncAt!.difference(startedAt).inMilliseconds,
+      if (vmServiceFoundAt != null)
+        'vmServiceFoundMs': vmServiceFoundAt!
+            .difference(startedAt)
+            .inMilliseconds,
+      if (readyAt != null)
+        'readyMs': readyAt!.difference(startedAt).inMilliseconds,
+    };
+  }
 }
 
 class _FlutterDevice {

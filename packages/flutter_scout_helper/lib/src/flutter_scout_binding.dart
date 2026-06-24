@@ -31,6 +31,7 @@ class FlutterScoutHelper {
 
 class FlutterScoutRuntime {
   final List<Map<String, Object?>> _errors = <Map<String, Object?>>[];
+  final DateTime _installedAt = DateTime.now();
   int _nextSyntheticPointer = 1000000;
   FlutterExceptionHandler? _previousFlutterError;
   ui.ErrorCallback? _previousPlatformError;
@@ -73,10 +74,17 @@ class FlutterScoutRuntime {
     required String message,
     String? library,
   }) {
+    final timestamp = DateTime.now();
+    final severity = _errorSeverity(type: type, message: message);
     final error = <String, Object?>{
       'type': type,
       'message': message,
-      'timestamp': DateTime.now().toIso8601String(),
+      'timestamp': timestamp.toIso8601String(),
+      'severity': severity,
+      'blocking': severity == 'blocking',
+      'phase': timestamp.difference(_installedAt) < const Duration(seconds: 10)
+          ? 'startup'
+          : 'runtime',
     };
     if (library != null) {
       error['library'] = library;
@@ -85,6 +93,40 @@ class FlutterScoutRuntime {
     if (_errors.length > 30) {
       _errors.removeRange(0, _errors.length - 30);
     }
+  }
+
+  String _errorSeverity({required String type, required String message}) {
+    final lower = message.toLowerCase();
+    if (type == 'flutter_error') return 'blocking';
+    if (lower.contains('renderflex overflow') ||
+        lower.contains('failed assertion') ||
+        lower.contains('setstate()') ||
+        lower.contains('null check operator used on a null value')) {
+      return 'blocking';
+    }
+    if (lower.contains('httpexception') ||
+        lower.contains('socketexception') ||
+        lower.contains('connection closed before full header') ||
+        lower.contains('connection refused') ||
+        lower.contains('connection reset')) {
+      return 'non_blocking';
+    }
+    return 'warning';
+  }
+
+  List<Map<String, Object?>> _recentErrors() {
+    final now = DateTime.now();
+    return [
+      for (final error in _errors)
+        {
+          ...error,
+          if (DateTime.tryParse(error['timestamp']?.toString() ?? '')
+              case final timestamp?) ...{
+            'ageMs': now.difference(timestamp).inMilliseconds,
+            'stale': now.difference(timestamp) > const Duration(seconds: 30),
+          },
+        },
+    ];
   }
 
   void _registerExtension(
@@ -141,12 +183,18 @@ class FlutterScoutRuntime {
       ScoutNode? node;
       if (target != null && target.isNotEmpty) {
         node = _snapshot().findNode(target);
-        point = node?.suggestedTapPoint ?? node?.rect?.center;
+        point = node?.suggestedTapPoint;
       } else if (x != null && y != null) {
         point = Offset(x, y);
       }
 
       if (point == null) {
+        if (node != null && node.visibleFraction == 0) {
+          return _fail(
+            'target_not_visible',
+            'Target `$target` matched `${node.id}` but is offscreen; scroll it into view before tapping.',
+          );
+        }
         return _fail(
           'target_not_found',
           'No tappable target matched `$target`.',
@@ -179,7 +227,7 @@ class FlutterScoutRuntime {
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
-        'recentErrors': _errors,
+        'recentErrors': _recentErrors(),
       });
     } catch (error) {
       return _fail('tap_failed', error.toString());
@@ -233,7 +281,7 @@ class FlutterScoutRuntime {
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
-        'recentErrors': _errors,
+        'recentErrors': _recentErrors(),
       });
     } catch (error) {
       return _fail('tap_text_failed', error.toString());
@@ -292,7 +340,7 @@ class FlutterScoutRuntime {
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
-        'recentErrors': _errors,
+        'recentErrors': _recentErrors(),
       });
     } catch (error) {
       return _fail('input_failed', error.toString());
@@ -322,7 +370,7 @@ class FlutterScoutRuntime {
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
-        'recentErrors': _errors,
+        'recentErrors': _recentErrors(),
       });
     } catch (error) {
       return _fail('long_press_failed', error.toString());
@@ -404,7 +452,7 @@ class FlutterScoutRuntime {
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
-        'recentErrors': _errors,
+        'recentErrors': _recentErrors(),
       });
     } catch (error) {
       return _fail('fill_failed', error.toString());
@@ -471,7 +519,7 @@ class FlutterScoutRuntime {
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
-        'recentErrors': _errors,
+        'recentErrors': _recentErrors(),
       });
     } catch (error) {
       return _fail('back_failed', error.toString());
@@ -491,7 +539,7 @@ class FlutterScoutRuntime {
       'reason': stable ? null : 'frames_still_changing',
       'durationMs': timeoutMs,
       'snapshot': _snapshot().summaryJson(),
-      'recentErrors': _errors,
+      'recentErrors': _recentErrors(),
     });
   }
 
@@ -604,7 +652,7 @@ class FlutterScoutRuntime {
       'before': before.summaryJson(),
       'after': after.summaryJson(),
       'delta': actionDelta,
-      'recentErrors': _errors,
+      'recentErrors': _recentErrors(),
     });
   }
 
@@ -614,6 +662,8 @@ class FlutterScoutRuntime {
     final scrollables = <Map<String, Object?>>[];
     final overlays = <Map<String, Object?>>[];
     final visibleText = <String>{};
+    final hitTestableText = <String>{};
+    final offscreenText = <String>{};
     var screen = 'RootWidget';
     final logicalSize = _logicalSize();
     if (root != null) {
@@ -652,12 +702,24 @@ class FlutterScoutRuntime {
         }
         final text = _ownText(element.widget);
         if (text != null && _isUsefulVisibleText(text)) {
-          visibleText.add(text.trim());
+          final rect = _rectFor(element);
+          final trimmed = text.trim();
+          if (rect == null || _visibleRectFor(rect) == null) {
+            offscreenText.add(trimmed);
+          } else {
+            visibleText.add(trimmed);
+            final point = _visibleCenter(rect);
+            if (point != null && _hitTestable(point)) {
+              hitTestableText.add(trimmed);
+            }
+          }
         }
       });
     }
 
-    final compactNodes = _disambiguateIds(_compactNodes(nodes));
+    final compactNodes = _disambiguateIds(
+      _inferActionableLabels(_compactNodes(nodes)),
+    );
     final interactables = compactNodes
         .where((node) => node.kind != 'text' && node.kind != 'field')
         .toList(growable: false);
@@ -680,12 +742,14 @@ class FlutterScoutRuntime {
           .devicePixelRatio,
       logicalSize: logicalSize,
       visibleText: visibleText.toList(growable: false),
+      hitTestableText: hitTestableText.toList(growable: false),
+      offscreenText: offscreenText.toList(growable: false),
       interactables: interactables,
       fields: fields,
       textTargets: textTargets,
       scrollables: scrollables,
       overlays: overlays,
-      recentErrors: List<Map<String, Object?>>.from(_errors),
+      recentErrors: _recentErrors(),
     );
   }
 
@@ -1011,7 +1075,7 @@ class FlutterScoutRuntime {
     if (explicitPoint != null) return explicitPoint;
     if (target == null || target.isEmpty) return null;
     final node = _snapshot().findNode(target);
-    return node?.suggestedTapPoint ?? node?.rect?.center;
+    return node?.suggestedTapPoint;
   }
 
   Offset? _pointFromParams(Map<String, String> params, {String prefix = ''}) {
@@ -1123,6 +1187,117 @@ class FlutterScoutRuntime {
       return (a.rect?.left ?? 0).compareTo(b.rect?.left ?? 0);
     });
     return result;
+  }
+
+  List<ScoutNode> _inferActionableLabels(List<ScoutNode> nodes) {
+    final textNodes = nodes
+        .where((node) => node.kind == 'text' && node.label != null)
+        .toList(growable: false);
+    return [
+      for (final node in nodes)
+        if ((node.kind == 'tap' || node.kind == 'btn') &&
+            (node.label == null ||
+                node.id == '${node.kind}.${_slug(node.widgetType)}'))
+          _inferActionableLabel(node, textNodes)
+        else
+          node,
+    ];
+  }
+
+  ScoutNode _inferActionableLabel(ScoutNode node, List<ScoutNode> textNodes) {
+    final rect = node.rect;
+    if (rect == null || rect.width <= 0 || rect.height <= 0) return node;
+    final viewportArea = _logicalSize().width * _logicalSize().height;
+    final nodeArea = rect.width * rect.height;
+    if (viewportArea > 0 && nodeArea / viewportArea > 0.45) {
+      return node;
+    }
+
+    final contained = [
+      for (final textNode in textNodes)
+        if (textNode.rect case final textRect?)
+          if (rect.contains(textRect.center) &&
+              textNode.visibleFraction > 0 &&
+              textNode.hitTestable &&
+              _isUsefulActionLabel(textNode.label!))
+            textNode,
+    ];
+    if (contained.isEmpty) return node;
+
+    contained.sort((a, b) {
+      final actionRank = _actionLabelRank(
+        b.label!,
+      ).compareTo(_actionLabelRank(a.label!));
+      if (actionRank != 0) return actionRank;
+      return (b.rect?.width ?? 0).compareTo(a.rect?.width ?? 0);
+    });
+    final label = contained.first.label!;
+    final kind = _buttonLikeActionLabel(label) ? 'btn' : node.kind;
+    return node.copyWith(
+      id: '$kind.${_slug(label)}',
+      kind: kind,
+      label: label,
+      confidence: 0.86,
+    );
+  }
+
+  bool _isUsefulActionLabel(String label) {
+    final trimmed = label.trim();
+    if (trimmed.isEmpty) return false;
+    if (_iconLabelForText(trimmed) != null) return false;
+    if (trimmed.runes.length == 1 && RegExp(r'^\d$').hasMatch(trimmed)) {
+      return false;
+    }
+    return _actionLabelRank(trimmed) > 0 ||
+        (trimmed.length >= 3 && RegExp(r'[A-Za-z]').hasMatch(trimmed));
+  }
+
+  bool _buttonLikeActionLabel(String label) {
+    final slug = _slug(label);
+    return const {
+      'add',
+      'add_new_order',
+      'cancel',
+      'cash',
+      'close',
+      'confirm',
+      'confirm_payment',
+      'continue',
+      'create_order',
+      'done',
+      'login',
+      'ok',
+      'pay',
+      'payment',
+      'print_receipt',
+      'save',
+      'select_member',
+      'submit',
+    }.contains(slug);
+  }
+
+  int _actionLabelRank(String label) {
+    final slug = _slug(label);
+    if (const {
+      'confirm_payment',
+      'payment',
+      'done',
+      'create_order',
+      'add_new_order',
+      'select_member',
+      'login',
+      'continue',
+      'save',
+      'ok',
+      'cash',
+    }.contains(slug)) {
+      return 100;
+    }
+    if (slug.startsWith('payment') || slug.startsWith('confirm')) return 90;
+    if (slug.contains('order') || slug.contains('receipt')) return 80;
+    if (slug.contains('pay') || slug.contains('cash')) return 70;
+    if (slug.contains('add') || slug.contains('select')) return 60;
+    return 10;
   }
 
   List<ScoutNode> _disambiguateIds(List<ScoutNode> nodes) {
@@ -1576,7 +1751,7 @@ class FlutterScoutRuntime {
       jsonEncode({
         'ok': false,
         'error': {'code': code, 'message': message},
-        'recentErrors': _errors,
+        'recentErrors': _recentErrors(),
       }),
     );
   }
@@ -1590,6 +1765,8 @@ class ScoutSnapshot {
     required this.devicePixelRatio,
     required this.logicalSize,
     required this.visibleText,
+    required this.hitTestableText,
+    required this.offscreenText,
     required this.interactables,
     required this.fields,
     required this.textTargets,
@@ -1604,6 +1781,8 @@ class ScoutSnapshot {
   final double devicePixelRatio;
   final Size logicalSize;
   final List<String> visibleText;
+  final List<String> hitTestableText;
+  final List<String> offscreenText;
   final List<ScoutNode> interactables;
   final List<ScoutNode> fields;
   final List<ScoutNode> textTargets;
@@ -1633,6 +1812,8 @@ class ScoutSnapshot {
       'devicePixelRatio': devicePixelRatio,
       'logicalSize': [logicalSize.width, logicalSize.height],
       'visibleText': visibleText,
+      'hitTestableText': hitTestableText,
+      'offscreenText': offscreenText,
       'fieldValues': {for (final field in fields) field.id: field.value},
       'fieldsById': {
         for (final field in fields)
@@ -1706,6 +1887,7 @@ class ScoutNode {
     String? baseId,
     int? ordinal,
     String? fallbackId,
+    String? kind,
     String? label,
     String? value,
     double? confidence,
@@ -1715,7 +1897,7 @@ class ScoutNode {
       baseId: baseId ?? this.baseId,
       ordinal: ordinal ?? this.ordinal,
       fallbackId: fallbackId ?? this.fallbackId,
-      kind: kind,
+      kind: kind ?? this.kind,
       label: label ?? this.label,
       value: value ?? this.value,
       widgetType: widgetType,

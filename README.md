@@ -16,17 +16,21 @@ The current vertical slice implements:
 - compact default action output, with full before/after data behind `--verbose`
 - compact inspect snapshots
 - addressable text targets for bounds/crops and safer `tap-text` activation through nearest actionable ancestors or visible text-point fallback
+- split text visibility in inspect summaries with `visibleText`, `hitTestableText`, and `offscreenText`
 - stable handles for common icon-only Material actions and glyph text such as add, back, save, duplicate, delete, download, search, close, edit, and more
+- inferred button handles for unlabeled gesture targets with clear contained action text, such as payment, confirm, done, create order, login, and save actions
 - stale helper diagnostics and CLI-side `tap-text` fallback for attached apps still running an older helper protocol
 - duplicate-safe field handles and field values
 - viewport-aware inspect metadata for offscreen or partially visible controls
+- offscreen target protection: target taps fail with `target_not_visible` until the control has a visible safe tap point
 - coordinate-aware scroll and swipe gestures
 - per-field fill results and before/after action deltas
 - screenshot capture through `xcrun simctl` for iOS Simulator sessions and app-window `screencapture` for macOS attach sessions
 - targeted crops through `xcrun simctl` for iOS Simulator sessions
 - log capture for Flutter Scout launches
-- hard runtime signal capture through Flutter/platform error hooks
-- replayable sessions
+- hard runtime signal capture through Flutter/platform error hooks with severity, blocking, phase, age, and stale facts
+- replayable sessions with a concise transcript in replay output
+- launch timing metrics for Scout-owned launches, including total, build, sync, VM service, and ready timing
 - a sample Flutter app for simulator verification
 
 ## Packages
@@ -126,7 +130,11 @@ dart run bin/flutter_scout.dart scroll down --from 220,760 --distance 520
 
 Action commands return compact JSON by default: result, stability, delta, recent errors, and a small after summary. Add `--verbose` to action commands or `replay` when full before/after payloads are needed.
 
-`inspect` includes `fieldsById`, `textTargets`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, and `overlays` so agents can avoid stale, hidden, modal-blocked, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Icon-only controls should use keys, tooltips, or semantics when possible; Scout also derives handles for common Material icon widgets and glyph text, for example `btn.duplicate` from `Icons.copy`.
+Scout-owned `launch` and `ensure` responses include a `timing` object when they start Flutter, for example `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`. Use this to tell rebuild cost from app startup or VM-service wait time.
+
+`inspect` includes `fieldsById`, `textTargets`, `visibleText`, `hitTestableText`, `offscreenText`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, and `overlays` so agents can avoid stale, hidden, modal-blocked, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Icon-only controls should use keys, tooltips, or semantics when possible; Scout also derives handles for common Material icon widgets and glyph text, for example `btn.duplicate` from `Icons.copy`. Unlabeled gesture targets that contain clear action text can be promoted to `btn.*` handles, such as `btn.confirm_payment`, `btn.done`, or `btn.save_smoke`.
+
+Target taps require a visible safe point. If a handle exists but is currently offscreen, `tap <handle>` returns `target_not_visible` instead of dispatching a gesture to an offscreen rect center. Scroll the control into view first, then tap the same handle.
 
 `tap-text` activates the nearest actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Very short text such as `OK` must match exactly. If the only actionable ancestor is much larger than the text, Scout taps the text point instead of the broad ancestor center. If no actionable ancestor exists but the visible text point is hit-testable, Scout can still tap that point and reports `activation.strategy:"visible_text_point"`. If an attached app is still running an older helper that returns a raw text target, the CLI warns about the stale helper protocol and retries against the best overlapping actionable inspect target when possible.
 
@@ -144,6 +152,10 @@ dart run bin/flutter_scout.dart logs --last 20
 ```
 
 When `logs --contains <text>` finds no matching lines in a non-empty Scout-owned log, the command keeps `available:true`, reports `matched:0`, and says no lines matched the filter.
+
+`recentErrors` reports runtime facts from Flutter/platform hooks. Entries include `severity`, `blocking`, `phase`, `ageMs`, and `stale` so agents can separate fresh blocking failures from older non-blocking startup noise.
+
+Replay output includes both `results` and a concise `transcript` array. The transcript is intended for quick run reports, while `results` keeps the structured command evidence.
 
 Stop a Scout-owned launch process:
 
