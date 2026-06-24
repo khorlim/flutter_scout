@@ -13,6 +13,8 @@ Use this skill only in the Flutter Scout repo:
 
 The goal is to finish a change end to end: validate the issue, fix it, review it, test it for real, update docs/skills, commit, push, then refresh the user's local installed skills and global package from the pushed Git commit.
 
+This is a project-scoped workflow skill. Keep it in `skills/ship-sync/`; do not copy it into `/Users/han/.codex/skills`.
+
 ## Workflow
 
 1. Read the relevant issue notes, `AGENTS.md`, repo docs, and owner files before editing.
@@ -40,8 +42,6 @@ Run from the repo root after a successful push:
 ```bash
 cp skills/flutter-scout/SKILL.md /Users/han/.codex/skills/flutter-scout/SKILL.md
 cp skills/flutter-scout-setup/SKILL.md /Users/han/.codex/skills/flutter-scout-setup/SKILL.md
-mkdir -p /Users/han/.codex/skills/ship-sync
-cp skills/ship-sync/SKILL.md /Users/han/.codex/skills/ship-sync/SKILL.md
 dart pub global activate --source git https://github.com/khorlim/flutter_scout.git --git-path packages/flutter_scout
 ```
 
@@ -50,7 +50,7 @@ Verify the refresh:
 ```bash
 diff -u skills/flutter-scout/SKILL.md /Users/han/.codex/skills/flutter-scout/SKILL.md
 diff -u skills/flutter-scout-setup/SKILL.md /Users/han/.codex/skills/flutter-scout-setup/SKILL.md
-diff -u skills/ship-sync/SKILL.md /Users/han/.codex/skills/ship-sync/SKILL.md
+test ! -e /Users/han/.codex/skills/ship-sync
 dart pub global list
 flutter-scout --help
 git status --short --branch
@@ -65,4 +65,5 @@ git ls-remote origin refs/heads/main
 - Treat simulator verification as required when changing runtime control/perception behavior.
 - Stop any Scout-owned `flutter run` process started during verification.
 - Do not activate the global package before pushing; activation must come from the newest Git commit.
+- Keep this skill project-scoped; do not install or sync it into `/Users/han/.codex/skills`.
 - If the user asks only to draft or review the workflow, do not create files, commit, push, or refresh local installs.

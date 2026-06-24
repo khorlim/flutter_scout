@@ -8,8 +8,6 @@ Whenever you update Flutter Scout code, docs, or shipped skills and then push th
 cd /Users/han/flutter_packages/flutter_scout
 cp skills/flutter-scout/SKILL.md /Users/han/.codex/skills/flutter-scout/SKILL.md
 cp skills/flutter-scout-setup/SKILL.md /Users/han/.codex/skills/flutter-scout-setup/SKILL.md
-mkdir -p /Users/han/.codex/skills/ship-sync
-cp skills/ship-sync/SKILL.md /Users/han/.codex/skills/ship-sync/SKILL.md
 dart pub global activate --source git https://github.com/khorlim/flutter_scout.git --git-path packages/flutter_scout
 ```
 
@@ -18,7 +16,7 @@ Verify the refresh:
 ```bash
 diff -u skills/flutter-scout/SKILL.md /Users/han/.codex/skills/flutter-scout/SKILL.md
 diff -u skills/flutter-scout-setup/SKILL.md /Users/han/.codex/skills/flutter-scout-setup/SKILL.md
-diff -u skills/ship-sync/SKILL.md /Users/han/.codex/skills/ship-sync/SKILL.md
+test ! -e /Users/han/.codex/skills/ship-sync
 dart pub global list
 flutter-scout --help
 ```
