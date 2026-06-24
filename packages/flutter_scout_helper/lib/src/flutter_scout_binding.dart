@@ -154,13 +154,16 @@ class FlutterScoutRuntime {
       }
 
       await _dispatchTap(point);
-      final stable = await _waitStableForAction(params);
-      final after = _snapshot();
+      final actionSnapshot = await _snapshotAfterAction(before, params);
+      final stable = actionSnapshot.stable;
+      final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       return _ok({
         'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
         'stable': stable,
         'result': changed ? 'changed' : 'activated_no_observed_change',
+        if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
+        if (actionSnapshot.waitTimedOut) 'waitTimedOut': true,
         'target': node?.toJson(),
         'activation': {
           'dispatched': true,
@@ -209,13 +212,16 @@ class FlutterScoutRuntime {
       }
       final point = match.actionable!.suggestedTapPoint ?? rect.center;
       await _dispatchTap(point);
-      final stable = await _waitStableForAction(params);
-      final after = _snapshot();
+      final actionSnapshot = await _snapshotAfterAction(before, params);
+      final stable = actionSnapshot.stable;
+      final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       return _ok({
         'action': 'tap-text $text',
         'stable': stable,
         'result': changed ? 'changed' : 'activated_no_observed_change',
+        if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
+        if (actionSnapshot.waitTimedOut) 'waitTimedOut': true,
         'target': match.actionable!.toJson(),
         'textTarget': match.text.toJson(),
         'activation': {
@@ -501,6 +507,42 @@ class FlutterScoutRuntime {
     final waitMs = int.tryParse(params['waitMs'] ?? '') ?? 1500;
     if (waitMs <= 0) return Future.value(false);
     return _waitStable(timeout: Duration(milliseconds: waitMs));
+  }
+
+  Future<_ActionSnapshotResult> _snapshotAfterAction(
+    ScoutSnapshot before,
+    Map<String, String> params,
+  ) async {
+    final stable = await _waitStableForAction(params);
+    var after = _snapshot();
+    if (_changed(before, after)) {
+      return _ActionSnapshotResult(snapshot: after, stable: stable);
+    }
+
+    final lateWaitMs = int.tryParse(params['lateWaitMs'] ?? '') ?? 1000;
+    if (lateWaitMs <= 0) {
+      return _ActionSnapshotResult(snapshot: after, stable: stable);
+    }
+
+    final deadline = DateTime.now().add(Duration(milliseconds: lateWaitMs));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      await _waitStable(timeout: const Duration(milliseconds: 250));
+      after = _snapshot();
+      if (_changed(before, after)) {
+        return _ActionSnapshotResult(
+          snapshot: after,
+          stable: !WidgetsBinding.instance.hasScheduledFrame,
+          lateChangeObserved: true,
+        );
+      }
+    }
+
+    return _ActionSnapshotResult(
+      snapshot: after,
+      stable: stable,
+      waitTimedOut: !stable || WidgetsBinding.instance.hasScheduledFrame,
+    );
   }
 
   Future<developer.ServiceExtensionResponse> _drag({
@@ -1643,4 +1685,18 @@ class _TextTargetMatch {
 
   final ScoutNode text;
   final ScoutNode? actionable;
+}
+
+class _ActionSnapshotResult {
+  const _ActionSnapshotResult({
+    required this.snapshot,
+    required this.stable,
+    this.lateChangeObserved = false,
+    this.waitTimedOut = false,
+  });
+
+  final ScoutSnapshot snapshot;
+  final bool stable;
+  final bool lateChangeObserved;
+  final bool waitTimedOut;
 }

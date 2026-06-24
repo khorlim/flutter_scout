@@ -148,13 +148,14 @@ After setup, use `flutter-scout reload` for Dart-only edits and `flutter-scout r
 - `hot_restart_unavailable`: start or reconnect through `flutter-scout ensure --device <simulator-id> --project <path>` so Scout owns the Flutter tool process, or perform a normal relaunch.
 - `reload_sources_failed` or `reload_rejected`: VM reload was rejected and the app is likely still running previous code; use the owning Flutter terminal/IDE hot reload, or relaunch/start a Scout-owned `ensure`/`launch` session.
 - `vm_reload_unavailable`: the attached session cannot hot reload through VM service; use the owning Flutter terminal/IDE, use a Scout-owned `ensure`/`launch` session, or relaunch after non-Dart changes.
+- `helperProtocol.status:"stale_or_old_helper"`: the CLI is newer than the helper extension running inside the attached app; hot reload/restart or relaunch the app so it loads the updated `flutter_scout_helper`.
 - `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable; run `attach` or `launch` again.
 - `device_not_found`: pass an exact device ID or name from `flutter devices`.
 - `flutter_scout_helper_not_registered`: add `flutter_scout_helper` and call `FlutterScoutBinding.ensureInitialized()` before `runApp`, or `FlutterScoutHelper.ensureRegistered()` after an existing debug binding.
 - `flutter-scout: command not found`: use `dart run bin/flutter_scout.dart` from the CLI package or fix pub global `PATH`.
 - No Flutter Scout extensions: confirm `FlutterScoutBinding.ensureInitialized()` runs before `runApp`.
 - Scout-owned run still active: run `flutter-scout stop --clear-session`.
-- `screenshot_unsupported_target`: screenshots/crops currently use `xcrun simctl` and only support iOS Simulator sessions; macOS attach cannot be screenshotted by Scout yet.
+- `screenshot_unsupported_target`: screenshots/crops currently use `xcrun simctl` and only support iOS Simulator sessions; macOS attach cannot be screenshotted by Scout yet, and no focused app-window macOS capture is available.
 - Simulator screenshot/crop failures: confirm `xcrun simctl` can see the booted simulator and that the session was attached/launched with the iOS Simulator device id.
 
 After setup works, use `$flutter-scout` for the normal inspect/act/replay workflow.

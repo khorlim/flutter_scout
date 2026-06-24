@@ -93,6 +93,8 @@ Action output is compact by default. Add `--verbose` only when full before/after
 
 When an action reports `activated_no_observed_change`, Scout dispatched the gesture but did not observe a synchronous Flutter tree, field, text, or geometry change before the wait timeout. Check `activation`, `warnings`, `recentErrors`, overlays, and logs before retrying.
 
+If action output includes `lateChangeObserved:true`, trust the returned `afterSummary`; Scout waited past the first stable check and observed a delayed route, modal, or overlay change.
+
 5. After Dart-only code edits, hot update instead of relaunching:
 
 ```bash
@@ -113,6 +115,8 @@ flutter-scout screenshot -o /tmp/current_screen.png
 Prefer `bounds` and crops over full screenshots when inspecting one control or dialog. Full screenshots and crops are supported for iOS Simulator sessions; macOS attach returns `screenshot_unsupported_target` instead of capturing a different simulator.
 
 `tap-text` activates the nearest actionable ancestor and returns both `target` and `textTarget`. Short labels like `OK` require exact matches. If no actionable ancestor exists, Scout returns `text_not_actionable`.
+
+If `inspect` or `tap-text` reports `helperProtocol.status:"stale_or_old_helper"`, the attached app is still running an older helper extension. Try `flutter-scout reload`; if helper behavior does not change, hot restart from the owning Flutter terminal/IDE or relaunch the app.
 
 7. Replay after a fix:
 
@@ -158,10 +162,12 @@ If `logs` reports `available:false`, the session is attach-only or has no Scout-
 - Prefer `fill` for forms instead of tap/type/tap/type, but read per-field results and warnings.
 - Trust action deltas for next-step planning.
 - Read `activation` and `warnings` when an action reports `activated_no_observed_change`.
+- Treat `lateChangeObserved:true` as a real observed post-action change, not a stale screen.
 - Treat `delta.changedGeometry` as a real change for scrolling or layout movement even when text and field values are unchanged.
 - Trust `status` to clear stale VM session files; reattach if it reports `staleCleared`.
 - Stop and fix code when `recentErrors` reports Flutter/platform errors.
 - Use `tap-text` for visible text rows or picker rows when generic row handles are ambiguous; it returns an actionable `target` and the matched `textTarget`.
+- When `tap-text` falls back because the helper is stale, follow the warning and restart/reload the attached app before relying on further text-target behavior.
 - Use coordinate scroll/swipe starts when the default gesture may hit the wrong layer.
 - Use `tap <x> <y>` or `tap --x <x> --y <y>` for coordinate taps.
 - Keep `.flutter_scout/` as runtime state; do not commit it.

@@ -625,12 +625,18 @@ class FlutterScoutCli {
       'text': text,
       'waitMs': parsed.option('wait-ms') ?? '1500',
     };
-    return _callAndPrint(
-      'ext.flutter_scout.tapText',
-      params: params,
-      record: {'cmd': 'tap-text', ...params},
-      compact: !parsed.flag('verbose'),
+    var result = await _call('ext.flutter_scout.tapText', params);
+    result = await _tapTextFallbackIfNeeded(result, params);
+    result = _withProtocolDiagnostics('ext.flutter_scout.tapText', result);
+    stdout.writeln(
+      const JsonEncoder.withIndent(
+        '  ',
+      ).convert(parsed.flag('verbose') ? result : _compactActionResult(result)),
     );
+    if (result['ok'] == true) {
+      _recordAction({'cmd': 'tap-text', ...params});
+    }
+    return result['ok'] == false ? 1 : 0;
   }
 
   Future<int> _longPress(List<String> args) async {
@@ -1109,13 +1115,131 @@ class FlutterScoutCli {
     Map<String, Object?>? record,
     bool compact = false,
   }) async {
-    final result = await _call(method, params);
+    final result = _withProtocolDiagnostics(
+      method,
+      await _call(method, params),
+    );
     final output = compact ? _compactActionResult(result) : result;
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
     if (record != null && result['ok'] == true) {
       _recordAction(record);
     }
     return result['ok'] == false ? 1 : 0;
+  }
+
+  Future<Map<String, dynamic>> _tapTextFallbackIfNeeded(
+    Map<String, dynamic> result,
+    Map<String, String> params,
+  ) async {
+    if (!_needsTapTextFallback(result)) return result;
+    final textTarget = result['target'];
+    if (textTarget is! Map<String, dynamic>) return result;
+    final inspect = await _tryInspect();
+    if (inspect == null) return result;
+    final fallbackTarget = _findActionableForTextTarget(inspect, textTarget);
+    if (fallbackTarget == null) return result;
+    final fallbackId = fallbackTarget['id']?.toString();
+    if (fallbackId == null || fallbackId.isEmpty) return result;
+
+    final fallbackResult = await _call('ext.flutter_scout.tap', {
+      'target': fallbackId,
+      if (params['waitMs'] != null) 'waitMs': params['waitMs']!,
+    });
+    return {
+      ...fallbackResult,
+      'action': 'tap-text ${params['text'] ?? params['target']}',
+      'target': fallbackResult['target'] ?? fallbackTarget,
+      'textTarget': textTarget,
+      'fallback': {
+        'used': true,
+        'reason':
+            'attached_helper_returned_text_target_without_actionable_parent',
+        'target': fallbackId,
+      },
+      'warnings': [
+        ..._objectList(fallbackResult['warnings']),
+        'Attached helper did not provide tap-text actionable-parent data; CLI retried using overlapping inspect target `$fallbackId`.',
+      ],
+    };
+  }
+
+  bool _needsTapTextFallback(Map<String, dynamic> result) {
+    if (result['ok'] != true) return false;
+    if (result.containsKey('textTarget')) return false;
+    final target = result['target'];
+    if (target is! Map) return false;
+    return target['kind'] == 'text';
+  }
+
+  Map<String, dynamic>? _findActionableForTextTarget(
+    Map<String, dynamic> inspect,
+    Map<String, dynamic> textTarget,
+  ) {
+    final textRect = _rectFromNode(textTarget);
+    if (textRect == null) return null;
+    final candidates = _nodesFromInspect(inspect, 'interactables')
+        .where((node) => node['kind'] != 'text' && node['kind'] != 'field')
+        .toList(growable: false);
+    Map<String, dynamic>? best;
+    var bestScore = 0.0;
+    for (final candidate in candidates) {
+      final rect = _rectFromNode(candidate);
+      if (rect == null) continue;
+      final containsCenter = _rectContains(rect, _rectCenter(textRect));
+      final overlap = _overlapRatio(textRect, rect);
+      final sameLabel =
+          candidate['label'] != null &&
+          textTarget['label'] != null &&
+          candidate['label'].toString() == textTarget['label'].toString();
+      final score =
+          (containsCenter ? 3.0 : 0.0) +
+          (sameLabel ? 2.0 : 0.0) +
+          overlap -
+          (_rectArea(rect) / 1000000000);
+      if (score > bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+    return bestScore > 0 ? best : null;
+  }
+
+  Map<String, dynamic> _withProtocolDiagnostics(
+    String method,
+    Map<String, dynamic> result,
+  ) {
+    if (result['ok'] != true) return result;
+    final warnings = <Object?>[..._objectList(result['warnings'])];
+    final missing = <String>[];
+    if (method == 'ext.flutter_scout.inspect' &&
+        !result.containsKey('textTargets')) {
+      result['textTargets'] = const <Object?>[];
+      missing.add('textTargets');
+    }
+    if (method == 'ext.flutter_scout.tapText' &&
+        !result.containsKey('textTarget')) {
+      final target = result['target'];
+      if (target is Map && target['kind'] == 'text') {
+        missing.add('tapTextActionableTarget');
+      }
+    }
+    if (missing.isNotEmpty) {
+      warnings.add(
+        'Attached app appears to be running an older flutter_scout_helper protocol; hot restart or relaunch the app so helper output includes ${missing.join(', ')}.',
+      );
+      result['helperProtocol'] = {
+        'status': 'stale_or_old_helper',
+        'missing': missing,
+        'nextBestActions': [
+          'Run flutter-scout reload',
+          'If reload does not update helper behavior, hot restart from the owning Flutter terminal or relaunch the app',
+        ],
+      };
+    }
+    if (warnings.isNotEmpty) {
+      result['warnings'] = warnings;
+    }
+    return result;
   }
 
   Map<String, dynamic> _compactActionResult(Map<String, dynamic> result) {
@@ -1132,6 +1256,10 @@ class FlutterScoutCli {
       if (result['action'] != null) 'action': result['action'],
       if (result['stable'] != null) 'stable': result['stable'],
       if (result['result'] != null) 'result': result['result'],
+      if (result['lateChangeObserved'] != null)
+        'lateChangeObserved': result['lateChangeObserved'],
+      if (result['waitTimedOut'] != null)
+        'waitTimedOut': result['waitTimedOut'],
       if (result['method'] != null) 'method': result['method'],
       if (result['state'] != null) 'state': result['state'],
       if (result['appReachable'] != null)
@@ -1157,6 +1285,9 @@ class FlutterScoutCli {
       if (result['fieldResults'] != null)
         'fieldResults': result['fieldResults'],
       if (result['warnings'] != null) 'warnings': result['warnings'],
+      if (result['fallback'] != null) 'fallback': result['fallback'],
+      if (result['helperProtocol'] != null)
+        'helperProtocol': result['helperProtocol'],
       if (after is Map<String, dynamic>) 'afterSummary': _compactSummary(after),
       if (result['delta'] != null) 'delta': result['delta'],
       if (result['recentErrors'] is List)
@@ -1609,7 +1740,7 @@ class FlutterScoutCli {
     if (device == null || device.isEmpty) {
       throw const ScoutCliException(
         'screenshot_unsupported_target',
-        'No simulator device is recorded for this session. Attach with --device <ios-simulator-id> or launch/ensure through Flutter Scout before taking screenshots.',
+        'No screenshot-capable target is recorded for this session. iOS Simulator screenshots require attach/ensure/launch with --device <ios-simulator-id>. macOS attach screenshots are not supported yet; use an OS-level window screenshot for now.',
       );
     }
     if (device == 'macos' ||
@@ -1723,6 +1854,51 @@ class FlutterScoutCli {
         (height * dpr).round(),
       ],
     };
+  }
+
+  List<Object?> _objectList(Object? value) {
+    if (value is List) return List<Object?>.from(value);
+    return const <Object?>[];
+  }
+
+  List<double>? _rectFromNode(Map<String, dynamic> node) {
+    final rect = node['rect'];
+    if (rect is! List || rect.length < 4) return null;
+    final left = (rect[0] as num?)?.toDouble();
+    final top = (rect[1] as num?)?.toDouble();
+    final width = (rect[2] as num?)?.toDouble();
+    final height = (rect[3] as num?)?.toDouble();
+    if (left == null || top == null || width == null || height == null) {
+      return null;
+    }
+    return [left, top, width, height];
+  }
+
+  List<double> _rectCenter(List<double> rect) => [
+    rect[0] + rect[2] / 2,
+    rect[1] + rect[3] / 2,
+  ];
+
+  bool _rectContains(List<double> rect, List<double> point) {
+    return point[0] >= rect[0] &&
+        point[0] <= rect[0] + rect[2] &&
+        point[1] >= rect[1] &&
+        point[1] <= rect[1] + rect[3];
+  }
+
+  double _rectArea(List<double> rect) => rect[2] * rect[3];
+
+  double _overlapRatio(List<double> a, List<double> b) {
+    final left = a[0] > b[0] ? a[0] : b[0];
+    final top = a[1] > b[1] ? a[1] : b[1];
+    final right = a[0] + a[2] < b[0] + b[2] ? a[0] + a[2] : b[0] + b[2];
+    final bottom = a[1] + a[3] < b[1] + b[3] ? a[1] + a[3] : b[1] + b[3];
+    final width = right - left;
+    final height = bottom - top;
+    if (width <= 0 || height <= 0) return 0;
+    final smaller = _rectArea(a) < _rectArea(b) ? _rectArea(a) : _rectArea(b);
+    if (smaller <= 0) return 0;
+    return (width * height) / smaller;
   }
 
   Map<String, dynamic>? _findNodeInInspect(
@@ -2070,7 +2246,7 @@ Usage:
   flutter-scout stop [--clear-session]
   flutter-scout inspect
   flutter-scout bounds [target]
-  flutter-scout tap <target> | --x <x> --y <y> [--verbose]
+  flutter-scout tap <target> | tap <x> <y> | --x <x> --y <y> [--verbose]
   flutter-scout tap-text <visible text> [--verbose]
   flutter-scout long-press <target> [--verbose]
   flutter-scout input [--target <field>] <value> [--verbose]

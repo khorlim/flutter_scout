@@ -16,6 +16,7 @@ The current vertical slice implements:
 - compact default action output, with full before/after data behind `--verbose`
 - compact inspect snapshots
 - addressable text targets for bounds/crops and safer `tap-text` activation through nearest actionable ancestors
+- stale helper diagnostics and CLI-side `tap-text` fallback for attached apps still running an older helper protocol
 - duplicate-safe field handles and field values
 - viewport-aware inspect metadata for offscreen or partially visible controls
 - coordinate-aware scroll and swipe gestures
@@ -34,6 +35,7 @@ packages/flutter_scout          CLI package
 apps/scout_test_app             Verification app
 skills/flutter-scout            Codex skill for agents using Flutter Scout
 skills/flutter-scout-setup      Codex skill for installing Flutter Scout
+skills/ship-sync                Project skill for fix/test/docs/push/local refresh workflow
 goal.md                         Product goals
 ```
 
@@ -124,9 +126,11 @@ Action commands return compact JSON by default: result, stability, delta, recent
 
 `inspect` includes `fieldsById`, `textTargets`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, and `overlays` so agents can avoid stale, hidden, modal-blocked, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`.
 
-`tap-text` activates the nearest actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Very short text such as `OK` must match exactly. If no actionable ancestor exists, Scout returns `text_not_actionable` instead of reporting a misleading success.
+`tap-text` activates the nearest actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Very short text such as `OK` must match exactly. If no actionable ancestor exists, Scout returns `text_not_actionable` instead of reporting a misleading success. If an attached app is still running an older helper that returns a raw text target, the CLI warns about the stale helper protocol and retries against the best overlapping actionable inspect target when possible.
 
 Coordinate taps accept either `tap --x <x> --y <y>` or the shorthand `tap <x> <y>`.
+
+When an action transition lands after the initial stability wait, action output can include `lateChangeObserved:true` so agents know the returned `afterSummary` includes a delayed route, modal, or overlay change.
 
 Use compact logs for triage:
 
