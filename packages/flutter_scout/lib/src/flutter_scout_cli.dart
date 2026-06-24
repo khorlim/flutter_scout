@@ -850,18 +850,19 @@ class FlutterScoutCli {
     }
     final contains = parsed.option('contains');
     final last = int.tryParse(parsed.option('last') ?? '') ?? 20;
-    var lines = file.readAsLinesSync();
+    final allLines = file.readAsLinesSync();
+    var lines = allLines;
     if (parsed.flag('summary')) {
-      final summary = _summarizeLogLines(lines, last: last);
+      final summary = _summarizeLogLines(allLines, last: last);
       stdout.writeln(
         const JsonEncoder.withIndent('  ').convert({
           'ok': true,
           'path': _logFile,
-          'available': lines.isNotEmpty,
-          if (lines.isEmpty) 'source': 'attach_only_or_empty_scout_log',
-          if (lines.isEmpty)
+          'available': allLines.isNotEmpty,
+          if (allLines.isEmpty) 'source': 'empty_scout_log',
+          if (allLines.isEmpty)
             'message':
-                'No Scout-owned Flutter tool output has been captured for this session. Attach-only sessions cannot read the owning terminal or IDE console logs.',
+                'The Scout-owned log file exists, but no Flutter tool output has been captured yet.',
           ...summary,
         }),
       );
@@ -879,11 +880,15 @@ class FlutterScoutCli {
       const JsonEncoder.withIndent('  ').convert({
         'ok': true,
         'path': _logFile,
-        'available': lines.isNotEmpty,
-        if (lines.isEmpty) 'source': 'attach_only_or_empty_scout_log',
-        if (lines.isEmpty)
+        'available': allLines.isNotEmpty,
+        if (contains != null && contains.isNotEmpty) 'contains': contains,
+        if (contains != null && contains.isNotEmpty) 'matched': lines.length,
+        if (allLines.isEmpty) 'source': 'empty_scout_log',
+        if (allLines.isEmpty)
           'message':
-              'No Scout-owned Flutter tool output has been captured for this session. Attach-only sessions cannot read the owning terminal or IDE console logs.',
+              'The Scout-owned log file exists, but no Flutter tool output has been captured yet.',
+        if (allLines.isNotEmpty && lines.isEmpty)
+          'message': 'No Scout-owned log lines matched the requested filter.',
         'lines': lines,
       }),
     );
@@ -1794,8 +1799,20 @@ class FlutterScoutCli {
     final listenerPid = vmUri == null
         ? null
         : await _pidForListeningVmPort(vmUri);
-    if (listenerPid == null) return null;
-    return _findMacosWindowForPid(listenerPid);
+    final launchPid = _readPid();
+    final pids = <int>[
+      ?listenerPid,
+      ...await _descendantPids(listenerPid),
+      ?launchPid,
+      ...await _descendantPids(launchPid),
+    ];
+    final seen = <int>{};
+    for (final pid in pids) {
+      if (!seen.add(pid)) continue;
+      final target = await _findMacosWindowForPid(pid);
+      if (target != null) return target;
+    }
+    return null;
   }
 
   Future<bool> _isMacosScreenshotSession() async {
@@ -2329,6 +2346,40 @@ print(String(data: data, encoding: .utf8)!)
       return int.tryParse(firstLine);
     } catch (_) {
       return null;
+    }
+  }
+
+  Future<List<int>> _descendantPids(int? pid) async {
+    if (pid == null) return const <int>[];
+    final result = <int>[];
+    final queue = <int>[pid];
+    final seen = <int>{pid};
+    while (queue.isNotEmpty) {
+      final parent = queue.removeAt(0);
+      final children = await _childPids(parent);
+      for (final child in children) {
+        if (!seen.add(child)) continue;
+        result.add(child);
+        queue.add(child);
+      }
+    }
+    return result;
+  }
+
+  Future<List<int>> _childPids(int pid) async {
+    try {
+      final result = await Process.run('pgrep', ['-P', '$pid']).timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => ProcessResult(0, 1, '', ''),
+      );
+      if (result.exitCode != 0) return const <int>[];
+      return (result.stdout as String)
+          .split('\n')
+          .map((line) => int.tryParse(line.trim()))
+          .nonNulls
+          .toList(growable: false);
+    } catch (_) {
+      return const <int>[];
     }
   }
 

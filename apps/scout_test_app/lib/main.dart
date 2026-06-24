@@ -31,6 +31,7 @@ class SupplierListScreen extends StatefulWidget {
 class _SupplierListScreenState extends State<SupplierListScreen> {
   final List<String> _suppliers = <String>[];
   int _duplicateActions = 0;
+  int _glyphDuplicateActions = 0;
 
   Future<void> _openAddSupplierDialog() async {
     final supplier = await showDialog<String>(
@@ -41,6 +42,22 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
     setState(() {
       _suppliers.add(supplier);
     });
+  }
+
+  Future<void> _showOkDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Scout dialog'),
+        content: const Text('Dialog opened'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -77,6 +94,17 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
               child: Wrap(
                 spacing: 8,
                 children: [
+                  InkWell(
+                    onTap: () {
+                      setState(() {
+                        _glyphDuplicateActions++;
+                      });
+                    },
+                    child: Text(
+                      String.fromCharCode(Icons.copy.codePoint),
+                      style: const TextStyle(fontFamily: 'MaterialIcons'),
+                    ),
+                  ),
                   TextButton(
                     key: const ValueKey('smoke_issues'),
                     onPressed: () {
@@ -102,11 +130,17 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                     },
                     child: const Text('Trigger error'),
                   ),
+                  TextButton(
+                    key: const ValueKey('show_ok_dialog'),
+                    onPressed: _showOkDialog,
+                    child: const Text('Show OK dialog'),
+                  ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
             Text('Duplicate actions: $_duplicateActions'),
+            Text('Glyph duplicate actions: $_glyphDuplicateActions'),
             const SizedBox(height: 16),
             Expanded(
               child: _suppliers.isEmpty

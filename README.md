@@ -15,8 +15,8 @@ The current vertical slice implements:
 - reload diagnostics that distinguish rejected VM reloads from reachable apps still running old code
 - compact default action output, with full before/after data behind `--verbose`
 - compact inspect snapshots
-- addressable text targets for bounds/crops and safer `tap-text` activation through nearest actionable ancestors
-- stable handles for common icon-only Material actions such as add, back, save, duplicate, delete, download, search, close, edit, and more
+- addressable text targets for bounds/crops and safer `tap-text` activation through nearest actionable ancestors or visible text-point fallback
+- stable handles for common icon-only Material actions and glyph text such as add, back, save, duplicate, delete, download, search, close, edit, and more
 - stale helper diagnostics and CLI-side `tap-text` fallback for attached apps still running an older helper protocol
 - duplicate-safe field handles and field values
 - viewport-aware inspect metadata for offscreen or partially visible controls
@@ -126,9 +126,11 @@ dart run bin/flutter_scout.dart scroll down --from 220,760 --distance 520
 
 Action commands return compact JSON by default: result, stability, delta, recent errors, and a small after summary. Add `--verbose` to action commands or `replay` when full before/after payloads are needed.
 
-`inspect` includes `fieldsById`, `textTargets`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, and `overlays` so agents can avoid stale, hidden, modal-blocked, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Icon-only controls should use keys, tooltips, or semantics when possible; Scout also derives handles for common Material icon glyphs, for example `btn.duplicate` from `Icons.copy`.
+`inspect` includes `fieldsById`, `textTargets`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, and `overlays` so agents can avoid stale, hidden, modal-blocked, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Icon-only controls should use keys, tooltips, or semantics when possible; Scout also derives handles for common Material icon widgets and glyph text, for example `btn.duplicate` from `Icons.copy`.
 
-`tap-text` activates the nearest actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Very short text such as `OK` must match exactly. If no actionable ancestor exists, Scout returns `text_not_actionable` instead of reporting a misleading success. If an attached app is still running an older helper that returns a raw text target, the CLI warns about the stale helper protocol and retries against the best overlapping actionable inspect target when possible.
+`tap-text` activates the nearest actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Very short text such as `OK` must match exactly. If the only actionable ancestor is much larger than the text, Scout taps the text point instead of the broad ancestor center. If no actionable ancestor exists but the visible text point is hit-testable, Scout can still tap that point and reports `activation.strategy:"visible_text_point"`. If an attached app is still running an older helper that returns a raw text target, the CLI warns about the stale helper protocol and retries against the best overlapping actionable inspect target when possible.
+
+Drag commands return `result:"navigated"` when the gesture changes screens. Verbose output includes `gestureStart`, `gestureEnd`, and the normal delta so agents can distinguish scrolling from a drag that triggered navigation.
 
 Coordinate taps accept either `tap --x <x> --y <y>` or the shorthand `tap <x> <y>`.
 
@@ -140,6 +142,8 @@ Use compact logs for triage:
 dart run bin/flutter_scout.dart logs --summary
 dart run bin/flutter_scout.dart logs --last 20
 ```
+
+When `logs --contains <text>` finds no matching lines in a non-empty Scout-owned log, the command keeps `available:true`, reports `matched:0`, and says no lines matched the filter.
 
 Stop a Scout-owned launch process:
 

@@ -200,17 +200,14 @@ class FlutterScoutRuntime {
       if (match == null) {
         return _fail('text_not_found', 'No visible text matched `$text`.');
       }
-      if (match.actionable == null) {
+      final targetNode = match.actionable ?? match.text;
+      final point = _tapPointForTextMatch(match);
+      if (point == null) {
         return _fail(
           'text_not_actionable',
           'Text `$text` is visible, but no actionable ancestor was found.',
         );
       }
-      final rect = match.actionable!.rect;
-      if (rect == null) {
-        return _fail('text_has_no_rect', 'Text `$text` has no usable rect.');
-      }
-      final point = match.actionable!.suggestedTapPoint ?? rect.center;
       await _dispatchTap(point);
       final actionSnapshot = await _snapshotAfterAction(before, params);
       final stable = actionSnapshot.stable;
@@ -222,14 +219,12 @@ class FlutterScoutRuntime {
         'result': changed ? 'changed' : 'activated_no_observed_change',
         if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
         if (actionSnapshot.waitTimedOut) 'waitTimedOut': true,
-        'target': match.actionable!.toJson(),
+        'target': targetNode.toJson(),
         'textTarget': match.text.toJson(),
         'activation': {
           'dispatched': true,
           'observedChange': changed,
-          'strategy': match.actionable!.id == match.text.id
-              ? 'text_target'
-              : 'nearest_actionable_ancestor',
+          'strategy': _tapTextStrategy(match),
         },
         if (!changed)
           'warnings': const [
@@ -243,6 +238,36 @@ class FlutterScoutRuntime {
     } catch (error) {
       return _fail('tap_text_failed', error.toString());
     }
+  }
+
+  Offset? _tapPointForTextMatch(_TextTargetMatch match) {
+    final textPoint = match.text.suggestedTapPoint ?? match.text.rect?.center;
+    final actionable = match.actionable;
+    if (actionable == null) {
+      return textPoint != null && _hitTestable(textPoint) ? textPoint : null;
+    }
+    if (_shouldTapTextPoint(match)) return textPoint;
+    return actionable.suggestedTapPoint ?? actionable.rect?.center ?? textPoint;
+  }
+
+  bool _shouldTapTextPoint(_TextTargetMatch match) {
+    final actionable = match.actionable;
+    final actionRect = actionable?.rect;
+    final textRect = match.text.rect;
+    if (actionable == null || actionRect == null || textRect == null) {
+      return false;
+    }
+    final actionArea = actionRect.width * actionRect.height;
+    final textArea = textRect.width * textRect.height;
+    if (actionArea <= 0 || textArea <= 0) return false;
+    return actionArea / textArea > 16;
+  }
+
+  String _tapTextStrategy(_TextTargetMatch match) {
+    if (match.actionable == null) return 'visible_text_point';
+    if (match.actionable!.id == match.text.id) return 'text_target';
+    if (_shouldTapTextPoint(match)) return 'broad_ancestor_text_point';
+    return 'nearest_actionable_ancestor';
   }
 
   Future<developer.ServiceExtensionResponse> _handleInput(
@@ -562,18 +587,23 @@ class FlutterScoutRuntime {
     final stable = await _waitStableForAction(params);
     final after = _snapshot();
     final changed = _changed(before, after);
+    final actionDelta = _delta(before, after);
+    final screenChanged = actionDelta['screenChanged'] == true;
     return _ok({
       'action': action,
       'stable': stable,
-      'result': changed ? 'changed' : 'unchanged',
+      'result': screenChanged
+          ? 'navigated'
+          : (changed ? 'changed' : 'unchanged'),
       'gestureStart': [start.dx, start.dy],
+      'gestureEnd': [start.dx + delta.dx, start.dy + delta.dy],
       if (!changed)
         'unchangedReason': _viewportRect().contains(start)
             ? 'no_visible_change_after_gesture'
             : 'gesture_start_outside_viewport',
       'before': before.summaryJson(),
       'after': after.summaryJson(),
-      'delta': _delta(before, after),
+      'delta': actionDelta,
       'recentErrors': _errors,
     });
   }
@@ -788,9 +818,15 @@ class FlutterScoutRuntime {
     final tooltip = _tooltipBelow(element);
     if (tooltip != null && tooltip.isNotEmpty) return tooltip;
     final own = _ownText(widget);
-    if (own != null && own.trim().isNotEmpty) return own.trim();
+    if (own != null && own.trim().isNotEmpty) {
+      final iconText = _iconLabelForText(own);
+      return iconText ?? own.trim();
+    }
     final text = _textBelow(element);
-    if (text != null && text.isNotEmpty) return text;
+    if (text != null && text.isNotEmpty) {
+      final iconText = _iconLabelForText(text);
+      return iconText ?? text;
+    }
     final icon = _iconLabelBelow(element);
     if (icon != null && icon.isNotEmpty) return icon;
     return null;
@@ -815,46 +851,53 @@ class FlutterScoutRuntime {
     return null;
   }
 
-  String? _iconLabelForData(IconData? icon) {
-    if (icon == null) return null;
-    if (_sameIcon(icon, Icons.add) || _sameIcon(icon, Icons.add_circle)) {
-      return 'add';
-    }
-    if (_sameIcon(icon, Icons.arrow_back) ||
-        _sameIcon(icon, Icons.chevron_left)) {
-      return 'back';
-    }
-    if (_sameIcon(icon, Icons.save) || _sameIcon(icon, Icons.check)) {
-      return 'save';
-    }
-    if (_sameIcon(icon, Icons.copy) ||
-        _sameIcon(icon, Icons.content_copy) ||
-        _sameIcon(icon, Icons.file_copy)) {
-      return 'duplicate';
-    }
-    if (_sameIcon(icon, Icons.delete) ||
-        _sameIcon(icon, Icons.delete_outline)) {
-      return 'delete';
-    }
-    if (_sameIcon(icon, Icons.download) ||
-        _sameIcon(icon, Icons.file_download)) {
-      return 'download';
-    }
-    if (_sameIcon(icon, Icons.search)) return 'search';
-    if (_sameIcon(icon, Icons.close) || _sameIcon(icon, Icons.cancel)) {
-      return 'close';
-    }
-    if (_sameIcon(icon, Icons.edit)) return 'edit';
-    if (_sameIcon(icon, Icons.more_vert) || _sameIcon(icon, Icons.more_horiz)) {
-      return 'more';
-    }
-    return 'icon_${icon.codePoint.toRadixString(16)}';
+  String? _iconLabelForText(String value) {
+    final trimmed = value.trim();
+    if (trimmed.runes.length != 1) return null;
+    return _iconLabelForCodePoint(trimmed.runes.single);
   }
 
-  bool _sameIcon(IconData a, IconData b) {
-    return a.codePoint == b.codePoint &&
-        a.fontFamily == b.fontFamily &&
-        a.fontPackage == b.fontPackage;
+  String? _iconLabelForData(IconData? icon) {
+    if (icon == null) return null;
+    return _iconLabelForCodePoint(icon.codePoint) ??
+        'icon_${icon.codePoint.toRadixString(16)}';
+  }
+
+  String? _iconLabelForCodePoint(int codePoint) {
+    bool same(IconData icon) => codePoint == icon.codePoint;
+
+    if (same(Icons.add) || same(Icons.add_circle)) {
+      return 'add';
+    }
+    if (same(Icons.arrow_back) ||
+        same(Icons.chevron_left) ||
+        codePoint == 62415) {
+      return 'back';
+    }
+    if (same(Icons.save) || same(Icons.check) || codePoint == 62701) {
+      return 'save';
+    }
+    if (same(Icons.copy) ||
+        same(Icons.content_copy) ||
+        same(Icons.file_copy) ||
+        codePoint == 63026) {
+      return 'duplicate';
+    }
+    if (same(Icons.delete) || same(Icons.delete_outline)) {
+      return 'delete';
+    }
+    if (same(Icons.download) || same(Icons.file_download)) {
+      return 'download';
+    }
+    if (same(Icons.search)) return 'search';
+    if (same(Icons.close) || same(Icons.cancel)) {
+      return 'close';
+    }
+    if (same(Icons.edit)) return 'edit';
+    if (same(Icons.more_vert) || same(Icons.more_horiz)) {
+      return 'more';
+    }
+    return null;
   }
 
   String? _tooltipBelow(Element element, {int depth = 0}) {
