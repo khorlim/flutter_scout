@@ -155,7 +155,9 @@ After setup, use `flutter-scout reload` for Dart-only edits and `flutter-scout r
 - `flutter-scout: command not found`: use `dart run bin/flutter_scout.dart` from the CLI package or fix pub global `PATH`.
 - No Flutter Scout extensions: confirm `FlutterScoutBinding.ensureInitialized()` runs before `runApp`.
 - Scout-owned run still active: run `flutter-scout stop --clear-session`.
-- `screenshot_unsupported_target`: screenshots/crops currently use `xcrun simctl` and only support iOS Simulator sessions; macOS attach cannot be screenshotted by Scout yet, and no focused app-window macOS capture is available.
+- `screenshot_unsupported_target`: no screenshot-capable target is recorded, or the macOS VM service is reachable but Scout cannot find a capturable open app window. For iOS Simulator, attach/launch with the simulator device id. For macOS, attach to the app VM service and keep the app window open and not minimized.
+- `crop_unsupported_target`: targeted crops are currently iOS Simulator-only. Use `flutter-scout screenshot -o <path>` for a full macOS app-window capture.
 - Simulator screenshot/crop failures: confirm `xcrun simctl` can see the booted simulator and that the session was attached/launched with the iOS Simulator device id.
+- macOS screenshot failures: confirm `screencapture` has Screen Recording permission if macOS blocks capture, and that the attached VM service belongs to the visible Flutter `.app` process.
 
 After setup works, use `$flutter-scout` for the normal inspect/act/replay workflow.

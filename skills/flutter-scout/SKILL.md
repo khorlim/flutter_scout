@@ -112,7 +112,7 @@ flutter-scout crop btn.save_supplier -o /tmp/save_button.png
 flutter-scout screenshot -o /tmp/current_screen.png
 ```
 
-Prefer `bounds` and crops over full screenshots when inspecting one control or dialog. Full screenshots and crops are supported for iOS Simulator sessions; macOS attach returns `screenshot_unsupported_target` instead of capturing a different simulator.
+Prefer `bounds` and crops over full screenshots when inspecting one control or dialog on iOS Simulator. Full screenshots are supported for iOS Simulator sessions and macOS app-window attach sessions. Targeted crops are currently iOS Simulator-only; macOS attach returns `crop_unsupported_target` for crops instead of producing misaligned visual evidence.
 
 `tap-text` activates the nearest actionable ancestor and returns both `target` and `textTarget`. Short labels like `OK` require exact matches. If no actionable ancestor exists, Scout returns `text_not_actionable`.
 

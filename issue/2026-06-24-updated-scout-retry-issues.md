@@ -111,7 +111,7 @@ Why it matters:
 
 ## ~~5. macOS attach screenshot is unsupported instead of capturing the app~~
 
-Resolution: fixed as clearer unsupported-target behavior. macOS app-window screenshots remain unsupported, but the no-device message now explicitly mentions macOS attach and no longer suggests only iOS Simulator attachment.
+Resolution: fixed. macOS app-window screenshots are now supported by resolving the attached VM service listener process to its CoreGraphics window and capturing that window with `screencapture -l`. Targeted macOS crops remain unsupported and return `crop_unsupported_target`.
 
 Command:
 
@@ -131,7 +131,7 @@ Observed:
 }
 ```
 
-This is better than the previous behavior where Scout captured the wrong iOS Simulator screen. However, for a macOS Flutter attach session, Scout still cannot capture the attached app window.
+This is better than the previous behavior where Scout captured the wrong iOS Simulator screen. Scout now captures the attached macOS Flutter app window for full screenshots.
 
 Expected:
 - Scout should capture the attached macOS Flutter app window, independent of which desktop app the user is currently viewing.

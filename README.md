@@ -21,7 +21,8 @@ The current vertical slice implements:
 - viewport-aware inspect metadata for offscreen or partially visible controls
 - coordinate-aware scroll and swipe gestures
 - per-field fill results and before/after action deltas
-- screenshot capture and targeted crops through `xcrun simctl` for iOS Simulator sessions
+- screenshot capture through `xcrun simctl` for iOS Simulator sessions and app-window `screencapture` for macOS attach sessions
+- targeted crops through `xcrun simctl` for iOS Simulator sessions
 - log capture for Flutter Scout launches
 - hard runtime signal capture through Flutter/platform error hooks
 - replayable sessions
@@ -148,7 +149,8 @@ dart run bin/flutter_scout.dart stop --clear-session
 ## Current Limits
 
 - Attach log discovery works with the helper marker on iOS Simulator, but explicit `--debug-url` remains the most deterministic path.
-- Full screenshots and crops currently use `xcrun simctl`; macOS attach sessions return `screenshot_unsupported_target` instead of capturing an unrelated simulator.
+- Full screenshots use `xcrun simctl` for iOS Simulator sessions and app-window `screencapture` for macOS attach sessions.
+- Targeted crops currently support iOS Simulator sessions only; macOS attach sessions return `crop_unsupported_target` for crops instead of producing misaligned content.
 - Attach-only sessions cannot read the owning IDE or terminal console logs. `logs` reports that limitation unless Scout owns the `flutter run` process.
 - Attach-only hot restart still requires the owning Flutter tool or a Scout-owned `ensure`/`launch`; Scout reports the VM listener process and next actions when restart is unavailable.
 - Targeted crop is implemented for current inspect handles; changed-region crop is not implemented yet.

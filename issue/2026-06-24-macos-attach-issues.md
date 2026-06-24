@@ -44,7 +44,7 @@ Why it matters:
 
 ## ~~2. `screenshot` captures the iOS Simulator home screen while attached to macOS app~~
 
-Resolution: fixed as unsupported-target behavior. Screenshot/crop now require an iOS Simulator session and return `screenshot_unsupported_target` for macOS attach instead of capturing a different simulator.
+Resolution: fixed. Full screenshots now capture the attached macOS app window by resolving the VM service listener process to its CoreGraphics window and using `screencapture -l`. Targeted macOS crops remain unsupported and return `crop_unsupported_target` instead of capturing a different simulator.
 
 Commands:
 
@@ -182,7 +182,7 @@ Why it matters:
 
 ## ~~7. Visual and semantic state can diverge during macOS attach testing~~
 
-Resolution: fixed as target validation. Screenshot/crop validate the recorded target and refuse unsupported macOS sessions instead of returning visual evidence from a different backend.
+Resolution: fixed. Full screenshots now validate and capture the attached macOS app window. Targeted macOS crops refuse the unsupported crop backend instead of returning visual evidence from a different target.
 
 Observed:
 - Scout semantic inspection reported a stable `MRecordScreen` with fields and values.

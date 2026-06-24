@@ -915,21 +915,8 @@ class FlutterScoutCli {
           'screenshot_${DateTime.now().millisecondsSinceEpoch}.png',
         );
     Directory(p.dirname(output)).createSync(recursive: true);
-    final simTarget = _requireSimulatorScreenshotTarget();
-    final result = await Process.run('xcrun', [
-      'simctl',
-      'io',
-      simTarget,
-      'screenshot',
-      output,
-    ]);
-    if (result.exitCode != 0) {
-      throw ScoutCliException(
-        'screenshot_failed',
-        (result.stderr as String).trim(),
-      );
-    }
-    stdout.writeln(jsonEncode({'ok': true, 'path': output}));
+    final capture = await _captureScreenshot(output);
+    stdout.writeln(jsonEncode({'ok': true, 'path': output, ...capture}));
     return 0;
   }
 
@@ -962,6 +949,12 @@ class FlutterScoutCli {
       throw ScoutCliException(
         'target_has_no_rect',
         'Target `$target` has no usable rect.',
+      );
+    }
+    if (await _isMacosScreenshotSession()) {
+      throw const ScoutCliException(
+        'crop_unsupported_target',
+        'Targeted crops are not supported for macOS window screenshots yet. Use flutter-scout screenshot -o <path> for a full macOS app-window capture.',
       );
     }
 
@@ -1713,8 +1706,12 @@ class FlutterScoutCli {
         );
   }
 
-  Future<void> _captureScreenshot(String output) async {
+  Future<Map<String, Object?>> _captureScreenshot(String output) async {
     Directory(p.dirname(output)).createSync(recursive: true);
+    final macos = await _macosWindowTarget();
+    if (macos != null) {
+      return _captureMacosWindowScreenshot(output, macos);
+    }
     final simTarget = _requireSimulatorScreenshotTarget();
     final result = await Process.run('xcrun', [
       'simctl',
@@ -1729,6 +1726,7 @@ class FlutterScoutCli {
         (result.stderr as String).trim(),
       );
     }
+    return {'backend': 'ios_simulator', 'device': simTarget};
   }
 
   String _requireSimulatorScreenshotTarget() {
@@ -1740,7 +1738,7 @@ class FlutterScoutCli {
     if (device == null || device.isEmpty) {
       throw const ScoutCliException(
         'screenshot_unsupported_target',
-        'No screenshot-capable target is recorded for this session. iOS Simulator screenshots require attach/ensure/launch with --device <ios-simulator-id>. macOS attach screenshots are not supported yet; use an OS-level window screenshot for now.',
+        'No screenshot-capable target is recorded for this session. Attach with --device <ios-simulator-id> for iOS Simulator screenshots, or attach to a reachable macOS Flutter VM service so Scout can find that app window.',
       );
     }
     if (device == 'macos' ||
@@ -1749,7 +1747,7 @@ class FlutterScoutCli {
         emulator == false) {
       throw ScoutCliException(
         'screenshot_unsupported_target',
-        'Screenshots and crops currently use xcrun simctl and are only supported for iOS Simulator sessions. The attached target is `${deviceInfo?['name'] ?? device}`.',
+        'No capturable macOS app window was found for `${deviceInfo?['name'] ?? device}`. Make sure the app window is open and not minimized.',
       );
     }
     if (platform != null && !platform.contains('ios')) {
@@ -1759,6 +1757,150 @@ class FlutterScoutCli {
       );
     }
     return device;
+  }
+
+  Future<Map<String, Object?>> _captureMacosWindowScreenshot(
+    String output,
+    _MacosWindowTarget target,
+  ) async {
+    final result = await Process.run('screencapture', [
+      '-x',
+      '-l',
+      target.windowId.toString(),
+      output,
+    ]);
+    if (result.exitCode != 0) {
+      throw ScoutCliException(
+        'screenshot_failed',
+        (result.stderr as String).trim().isEmpty
+            ? 'macOS screencapture failed for window ${target.windowId}.'
+            : (result.stderr as String).trim(),
+      );
+    }
+    return {
+      'backend': 'macos_window',
+      'windowId': target.windowId,
+      'pid': target.pid,
+      'ownerName': target.ownerName,
+      if (target.windowName != null && target.windowName!.isNotEmpty)
+        'windowName': target.windowName,
+      if (target.bounds != null) 'bounds': target.bounds,
+    };
+  }
+
+  Future<_MacosWindowTarget?> _macosWindowTarget() async {
+    if (!await _isMacosScreenshotSession()) return null;
+    final vmUri = _readVmUri();
+    final listenerPid = vmUri == null
+        ? null
+        : await _pidForListeningVmPort(vmUri);
+    if (listenerPid == null) return null;
+    return _findMacosWindowForPid(listenerPid);
+  }
+
+  Future<bool> _isMacosScreenshotSession() async {
+    final device = _readDevice();
+    final deviceInfo = _readDeviceInfo();
+    final platform = deviceInfo?['platform']?.toString().toLowerCase();
+    final category = deviceInfo?['category']?.toString().toLowerCase();
+    final emulator = deviceInfo?['emulator'] == true;
+    final isRecordedMacos =
+        device == 'macos' ||
+        platform == 'macos' ||
+        category == 'desktop' ||
+        emulator == false;
+    final vmUri = _readVmUri();
+    final listenerPid = vmUri == null
+        ? null
+        : await _pidForListeningVmPort(vmUri);
+    final command = listenerPid == null
+        ? null
+        : await _processCommand(listenerPid);
+    final looksLikeMacosApp =
+        command != null && command.contains('.app/Contents/MacOS/');
+    return isRecordedMacos || looksLikeMacosApp;
+  }
+
+  Future<_MacosWindowTarget?> _findMacosWindowForPid(int pid) async {
+    final script = r'''
+import Foundation
+import CoreGraphics
+
+let pid = Int(CommandLine.arguments[1])!
+let options = CGWindowListOption(arrayLiteral: .optionAll, .excludeDesktopElements)
+guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+  exit(2)
+}
+
+func number(_ value: Any?) -> Double {
+  if let value = value as? Double { return value }
+  if let value = value as? Int { return Double(value) }
+  if let value = value as? CGFloat { return Double(value) }
+  if let value = value as? NSNumber { return value.doubleValue }
+  return 0
+}
+
+var best: [String: Any]?
+var bestArea = 0.0
+for window in windows {
+  guard (window[kCGWindowOwnerPID as String] as? Int) == pid else { continue }
+  guard (window[kCGWindowLayer as String] as? Int) == 0 else { continue }
+  guard number(window[kCGWindowAlpha as String]) > 0 else { continue }
+  guard (window[kCGWindowSharingState as String] as? Int ?? 0) != 0 else { continue }
+  guard let bounds = window[kCGWindowBounds as String] as? [String: Any] else { continue }
+  let width = number(bounds["Width"])
+  let height = number(bounds["Height"])
+  guard width >= 80 && height >= 80 else { continue }
+  let area = width * height
+  if area > bestArea {
+    bestArea = area
+    best = window
+  }
+}
+
+guard let window = best else {
+  exit(3)
+}
+
+let bounds = window[kCGWindowBounds as String] as? [String: Any] ?? [:]
+let output: [String: Any] = [
+  "windowId": window[kCGWindowNumber as String] as? Int ?? 0,
+  "pid": pid,
+  "ownerName": window[kCGWindowOwnerName as String] as? String ?? "",
+  "windowName": window[kCGWindowName as String] as? String ?? "",
+  "bounds": [
+    number(bounds["X"]),
+    number(bounds["Y"]),
+    number(bounds["Width"]),
+    number(bounds["Height"])
+  ]
+]
+let data = try! JSONSerialization.data(withJSONObject: output)
+print(String(data: data, encoding: .utf8)!)
+''';
+    final temp = await File(
+      p.join(
+        Directory.systemTemp.path,
+        'flutter_scout_window_${DateTime.now().microsecondsSinceEpoch}.swift',
+      ),
+    ).create();
+    try {
+      await temp.writeAsString(script);
+      final result = await Process.run('swift', [temp.path, pid.toString()])
+          .timeout(
+            const Duration(seconds: 10),
+            onTimeout: () =>
+                ProcessResult(0, 124, '', 'window lookup timed out'),
+          );
+      if (result.exitCode != 0) return null;
+      final decoded = jsonDecode(result.stdout as String);
+      if (decoded is! Map<String, dynamic>) return null;
+      return _MacosWindowTarget.fromJson(decoded);
+    } finally {
+      if (await temp.exists()) {
+        await temp.delete();
+      }
+    }
   }
 
   Future<void> _openDeeplink(String url) async {
@@ -2334,6 +2476,34 @@ class _FlutterDevice {
       'emulator': emulator,
     };
   }
+}
+
+class _MacosWindowTarget {
+  const _MacosWindowTarget({
+    required this.windowId,
+    required this.pid,
+    required this.ownerName,
+    required this.windowName,
+    required this.bounds,
+  });
+
+  factory _MacosWindowTarget.fromJson(Map<String, dynamic> json) {
+    return _MacosWindowTarget(
+      windowId: (json['windowId'] as num).toInt(),
+      pid: (json['pid'] as num).toInt(),
+      ownerName: json['ownerName']?.toString() ?? '',
+      windowName: json['windowName']?.toString(),
+      bounds: json['bounds'] is List
+          ? List<Object?>.from(json['bounds'] as List)
+          : null,
+    );
+  }
+
+  final int windowId;
+  final int pid;
+  final String ownerName;
+  final String? windowName;
+  final List<Object?>? bounds;
 }
 
 Directory get _sessionDir =>
