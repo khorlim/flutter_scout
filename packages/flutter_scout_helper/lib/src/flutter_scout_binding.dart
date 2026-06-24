@@ -778,6 +778,10 @@ class FlutterScoutRuntime {
     if (widget is IconButton && widget.tooltip != null) {
       return widget.tooltip;
     }
+    if (widget is IconButton) {
+      final icon = _iconLabelForWidget(widget.icon);
+      if (icon != null && icon.isNotEmpty) return icon;
+    }
     if (widget is TextField) {
       return widget.decoration?.labelText ?? widget.decoration?.hintText;
     }
@@ -785,7 +789,72 @@ class FlutterScoutRuntime {
     if (tooltip != null && tooltip.isNotEmpty) return tooltip;
     final own = _ownText(widget);
     if (own != null && own.trim().isNotEmpty) return own.trim();
-    return _textBelow(element);
+    final text = _textBelow(element);
+    if (text != null && text.isNotEmpty) return text;
+    final icon = _iconLabelBelow(element);
+    if (icon != null && icon.isNotEmpty) return icon;
+    return null;
+  }
+
+  String? _iconLabelBelow(Element element, {int depth = 0}) {
+    if (depth > 4) return null;
+    final widget = element.widget;
+    final icon = _iconLabelForWidget(widget);
+    if (icon != null) return icon;
+    String? result;
+    element.visitChildElements((Element child) {
+      result ??= _iconLabelBelow(child, depth: depth + 1);
+    });
+    return result;
+  }
+
+  String? _iconLabelForWidget(Widget widget) {
+    if (widget is Icon) {
+      return _iconLabelForData(widget.icon);
+    }
+    return null;
+  }
+
+  String? _iconLabelForData(IconData? icon) {
+    if (icon == null) return null;
+    if (_sameIcon(icon, Icons.add) || _sameIcon(icon, Icons.add_circle)) {
+      return 'add';
+    }
+    if (_sameIcon(icon, Icons.arrow_back) ||
+        _sameIcon(icon, Icons.chevron_left)) {
+      return 'back';
+    }
+    if (_sameIcon(icon, Icons.save) || _sameIcon(icon, Icons.check)) {
+      return 'save';
+    }
+    if (_sameIcon(icon, Icons.copy) ||
+        _sameIcon(icon, Icons.content_copy) ||
+        _sameIcon(icon, Icons.file_copy)) {
+      return 'duplicate';
+    }
+    if (_sameIcon(icon, Icons.delete) ||
+        _sameIcon(icon, Icons.delete_outline)) {
+      return 'delete';
+    }
+    if (_sameIcon(icon, Icons.download) ||
+        _sameIcon(icon, Icons.file_download)) {
+      return 'download';
+    }
+    if (_sameIcon(icon, Icons.search)) return 'search';
+    if (_sameIcon(icon, Icons.close) || _sameIcon(icon, Icons.cancel)) {
+      return 'close';
+    }
+    if (_sameIcon(icon, Icons.edit)) return 'edit';
+    if (_sameIcon(icon, Icons.more_vert) || _sameIcon(icon, Icons.more_horiz)) {
+      return 'more';
+    }
+    return 'icon_${icon.codePoint.toRadixString(16)}';
+  }
+
+  bool _sameIcon(IconData a, IconData b) {
+    return a.codePoint == b.codePoint &&
+        a.fontFamily == b.fontFamily &&
+        a.fontPackage == b.fontPackage;
   }
 
   String? _tooltipBelow(Element element, {int depth = 0}) {
@@ -875,11 +944,7 @@ class FlutterScoutRuntime {
   }
 
   String _slug(String value) {
-    final slug = value
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-        .replaceAll(RegExp(r'_+'), '_');
-    return slug.replaceAll(RegExp(r'^_|_$'), '');
+    return _scoutSlug(value);
   }
 
   String? _keyLabel(Key? key) {
@@ -1630,12 +1695,11 @@ class ScoutNode {
         label == normalized) {
       return true;
     }
-    final slug = normalized
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .replaceAll(RegExp(r'^_|_$'), '');
-    return id.endsWith('.$slug');
+    final slug = _scoutSlug(normalized);
+    final kindlessSlug = _scoutSlug(
+      normalized.contains('.') ? normalized.split('.').last : normalized,
+    );
+    return id.endsWith('.$slug') || id.endsWith('.$kindlessSlug');
   }
 
   Map<String, Object?> toJson() {
@@ -1699,4 +1763,12 @@ class _ActionSnapshotResult {
   final bool stable;
   final bool lateChangeObserved;
   final bool waitTimedOut;
+}
+
+String _scoutSlug(String value) {
+  final slug = value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+      .replaceAll(RegExp(r'_+'), '_');
+  return slug.replaceAll(RegExp(r'^_|_$'), '');
 }

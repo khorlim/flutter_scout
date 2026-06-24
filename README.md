@@ -16,6 +16,7 @@ The current vertical slice implements:
 - compact default action output, with full before/after data behind `--verbose`
 - compact inspect snapshots
 - addressable text targets for bounds/crops and safer `tap-text` activation through nearest actionable ancestors
+- stable handles for common icon-only Material actions such as add, back, save, duplicate, delete, download, search, close, edit, and more
 - stale helper diagnostics and CLI-side `tap-text` fallback for attached apps still running an older helper protocol
 - duplicate-safe field handles and field values
 - viewport-aware inspect metadata for offscreen or partially visible controls
@@ -125,7 +126,7 @@ dart run bin/flutter_scout.dart scroll down --from 220,760 --distance 520
 
 Action commands return compact JSON by default: result, stability, delta, recent errors, and a small after summary. Add `--verbose` to action commands or `replay` when full before/after payloads are needed.
 
-`inspect` includes `fieldsById`, `textTargets`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, and `overlays` so agents can avoid stale, hidden, modal-blocked, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`.
+`inspect` includes `fieldsById`, `textTargets`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, and `overlays` so agents can avoid stale, hidden, modal-blocked, or unsafe targets. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Icon-only controls should use keys, tooltips, or semantics when possible; Scout also derives handles for common Material icon glyphs, for example `btn.duplicate` from `Icons.copy`.
 
 `tap-text` activates the nearest actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Very short text such as `OK` must match exactly. If no actionable ancestor exists, Scout returns `text_not_actionable` instead of reporting a misleading success. If an attached app is still running an older helper that returns a raw text target, the CLI warns about the stale helper protocol and retries against the best overlapping actionable inspect target when possible.
 
@@ -153,5 +154,6 @@ dart run bin/flutter_scout.dart stop --clear-session
 - Targeted crops currently support iOS Simulator sessions only; macOS attach sessions return `crop_unsupported_target` for crops instead of producing misaligned content.
 - Attach-only sessions cannot read the owning IDE or terminal console logs. `logs` reports that limitation unless Scout owns the `flutter run` process.
 - Attach-only hot restart still requires the owning Flutter tool or a Scout-owned `ensure`/`launch`; Scout reports the VM listener process and next actions when restart is unavailable.
+- Package or helper updates do not change code already loaded in an attached human-started Flutter process; hot restart or relaunch that app when `helperProtocol.status` reports `stale_or_old_helper`.
 - Targeted crop is implemented for current inspect handles; changed-region crop is not implemented yet.
 - Runtime hard-signal collection covers Flutter/platform errors and needs more coverage for image load failures and visible error banners.

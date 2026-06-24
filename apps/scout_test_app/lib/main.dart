@@ -30,6 +30,7 @@ class SupplierListScreen extends StatefulWidget {
 
 class _SupplierListScreenState extends State<SupplierListScreen> {
   final List<String> _suppliers = <String>[];
+  int _duplicateActions = 0;
 
   Future<void> _openAddSupplierDialog() async {
     final supplier = await showDialog<String>(
@@ -45,7 +46,19 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Suppliers')),
+      appBar: AppBar(
+        title: const Text('Suppliers'),
+        actions: [
+          IconButton(
+            onPressed: () {
+              setState(() {
+                _duplicateActions++;
+              });
+            },
+            icon: const Icon(Icons.copy),
+          ),
+        ],
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -92,6 +105,8 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: 16),
+            Text('Duplicate actions: $_duplicateActions'),
             const SizedBox(height: 16),
             Expanded(
               child: _suppliers.isEmpty
@@ -190,7 +205,20 @@ class _SmokeIssuesScreenState extends State<SmokeIssuesScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Smoke issues')),
+      appBar: AppBar(
+        title: const Text('Smoke issues'),
+        actions: [
+          IconButton(
+            onPressed: () {
+              setState(() {
+                _duplicateOneController.text = _committedAnswer;
+                _duplicateTwoController.text = _committedAnswer;
+              });
+            },
+            icon: const Icon(Icons.copy),
+          ),
+        ],
+      ),
       body: SingleChildScrollView(
         key: const ValueKey('smoke_scroll'),
         padding: const EdgeInsets.all(16),

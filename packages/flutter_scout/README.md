@@ -3,7 +3,8 @@
 Command-line eyes and hands for Flutter Scout.
 
 This CLI attaches to or launches a Flutter debug session, calls the
-`flutter_scout_helper` VM service extensions, captures simulator screenshots,
+`flutter_scout_helper` VM service extensions, captures simulator or macOS
+app-window screenshots,
 records action sessions, and replays flows.
 
 ## Basic Flow

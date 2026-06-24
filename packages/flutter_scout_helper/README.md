@@ -19,5 +19,6 @@ inspect and operate a running debug/profile app:
 - wait-until-stable
 - hard runtime signal capture from Flutter/platform error hooks
 - target metadata for screenshots and crops
+- stable labels for keyed, text, tooltip, and common icon-only controls
 
 No per-screen wrappers or per-widget action annotations are required.

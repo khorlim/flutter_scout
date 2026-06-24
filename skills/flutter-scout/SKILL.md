@@ -77,6 +77,8 @@ Use `visibleText`, `interactables`, `fields`, `textTargets`, `fieldValues`, `fie
 
 Read viewport facts before tapping: `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, and `hitTestable`. If a control is partially visible, prefer the Scout handle because Scout taps the visible safe point. If a control is offscreen, scroll first.
 
+Icon-only controls can expose handles from keys, tooltips, semantics, or common Material icon glyphs. Try handles such as `btn.duplicate`, `btn.save`, `btn.delete`, `btn.download`, `btn.back`, or `btn.search` before falling back to coordinates; Scout can match a kind-prefixed guess like `btn.duplicate` to a custom tappable exposed as `tap.duplicate`.
+
 Duplicate unkeyed fields are suffixed in inspect output, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Use the exact `fieldsById` key when filling or inputting duplicate labels.
 
 4. Act in feature-sized steps:
@@ -150,7 +152,7 @@ flutter-scout logs --last 20
 flutter-scout stop --clear-session
 ```
 
-If `logs` reports `available:false`, the session is attach-only or has no Scout-owned Flutter tool log. Use the owning terminal or IDE console for those app logs.
+If `logs` reports `available:false`, the session is attach-only or has no Scout-owned Flutter tool log. Use the owning terminal or IDE console for those app logs, especially for API/server validation failures that only print to the original Flutter process.
 
 ## Agent Rules
 

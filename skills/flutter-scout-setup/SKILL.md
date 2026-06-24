@@ -148,7 +148,7 @@ After setup, use `flutter-scout reload` for Dart-only edits and `flutter-scout r
 - `hot_restart_unavailable`: start or reconnect through `flutter-scout ensure --device <simulator-id> --project <path>` so Scout owns the Flutter tool process, or perform a normal relaunch.
 - `reload_sources_failed` or `reload_rejected`: VM reload was rejected and the app is likely still running previous code; use the owning Flutter terminal/IDE hot reload, or relaunch/start a Scout-owned `ensure`/`launch` session.
 - `vm_reload_unavailable`: the attached session cannot hot reload through VM service; use the owning Flutter terminal/IDE, use a Scout-owned `ensure`/`launch` session, or relaunch after non-Dart changes.
-- `helperProtocol.status:"stale_or_old_helper"`: the CLI is newer than the helper extension running inside the attached app; hot reload/restart or relaunch the app so it loads the updated `flutter_scout_helper`.
+- `helperProtocol.status:"stale_or_old_helper"`: the CLI is newer than the helper extension running inside the attached app. Package/global CLI updates do not change code already loaded in a human-started Flutter process; hot reload/restart or relaunch the app from the owning Flutter terminal or IDE so it loads the updated `flutter_scout_helper`.
 - `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable; run `attach` or `launch` again.
 - `device_not_found`: pass an exact device ID or name from `flutter devices`.
 - `flutter_scout_helper_not_registered`: add `flutter_scout_helper` and call `FlutterScoutBinding.ensureInitialized()` before `runApp`, or `FlutterScoutHelper.ensureRegistered()` after an existing debug binding.
