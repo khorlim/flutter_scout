@@ -137,7 +137,7 @@ Successful setup means `status` reports running and `inspect` returns visible te
 
 `ensure`, `launch`, and `attach` report `ready` when they connect to or start a VM service. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
 
-After setup, run `flutter-scout status` when session ownership is unclear. The `hotUpdate` object reports whether reload can use the VM service and whether restart can signal a Scout-owned Flutter run. Use `flutter-scout reload` for Dart-only edits and `flutter-scout restart` when Dart state must reset. If `reload` returns `reload_rejected`, the app is still reachable but is likely running previous code. `restart` requires a Scout-owned `ensure` or `launch` process; attach-only sessions can still inspect and act, but cannot signal the Flutter tool for restart. Use the owning Flutter terminal or IDE hot restart when attached to a human-started session.
+After setup, run `flutter-scout status` when session ownership is unclear. The `hotUpdate` object reports whether reload can use the VM service and whether restart can signal a Scout-owned Flutter run. If Flutter moves the VM service after hot restart, `status` can refresh the stale saved URI from Scout logs or simulator log markers and reports `staleRefreshed:true`. Use `flutter-scout reload` for Dart-only edits and `flutter-scout restart` when Dart state must reset. If `reload` returns `reload_rejected`, the app is still reachable but is likely running previous code. `restart` requires a Scout-owned `ensure` or `launch` process; attach-only sessions can still inspect and act, but cannot signal the Flutter tool for restart. Use the owning Flutter terminal or IDE hot restart when attached to a human-started session.
 
 ## Troubleshooting
 
@@ -151,7 +151,8 @@ After setup, run `flutter-scout status` when session ownership is unclear. The `
 - `helperProtocol.status:"stale_or_old_helper"`: the CLI is newer than the helper extension running inside the attached app. Package/global CLI updates do not change code already loaded in a human-started Flutter process; hot reload/restart or relaunch the app from the owning Flutter terminal or IDE so it loads the updated `flutter_scout_helper`.
 - `logs` returns `source:"attach_only_session"` and `available:false`: Scout is attached to a VS Code/Cursor/terminal-owned Flutter run. Scout can inspect and act, but cannot read the owner console logs. Use the owning console, run `flutter logs` separately, or start through `flutter-scout ensure`/`launch` when Scout should own log capture.
 - `logs --contains` returns `matched:0`: Scout read a non-empty Scout-owned log, but no line matched the filter. Use a broader filter or add app-side logging for the event you need.
-- `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable; run `attach` or `launch` again.
+- `staleRefreshed:true`: the saved VM service URL was stale, but Scout discovered and saved the current URI; continue with `inspect` or actions.
+- `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable and Scout could not discover a replacement; run `attach` or `launch` again.
 - `device_not_found`: pass an exact device ID or name from `flutter devices`.
 - `flutter_scout_helper_not_registered`: add `flutter_scout_helper` and call `FlutterScoutBinding.ensureInitialized()` before `runApp`, or `FlutterScoutHelper.ensureRegistered()` after an existing debug binding.
 - `flutter-scout: command not found`: use `dart run bin/flutter_scout.dart` from the CLI package or fix pub global `PATH`.

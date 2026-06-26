@@ -42,6 +42,7 @@ class FlutterScoutCli {
         'restart' => _restart(rest),
         'deeplink' => _deeplink(rest),
         'logs' => _logs(rest),
+        'vm-log-listener' => _vmLogListener(rest),
         'screenshot' => _screenshot(rest),
         'crop' => _crop(rest),
         'evidence' => _evidence(rest),
@@ -187,9 +188,14 @@ class FlutterScoutCli {
 
     final wsUri = _normalizeVmUri(vmUri);
     File(_vmUriFile).writeAsStringSync(wsUri);
+    final vmLogListenerPid = await _startVmLogListener(
+      vmUri: wsUri,
+      logFile: _logFile,
+    );
     _writeSessionMeta({
       'mode': 'scout_owned_flutter_run',
       'pid': process.pid,
+      'vmLogListenerPid': ?vmLogListenerPid,
       'logFile': _logFile,
       'project': project,
       'device': resolvedDevice.id,
@@ -209,6 +215,7 @@ class FlutterScoutCli {
         'deviceCategory': resolvedDevice.category,
         'project': project,
         'pid': process.pid,
+        'vmLogListenerPid': ?vmLogListenerPid,
         'vmServiceUri': wsUri,
         'logFile': _logFile,
         'timing': launchTiming.toJson(completedAt: launchTiming.readyAt),
@@ -384,6 +391,7 @@ class FlutterScoutCli {
     }
     final stale = await _validateVmUri(vmUri);
     if (stale.ok) {
+      await _ensureVmLogListenerForCurrentSession(vmUri);
       return {
         'running': true,
         'vmServiceUri': vmUri,
@@ -391,6 +399,20 @@ class FlutterScoutCli {
         if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
         'session': _sessionModeInfo(),
         'hotUpdate': await _hotUpdateCapability(vmUri),
+      };
+    }
+    final refreshed = await _refreshStaleVmUri(staleUri: vmUri);
+    if (refreshed != null) {
+      return {
+        'running': true,
+        'vmServiceUri': refreshed.uri,
+        'staleVmServiceUri': vmUri,
+        'staleRefreshed': true,
+        'refreshSource': refreshed.source,
+        if (_readDevice() != null) 'device': _readDevice(),
+        if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
+        'session': _sessionModeInfo(),
+        'hotUpdate': await _hotUpdateCapability(refreshed.uri),
       };
     }
     _clearVmUriFile();
@@ -477,6 +499,7 @@ class FlutterScoutCli {
     final listenerPid = vmUri == null
         ? null
         : await _pidForListeningVmPort(vmUri);
+    final vmLogListenerPid = _readVmLogListenerPid();
     var stopped = false;
     var processExisted = false;
     String? pidKillSkippedReason;
@@ -498,7 +521,25 @@ class FlutterScoutCli {
       listenerExisted = Process.killPid(listenerPid);
       stopped = stopped || listenerExisted;
     }
+    var vmLogListenerExisted = false;
+    var vmLogListenerKillSkippedReason = <String, Object?>{};
+    if (vmLogListenerPid != null &&
+        vmLogListenerPid != pid &&
+        vmLogListenerPid != listenerPid) {
+      if (await _looksLikeScoutVmLogListener(vmLogListenerPid)) {
+        vmLogListenerExisted = Process.killPid(vmLogListenerPid);
+        stopped = stopped || vmLogListenerExisted;
+      } else {
+        final exists = await _processExists(vmLogListenerPid);
+        if (exists) {
+          vmLogListenerKillSkippedReason = {
+            'vmLogListenerKillSkippedReason': 'pid_identity_mismatch',
+          };
+        }
+      }
+    }
     _deleteFileIfExists(_pidFile);
+    _deleteFileIfExists(_vmLogListenerPidFile);
     if (parsed.flag('clear-session')) {
       _clearVmUriFile();
       _deleteFileIfExists(_deviceFile);
@@ -511,11 +552,15 @@ class FlutterScoutCli {
         'ok': true,
         'pid': pid,
         'vmServiceListenerPid': listenerPid,
+        'vmLogListenerPid': vmLogListenerPid,
         'processExisted': processExisted,
         'vmServiceListenerExisted': listenerExisted,
+        'vmLogListenerExisted': vmLogListenerExisted,
         'stopped': stopped,
         'pidKillSkippedReason': ?pidKillSkippedReason,
+        ...vmLogListenerKillSkippedReason,
         'pidFileCleared': true,
+        'vmLogListenerPidFileCleared': true,
         if (parsed.flag('clear-session')) 'sessionCleared': true,
       }),
     );
@@ -893,6 +938,12 @@ class FlutterScoutCli {
   }) async {
     final file = File(_logFile);
     final attachOnly = await _isAttachOnlySession();
+    if (!attachOnly) {
+      final vmUri = _readVmUri();
+      if (vmUri != null) {
+        await _ensureVmLogListenerForCurrentSession(vmUri);
+      }
+    }
     if (attachOnly || !file.existsSync()) {
       return {
         'ok': true,
@@ -958,6 +1009,124 @@ class FlutterScoutCli {
       'lines': lines,
     };
   }
+
+  Future<int> _vmLogListener(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('vm-uri')
+      ..addOption('log-file');
+    final parsed = parser.parse(args);
+    final vmUri = parsed.option('vm-uri');
+    final logFile = parsed.option('log-file');
+    if (vmUri == null || vmUri.isEmpty || logFile == null || logFile.isEmpty) {
+      throw const ScoutCliException(
+        'usage',
+        'Usage: flutter-scout vm-log-listener --vm-uri <uri> --log-file <path>',
+      );
+    }
+    return _listenToVmLogs(vmUri: vmUri, logFile: logFile);
+  }
+
+  Future<int> _listenToVmLogs({
+    required String vmUri,
+    required String logFile,
+  }) async {
+    IOSink? sink;
+    VmService? service;
+    StreamSubscription<Event>? subscription;
+    try {
+      Directory(p.dirname(logFile)).createSync(recursive: true);
+      sink = File(logFile).openWrite(mode: FileMode.append);
+      service = await vmServiceConnectUri(_normalizeVmUri(vmUri));
+      subscription = service.onLoggingEvent.listen((event) async {
+        sink?.writeln(await _formatVmLogEvent(service!, event));
+      });
+      await service.streamListen(EventStreams.kLogging);
+      sink.writeln(
+        '[flutter_scout] VM logging listener attached ${DateTime.now().toIso8601String()}',
+      );
+      await sink.flush();
+      await service.onDone;
+      return 0;
+    } catch (error) {
+      sink ??= File(logFile).openWrite(mode: FileMode.append);
+      sink.writeln('[flutter_scout] VM logging listener failed: $error');
+      await sink.flush();
+      return 1;
+    } finally {
+      await subscription?.cancel();
+      await service?.dispose();
+      await sink?.close();
+    }
+  }
+
+  Future<String> _formatVmLogEvent(VmService service, Event event) async {
+    final record = event.logRecord;
+    if (record == null) {
+      return '[VM_LOG] ${jsonEncode(event.toJson())}';
+    }
+    final timestamp = record.time != null && record.time! > 0
+        ? DateTime.fromMillisecondsSinceEpoch(record.time!).toIso8601String()
+        : DateTime.now().toIso8601String();
+    final isolateId = event.isolate?.id;
+    final loggerName =
+        await _instanceValue(service, isolateId, record.loggerName) ??
+        record.loggerName?.id ??
+        'log';
+    final message = _stripAnsi(
+      await _instanceValue(service, isolateId, record.message) ?? '',
+    );
+    final error = _stripAnsi(
+      await _instanceValue(service, isolateId, record.error) ?? '',
+    );
+    final stackTrace = _stripAnsi(
+      await _instanceValue(service, isolateId, record.stackTrace) ?? '',
+    );
+    final extras = <String>[
+      if (record.level != null) 'level=${record.level}',
+      if (record.sequenceNumber != null) 'seq=${record.sequenceNumber}',
+    ].join(' ');
+    return [
+      '[$timestamp]',
+      '[VM_LOG]',
+      '[$loggerName]',
+      if (extras.isNotEmpty) extras,
+      message,
+      if (error.isNotEmpty) 'error=$error',
+      if (stackTrace.isNotEmpty) 'stack=$stackTrace',
+    ].where((part) => part.isNotEmpty).join(' ');
+  }
+
+  Future<String?> _instanceValue(
+    VmService service,
+    String? isolateId,
+    InstanceRef? ref,
+  ) async {
+    final value = ref?.valueAsString;
+    if (value != null &&
+        value.isNotEmpty &&
+        ref?.valueAsStringIsTruncated != true) {
+      return value;
+    }
+    if (isolateId != null &&
+        ref?.id != null &&
+        ref?.valueAsStringIsTruncated == true) {
+      try {
+        final object = await service.getObject(isolateId, ref!.id!);
+        if (object is Instance &&
+            object.valueAsString != null &&
+            object.valueAsString!.isNotEmpty) {
+          return object.valueAsString;
+        }
+      } catch (_) {
+        // Fall back to the truncated VM-service ref below.
+      }
+    }
+    if (value != null && value.isNotEmpty) return '$value [truncated]';
+    return null;
+  }
+
+  String _stripAnsi(String value) =>
+      value.replaceAll(RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]'), '');
 
   Future<int> _screenshot(List<String> args) async {
     final parser = ArgParser()
@@ -1860,9 +2029,9 @@ class FlutterScoutCli {
       );
     }
 
-    final fromLogs = await _discoverVmUriFromSimulatorLogs(device: device);
-    if (fromLogs != null && fromLogs.isNotEmpty) {
-      final uri = _normalizeVmUri(fromLogs);
+    final fromLogs = await _discoverCurrentVmUri(device: device);
+    if (fromLogs != null && fromLogs.uri.isNotEmpty) {
+      final uri = _normalizeVmUri(fromLogs.uri);
       final validation = await _validateVmUri(uri);
       if (validation.ok) return _AttachDiscovery(uri: uri);
     }
@@ -2382,6 +2551,41 @@ print(String(data: data, encoding: .utf8)!)
     }
   }
 
+  Future<_DiscoveredVmUri?> _discoverCurrentVmUri({String? device}) async {
+    final fromScoutLog = _discoverVmUriFromScoutLog();
+    if (fromScoutLog != null) {
+      return _DiscoveredVmUri(uri: fromScoutLog, source: 'scout_log');
+    }
+    final fromSimulatorLog = await _discoverVmUriFromSimulatorLogs(
+      device: device,
+    );
+    if (fromSimulatorLog != null) {
+      return _DiscoveredVmUri(uri: fromSimulatorLog, source: 'simulator_log');
+    }
+    return null;
+  }
+
+  Future<_DiscoveredVmUri?> _refreshStaleVmUri({
+    required String staleUri,
+  }) async {
+    final discovered = await _discoverCurrentVmUri(device: _readDevice());
+    if (discovered == null) return null;
+    final uri = _normalizeVmUri(discovered.uri);
+    if (uri == _normalizeVmUri(staleUri)) return null;
+    final validation = await _validateVmUri(uri);
+    if (!validation.ok) return null;
+    File(_vmUriFile).writeAsStringSync(uri);
+    await _ensureVmLogListenerForCurrentSession(uri);
+    return _DiscoveredVmUri(uri: uri, source: discovered.source);
+  }
+
+  String? _discoverVmUriFromScoutLog() {
+    final file = File(_logFile);
+    if (!file.existsSync()) return null;
+    final text = file.readAsStringSync();
+    return _extractVmUri(text) ?? _extractFlutterToolVmUri(text);
+  }
+
   Future<_FlutterDevice?> _resolveFlutterDevice(String requested) async {
     final result = await Process.run('flutter', ['devices', '--machine'])
         .timeout(
@@ -2435,9 +2639,11 @@ print(String(data: data, encoding: .utf8)!)
       RegExp(r'(https?://127\.0\.0\.1:\d+/\S*=/?)'),
       RegExp(r'(https?://localhost:\d+/\S*=/?)'),
     ];
-    for (final pattern in patterns) {
-      final match = pattern.firstMatch(text);
-      if (match != null) return match.group(1);
+    for (final line in text.split('\n').reversed) {
+      for (final pattern in patterns) {
+        final match = pattern.firstMatch(line);
+        if (match != null) return match.group(1);
+      }
     }
     return null;
   }
@@ -2542,6 +2748,47 @@ print(String(data: data, encoding: .utf8)!)
     return value.isEmpty ? null : value;
   }
 
+  Future<int?> _startVmLogListener({
+    required String vmUri,
+    required String logFile,
+  }) async {
+    if (Platform.script.scheme != 'file') {
+      return null;
+    }
+    try {
+      final process = await Process.start(Platform.resolvedExecutable, [
+        Platform.script.toFilePath(),
+        'vm-log-listener',
+        '--vm-uri',
+        vmUri,
+        '--log-file',
+        logFile,
+      ], mode: ProcessStartMode.detached);
+      File(_vmLogListenerPidFile).writeAsStringSync(process.pid.toString());
+      return process.pid;
+    } catch (error) {
+      File(logFile).writeAsStringSync(
+        '[flutter_scout] VM logging listener start failed: $error\n',
+        mode: FileMode.append,
+      );
+      return null;
+    }
+  }
+
+  Future<int?> _ensureVmLogListenerForCurrentSession(String vmUri) async {
+    if (await _isAttachOnlySession()) return null;
+    final existing = _readVmLogListenerPid();
+    if (existing != null) {
+      final command = await _processCommand(existing);
+      if (command != null && _commandLooksLikeScoutVmLogListener(command)) {
+        if (command.contains(vmUri)) return existing;
+        Process.killPid(existing);
+      }
+      _deleteFileIfExists(_vmLogListenerPidFile);
+    }
+    return _startVmLogListener(vmUri: vmUri, logFile: _logFile);
+  }
+
   void _clearVmUriFile() {
     _deleteFileIfExists(_vmUriFile);
   }
@@ -2577,6 +2824,12 @@ print(String(data: data, encoding: .utf8)!)
     return int.tryParse(file.readAsStringSync().trim());
   }
 
+  int? _readVmLogListenerPid() {
+    final file = File(_vmLogListenerPidFile);
+    if (!file.existsSync()) return null;
+    return int.tryParse(file.readAsStringSync().trim());
+  }
+
   void _writeSessionMeta(Map<String, Object?> meta) {
     _ensureSessionDir();
     File(
@@ -2603,6 +2856,7 @@ print(String(data: data, encoding: .utf8)!)
     return {
       'mode': meta?['mode'] ?? (pid == null ? 'unknown' : 'legacy'),
       'pid': ?pid,
+      'vmLogListenerPid': ?_readVmLogListenerPid(),
       'createdAt': ?meta?['createdAt'],
       'logFile': ?meta?['logFile'],
     };
@@ -2716,6 +2970,19 @@ print(String(data: data, encoding: .utf8)!)
     return hasFlutterTool && hasRunCommand;
   }
 
+  Future<bool> _looksLikeScoutVmLogListener(int pid) async {
+    final command = await _processCommand(pid);
+    if (command == null) return false;
+    return _commandLooksLikeScoutVmLogListener(command);
+  }
+
+  bool _commandLooksLikeScoutVmLogListener(String command) {
+    final lower = command.toLowerCase();
+    final hasScoutCommand =
+        lower.contains('flutter_scout') || lower.contains('flutter-scout');
+    return hasScoutCommand && lower.contains('vm-log-listener');
+  }
+
   Future<bool> _processExists(int pid) async {
     return await _processCommand(pid) != null;
   }
@@ -2804,6 +3071,13 @@ class _AttachDiscovery {
   final String? reason;
   final String? staleUri;
   final bool staleCleared;
+}
+
+class _DiscoveredVmUri {
+  const _DiscoveredVmUri({required this.uri, required this.source});
+
+  final String uri;
+  final String source;
 }
 
 class _VmUriValidation {
@@ -2949,6 +3223,8 @@ String get _deviceFile => p.join(_sessionDir.path, 'device.txt');
 String get _deviceInfoFile => p.join(_sessionDir.path, 'device_info.json');
 String get _sessionFile => p.join(_sessionDir.path, 'session.json');
 String get _pidFile => p.join(_sessionDir.path, 'flutter.pid');
+String get _vmLogListenerPidFile =>
+    p.join(_sessionDir.path, 'vm_log_listener.pid');
 String get _logFile => p.join(_sessionDir.path, 'logs.txt');
 String get _sessionMetaFile => p.join(_sessionDir.path, 'session_meta.json');
 

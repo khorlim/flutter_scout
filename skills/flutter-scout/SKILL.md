@@ -67,7 +67,7 @@ flutter-scout stop --clear-session
 
 Launch, ensure, and attach responses include `ready` when they start or connect to a VM service. If `ready` is false, fix the reported setup reason before inspecting or acting. When `ensure` or `launch` starts a Scout-owned Flutter run, read the `timing` object if present; it reports launch cost such as `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`.
 
-Use `status` when session ownership is unclear. It reports `session.mode` and `hotUpdate` capability so you know whether `reload` can use the VM service, whether `restart` can signal a Scout-owned Flutter run, or whether the owning IDE/terminal must perform restart.
+Use `status` when session ownership is unclear. It reports `session.mode` and `hotUpdate` capability so you know whether `reload` can use the VM service, whether `restart` can signal a Scout-owned Flutter run, or whether the owning IDE/terminal must perform restart. If Flutter moves the VM service after hot restart, `status` can refresh the stale saved URI from Scout logs or simulator log markers and reports `staleRefreshed:true`.
 
 3. Inspect before acting:
 
@@ -197,7 +197,7 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Treat `lateChangeObserved:true` as a real observed post-action change, not a stale screen.
 - Treat `delta.changedGeometry` as a real change for scrolling or layout movement even when text and field values are unchanged.
 - Treat drag `result:"navigated"` as a real route/screen transition caused by the gesture, not a plain scroll.
-- Trust `status` to clear stale VM session files; reattach if it reports `staleCleared`.
+- Trust `status` to refresh stale VM service URIs when it reports `staleRefreshed:true`; reattach only if it reports `staleCleared` or cannot discover a current URI.
 - Stop and fix code when `recentErrors` reports Flutter/platform errors.
 - Treat fresh `recentErrors` with `blocking:true` as hard failures; separate stale/non-blocking startup errors from the current flow.
 - Use `tap-text` for visible text rows or picker rows when generic row handles are ambiguous; it returns an actionable `target` and the matched `textTarget`.

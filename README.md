@@ -164,7 +164,7 @@ When `logs --contains <text>` finds no matching lines in a non-empty Scout-owned
 
 For attach-only sessions started by VS Code, Cursor, or another terminal, `logs` reports `source:"attach_only_session"` with `available:false`; Scout can still inspect and act through the VM service, but the owning process keeps the console logs. Start with `flutter-scout ensure` or `flutter-scout launch` when Scout should own log capture.
 
-Use `status` before hot updates when the session origin is unclear. It reports `hotUpdate.reload` and `hotUpdate.restart` capability, including whether restart requires the owning Flutter terminal/IDE or a Scout-owned run.
+Use `status` before hot updates when the session origin is unclear. It reports `hotUpdate.reload` and `hotUpdate.restart` capability, including whether restart requires the owning Flutter terminal/IDE or a Scout-owned run. If a hot restart moves the VM service to a new port, `status` tries to refresh a stale saved URI from the latest Scout-owned log or simulator log marker and reports `staleRefreshed:true` when it rewrites the session.
 
 Collect a shareable run bundle:
 
