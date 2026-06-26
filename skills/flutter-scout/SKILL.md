@@ -77,6 +77,14 @@ flutter-scout inspect
 
 Use `visibleText`, `hitTestableText`, `offscreenText`, `interactables`, `fields`, `textTargets`, `fieldValues`, `fieldsById`, `scrollables`, `overlays`, `keyboard`, and `recentErrors` to orient yourself. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
 
+If the user manually annotated the running app, read the annotations before editing:
+
+```bash
+flutter-scout annotations list
+```
+
+Annotations contain the user's comment plus the selected widget metadata. `inspect` also includes top-level `annotationMode` and `annotations` fields, but `annotations list` is the clearest handoff from manual review to agent work.
+
 Treat `hitTestableText` as the safest text set for immediate `tap-text`. `offscreenText` is useful for planning, but it is not directly tappable until you scroll it into view.
 
 Read viewport facts before tapping: `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, and `hitTestable`. If a control is partially visible, prefer the Scout handle because Scout taps the visible safe point. If a control is offscreen, scroll first. Target taps require a visible safe point; if a handle exists but is offscreen, Scout returns `target_not_visible` instead of tapping an offscreen rect center.
@@ -142,6 +150,10 @@ Replay should be the first check after changing code for a flow you already test
 flutter-scout status
 flutter-scout ensure --device <simulator-id> --project <flutter-app-path>
 flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
+flutter-scout annotations list
+flutter-scout annotations targets
+flutter-scout annotations enable
+flutter-scout annotations disable
 flutter-scout wait stable
 flutter-scout reload
 flutter-scout restart

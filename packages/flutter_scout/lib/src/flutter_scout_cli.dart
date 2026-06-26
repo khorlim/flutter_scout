@@ -27,6 +27,7 @@ class FlutterScoutCli {
         'stop' => _stop(rest),
         'cleanup' => _stop(rest),
         'inspect' => _callAndPrint('ext.flutter_scout.inspect'),
+        'annotations' => _annotations(rest),
         'bounds' => _bounds(rest),
         'tap' => _tap(rest),
         'tap-text' => _tapText(rest),
@@ -561,6 +562,21 @@ class FlutterScoutCli {
       }),
     );
     return 0;
+  }
+
+  Future<int> _annotations(List<String> args) async {
+    final action = args.isEmpty ? 'list' : args.first;
+    const allowed = {'list', 'targets', 'enable', 'disable', 'clear'};
+    if (!allowed.contains(action)) {
+      throw const ScoutCliException(
+        'usage',
+        'Usage: flutter-scout annotations [list|targets|enable|disable|clear]',
+      );
+    }
+    return _callAndPrint(
+      'ext.flutter_scout.annotations',
+      params: {'action': action},
+    );
   }
 
   Future<int> _tap(List<String> args) async {
@@ -2744,6 +2760,7 @@ Usage:
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
   flutter-scout inspect
+  flutter-scout annotations [list|targets|enable|disable|clear]
   flutter-scout bounds [target]
   flutter-scout tap <target> | tap <x> <y> | --x <x> --y <y> [--verbose]
   flutter-scout tap-text <visible text> [--allow-mismatch] [--verbose]

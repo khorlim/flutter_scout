@@ -34,6 +34,7 @@ The current vertical slice implements:
 - hard runtime signal capture through Flutter/platform error hooks with severity, blocking, phase, age, and stale facts
 - replayable sessions with a concise transcript in replay output
 - launch timing metrics for Scout-owned launches, including total, build, sync, VM service, and ready timing
+- an in-app annotation overlay for selecting visible widgets, adding comments, and exposing those comments to agents
 - a sample Flutter app for simulator verification
 
 ## Packages
@@ -176,6 +177,20 @@ The bundle writes `summary.json`, `status.json`, `logs.json`, optional `inspect.
 `recentErrors` reports runtime facts from Flutter/platform hooks. Entries include `severity`, `blocking`, `phase`, `ageMs`, and `stale` so agents can separate fresh blocking failures from older non-blocking startup noise.
 
 Replay output includes both `results` and a concise `transcript` array. The transcript is intended for quick run reports, while `results` keeps the structured command evidence.
+
+## Annotation Mode
+
+When an app runs with `flutter_scout_helper`, Scout injects a small debug overlay button. Tap it to enter annotation mode, then tap a visible widget to select it. Repeated taps in the same spot cycle through stacked candidates, such as text, button, section, or screen-level targets. Add a comment and save it; the comment is kept in the running app and exposed to the CLI:
+
+```bash
+dart run bin/flutter_scout.dart annotations list
+dart run bin/flutter_scout.dart annotations targets
+dart run bin/flutter_scout.dart annotations enable
+dart run bin/flutter_scout.dart annotations disable
+dart run bin/flutter_scout.dart annotations clear
+```
+
+`inspect` also includes top-level `annotationMode` and `annotations` fields so agents can see user comments during the normal inspect loop. Annotation targets are intentionally collected separately from normal `inspect` interactables so Scout keeps its compact action-oriented view while annotation mode can identify non-actionable visible widgets.
 
 Stop a Scout-owned launch process:
 

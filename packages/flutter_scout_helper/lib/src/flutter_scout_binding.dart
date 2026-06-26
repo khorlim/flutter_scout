@@ -31,14 +31,21 @@ class FlutterScoutHelper {
 
 class FlutterScoutRuntime {
   final List<Map<String, Object?>> _errors = <Map<String, Object?>>[];
+  final List<ScoutAnnotation> _annotations = <ScoutAnnotation>[];
+  final ValueNotifier<int> _annotationRevision = ValueNotifier<int>(0);
   final DateTime _installedAt = DateTime.now();
   int _nextSyntheticPointer = 1000000;
+  int _nextAnnotationId = 1;
+  bool _annotationMode = false;
+  OverlayEntry? _annotationOverlayEntry;
+  bool _annotationOverlayInstallScheduled = false;
   FlutterExceptionHandler? _previousFlutterError;
   ui.ErrorCallback? _previousPlatformError;
 
   void install() {
     _installErrorHooks();
     _registerExtension('ext.flutter_scout.inspect', _handleInspect);
+    _registerExtension('ext.flutter_scout.annotations', _handleAnnotations);
     _registerExtension('ext.flutter_scout.tap', _handleTap);
     _registerExtension('ext.flutter_scout.tapText', _handleTapText);
     _registerExtension('ext.flutter_scout.longPress', _handleLongPress);
@@ -49,6 +56,7 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.back', _handleBack);
     _registerExtension('ext.flutter_scout.waitStable', _handleWaitStable);
     _broadcastVmUri();
+    _scheduleAnnotationOverlayInstall();
   }
 
   void _installErrorHooks() {
@@ -163,10 +171,150 @@ class FlutterScoutRuntime {
   ) async {
     try {
       await _waitForFrame();
-      return _ok(_snapshot().toJson());
+      return _ok({
+        ..._snapshot().toJson(),
+        'annotationMode': _annotationMode,
+        'annotations': _annotationJsonList(),
+      });
     } catch (error) {
       return _fail('inspect_failed', error.toString());
     }
+  }
+
+  Future<developer.ServiceExtensionResponse> _handleAnnotations(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final action = params['action'] ?? 'list';
+      switch (action) {
+        case 'enable':
+          _setAnnotationMode(true);
+          break;
+        case 'disable':
+          _setAnnotationMode(false);
+          break;
+        case 'clear':
+          _annotations.clear();
+          _bumpAnnotationRevision();
+          break;
+        case 'list':
+        case 'targets':
+          break;
+        default:
+          return _fail(
+            'unknown_annotation_action',
+            'Unknown annotations action `$action`.',
+          );
+      }
+      await _waitForFrame();
+      return _ok(_annotationsStateJson(includeTargets: action == 'targets'));
+    } catch (error) {
+      return _fail('annotations_failed', error.toString());
+    }
+  }
+
+  void _setAnnotationMode(bool enabled) {
+    if (_annotationMode == enabled) return;
+    _annotationMode = enabled;
+    _bumpAnnotationRevision();
+    _scheduleAnnotationOverlayInstall();
+  }
+
+  void _bumpAnnotationRevision() {
+    _annotationRevision.value++;
+  }
+
+  Map<String, Object?> _annotationsStateJson({bool includeTargets = false}) {
+    final snapshot = _snapshot();
+    return {
+      'annotationMode': _annotationMode,
+      'screen': snapshot.screen,
+      'routeGuess': snapshot.routeGuess,
+      'annotations': _annotationJsonList(),
+      if (includeTargets)
+        'targets': _annotationTargets()
+            .map((target) => target.toJson())
+            .toList(growable: false),
+    };
+  }
+
+  List<Map<String, Object?>> _annotationJsonList() {
+    return [for (final annotation in _annotations) annotation.toJson()];
+  }
+
+  ScoutAnnotation addAnnotation({
+    required ScoutAnnotationTarget target,
+    required String comment,
+  }) {
+    final annotation = ScoutAnnotation(
+      id: 'ann_${_nextAnnotationId.toString().padLeft(3, '0')}',
+      createdAt: DateTime.now(),
+      comment: comment,
+      status: 'open',
+      target: target,
+    );
+    _nextAnnotationId++;
+    _annotations.add(annotation);
+    _bumpAnnotationRevision();
+    return annotation;
+  }
+
+  List<ScoutAnnotationTarget> annotationCandidatesAt(Offset point) {
+    final targets = [
+      for (final target in _annotationTargets())
+        if (target.rect.contains(point)) target,
+    ];
+    targets.sort((a, b) {
+      final aArea = a.rect.width * a.rect.height;
+      final bArea = b.rect.width * b.rect.height;
+      final area = aArea.compareTo(bArea);
+      if (area != 0) return area;
+      return b.depth.compareTo(a.depth);
+    });
+    return targets;
+  }
+
+  List<ScoutAnnotationTarget> visibleAnnotationTargets() {
+    return _annotationTargets();
+  }
+
+  void _scheduleAnnotationOverlayInstall() {
+    if (kReleaseMode || _annotationOverlayEntry != null) return;
+    if (_annotationOverlayInstallScheduled) return;
+    _annotationOverlayInstallScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _annotationOverlayInstallScheduled = false;
+      _installAnnotationOverlayIfPossible();
+    });
+  }
+
+  void _installAnnotationOverlayIfPossible() {
+    if (kReleaseMode || _annotationOverlayEntry != null) return;
+    final root = WidgetsBinding.instance.rootElement;
+    if (root == null) {
+      _scheduleAnnotationOverlayInstall();
+      return;
+    }
+    final overlay = _findRootOverlay(root);
+    if (overlay == null) {
+      _scheduleAnnotationOverlayInstall();
+      return;
+    }
+    _annotationOverlayEntry = OverlayEntry(
+      builder: (context) => _FlutterScoutAnnotationOverlay(runtime: this),
+    );
+    overlay.insert(_annotationOverlayEntry!);
+  }
+
+  OverlayState? _findRootOverlay(Element root) {
+    OverlayState? result;
+    _walk(root, (Element element) {
+      if (element is StatefulElement && element.state is OverlayState) {
+        result = element.state as OverlayState;
+      }
+    });
+    return result;
   }
 
   Future<developer.ServiceExtensionResponse> _handleTap(
@@ -813,6 +961,307 @@ class FlutterScoutRuntime {
     );
   }
 
+  List<ScoutAnnotationTarget> _annotationTargets() {
+    final root = WidgetsBinding.instance.rootElement;
+    if (root == null) return const <ScoutAnnotationTarget>[];
+    final route = ModalRoute.of(root)?.settings.name;
+    final screen = _screenName(root, route);
+    final modalElement = _activeAnnotationModalElement(root);
+    final targets = <ScoutAnnotationTarget>[];
+    _walk(root, (Element element) {
+      if (_isHiddenByAncestor(element) || _isScoutOverlayElement(element)) {
+        return;
+      }
+      if (!_isInsideActiveAnnotationModal(element, modalElement)) return;
+      final rect = _rectFor(element);
+      if (rect == null || rect.width < 1 || rect.height < 1) return;
+      final visibleRect = _visibleRectFor(rect);
+      if (visibleRect == null) return;
+      final widget = element.widget;
+      final widgetType = widget.runtimeType.toString();
+      final key = _annotationKeyLabel(widget.key);
+      final label = _labelFor(element, widget);
+      final text = _ownText(widget)?.trim();
+      final kind = _annotationKindFor(widget, element);
+      if (!_isUsefulAnnotationTarget(
+        widget: widget,
+        kind: kind,
+        key: key,
+        label: label,
+        text: text,
+      )) {
+        return;
+      }
+      final ancestors = _ancestorSummary(element);
+      targets.add(
+        ScoutAnnotationTarget(
+          id: _annotationTargetId(
+            kind: kind,
+            widgetType: widgetType,
+            key: key,
+            label: label,
+            text: text,
+            rect: rect,
+            ancestors: ancestors,
+          ),
+          stableId: _stableAnnotationId(
+            kind: kind,
+            widgetType: widgetType,
+            key: key,
+            label: label,
+            text: text,
+          ),
+          kind: kind,
+          widgetType: widgetType,
+          key: key,
+          label: label,
+          text: text,
+          screen: screen,
+          routeGuess: route,
+          rect: rect,
+          visibleRect: visibleRect,
+          visibleFraction: _visibleFraction(rect, visibleRect),
+          depth: _elementDepth(element),
+          ancestorSummary: ancestors,
+          scoutNodeId: _nodeFromElement(element)?.id,
+        ),
+      );
+    });
+
+    final deduped = <String, ScoutAnnotationTarget>{};
+    for (final target in _removeOversizedModalTargets(
+      targets,
+      modalActive: modalElement != null,
+    )) {
+      final rect = target.rect;
+      final key = [
+        target.stableId,
+        rect.left.round(),
+        rect.top.round(),
+        rect.width.round(),
+        rect.height.round(),
+      ].join(':');
+      final existing = deduped[key];
+      if (existing == null || target.depth > existing.depth) {
+        deduped[key] = target;
+      }
+    }
+    final result = deduped.values.toList(growable: false)
+      ..sort((a, b) {
+        final top = a.rect.top.compareTo(b.rect.top);
+        if (top != 0) return top;
+        final left = a.rect.left.compareTo(b.rect.left);
+        if (left != 0) return left;
+        return a.rect.width.compareTo(b.rect.width);
+      });
+    return result;
+  }
+
+  Element? _activeAnnotationModalElement(Element root) {
+    Element? result;
+    var resultDepth = -1;
+    _walk(root, (Element element) {
+      if (_isHiddenByAncestor(element) || _isScoutOverlayElement(element)) {
+        return;
+      }
+      final widget = element.widget;
+      if (widget is! AlertDialog &&
+          widget is! SimpleDialog &&
+          widget is! Dialog &&
+          widget is! BottomSheet) {
+        return;
+      }
+      final rect = _rectFor(element);
+      if (rect == null || _visibleRectFor(rect) == null) return;
+      final depth = _elementDepth(element);
+      if (depth >= resultDepth) {
+        result = element;
+        resultDepth = depth;
+      }
+    });
+    return result;
+  }
+
+  bool _isInsideActiveAnnotationModal(Element element, Element? modalElement) {
+    if (modalElement == null) return true;
+    if (identical(element, modalElement)) return true;
+    var result = false;
+    element.visitAncestorElements((ancestor) {
+      if (identical(ancestor, modalElement)) {
+        result = true;
+        return false;
+      }
+      return true;
+    });
+    return result;
+  }
+
+  List<ScoutAnnotationTarget> _removeOversizedModalTargets(
+    List<ScoutAnnotationTarget> targets, {
+    required bool modalActive,
+  }) {
+    if (!modalActive || targets.isEmpty) return targets;
+    final viewportArea = _rectArea(_viewportRect());
+    final contentCandidates = [
+      for (final target in targets)
+        if (_rectArea(target.rect) < viewportArea * 0.45) target.rect,
+    ];
+    if (contentCandidates.isEmpty) return targets;
+    final contentRect = contentCandidates.reduce(
+      (value, element) => value.expandToInclude(element),
+    );
+    final contentArea = _rectArea(contentRect);
+    return [
+      for (final target in targets)
+        if (_rectArea(target.rect) <= contentArea * 3) target,
+    ];
+  }
+
+  String _screenName(Element root, String? route) {
+    if (route != null && route.isNotEmpty) return route;
+    var screen = 'RootWidget';
+    _walk(root, (Element element) {
+      if (screen != 'RootWidget') return;
+      final widgetType = element.widget.runtimeType.toString();
+      if (widgetType.endsWith('Screen')) screen = widgetType;
+    });
+    return screen;
+  }
+
+  String _annotationKindFor(Widget widget, Element element) {
+    final scoutKind = _kindFor(widget, element);
+    if (scoutKind != null) return scoutKind;
+    if (widget is Image) return 'image';
+    if (widget is Icon) return 'icon';
+    if (widget is AppBar) return 'appBar';
+    if (widget is Scaffold) return 'screen';
+    if (widget is Card) return 'card';
+    if (widget is Dialog || widget is AlertDialog || widget is SimpleDialog) {
+      return 'dialog';
+    }
+    if (widget is Row ||
+        widget is Column ||
+        widget is Stack ||
+        widget is Wrap) {
+      return 'layout';
+    }
+    return 'widget';
+  }
+
+  bool _isUsefulAnnotationTarget({
+    required Widget widget,
+    required String kind,
+    required String? key,
+    required String? label,
+    required String? text,
+  }) {
+    final type = widget.runtimeType.toString();
+    if (key != null && key.isNotEmpty) return true;
+    if (type.startsWith('_')) return false;
+    if (kind == 'widget' || kind == 'layout') {
+      if (text != null && text.trim().isNotEmpty) return true;
+      if (type.endsWith('Screen') || type.endsWith('Dialog')) return true;
+      return false;
+    }
+    if (kind == 'tap' &&
+        (label == null || label.trim().isEmpty) &&
+        (text == null || text.trim().isEmpty)) {
+      return false;
+    }
+    if (label != null && label.trim().isNotEmpty) return true;
+    if (text != null && text.trim().isNotEmpty) return true;
+    if (kind != 'widget' && kind != 'layout') return true;
+    if (type.endsWith('Screen') || type.endsWith('Dialog')) return true;
+    return false;
+  }
+
+  String? _annotationKeyLabel(Key? key) {
+    if (key is ValueKey) {
+      final label = key.value.toString();
+      if (label.startsWith('_') || label.contains('#')) return null;
+      return label;
+    }
+    return null;
+  }
+
+  String _annotationTargetId({
+    required String kind,
+    required String widgetType,
+    required String? key,
+    required String? label,
+    required String? text,
+    required Rect rect,
+    required List<String> ancestors,
+  }) {
+    final base = _stableAnnotationId(
+      kind: kind,
+      widgetType: widgetType,
+      key: key,
+      label: label,
+      text: text,
+    );
+    final ancestorTail = ancestors.length <= 3
+        ? ancestors.join('.')
+        : ancestors.sublist(ancestors.length - 3).join('.');
+    return [
+      'annTarget',
+      _slug(ancestorTail),
+      base,
+      rect.left.round(),
+      rect.top.round(),
+    ].where((part) => part.toString().isNotEmpty).join('.');
+  }
+
+  String _stableAnnotationId({
+    required String kind,
+    required String widgetType,
+    required String? key,
+    required String? label,
+    required String? text,
+  }) {
+    if (key != null && key.isNotEmpty) return '$kind.${_slug(key)}';
+    if (label != null && label.isNotEmpty) return '$kind.${_slug(label)}';
+    if (text != null && text.isNotEmpty) return '$kind.${_slug(text)}';
+    return '$kind.${_slug(widgetType)}';
+  }
+
+  List<String> _ancestorSummary(Element element) {
+    final ancestors = <String>[];
+    element.visitAncestorElements((ancestor) {
+      final type = ancestor.widget.runtimeType.toString();
+      if (!type.startsWith('_') && ancestors.length < 8) {
+        ancestors.add(type);
+      }
+      return true;
+    });
+    return ancestors.reversed.toList(growable: false);
+  }
+
+  int _elementDepth(Element element) {
+    var depth = 0;
+    element.visitAncestorElements((_) {
+      depth++;
+      return true;
+    });
+    return depth;
+  }
+
+  bool _isScoutOverlayElement(Element element) {
+    var isScout = _isScoutOverlayWidget(element.widget);
+    element.visitAncestorElements((ancestor) {
+      if (_isScoutOverlayWidget(ancestor.widget)) {
+        isScout = true;
+        return false;
+      }
+      return true;
+    });
+    return isScout;
+  }
+
+  bool _isScoutOverlayWidget(Widget widget) {
+    return widget.runtimeType.toString().startsWith('_FlutterScout');
+  }
+
   ScoutNode? _nodeFromElement(Element element) {
     if (_isHiddenByAncestor(element)) return null;
     final widget = element.widget;
@@ -1188,6 +1637,8 @@ class FlutterScoutRuntime {
     if (area <= 0) return 0;
     return (visibleRect.width * visibleRect.height / area).clamp(0, 1);
   }
+
+  double _rectArea(Rect rect) => rect.width * rect.height;
 
   Offset? _visibleCenter(Rect rect) {
     final visible = _visibleRectFor(rect);
@@ -2202,6 +2653,412 @@ class FlutterScoutRuntime {
   }
 }
 
+class _FlutterScoutAnnotationOverlay extends StatefulWidget {
+  const _FlutterScoutAnnotationOverlay({required this.runtime});
+
+  final FlutterScoutRuntime runtime;
+
+  @override
+  State<_FlutterScoutAnnotationOverlay> createState() =>
+      _FlutterScoutAnnotationOverlayState();
+}
+
+class _FlutterScoutAnnotationOverlayState
+    extends State<_FlutterScoutAnnotationOverlay> {
+  final TextEditingController _commentController = TextEditingController();
+  ScoutAnnotationTarget? _selectedTarget;
+  List<ScoutAnnotationTarget> _currentCandidates = const [];
+  List<ScoutAnnotationTarget> _visibleTargets = const [];
+  Offset? _toggleButtonOffset;
+  Offset? _lastTapPoint;
+  int _candidateIndex = 0;
+  int _lastCollectedRevision = -1;
+  bool _targetRefreshScheduled = false;
+
+  static const double _toggleButtonMargin = 12;
+  static const double _toggleButtonHeight = 48;
+
+  @override
+  void dispose() {
+    _commentController.dispose();
+    super.dispose();
+  }
+
+  void _toggleAnnotationMode() {
+    widget.runtime._setAnnotationMode(!widget.runtime._annotationMode);
+    if (!widget.runtime._annotationMode) {
+      setState(() {
+        _selectedTarget = null;
+        _currentCandidates = const [];
+        _commentController.clear();
+      });
+    }
+  }
+
+  void _selectAt(Offset point) {
+    final candidates = widget.runtime.annotationCandidatesAt(point);
+    if (candidates.isEmpty) {
+      setState(() {
+        _selectedTarget = null;
+        _currentCandidates = const [];
+        _commentController.clear();
+        _lastTapPoint = point;
+        _candidateIndex = 0;
+      });
+      return;
+    }
+
+    var index = 0;
+    final last = _lastTapPoint;
+    if (last != null && (last - point).distance <= 12) {
+      index = (_candidateIndex + 1) % candidates.length;
+    }
+    setState(() {
+      _lastTapPoint = point;
+      _candidateIndex = index;
+      _currentCandidates = candidates;
+      _selectedTarget = candidates[index];
+      _commentController.clear();
+    });
+  }
+
+  void _saveComment() {
+    final target = _selectedTarget;
+    final comment = _commentController.text.trim();
+    if (target == null || comment.isEmpty) return;
+    widget.runtime.addAnnotation(target: target, comment: comment);
+    setState(() {
+      _selectedTarget = null;
+      _currentCandidates = const [];
+      _commentController.clear();
+    });
+  }
+
+  void _scheduleTargetRefresh(int revision) {
+    if (_targetRefreshScheduled || _lastCollectedRevision == revision) return;
+    _targetRefreshScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final enabled = widget.runtime._annotationMode;
+      final targets = enabled
+          ? widget.runtime.visibleAnnotationTargets()
+          : const <ScoutAnnotationTarget>[];
+      setState(() {
+        _targetRefreshScheduled = false;
+        _lastCollectedRevision = revision;
+        _visibleTargets = targets;
+      });
+    });
+  }
+
+  void _moveToggleButton(DragUpdateDetails details, BuildContext context) {
+    final current = _resolvedToggleButtonOffset(context);
+    setState(() {
+      _toggleButtonOffset = _clampedToggleButtonOffset(
+        context,
+        current + details.delta,
+      );
+    });
+  }
+
+  Offset _resolvedToggleButtonOffset(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final size = media.size;
+    final defaultOffset = Offset(
+      size.width - _toggleButtonWidth - _toggleButtonMargin,
+      media.padding.top + _toggleButtonMargin,
+    );
+    return _clampedToggleButtonOffset(
+      context,
+      _toggleButtonOffset ?? defaultOffset,
+    );
+  }
+
+  Offset _clampedToggleButtonOffset(BuildContext context, Offset offset) {
+    final media = MediaQuery.of(context);
+    final size = media.size;
+    final minLeft = _toggleButtonMargin;
+    final minTop = media.padding.top + _toggleButtonMargin;
+    final maxLeft = (size.width - _toggleButtonWidth - _toggleButtonMargin)
+        .clamp(minLeft, double.infinity);
+    final maxTop =
+        (size.height -
+                _toggleButtonHeight -
+                media.padding.bottom -
+                _toggleButtonMargin)
+            .clamp(minTop, double.infinity);
+    return Offset(
+      offset.dx.clamp(minLeft, maxLeft),
+      offset.dy.clamp(minTop, maxTop),
+    );
+  }
+
+  double get _toggleButtonWidth {
+    final count = widget.runtime._annotations.length;
+    if (count == 0) return 56;
+    return 74 + (count.toString().length * 8);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: widget.runtime._annotationRevision,
+      builder: (context, revision, child) {
+        final enabled = widget.runtime._annotationMode;
+        final toggleButtonOffset = _resolvedToggleButtonOffset(context);
+        if (enabled) {
+          _scheduleTargetRefresh(revision);
+        } else if (_visibleTargets.isNotEmpty) {
+          _scheduleTargetRefresh(revision);
+        }
+        return Stack(
+          children: [
+            if (enabled)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (details) => _selectAt(details.localPosition),
+                  child: CustomPaint(
+                    painter: _FlutterScoutAnnotationPainter(
+                      targets: _visibleTargets,
+                      annotations: widget.runtime._annotations,
+                      selectedTarget: _selectedTarget,
+                      colorScheme: Theme.of(context).colorScheme,
+                    ),
+                  ),
+                ),
+              ),
+            if (enabled && _selectedTarget != null)
+              _AnnotationCommentPanel(
+                target: _selectedTarget!,
+                candidateIndex: _candidateIndex,
+                candidateCount: _currentCandidates.length,
+                controller: _commentController,
+                onCancel: () {
+                  setState(() {
+                    _selectedTarget = null;
+                    _currentCandidates = const [];
+                    _commentController.clear();
+                  });
+                },
+                onSave: _saveComment,
+              ),
+            Positioned(
+              left: toggleButtonOffset.dx,
+              top: toggleButtonOffset.dy,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onPanUpdate: (details) => _moveToggleButton(details, context),
+                child: _AnnotationToggleButton(
+                  enabled: enabled,
+                  count: widget.runtime._annotations.length,
+                  onPressed: _toggleAnnotationMode,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _AnnotationToggleButton extends StatelessWidget {
+  const _AnnotationToggleButton({
+    required this.enabled,
+    required this.count,
+    required this.onPressed,
+  });
+
+  final bool enabled;
+  final int count;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: enabled ? scheme.primary : scheme.surface,
+      elevation: 6,
+      shape: const StadiumBorder(),
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.edit_note,
+                color: enabled ? scheme.onPrimary : scheme.onSurface,
+              ),
+              if (count > 0) ...[
+                const SizedBox(width: 6),
+                Text(
+                  '$count',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: enabled ? scheme.onPrimary : scheme.onSurface,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AnnotationCommentPanel extends StatelessWidget {
+  const _AnnotationCommentPanel({
+    required this.target,
+    required this.candidateIndex,
+    required this.candidateCount,
+    required this.controller,
+    required this.onCancel,
+    required this.onSave,
+  });
+
+  final ScoutAnnotationTarget target;
+  final int candidateIndex;
+  final int candidateCount;
+  final TextEditingController controller;
+  final VoidCallback onCancel;
+  final VoidCallback onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Positioned(
+      left: 12,
+      right: 12,
+      bottom: MediaQuery.paddingOf(context).bottom + 12,
+      child: Material(
+        color: scheme.surface,
+        elevation: 8,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                target.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.titleSmall,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${target.widgetType} - ${candidateIndex + 1} of $candidateCount',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'Comment',
+                  border: OutlineInputBorder(),
+                ),
+                textInputAction: TextInputAction.newline,
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(onPressed: onCancel, child: const Text('Cancel')),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    onPressed: onSave,
+                    icon: const Icon(Icons.check),
+                    label: const Text('Save'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FlutterScoutAnnotationPainter extends CustomPainter {
+  const _FlutterScoutAnnotationPainter({
+    required this.targets,
+    required this.annotations,
+    required this.selectedTarget,
+    required this.colorScheme,
+  });
+
+  final List<ScoutAnnotationTarget> targets;
+  final List<ScoutAnnotation> annotations;
+  final ScoutAnnotationTarget? selectedTarget;
+  final ColorScheme colorScheme;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scrim = Paint()..color = colorScheme.scrim.withValues(alpha: 0.08);
+    canvas.drawRect(Offset.zero & size, scrim);
+
+    final outline = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = colorScheme.primary.withValues(alpha: 0.28);
+    for (final target in targets.take(220)) {
+      canvas.drawRect(target.rect, outline);
+    }
+
+    final selected = selectedTarget;
+    if (selected != null) {
+      final selectedPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..color = colorScheme.primary;
+      canvas.drawRect(selected.rect, selectedPaint);
+    }
+
+    final pinPaint = Paint()..color = colorScheme.tertiary;
+    final textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+    );
+    for (var i = 0; i < annotations.length; i++) {
+      final rect = annotations[i].target.rect;
+      final center = Offset(rect.left + 10, rect.top + 10);
+      canvas.drawCircle(center, 10, pinPaint);
+      textPainter.text = TextSpan(
+        text: '${i + 1}',
+        style: TextStyle(
+          color: colorScheme.onTertiary,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      );
+      textPainter.layout(minWidth: 20, maxWidth: 20);
+      textPainter.paint(canvas, center - const Offset(10, 7));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FlutterScoutAnnotationPainter oldDelegate) {
+    return oldDelegate.targets != targets ||
+        oldDelegate.annotations != annotations ||
+        oldDelegate.selectedTarget != selectedTarget ||
+        oldDelegate.colorScheme != colorScheme;
+  }
+}
+
 class ScoutSnapshot {
   const ScoutSnapshot({
     required this.screen,
@@ -2454,6 +3311,98 @@ class ScoutNode {
       'hitTestable': hitTestable,
       'enabled': enabled,
       'confidence': confidence,
+    };
+  }
+}
+
+class ScoutAnnotation {
+  const ScoutAnnotation({
+    required this.id,
+    required this.createdAt,
+    required this.comment,
+    required this.status,
+    required this.target,
+  });
+
+  final String id;
+  final DateTime createdAt;
+  final String comment;
+  final String status;
+  final ScoutAnnotationTarget target;
+
+  Map<String, Object?> toJson() {
+    return {
+      'id': id,
+      'createdAt': createdAt.toIso8601String(),
+      'comment': comment,
+      'status': status,
+      'target': target.toJson(),
+    };
+  }
+}
+
+class ScoutAnnotationTarget {
+  const ScoutAnnotationTarget({
+    required this.id,
+    required this.stableId,
+    required this.kind,
+    required this.widgetType,
+    required this.key,
+    required this.label,
+    required this.text,
+    required this.screen,
+    required this.routeGuess,
+    required this.rect,
+    required this.visibleRect,
+    required this.visibleFraction,
+    required this.depth,
+    required this.ancestorSummary,
+    required this.scoutNodeId,
+  });
+
+  final String id;
+  final String stableId;
+  final String kind;
+  final String widgetType;
+  final String? key;
+  final String? label;
+  final String? text;
+  final String screen;
+  final String? routeGuess;
+  final Rect rect;
+  final Rect visibleRect;
+  final double visibleFraction;
+  final int depth;
+  final List<String> ancestorSummary;
+  final String? scoutNodeId;
+
+  String get displayName {
+    final value = label ?? text ?? key ?? widgetType;
+    return '$kind.$value';
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'id': id,
+      'stableId': stableId,
+      'kind': kind,
+      'widgetType': widgetType,
+      'key': key,
+      'label': label,
+      'text': text,
+      'screen': screen,
+      'routeGuess': routeGuess,
+      'rect': [rect.left, rect.top, rect.width, rect.height],
+      'visibleRect': [
+        visibleRect.left,
+        visibleRect.top,
+        visibleRect.width,
+        visibleRect.height,
+      ],
+      'visibleFraction': visibleFraction,
+      'depth': depth,
+      'ancestorSummary': ancestorSummary,
+      if (scoutNodeId != null) 'scoutNodeId': scoutNodeId,
     };
   }
 }

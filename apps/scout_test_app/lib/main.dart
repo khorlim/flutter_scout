@@ -102,7 +102,7 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
               onChanged: (_) {},
             ),
             Align(
-              alignment: Alignment.centerRight,
+              alignment: Alignment.centerLeft,
               child: Wrap(
                 spacing: 8,
                 children: [
@@ -237,6 +237,13 @@ class _CustomPhoneDialogState extends State<CustomPhoneDialog> {
                                   : OutlinedButton(
                                       key: ValueKey('custom_digit_$digit'),
                                       onPressed: () => _append(digit),
+                                      style: OutlinedButton.styleFrom(
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                        ),
+                                      ),
                                       child: Text(digit),
                                     ),
                             ),

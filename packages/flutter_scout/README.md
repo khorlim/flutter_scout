@@ -7,6 +7,13 @@ This CLI attaches to or launches a Flutter debug session, calls the
 app-window screenshots,
 records action sessions, and replays flows.
 
+It can also read user-created annotation comments from the running app:
+
+```bash
+dart run bin/flutter_scout.dart annotations list
+dart run bin/flutter_scout.dart annotations targets
+```
+
 ## Basic Flow
 
 ```bash
