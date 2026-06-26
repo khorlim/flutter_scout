@@ -187,10 +187,17 @@ dart run bin/flutter_scout.dart annotations list
 dart run bin/flutter_scout.dart annotations targets
 dart run bin/flutter_scout.dart annotations enable
 dart run bin/flutter_scout.dart annotations disable
+dart run bin/flutter_scout.dart annotations check
+dart run bin/flutter_scout.dart annotations resolve ann_001 --note "Fixed layout"
+dart run bin/flutter_scout.dart annotations dismiss ann_002 --note "No longer relevant"
+dart run bin/flutter_scout.dart annotations reopen ann_001
+dart run bin/flutter_scout.dart annotations clear --resolved
 dart run bin/flutter_scout.dart annotations clear
 ```
 
 `inspect` also includes top-level `annotationMode` and `annotations` fields so agents can see user comments during the normal inspect loop. Annotation targets are intentionally collected separately from normal `inspect` interactables so Scout keeps its compact action-oriented view while annotation mode can identify non-actionable visible widgets.
+
+Annotations are persistent review markers. Code changes, hot reloads, and hot restarts do not automatically remove them. `annotations list` and `inspect` include both the captured `snapshotRect` and the current `liveRect` when Scout can match the target again, plus `liveMatched`, `geometryChanged`, and `geometryDelta`. Use `annotations check` to refresh `open` annotations whose targets disappeared into `stale_target`, and use `resolve`, `dismiss`, or `reopen` for explicit lifecycle changes. Resolved and dismissed annotations stay in CLI history but are hidden from the in-app overlay marker count and pins.
 
 Stop a Scout-owned launch process:
 

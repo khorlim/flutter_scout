@@ -12,7 +12,15 @@ It can also read user-created annotation comments from the running app:
 ```bash
 dart run bin/flutter_scout.dart annotations list
 dart run bin/flutter_scout.dart annotations targets
+dart run bin/flutter_scout.dart annotations check
+dart run bin/flutter_scout.dart annotations resolve ann_001 --note "Fixed"
+dart run bin/flutter_scout.dart annotations dismiss ann_002
+dart run bin/flutter_scout.dart annotations clear --resolved
 ```
+
+Annotation output includes captured `snapshotRect` values and matched `liveRect`
+values when the target is still present, so code fixes do not need to delete the
+review marker. Resolve or dismiss annotations explicitly when they are done.
 
 ## Basic Flow
 

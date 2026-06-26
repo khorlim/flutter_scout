@@ -83,7 +83,17 @@ If the user manually annotated the running app, read the annotations before edit
 flutter-scout annotations list
 ```
 
-Annotations contain the user's comment plus the selected widget metadata. `inspect` also includes top-level `annotationMode` and `annotations` fields, but `annotations list` is the clearest handoff from manual review to agent work.
+Annotations contain the user's comment plus the selected widget metadata. They are persistent review markers, so code fixes and hot reloads do not automatically remove them. `inspect` also includes top-level `annotationMode` and `annotations` fields, but `annotations list` is the clearest handoff from manual review to agent work.
+
+Read `target.snapshotRect` as the original captured geometry and `target.liveRect` as current matched geometry. If `target.liveMatched` is false, run `flutter-scout annotations check` to mark missing open targets as `stale_target`. After fixing and verifying an annotation, explicitly resolve it:
+
+```bash
+flutter-scout annotations check
+flutter-scout annotations resolve ann_001 --note "Fixed layout"
+flutter-scout annotations dismiss ann_002 --note "No longer relevant"
+flutter-scout annotations reopen ann_001
+flutter-scout annotations clear --resolved
+```
 
 Treat `hitTestableText` as the safest text set for immediate `tap-text`. `offscreenText` is useful for planning, but it is not directly tappable until you scroll it into view.
 
@@ -154,6 +164,10 @@ flutter-scout annotations list
 flutter-scout annotations targets
 flutter-scout annotations enable
 flutter-scout annotations disable
+flutter-scout annotations check
+flutter-scout annotations resolve ann_001 --note "Fixed"
+flutter-scout annotations dismiss ann_002
+flutter-scout annotations clear --resolved
 flutter-scout wait stable
 flutter-scout reload
 flutter-scout restart
@@ -205,3 +219,4 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Use coordinate scroll/swipe starts when the default gesture may hit the wrong layer.
 - Use `tap <x> <y>` or `tap --x <x> --y <y>` for coordinate taps.
 - Keep `.flutter_scout/` as runtime state; do not commit it.
+- Do not expect annotations to disappear after fixes; use `snapshotRect` versus `liveRect` for evidence, then explicitly `resolve` or `dismiss` annotations when done.

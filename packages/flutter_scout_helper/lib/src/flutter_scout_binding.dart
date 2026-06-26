@@ -59,6 +59,9 @@ class FlutterScoutRuntime {
     _scheduleAnnotationOverlayInstall();
   }
 
+  int get _activeAnnotationCount =>
+      _annotations.where((annotation) => annotation.isActive).length;
+
   void _installErrorHooks() {
     _previousFlutterError = FlutterError.onError;
     FlutterError.onError = (FlutterErrorDetails details) {
@@ -171,10 +174,11 @@ class FlutterScoutRuntime {
   ) async {
     try {
       await _waitForFrame();
+      final liveAnnotationTargets = _annotationTargets();
       return _ok({
         ..._snapshot().toJson(),
         'annotationMode': _annotationMode,
-        'annotations': _annotationJsonList(),
+        'annotations': _annotationJsonList(liveTargets: liveAnnotationTargets),
       });
     } catch (error) {
       return _fail('inspect_failed', error.toString());
@@ -195,8 +199,42 @@ class FlutterScoutRuntime {
           _setAnnotationMode(false);
           break;
         case 'clear':
-          _annotations.clear();
+          final status = params['status'];
+          if (status == null || status.isEmpty) {
+            _annotations.clear();
+          } else {
+            _annotations.removeWhere(
+              (annotation) => annotation.status == status,
+            );
+          }
           _bumpAnnotationRevision();
+          break;
+        case 'resolve':
+          final updated = _updateAnnotationStatus(
+            id: params['id'],
+            status: 'resolved',
+            note: params['note'],
+          );
+          if (!updated) return _annotationMissing(params['id']);
+          break;
+        case 'dismiss':
+          final updated = _updateAnnotationStatus(
+            id: params['id'],
+            status: 'dismissed',
+            note: params['note'],
+          );
+          if (!updated) return _annotationMissing(params['id']);
+          break;
+        case 'reopen':
+          final updated = _updateAnnotationStatus(
+            id: params['id'],
+            status: 'open',
+            note: params['note'],
+          );
+          if (!updated) return _annotationMissing(params['id']);
+          break;
+        case 'check':
+          _refreshStaleAnnotationStatuses(_annotationTargets());
           break;
         case 'list':
         case 'targets':
@@ -214,6 +252,55 @@ class FlutterScoutRuntime {
     }
   }
 
+  developer.ServiceExtensionResponse _annotationMissing(String? id) {
+    return _fail(
+      'annotation_not_found',
+      id == null || id.isEmpty
+          ? 'Annotation id is required.'
+          : 'Annotation `$id` was not found.',
+    );
+  }
+
+  bool _updateAnnotationStatus({
+    required String? id,
+    required String status,
+    String? note,
+  }) {
+    if (id == null || id.isEmpty) return false;
+    for (final annotation in _annotations) {
+      if (annotation.id == id) {
+        annotation.status = status;
+        annotation.updatedAt = DateTime.now();
+        final trimmedNote = note?.trim();
+        annotation.note = trimmedNote == null || trimmedNote.isEmpty
+            ? null
+            : trimmedNote;
+        _bumpAnnotationRevision();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void _refreshStaleAnnotationStatuses(
+    List<ScoutAnnotationTarget> liveTargets,
+  ) {
+    var changed = false;
+    for (final annotation in _annotations) {
+      if (annotation.status != 'open' && annotation.status != 'stale_target') {
+        continue;
+      }
+      final liveTarget = _liveAnnotationTarget(annotation, liveTargets);
+      final nextStatus = liveTarget == null ? 'stale_target' : 'open';
+      if (annotation.status != nextStatus) {
+        annotation.status = nextStatus;
+        annotation.updatedAt = DateTime.now();
+        changed = true;
+      }
+    }
+    if (changed) _bumpAnnotationRevision();
+  }
+
   void _setAnnotationMode(bool enabled) {
     if (_annotationMode == enabled) return;
     _annotationMode = enabled;
@@ -227,20 +314,76 @@ class FlutterScoutRuntime {
 
   Map<String, Object?> _annotationsStateJson({bool includeTargets = false}) {
     final snapshot = _snapshot();
+    final liveTargets = _annotationTargets();
     return {
       'annotationMode': _annotationMode,
       'screen': snapshot.screen,
       'routeGuess': snapshot.routeGuess,
-      'annotations': _annotationJsonList(),
+      'annotations': _annotationJsonList(liveTargets: liveTargets),
       if (includeTargets)
-        'targets': _annotationTargets()
+        'targets': liveTargets
             .map((target) => target.toJson())
             .toList(growable: false),
     };
   }
 
-  List<Map<String, Object?>> _annotationJsonList() {
-    return [for (final annotation in _annotations) annotation.toJson()];
+  List<Map<String, Object?>> _annotationJsonList({
+    List<ScoutAnnotationTarget>? liveTargets,
+  }) {
+    final targets = liveTargets ?? _annotationTargets();
+    return [
+      for (final annotation in _annotations)
+        annotation.toJson(
+          liveTarget: _liveAnnotationTarget(annotation, targets),
+        ),
+    ];
+  }
+
+  List<Rect> _annotationPinRects(List<ScoutAnnotationTarget> liveTargets) {
+    return [
+      for (final annotation in _annotations)
+        if (annotation.isActive)
+          if (_liveAnnotationTarget(annotation, liveTargets) case final target?)
+            target.rect,
+    ];
+  }
+
+  ScoutAnnotationTarget? _liveAnnotationTarget(
+    ScoutAnnotation annotation,
+    List<ScoutAnnotationTarget> liveTargets,
+  ) {
+    ScoutAnnotationTarget? exactId;
+    ScoutAnnotationTarget? exactNode;
+    final stableMatches = <ScoutAnnotationTarget>[];
+    for (final target in liveTargets) {
+      if (target.id == annotation.target.id) {
+        exactId = target;
+        break;
+      }
+      if (annotation.target.scoutNodeId != null &&
+          target.scoutNodeId == annotation.target.scoutNodeId) {
+        exactNode ??= target;
+      }
+      if (target.stableId == annotation.target.stableId) {
+        stableMatches.add(target);
+      }
+    }
+    if (exactId != null) return exactId;
+    if (exactNode != null) return exactNode;
+    if (stableMatches.isEmpty) return null;
+    stableMatches.sort(
+      (a, b) => _annotationRectDistance(
+        annotation.target.rect,
+        a.rect,
+      ).compareTo(_annotationRectDistance(annotation.target.rect, b.rect)),
+    );
+    return stableMatches.first;
+  }
+
+  double _annotationRectDistance(Rect snapshot, Rect live) {
+    final snapshotCenter = snapshot.center;
+    final liveCenter = live.center;
+    return (snapshotCenter - liveCenter).distance;
   }
 
   ScoutAnnotation addAnnotation({
@@ -977,6 +1120,7 @@ class FlutterScoutRuntime {
       if (rect == null || rect.width < 1 || rect.height < 1) return;
       final visibleRect = _visibleRectFor(rect);
       if (visibleRect == null) return;
+      if (!_annotationTargetReceivesHit(element, rect)) return;
       final widget = element.widget;
       final widgetType = widget.runtimeType.toString();
       final key = _annotationKeyLabel(widget.key);
@@ -1094,6 +1238,36 @@ class FlutterScoutRuntime {
       return true;
     });
     return result;
+  }
+
+  bool _annotationTargetReceivesHit(Element element, Rect rect) {
+    final renderObject = element.renderObject;
+    if (renderObject == null) return false;
+    final visible = _visibleRectFor(rect);
+    if (visible == null) return false;
+    final insetX = (visible.width * 0.2).clamp(1.0, 12.0);
+    final insetY = (visible.height * 0.2).clamp(1.0, 12.0);
+    final points = <Offset>[
+      visible.center,
+      Offset(visible.left + insetX, visible.top + insetY),
+      Offset(visible.right - insetX, visible.top + insetY),
+      Offset(visible.left + insetX, visible.bottom - insetY),
+      Offset(visible.right - insetX, visible.bottom - insetY),
+    ];
+    for (final point in points) {
+      if (_hitTestPathContainsRenderObject(point, renderObject)) return true;
+    }
+    return false;
+  }
+
+  bool _hitTestPathContainsRenderObject(Offset point, RenderObject target) {
+    try {
+      final result = HitTestResult();
+      WidgetsBinding.instance.hitTestInView(result, point, _primaryViewId);
+      return result.path.any((entry) => identical(entry.target, target));
+    } catch (_) {
+      return false;
+    }
   }
 
   List<ScoutAnnotationTarget> _removeOversizedModalTargets(
@@ -2794,7 +2968,7 @@ class _FlutterScoutAnnotationOverlayState
   }
 
   double get _toggleButtonWidth {
-    final count = widget.runtime._annotations.length;
+    final count = widget.runtime._activeAnnotationCount;
     if (count == 0) return 56;
     return 74 + (count.toString().length * 8);
   }
@@ -2821,9 +2995,12 @@ class _FlutterScoutAnnotationOverlayState
                   child: CustomPaint(
                     painter: _FlutterScoutAnnotationPainter(
                       targets: _visibleTargets,
-                      annotations: widget.runtime._annotations,
+                      annotationPinRects: widget.runtime._annotationPinRects(
+                        _visibleTargets,
+                      ),
                       selectedTarget: _selectedTarget,
                       colorScheme: Theme.of(context).colorScheme,
+                      annotationRevision: revision,
                     ),
                   ),
                 ),
@@ -2851,7 +3028,7 @@ class _FlutterScoutAnnotationOverlayState
                 onPanUpdate: (details) => _moveToggleButton(details, context),
                 child: _AnnotationToggleButton(
                   enabled: enabled,
-                  count: widget.runtime._annotations.length,
+                  count: widget.runtime._activeAnnotationCount,
                   onPressed: _toggleAnnotationMode,
                 ),
               ),
@@ -2996,15 +3173,17 @@ class _AnnotationCommentPanel extends StatelessWidget {
 class _FlutterScoutAnnotationPainter extends CustomPainter {
   const _FlutterScoutAnnotationPainter({
     required this.targets,
-    required this.annotations,
+    required this.annotationPinRects,
     required this.selectedTarget,
     required this.colorScheme,
+    required this.annotationRevision,
   });
 
   final List<ScoutAnnotationTarget> targets;
-  final List<ScoutAnnotation> annotations;
+  final List<Rect> annotationPinRects;
   final ScoutAnnotationTarget? selectedTarget;
   final ColorScheme colorScheme;
+  final int annotationRevision;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -3033,8 +3212,8 @@ class _FlutterScoutAnnotationPainter extends CustomPainter {
       textDirection: TextDirection.ltr,
       textAlign: TextAlign.center,
     );
-    for (var i = 0; i < annotations.length; i++) {
-      final rect = annotations[i].target.rect;
+    for (var i = 0; i < annotationPinRects.length; i++) {
+      final rect = annotationPinRects[i];
       final center = Offset(rect.left + 10, rect.top + 10);
       canvas.drawCircle(center, 10, pinPaint);
       textPainter.text = TextSpan(
@@ -3053,9 +3232,10 @@ class _FlutterScoutAnnotationPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _FlutterScoutAnnotationPainter oldDelegate) {
     return oldDelegate.targets != targets ||
-        oldDelegate.annotations != annotations ||
+        oldDelegate.annotationPinRects != annotationPinRects ||
         oldDelegate.selectedTarget != selectedTarget ||
-        oldDelegate.colorScheme != colorScheme;
+        oldDelegate.colorScheme != colorScheme ||
+        oldDelegate.annotationRevision != annotationRevision;
   }
 }
 
@@ -3316,7 +3496,7 @@ class ScoutNode {
 }
 
 class ScoutAnnotation {
-  const ScoutAnnotation({
+  ScoutAnnotation({
     required this.id,
     required this.createdAt,
     required this.comment,
@@ -3327,17 +3507,55 @@ class ScoutAnnotation {
   final String id;
   final DateTime createdAt;
   final String comment;
-  final String status;
+  String status;
   final ScoutAnnotationTarget target;
+  DateTime? updatedAt;
+  String? note;
 
-  Map<String, Object?> toJson() {
+  bool get isActive => status == 'open' || status == 'stale_target';
+
+  Map<String, Object?> toJson({ScoutAnnotationTarget? liveTarget}) {
+    final targetJson = target.toJson();
+    final snapshotRect = target.rectJson;
+    final liveRect = liveTarget?.rectJson;
+    final geometryDelta = liveTarget == null
+        ? null
+        : <String, Object?>{
+            'left': liveTarget.rect.left - target.rect.left,
+            'top': liveTarget.rect.top - target.rect.top,
+            'width': liveTarget.rect.width - target.rect.width,
+            'height': liveTarget.rect.height - target.rect.height,
+          };
+    targetJson.addAll({
+      'snapshotRect': snapshotRect,
+      'liveMatched': liveTarget != null,
+      if (liveTarget != null) ...{
+        'liveRect': liveRect,
+        'liveVisibleRect': liveTarget.visibleRectJson,
+        'liveTarget': liveTarget.toJson(),
+        'geometryChanged': !_sameRect(target.rect, liveTarget.rect),
+        'geometryDelta': geometryDelta,
+      },
+    });
     return {
       'id': id,
       'createdAt': createdAt.toIso8601String(),
+      if (updatedAt != null) 'updatedAt': updatedAt!.toIso8601String(),
       'comment': comment,
       'status': status,
-      'target': target.toJson(),
+      if (note != null) 'note': note,
+      'liveStatus': status == 'open' && liveTarget == null
+          ? 'stale_target'
+          : status,
+      'target': targetJson,
     };
+  }
+
+  bool _sameRect(Rect a, Rect b) {
+    return a.left == b.left &&
+        a.top == b.top &&
+        a.width == b.width &&
+        a.height == b.height;
   }
 }
 
@@ -3381,6 +3599,15 @@ class ScoutAnnotationTarget {
     return '$kind.$value';
   }
 
+  List<double> get rectJson => [rect.left, rect.top, rect.width, rect.height];
+
+  List<double> get visibleRectJson => [
+    visibleRect.left,
+    visibleRect.top,
+    visibleRect.width,
+    visibleRect.height,
+  ];
+
   Map<String, Object?> toJson() {
     return {
       'id': id,
@@ -3392,13 +3619,8 @@ class ScoutAnnotationTarget {
       'text': text,
       'screen': screen,
       'routeGuess': routeGuess,
-      'rect': [rect.left, rect.top, rect.width, rect.height],
-      'visibleRect': [
-        visibleRect.left,
-        visibleRect.top,
-        visibleRect.width,
-        visibleRect.height,
-      ],
+      'rect': rectJson,
+      'visibleRect': visibleRectJson,
       'visibleFraction': visibleFraction,
       'depth': depth,
       'ancestorSummary': ancestorSummary,

@@ -611,17 +611,91 @@ class FlutterScoutCli {
 
   Future<int> _annotations(List<String> args) async {
     final action = args.isEmpty ? 'list' : args.first;
-    const allowed = {'list', 'targets', 'enable', 'disable', 'clear'};
+    const usage =
+        'Usage: flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|check]';
+    const allowed = {
+      'list',
+      'targets',
+      'enable',
+      'disable',
+      'clear',
+      'resolve',
+      'dismiss',
+      'reopen',
+      'check',
+    };
     if (!allowed.contains(action)) {
-      throw const ScoutCliException(
-        'usage',
-        'Usage: flutter-scout annotations [list|targets|enable|disable|clear]',
-      );
+      throw const ScoutCliException('usage', usage);
     }
-    return _callAndPrint(
-      'ext.flutter_scout.annotations',
-      params: {'action': action},
-    );
+    final params = <String, String>{'action': action};
+    switch (action) {
+      case 'resolve':
+      case 'dismiss':
+      case 'reopen':
+        final parser = ArgParser()..addOption('note');
+        final parsed = _parseAnnotationArgs(parser, args.skip(1), usage);
+        if (parsed.rest.length != 1) {
+          throw ScoutCliException(
+            'usage',
+            'Usage: flutter-scout annotations $action <annotation-id> [--note <text>]',
+          );
+        }
+        params['id'] = parsed.rest.first;
+        final note = parsed.option('note');
+        if (note != null && note.isNotEmpty) {
+          params['note'] = note;
+        }
+        break;
+      case 'clear':
+        final parser = ArgParser()
+          ..addFlag('resolved', defaultsTo: false)
+          ..addFlag('dismissed', defaultsTo: false)
+          ..addOption('status');
+        final parsed = _parseAnnotationArgs(parser, args.skip(1), usage);
+        if (parsed.rest.isNotEmpty) {
+          throw const ScoutCliException(
+            'usage',
+            'Usage: flutter-scout annotations clear [--resolved|--dismissed|--status <status>]',
+          );
+        }
+        final status = parsed.option('status');
+        final filters = [
+          if (status != null && status.isNotEmpty) status,
+          if (parsed.flag('resolved')) 'resolved',
+          if (parsed.flag('dismissed')) 'dismissed',
+        ];
+        if (filters.length > 1) {
+          throw const ScoutCliException(
+            'usage',
+            'Use only one annotation clear filter.',
+          );
+        }
+        if (status != null && status.isNotEmpty) {
+          params['status'] = status;
+        } else if (parsed.flag('resolved')) {
+          params['status'] = 'resolved';
+        } else if (parsed.flag('dismissed')) {
+          params['status'] = 'dismissed';
+        }
+        break;
+      default:
+        if (args.length > 1) {
+          throw const ScoutCliException('usage', usage);
+        }
+    }
+    return _callAndPrint('ext.flutter_scout.annotations', params: params);
+  }
+
+  ArgResults _parseAnnotationArgs(
+    ArgParser parser,
+    Iterable<String> args,
+    String usage,
+  ) {
+    try {
+      return parser.parse(args);
+    } on FormatException catch (error) {
+      throw ScoutCliException('usage', '$usage\n${error.message}');
+    }
   }
 
   Future<int> _tap(List<String> args) async {
@@ -3027,7 +3101,7 @@ Usage:
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
   flutter-scout inspect
-  flutter-scout annotations [list|targets|enable|disable|clear]
+  flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|check]
   flutter-scout bounds [target]
   flutter-scout tap <target> | tap <x> <y> | --x <x> --y <y> [--verbose]
   flutter-scout tap-text <visible text> [--allow-mismatch] [--verbose]

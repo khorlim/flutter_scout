@@ -125,6 +125,46 @@ void main() {
     });
   });
 
+  test('annotation lifecycle commands require exactly one id', () async {
+    await _withTempCwd(() async {
+      final missingId = await FlutterScoutCli().run(['annotations', 'resolve']);
+      final extraId = await FlutterScoutCli().run([
+        'annotations',
+        'dismiss',
+        'ann_001',
+        'ann_002',
+      ]);
+
+      expect(missingId, 1);
+      expect(extraId, 1);
+    });
+  });
+
+  test('annotation clear accepts only one filter', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run([
+        'annotations',
+        'clear',
+        '--resolved',
+        '--dismissed',
+      ]);
+
+      expect(exitCode, 1);
+    });
+  });
+
+  test('annotation read commands reject extra arguments', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run([
+        'annotations',
+        'list',
+        'extra',
+      ]);
+
+      expect(exitCode, 1);
+    });
+  });
+
   test('help exits successfully', () async {
     final exitCode = await FlutterScoutCli().run(['--help']);
 
