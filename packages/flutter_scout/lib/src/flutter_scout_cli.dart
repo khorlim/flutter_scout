@@ -2661,6 +2661,99 @@ print(String(data: data, encoding: .utf8)!)
   }
 
   Future<_FlutterDevice?> _resolveFlutterDevice(String requested) async {
+    // Fast path: resolve iOS Simulator targets directly through `xcrun simctl`
+    // (~0.1s) instead of booting the Flutter tool via `flutter devices
+    // --machine` (~7s). This call runs on every command, so the simctl path
+    // shaves seconds off both cold launches and warm `ensure`/`status` loops.
+    final simulatorDevice = await _resolveSimulatorDevice(requested);
+    if (simulatorDevice != null) return simulatorDevice;
+    // Fallback: physical devices, macOS, and web are only known to the Flutter
+    // tool, so pay the slower discovery cost when simctl has no match.
+    return _resolveDeviceViaFlutter(requested);
+  }
+
+  Future<_FlutterDevice?> _resolveSimulatorDevice(String requested) async {
+    final ProcessResult result;
+    try {
+      result = await Process.run('xcrun', [
+        'simctl',
+        'list',
+        'devices',
+        '--json',
+      ]).timeout(const Duration(seconds: 10));
+    } on Object {
+      // xcrun missing/unavailable (non-macOS host, no Xcode) -> fall back.
+      return null;
+    }
+    if (result.exitCode != 0) return null;
+    final match = parseSimctlDevices(result.stdout as String, requested);
+    if (match == null) return null;
+    return _FlutterDevice(
+      id: match['id'] as String,
+      name: match['name'] as String,
+      platform: match['platform'] as String,
+      category: 'mobile',
+      emulator: true,
+    );
+  }
+
+  /// Finds the simulator matching [requested] (a UDID or device name) within the
+  /// `xcrun simctl list devices --json` payload in [jsonOutput].
+  ///
+  /// Returns a map with `id`, `name`, and `platform`, or null when the payload
+  /// is malformed or no available device matches. A UDID match wins
+  /// immediately; for name matches a booted device is preferred so the same
+  /// device created under multiple runtimes resolves deterministically. Exposed
+  /// for testing the parser without spawning a process.
+  static Map<String, Object?>? parseSimctlDevices(
+    String jsonOutput,
+    String requested,
+  ) {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(jsonOutput);
+    } on FormatException {
+      return null;
+    }
+    if (decoded is! Map) return null;
+    final devices = decoded['devices'];
+    if (devices is! Map) return null;
+
+    Map<String, Object?>? nameMatch;
+    var nameMatchBooted = false;
+    for (final entry in devices.entries) {
+      final platform = _platformForSimRuntime(entry.key.toString());
+      final list = entry.value;
+      if (list is! List) continue;
+      for (final item in list) {
+        if (item is! Map) continue;
+        if (item['isAvailable'] != true) continue;
+        final udid = item['udid']?.toString();
+        if (udid == null || udid.isEmpty) continue;
+        final name = item['name']?.toString();
+        final booted = item['state']?.toString() == 'Booted';
+        if (udid == requested) {
+          return {'id': udid, 'name': name ?? udid, 'platform': platform};
+        }
+        if (name == requested &&
+            (nameMatch == null || (booted && !nameMatchBooted))) {
+          nameMatch = {'id': udid, 'name': name ?? udid, 'platform': platform};
+          nameMatchBooted = booted;
+        }
+      }
+    }
+    return nameMatch;
+  }
+
+  static String _platformForSimRuntime(String runtime) {
+    final lower = runtime.toLowerCase();
+    if (lower.contains('watchos')) return 'watchos';
+    if (lower.contains('tvos')) return 'tvos';
+    if (lower.contains('xros') || lower.contains('visionos')) return 'visionos';
+    return 'ios';
+  }
+
+  Future<_FlutterDevice?> _resolveDeviceViaFlutter(String requested) async {
     final result = await Process.run('flutter', ['devices', '--machine'])
         .timeout(
           const Duration(seconds: 20),

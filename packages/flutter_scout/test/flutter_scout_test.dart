@@ -8,6 +8,59 @@ void main() {
     expect(FlutterScoutCli(), isA<FlutterScoutCli>());
   });
 
+  group('parseSimctlDevices', () {
+    const payload = '''
+{
+  "devices": {
+    "com.apple.CoreSimulator.SimRuntime.iOS-26-4": [
+      {"udid": "AAAA-OLD", "name": "iPad mini (A17 Pro)", "state": "Shutdown", "isAvailable": true}
+    ],
+    "com.apple.CoreSimulator.SimRuntime.iOS-26-5": [
+      {"udid": "BBBB-BOOTED", "name": "iPad mini (A17 Pro)", "state": "Booted", "isAvailable": true},
+      {"udid": "CCCC-UNAVAIL", "name": "iPhone 16", "state": "Shutdown", "isAvailable": false}
+    ],
+    "com.apple.CoreSimulator.SimRuntime.watchOS-11-0": [
+      {"udid": "DDDD-WATCH", "name": "Apple Watch", "state": "Shutdown", "isAvailable": true}
+    ]
+  }
+}''';
+
+    test('matches by udid and reports the runtime platform', () {
+      final match = FlutterScoutCli.parseSimctlDevices(payload, 'AAAA-OLD');
+      expect(match, isNotNull);
+      expect(match!['id'], 'AAAA-OLD');
+      expect(match['name'], 'iPad mini (A17 Pro)');
+      expect(match['platform'], 'ios');
+    });
+
+    test('prefers a booted device when a name matches multiple runtimes', () {
+      final match = FlutterScoutCli.parseSimctlDevices(
+        payload,
+        'iPad mini (A17 Pro)',
+      );
+      expect(match, isNotNull);
+      expect(match!['id'], 'BBBB-BOOTED');
+    });
+
+    test('derives non-iOS platforms from the runtime key', () {
+      final match = FlutterScoutCli.parseSimctlDevices(payload, 'DDDD-WATCH');
+      expect(match!['platform'], 'watchos');
+    });
+
+    test('skips unavailable devices', () {
+      expect(FlutterScoutCli.parseSimctlDevices(payload, 'CCCC-UNAVAIL'), isNull);
+    });
+
+    test('returns null for an unknown target', () {
+      expect(FlutterScoutCli.parseSimctlDevices(payload, 'nope'), isNull);
+    });
+
+    test('returns null for malformed payloads', () {
+      expect(FlutterScoutCli.parseSimctlDevices('not json', 'x'), isNull);
+      expect(FlutterScoutCli.parseSimctlDevices('[]', 'x'), isNull);
+    });
+  });
+
   test('status reports successfully before attach', () async {
     await _withTempCwd(() async {
       final exitCode = await FlutterScoutCli().run(['status']);
