@@ -35,6 +35,7 @@ class FlutterScoutCli {
         'input' => _input(rest),
         'fill' => _fill(rest),
         'scroll' => _scroll(rest),
+        'scroll-to' => _scrollTo(rest),
         'swipe' => _swipe(rest),
         'back' => _back(rest),
         'wait' => _wait(rest),
@@ -930,6 +931,36 @@ class FlutterScoutCli {
     );
   }
 
+  Future<int> _scrollTo(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('max-scrolls', defaultsTo: '20')
+      ..addOption('direction', defaultsTo: 'down')
+      ..addOption('distance')
+      ..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    final target = parsed.rest.isEmpty ? null : parsed.rest.first;
+    if (target == null || target.isEmpty) {
+      throw const ScoutCliException(
+        'usage',
+        'Usage: flutter-scout scroll-to <target> [--max-scrolls <n>] '
+            '[--direction down|up|left|right] [--distance <px>]',
+      );
+    }
+    final params = <String, String>{
+      'target': target,
+      'maxScrolls': parsed.option('max-scrolls') ?? '20',
+      'direction': parsed.option('direction') ?? 'down',
+      if (parsed.option('distance') != null)
+        'distance': parsed.option('distance')!,
+    };
+    return _callAndPrint(
+      'ext.flutter_scout.scrollTo',
+      params: params,
+      record: {'cmd': 'scroll-to', ...params},
+      compact: !parsed.flag('verbose'),
+    );
+  }
+
   Future<int> _dragCommand({
     required String method,
     required String command,
@@ -1497,6 +1528,10 @@ class FlutterScoutCli {
         }),
         'scroll' => await _call('ext.flutter_scout.scroll', _stringMap(item)),
         'swipe' => await _call('ext.flutter_scout.swipe', _stringMap(item)),
+        'scroll-to' => await _call(
+          'ext.flutter_scout.scrollTo',
+          _stringMap(item),
+        ),
         'back' => await _call('ext.flutter_scout.back'),
         'reload' => await _hotUpdate(
           action: 'reload',
@@ -1542,6 +1577,7 @@ class FlutterScoutCli {
       'long-press' => 'long-press ${item['target']}',
       'scroll' => 'scroll ${item['direction'] ?? ''}'.trim(),
       'swipe' => 'swipe ${item['direction'] ?? ''}'.trim(),
+      'scroll-to' => 'scroll-to ${item['target']}',
       'back' => 'back',
       'reload' => 'reload',
       'restart' => 'restart',
@@ -1738,6 +1774,8 @@ class FlutterScoutCli {
       if (result['filled'] != null) 'filled': result['filled'],
       if (result['failed'] != null) 'failed': result['failed'],
       if (result['popped'] != null) 'popped': result['popped'],
+      if (result['scrollsUsed'] != null) 'scrollsUsed': result['scrollsUsed'],
+      if (result['reason'] != null) 'reason': result['reason'],
       if (result['target'] is Map<String, dynamic>)
         'target': _compactNode(result['target'] as Map<String, dynamic>),
       if (result['textTarget'] is Map<String, dynamic>)
@@ -3235,6 +3273,7 @@ Usage:
   flutter-scout input [--target <field>] <value> [--verbose]
   flutter-scout fill --json <object> [--verbose]
   flutter-scout scroll [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--verbose]
+  flutter-scout scroll-to <target> [--max-scrolls <n>] [--direction down|up|left|right] [--distance <px>] [--verbose]
   flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--to x,y] [--verbose]
   flutter-scout back [--verbose]
   flutter-scout wait stable

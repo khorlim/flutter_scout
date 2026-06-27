@@ -99,6 +99,22 @@ Treat `hitTestableText` as the safest text set for immediate `tap-text`. `offscr
 
 Read viewport facts before tapping: `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, and `hitTestable`. If a control is partially visible, prefer the Scout handle because Scout taps the visible safe point. If a control is offscreen, scroll first. Target taps require a visible safe point; if a handle exists but is offscreen, Scout returns `target_not_visible` instead of tapping an offscreen rect center.
 
+To reach a handle that is offscreen or lazy-unbuilt (e.g. a keyed row deep in a long `ListView`/`GridView`), use `scroll-to` instead of emitting many manual scrolls. It scrolls the enclosing scrollable until the target builds and becomes hit-testable, then stops:
+
+```bash
+flutter-scout scroll-to far_target
+flutter-scout scroll-to painted_tile_80 --max-scrolls 30
+flutter-scout scroll-to side_panel_item --direction right
+```
+
+It returns `result:"reached"` with `scrollsUsed` and the matched `target` on success, `result:"already_visible"` when no scroll was needed, and fails with `reason:"reached_scroll_end"` (hit an edge) or `reason:"target_not_reached"` (exhausted `--max-scrolls`; raise it for deeper targets). When a plain `tap`/`long-press` cannot find a handle and the screen has a scrollable, the `target_not_found` failure includes `reason:"maybe_offscreen_or_lazy"` and `reachHint:"scroll-to <target>"` — follow it rather than assuming the handle is wrong.
+
+Explicit widget `Key`s are always surfaced as handles in `interactables` (for example a keyed `InkWell`, `ListTile`, or `GestureDetector` appears as `tap.<key>`), and they win over text-derived ids, so prefer keyed handles when present. Handle matching is kind-prefix agnostic: `btn.gesture_menu_pin`, `tap.gesture_menu_pin`, and the bare `gesture_menu_pin` all resolve to the same keyed node.
+
+`swipe` and `long-press` accept a handle via `--target`/positional target (resolved to the target's safe point), so prefer `swipe left --target tap.task_1` or `long-press tap.task_2` over hand-computed coordinates for Dismissible rows, reorder handles, and context menus.
+
+After an action, read `delta.changedText` for keyed `Text` widgets — it reports `{key, from, to}` so a tap that only updates a status label is self-confirming without a follow-up `inspect`.
+
 Icon-only controls can expose handles from keys, tooltips, semantics, common Material icon widgets, or common Material glyph text. Try handles such as `btn.duplicate`, `btn.save`, `btn.delete`, `btn.download`, `btn.back`, or `btn.search` before falling back to coordinates; Scout can match a kind-prefixed guess like `btn.duplicate` to a custom tappable exposed as `tap.duplicate`. Unlabeled gesture targets with clear contained action text can also appear as `btn.*` handles, such as `btn.payment`, `btn.confirm_payment`, `btn.done`, `btn.create_order`, or `btn.save_smoke`.
 
 Duplicate unkeyed fields are suffixed in inspect output, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Use the exact `fieldsById` key when filling or inputting duplicate labels.
@@ -177,8 +193,11 @@ flutter-scout tap 1036 589
 flutter-scout long-press btn.more
 flutter-scout scroll down --distance 300
 flutter-scout scroll down --from 220,760 --distance 520
+flutter-scout scroll-to far_target
+flutter-scout scroll-to painted_tile_80 --max-scrolls 30 --direction down
 flutter-scout swipe left --distance 240
 flutter-scout swipe left --from 380,500 --to 80,500
+flutter-scout swipe left --target tap.task_1
 flutter-scout back
 flutter-scout deeplink myapp://route
 flutter-scout logs --summary
@@ -205,6 +224,11 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Prefer `fill` for real text fields, but do not use it for custom pickers, keypads, steppers, calendars, or segmented controls.
 - For custom controls, read `visualTree`, `controlGroups`, and `suggestedActions`, then use explicit `tap`/`tap-text`/scroll commands.
 - Trust action deltas for next-step planning.
+- Use `scroll-to <handle>` to reach an offscreen or lazy-unbuilt target instead of emitting many manual `scroll` calls; raise `--max-scrolls` for deep targets.
+- When `tap`/`long-press` returns `target_not_found` with `reason:"maybe_offscreen_or_lazy"`, follow the `reachHint` (`scroll-to <target>`) before concluding the handle is wrong.
+- Prefer keyed handles surfaced in `interactables` (`tap.<key>`/`btn.<key>`); handle matching ignores the kind prefix, so a `btn.`/`tap.` guess and the bare key all resolve.
+- Pass a handle to `swipe`/`long-press` via `--target` for Dismissible rows, reorder, and menus rather than computing coordinates.
+- Read `delta.changedText` (`{key, from, to}`) to confirm a tap that only updated a keyed status label, without a follow-up `inspect`.
 - Read `activation` and `warnings` when an action reports `activated_no_observed_change`.
 - Treat `tap_text_target_mismatch` as a safety stop; do not retry blindly. Use an explicit handle or `--allow-mismatch` only after confirming the target is intended.
 - Read `delta.newValidationMessages` after save/confirm actions before guessing which required field is missing.

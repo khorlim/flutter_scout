@@ -52,6 +52,7 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.input', _handleInput);
     _registerExtension('ext.flutter_scout.fill', _handleFill);
     _registerExtension('ext.flutter_scout.scroll', _handleScroll);
+    _registerExtension('ext.flutter_scout.scrollTo', _handleScrollTo);
     _registerExtension('ext.flutter_scout.swipe', _handleSwipe);
     _registerExtension('ext.flutter_scout.back', _handleBack);
     _registerExtension('ext.flutter_scout.waitStable', _handleWaitStable);
@@ -484,11 +485,16 @@ class FlutterScoutRuntime {
           return _fail(
             'target_not_visible',
             'Target `$target` matched `${node.id}` but is offscreen; scroll it into view before tapping.',
+            extra: {
+              'reachHint': 'scroll-to $target',
+              'recentErrors': _recentErrors(),
+            },
           );
         }
         return _fail(
           'target_not_found',
           'No tappable target matched `$target`.',
+          extra: _notFoundScrollHint(target),
         );
       }
 
@@ -687,7 +693,11 @@ class FlutterScoutRuntime {
       final durationMs = int.tryParse(params['durationMs'] ?? '') ?? 600;
       final point = _pointForTarget(target, params);
       if (point == null) {
-        return _fail('target_not_found', 'No target matched `$target`.');
+        return _fail(
+          'target_not_found',
+          'No target matched `$target`.',
+          extra: _notFoundScrollHint(target),
+        );
       }
 
       await _dispatchPress(point, hold: Duration(milliseconds: durationMs));
@@ -828,6 +838,207 @@ class FlutterScoutRuntime {
     } catch (error) {
       return _fail('swipe_failed', error.toString());
     }
+  }
+
+  Future<developer.ServiceExtensionResponse> _handleScrollTo(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final target = params['target'];
+      if (target == null || target.trim().isEmpty) {
+        return _fail('missing_target', 'Expected a target handle to reach.');
+      }
+      final before = _snapshot();
+      final maxScrolls = int.tryParse(params['maxScrolls'] ?? '') ?? 20;
+      final direction = params['direction'] ?? 'down';
+      final distance =
+          double.tryParse(params['distance'] ?? '') ??
+          (_viewportRect().height * 0.7);
+
+      // Already reachable without scrolling.
+      var node = before.findNode(target);
+      if (_isReachable(node)) {
+        return _scrollToResult(
+          before: before,
+          after: before,
+          node: node!,
+          scrolls: 0,
+          result: 'already_visible',
+          target: target,
+        );
+      }
+
+      var current = before;
+      var scrolls = 0;
+      while (scrolls < maxScrolls) {
+        final start = _scrollStartFor(current, direction);
+        if (start == null) {
+          final after = _snapshot();
+          return _scrollToFailure(
+            before: before,
+            after: after,
+            scrolls: scrolls,
+            reason: 'no_scrollable',
+            message:
+                'No scrollable was found to reach `$target`. Verify the '
+                'handle exists on this screen.',
+            target: target,
+          );
+        }
+        final delta = _dragDelta(direction, distance, scrollGesture: true);
+        await _dispatchDrag(start, delta);
+        await _waitStableForAction(params);
+        scrolls++;
+        final after = _snapshot();
+        node = after.findNode(target);
+        if (_isReachable(node)) {
+          return _scrollToResult(
+            before: before,
+            after: after,
+            node: node!,
+            scrolls: scrolls,
+            result: 'reached',
+            target: target,
+          );
+        }
+        // Stop early if the scrollable did not move (hit an edge).
+        if (!_geometryChanged(current, after)) {
+          return _scrollToFailure(
+            before: before,
+            after: after,
+            scrolls: scrolls,
+            reason: 'reached_scroll_end',
+            message:
+                'Reached the end of the scrollable after $scrolls scroll(s) '
+                'without finding `$target`. Try --direction ${_oppositeDirection(direction)} '
+                'or a different screen.',
+            target: target,
+          );
+        }
+        current = after;
+      }
+      return _scrollToFailure(
+        before: before,
+        after: current,
+        scrolls: scrolls,
+        reason: 'target_not_reached',
+        message:
+            'Did not reach `$target` within $maxScrolls scroll(s). Increase '
+            '--max-scrolls if the target is deeper.',
+        target: target,
+      );
+    } catch (error) {
+      return _fail('scroll_to_failed', error.toString());
+    }
+  }
+
+  bool _isReachable(ScoutNode? node) =>
+      node != null && node.visibleFraction > 0 && node.hitTestable;
+
+  /// Extra payload for a `target_not_found` failure. When the screen has a
+  /// scrollable, the target may simply be lazy-unbuilt or offscreen, so point
+  /// the agent at `scroll-to` instead of letting it conclude the handle is
+  /// wrong.
+  Map<String, Object?> _notFoundScrollHint(String? target) {
+    final snapshot = _snapshot();
+    final hasScrollable = snapshot.scrollables.isNotEmpty;
+    return {
+      if (hasScrollable && target != null && target.isNotEmpty) ...{
+        'reason': 'maybe_offscreen_or_lazy',
+        'hint':
+            'No built widget matched `$target`. Lazy lists/grids build '
+            'children on demand, so the target may exist deeper in a '
+            'scrollable. Run `scroll-to $target` to scroll until it builds, '
+            'then retry.',
+        'reachHint': 'scroll-to $target',
+        'scrollableCount': snapshot.scrollables.length,
+      },
+      'recentErrors': _recentErrors(),
+    };
+  }
+
+  String _oppositeDirection(String direction) => switch (direction) {
+    'down' => 'up',
+    'up' => 'down',
+    'left' => 'right',
+    'right' => 'left',
+    _ => 'up',
+  };
+
+  /// Center of the largest visible scrollable whose major axis matches the
+  /// scroll direction, used as the drag origin for [_handleScrollTo].
+  Offset? _scrollStartFor(ScoutSnapshot snapshot, String direction) {
+    final vertical = direction == 'down' || direction == 'up';
+    Rect? best;
+    var bestArea = 0.0;
+    for (final scrollable in snapshot.scrollables) {
+      final visible = scrollable['visibleRect'];
+      final raw = visible is List ? visible : scrollable['rect'];
+      if (raw is! List || raw.length < 4) continue;
+      final rect = Rect.fromLTWH(
+        (raw[0] as num).toDouble(),
+        (raw[1] as num).toDouble(),
+        (raw[2] as num).toDouble(),
+        (raw[3] as num).toDouble(),
+      );
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      // Prefer a scrollable oriented along the requested axis when its shape
+      // makes the axis obvious; otherwise fall back to largest visible area.
+      final axisMatch = vertical
+          ? rect.height >= rect.width * 0.6
+          : rect.width >= rect.height * 0.6;
+      final area = rect.width * rect.height * (axisMatch ? 1.0 : 0.25);
+      if (area > bestArea) {
+        bestArea = area;
+        best = rect;
+      }
+    }
+    if (best == null) return null;
+    return best.center;
+  }
+
+  developer.ServiceExtensionResponse _scrollToResult({
+    required ScoutSnapshot before,
+    required ScoutSnapshot after,
+    required ScoutNode node,
+    required int scrolls,
+    required String result,
+    required String target,
+  }) {
+    return _ok({
+      'action': 'scroll-to $target',
+      'result': result,
+      'reason': result,
+      'scrollsUsed': scrolls,
+      'target': node.toJson(),
+      'before': before.summaryJson(),
+      'after': after.summaryJson(),
+      'delta': _delta(before, after),
+      'recentErrors': _recentErrors(),
+    });
+  }
+
+  developer.ServiceExtensionResponse _scrollToFailure({
+    required ScoutSnapshot before,
+    required ScoutSnapshot after,
+    required int scrolls,
+    required String reason,
+    required String message,
+    required String target,
+  }) {
+    return _fail(
+      'target_not_reached',
+      message,
+      extra: {
+        'reason': reason,
+        'scrollsUsed': scrolls,
+        'before': before.summaryJson(),
+        'after': after.summaryJson(),
+        'delta': _delta(before, after),
+        'recentErrors': _recentErrors(),
+      },
+    );
   }
 
   Future<developer.ServiceExtensionResponse> _handleBack(
@@ -1927,6 +2138,12 @@ class FlutterScoutRuntime {
       return (b.rect?.width ?? 0).compareTo(a.rect?.width ?? 0);
     });
     final label = contained.first.label!;
+    // Preserve explicit key-derived handles: when the widget carries a Key,
+    // keep its stable `kind.<key>` id (and kind) so agents can discover and
+    // target it, and only enrich the human-readable label from contained text.
+    if (node.key != null && node.key!.isNotEmpty) {
+      return node.copyWith(label: label, confidence: 0.86);
+    }
     final kind = _buttonLikeActionLabel(label) ? 'btn' : node.kind;
     return node.copyWith(
       id: '$kind.${_slug(label)}',
@@ -2741,11 +2958,29 @@ class FlutterScoutRuntime {
     final afterValidationMessages = {
       for (final node in after.fields) node.id: node.validationMessage,
     };
+    final beforeKeyedText = {
+      for (final node in before.textTargets)
+        if (node.key != null && node.key!.isNotEmpty) node.key!: node.label,
+    };
+    final afterKeyedText = {
+      for (final node in after.textTargets)
+        if (node.key != null && node.key!.isNotEmpty) node.key!: node.label,
+    };
     final changedGeometry = _changedGeometryIds(before, after);
     return {
       'screenChanged': before.screen != after.screen,
       'newText': afterText.difference(beforeText).toList(growable: false),
       'removedText': beforeText.difference(afterText).toList(growable: false),
+      'changedText': [
+        for (final entry in afterKeyedText.entries)
+          if (beforeKeyedText.containsKey(entry.key) &&
+              beforeKeyedText[entry.key] != entry.value)
+            {
+              'key': entry.key,
+              'from': beforeKeyedText[entry.key],
+              'to': entry.value,
+            },
+      ],
       'newFields': afterFields.difference(beforeFields).toList(growable: false),
       'removedFields': beforeFields
           .difference(afterFields)
