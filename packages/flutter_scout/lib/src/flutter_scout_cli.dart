@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:args/args.dart';
 import 'package:image/image.dart' as img;
@@ -612,7 +613,7 @@ class FlutterScoutCli {
   Future<int> _annotations(List<String> args) async {
     final action = args.isEmpty ? 'list' : args.first;
     const usage =
-        'Usage: flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|check]';
+        'Usage: flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|fixed|check|wait|signal-handoff]';
     const allowed = {
       'list',
       'targets',
@@ -622,16 +623,36 @@ class FlutterScoutCli {
       'resolve',
       'dismiss',
       'reopen',
+      'fixed',
       'check',
+      'wait',
+      'signal-handoff',
     };
     if (!allowed.contains(action)) {
       throw const ScoutCliException('usage', usage);
     }
-    final params = <String, String>{'action': action};
+    if (action == 'wait') {
+      final parser = ArgParser()
+        ..addOption('timeout', defaultsTo: '600')
+        ..addOption('poll', defaultsTo: '1000');
+      final parsed = _parseAnnotationArgs(parser, args.skip(1), usage);
+      if (parsed.rest.isNotEmpty) {
+        throw const ScoutCliException(
+          'usage',
+          'Usage: flutter-scout annotations wait [--timeout <seconds>] [--poll <ms>]',
+        );
+      }
+      return _annotationsWait(parsed);
+    }
+    // 'fixed' is the ergonomic name for the runtime 'mark-fixed' action.
+    final params = <String, String>{
+      'action': action == 'fixed' ? 'mark-fixed' : action,
+    };
     switch (action) {
       case 'resolve':
       case 'dismiss':
       case 'reopen':
+      case 'fixed':
         final parser = ArgParser()..addOption('note');
         final parsed = _parseAnnotationArgs(parser, args.skip(1), usage);
         if (parsed.rest.length != 1) {
@@ -683,7 +704,197 @@ class FlutterScoutCli {
           throw const ScoutCliException('usage', usage);
         }
     }
-    return _callAndPrint('ext.flutter_scout.annotations', params: params);
+    return _runAnnotationsAndPrint(params);
+  }
+
+  /// Calls the annotations extension, materialises any in-app crops to the
+  /// session `crops/` dir (with native fallback for platform-view regions),
+  /// then prints the augmented JSON.
+  Future<int> _runAnnotationsAndPrint(Map<String, String> params) async {
+    final result = await _call('ext.flutter_scout.annotations', params);
+    final annotations = result['annotations'];
+    if (result['ok'] != false && annotations is List) {
+      await _attachCropPaths(annotations);
+    }
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
+    return result['ok'] == false ? 1 : 0;
+  }
+
+  Future<int> _annotationsWait(ArgResults parsed) async {
+    final timeoutSeconds = int.tryParse(parsed.option('timeout') ?? '') ?? 600;
+    final pollMs = (int.tryParse(parsed.option('poll') ?? '') ?? 1000).clamp(
+      200,
+      60000,
+    );
+    final deadline = DateTime.now().add(Duration(seconds: timeoutSeconds));
+    final initial = await _call('ext.flutter_scout.annotations', {
+      'action': 'list',
+    });
+    if (initial['ok'] == false) {
+      stdout.writeln(const JsonEncoder.withIndent('  ').convert(initial));
+      return 1;
+    }
+    final baseline = (initial['handoffSeq'] as num?)?.toInt() ?? 0;
+    while (DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(Duration(milliseconds: pollMs));
+      final Map<String, dynamic> state;
+      try {
+        state = await _call('ext.flutter_scout.annotations', {
+          'action': 'list',
+        });
+      } catch (_) {
+        // A transient disconnect (hot reload, GC pause, sim hiccup) must not
+        // abort a long wait — keep polling until the deadline.
+        continue;
+      }
+      if (state['ok'] == false) continue;
+      final seq = (state['handoffSeq'] as num?)?.toInt() ?? 0;
+      if (seq > baseline) {
+        final annotations = state['annotations'];
+        if (annotations is List) await _attachCropPaths(annotations);
+        stdout.writeln(
+          const JsonEncoder.withIndent('  ').convert({
+            ...state,
+            'handoff': true,
+            'timedOut': false,
+          }),
+        );
+        return 0;
+      }
+    }
+    final timeoutState = await _call('ext.flutter_scout.annotations', {
+      'action': 'list',
+    });
+    // The app may have disconnected during the wait; don't report a clean
+    // timeout (exit 0) on top of an error payload.
+    if (timeoutState['ok'] == false) {
+      stdout.writeln(const JsonEncoder.withIndent('  ').convert(timeoutState));
+      return 1;
+    }
+    final annotations = timeoutState['annotations'];
+    if (annotations is List) await _attachCropPaths(annotations);
+    stdout.writeln(
+      const JsonEncoder.withIndent('  ').convert({
+        ...timeoutState,
+        'handoff': false,
+        'timedOut': true,
+      }),
+    );
+    return 0;
+  }
+
+  /// Cache filename for an annotation crop. The token ties the file to the
+  /// capture identity (the annotation's timestamp) so a same-numbered
+  /// annotation from a later app launch — IDs reset to `ann_001` on restart
+  /// while the session `crops/` dir persists — can never serve a stale crop,
+  /// and a re-captured `after` crop (reopen then fixed again) gets a fresh file.
+  String _cropCachePath(Map<dynamic, dynamic> annotation, String slot) {
+    final stamp = slot == 'after'
+        ? (annotation['updatedAt'] ?? annotation['createdAt'])
+        : annotation['createdAt'];
+    final token = (stamp?.toString() ?? '').replaceAll(
+      RegExp(r'[^0-9A-Za-z]'),
+      '',
+    );
+    final id = annotation['id']?.toString() ?? 'unknown';
+    final suffix = token.isEmpty ? '' : '_$token';
+    return p.join(_sessionDir.path, 'crops', '${id}_$slot$suffix.png');
+  }
+
+  Future<void> _attachCropPaths(List<dynamic> annotations) async {
+    for (final annotation in annotations.whereType<Map>()) {
+      final id = annotation['id']?.toString();
+      if (id == null) continue;
+      for (final slot in const ['before', 'after']) {
+        final capitalized = slot == 'before' ? 'Before' : 'After';
+        final hasCrop = annotation['has${capitalized}Crop'] == true;
+        final needsNative = annotation['${slot}CropNeedsNative'] == true;
+        final rect = annotation['${slot}CropRect'];
+        final outPath = _cropCachePath(annotation, slot);
+        if (File(outPath).existsSync()) {
+          annotation['${slot}CropPath'] = outPath;
+          continue;
+        }
+        if (hasCrop) {
+          final fetched = await _fetchAnnotationCrop(id, slot, outPath);
+          if (fetched != null) {
+            annotation['${slot}CropPath'] = fetched;
+            continue;
+          }
+        }
+        if (needsNative && rect is List && rect.length >= 4) {
+          final native = await _nativeCropToFile(rect.cast<num>(), outPath);
+          if (native != null) {
+            annotation['${slot}CropPath'] = native;
+            annotation['${slot}CropBackend'] = 'native';
+            continue;
+          }
+          annotation['${slot}CropMissing'] = 'native_capture_unavailable';
+        } else if (hasCrop) {
+          // The runtime has the crop but the in-app fetch failed (decode/IO);
+          // mark it so the agent doesn't expect a path that isn't there.
+          annotation['${slot}CropMissing'] = 'in_app_fetch_failed';
+        }
+      }
+    }
+  }
+
+  Future<String?> _fetchAnnotationCrop(
+    String id,
+    String slot,
+    String outPath,
+  ) async {
+    try {
+      final res = await _call('ext.flutter_scout.annotations', {
+        'action': 'get-crop',
+        'id': id,
+        'slot': slot,
+      });
+      final bytes = res['bytes'];
+      if (res['ok'] != false && bytes is String && bytes.isNotEmpty) {
+        Directory(p.dirname(outPath)).createSync(recursive: true);
+        File(outPath).writeAsBytesSync(base64Decode(bytes));
+        return outPath;
+      }
+    } catch (_) {
+      // Fall through; caller may try a native capture.
+    }
+    return null;
+  }
+
+  Future<String?> _nativeCropToFile(List<num> rectLogical, String outPath) async {
+    final shotPath = p.join(
+      _sessionDir.path,
+      'screenshots',
+      'crop_source_${DateTime.now().millisecondsSinceEpoch}.png',
+    );
+    try {
+      if (await _isMacosScreenshotSession()) return null;
+      final inspect = await _call('ext.flutter_scout.inspect');
+      await _captureScreenshot(shotPath);
+      final sourceBytes = File(shotPath).readAsBytesSync();
+      final source = img.decodeImage(sourceBytes);
+      if (source == null) return null;
+      final dpr =
+          (inspect['devicePixelRatio'] as num?)?.toDouble() ??
+          _inferDevicePixelRatio(inspect, source);
+      final crop = _cropPngBytes(source, rectLogical, dpr, 12);
+      Directory(p.dirname(outPath)).createSync(recursive: true);
+      File(outPath).writeAsBytesSync(crop.bytes);
+      return outPath;
+    } catch (_) {
+      return null;
+    } finally {
+      // The full-screen source is only an intermediate for the targeted crop;
+      // don't leave it behind (this path can run per poll on platform-view
+      // annotations during `annotations wait`).
+      final source = File(shotPath);
+      if (source.existsSync()) {
+        try {
+          source.deleteSync();
+        } catch (_) {}
+      }
+    }
   }
 
   ArgResults _parseAnnotationArgs(
@@ -1205,8 +1416,10 @@ class FlutterScoutCli {
   Future<int> _screenshot(List<String> args) async {
     final parser = ArgParser()
       ..addOption('output', abbr: 'o')
-      ..addOption('target');
+      ..addOption('target')
+      ..addFlag('native', defaultsTo: false);
     final parsed = parser.parse(args);
+    final native = parsed.flag('native');
     final target = parsed.option('target');
     if (target != null && target.isNotEmpty) {
       return _crop([
@@ -1216,6 +1429,7 @@ class FlutterScoutCli {
           '--output',
           parsed.option('output')!,
         ],
+        if (native) '--native',
       ]);
     }
     _ensureSessionDir();
@@ -1227,6 +1441,20 @@ class FlutterScoutCli {
           'screenshot_${DateTime.now().millisecondsSinceEpoch}.png',
         );
     Directory(p.dirname(output)).createSync(recursive: true);
+    if (!native) {
+      final capture = await _inAppCapture(mode: 'screen');
+      if (capture?.bytes != null) {
+        File(output).writeAsBytesSync(capture!.bytes!);
+        stdout.writeln(
+          jsonEncode({
+            'ok': true,
+            'path': output,
+            'backend': 'in_app_capture',
+          }),
+        );
+        return 0;
+      }
+    }
     final capture = await _captureScreenshot(output);
     stdout.writeln(jsonEncode({'ok': true, 'path': output, ...capture}));
     return 0;
@@ -1236,15 +1464,17 @@ class FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('target')
       ..addOption('output', abbr: 'o')
-      ..addOption('padding', defaultsTo: '12');
+      ..addOption('padding', defaultsTo: '12')
+      ..addFlag('native', defaultsTo: false);
     final parsed = parser.parse(args);
+    final native = parsed.flag('native');
     final target =
         parsed.option('target') ??
         (parsed.rest.isEmpty ? null : parsed.rest.first);
     if (target == null || target.isEmpty) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout crop <target> [-o <path>]',
+        'Usage: flutter-scout crop <target> [-o <path>] [--native]',
       );
     }
 
@@ -1263,23 +1493,54 @@ class FlutterScoutCli {
         'Target `$target` has no usable rect.',
       );
     }
+    final rectNums = rect.cast<num>();
+    _ensureSessionDir();
+    final padding = int.tryParse(parsed.option('padding') ?? '') ?? 12;
+    final output =
+        parsed.option('output') ??
+        p.join(
+          _sessionDir.path,
+          'crops',
+          '${_safeFileName(target)}_${DateTime.now().millisecondsSinceEpoch}.png',
+        );
+    Directory(p.dirname(output)).createSync(recursive: true);
+
+    if (!native) {
+      final capture = await _inAppCapture(
+        mode: 'crop',
+        rect: rectNums,
+        padding: padding,
+      );
+      if (capture?.bytes != null) {
+        File(output).writeAsBytesSync(capture!.bytes!);
+        stdout.writeln(
+          jsonEncode({
+            'ok': true,
+            'target': target,
+            'path': output,
+            'rect': rect,
+            'backend': 'in_app_capture',
+          }),
+        );
+        return 0;
+      }
+    }
+
+    // Native fallback (forced via --native, or when in-app capture reports a
+    // platform view in the region that would render blank).
     if (await _isMacosScreenshotSession()) {
       throw const ScoutCliException(
         'crop_unsupported_target',
         'Targeted crops are not supported for macOS window screenshots yet. Use flutter-scout screenshot -o <path> for a full macOS app-window capture.',
       );
     }
-
-    _ensureSessionDir();
     final shotPath = p.join(
       _sessionDir.path,
       'screenshots',
       'crop_source_${DateTime.now().millisecondsSinceEpoch}.png',
     );
     await _captureScreenshot(shotPath);
-
-    final sourceBytes = File(shotPath).readAsBytesSync();
-    final source = img.decodeImage(sourceBytes);
+    final source = img.decodeImage(File(shotPath).readAsBytesSync());
     if (source == null) {
       throw const ScoutCliException(
         'image_decode_failed',
@@ -1289,18 +1550,41 @@ class FlutterScoutCli {
     final dpr =
         (inspect['devicePixelRatio'] as num?)?.toDouble() ??
         _inferDevicePixelRatio(inspect, source);
-    final padding = int.tryParse(parsed.option('padding') ?? '') ?? 12;
-    final left = (((rect[0] as num).toDouble() * dpr) - padding).floor().clamp(
+    final crop = _cropPngBytes(source, rectNums, dpr, padding);
+    File(output).writeAsBytesSync(crop.bytes);
+    stdout.writeln(
+      jsonEncode({
+        'ok': true,
+        'target': target,
+        'path': output,
+        'source': shotPath,
+        'rect': rect,
+        'pixelRect': crop.pixelRect,
+        'backend': 'native',
+      }),
+    );
+    return 0;
+  }
+
+  /// Crops [rectLogical] (logical [l,t,w,h]) out of a decoded native
+  /// screenshot, scaling by [dpr] and inflating by [padding] device pixels.
+  ({Uint8List bytes, List<int> pixelRect}) _cropPngBytes(
+    img.Image source,
+    List<num> rectLogical,
+    double dpr,
+    int padding,
+  ) {
+    final left = ((rectLogical[0].toDouble() * dpr) - padding).floor().clamp(
       0,
       source.width - 1,
     );
-    final top = (((rect[1] as num).toDouble() * dpr) - padding).floor().clamp(
+    final top = ((rectLogical[1].toDouble() * dpr) - padding).floor().clamp(
       0,
       source.height - 1,
     );
-    final width = ((((rect[2] as num).toDouble() * dpr) + padding * 2).ceil())
+    final width = (((rectLogical[2].toDouble() * dpr) + padding * 2).ceil())
         .clamp(1, source.width - left);
-    final height = ((((rect[3] as num).toDouble() * dpr) + padding * 2).ceil())
+    final height = (((rectLogical[3].toDouble() * dpr) + padding * 2).ceil())
         .clamp(1, source.height - top);
     final cropped = img.copyCrop(
       source,
@@ -1309,26 +1593,38 @@ class FlutterScoutCli {
       width: width,
       height: height,
     );
-    final output =
-        parsed.option('output') ??
-        p.join(
-          _sessionDir.path,
-          'crops',
-          '${_safeFileName(target)}_${DateTime.now().millisecondsSinceEpoch}.png',
-        );
-    Directory(p.dirname(output)).createSync(recursive: true);
-    File(output).writeAsBytesSync(img.encodePng(cropped));
-    stdout.writeln(
-      jsonEncode({
-        'ok': true,
-        'target': target,
-        'path': output,
-        'source': shotPath,
-        'rect': rect,
-        'pixelRect': [left, top, width, height],
-      }),
-    );
-    return 0;
+    return (bytes: img.encodePng(cropped), pixelRect: [left, top, width, height]);
+  }
+
+  /// Asks the in-app helper to rasterise the screen (or a crop rect). Returns
+  /// null when the capture extension is unavailable so callers fall back to a
+  /// native screenshot.
+  Future<({Uint8List? bytes, bool needsNative})?> _inAppCapture({
+    required String mode,
+    List<num>? rect,
+    int? padding,
+    String native = 'auto',
+  }) async {
+    try {
+      final params = <String, String>{'mode': mode, 'native': native};
+      if (rect != null && rect.length >= 4) {
+        params['rect'] = '${rect[0]},${rect[1]},${rect[2]},${rect[3]}';
+      }
+      if (padding != null) {
+        params['padding'] = padding.toString();
+      }
+      final res = await _call('ext.flutter_scout.capture', params);
+      if (res['ok'] == false) return null;
+      final needsNative = res['needsNative'] == true;
+      final bytes = res['bytes'];
+      if (bytes is String && bytes.isNotEmpty) {
+        return (bytes: base64Decode(bytes), needsNative: needsNative);
+      }
+      if (needsNative) return (bytes: null, needsNative: true);
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<int> _evidence(List<String> args) async {
@@ -3227,7 +3523,9 @@ Usage:
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
   flutter-scout inspect
-  flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|check]
+  flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|fixed|check]
+  flutter-scout annotations wait [--timeout <seconds>] [--poll <ms>]
+  flutter-scout annotations fixed <annotation-id> [--note <text>]
   flutter-scout bounds [target]
   flutter-scout tap <target> | tap <x> <y> | --x <x> --y <y> [--verbose]
   flutter-scout tap-text <visible text> [--allow-mismatch] [--verbose]
@@ -3242,8 +3540,8 @@ Usage:
   flutter-scout restart [--verbose]
   flutter-scout deeplink <url>
   flutter-scout logs [--last <n>] [--contains <text>] [--summary]
-  flutter-scout screenshot [-o <path>] [--target <target>]
-  flutter-scout crop <target> [-o <path>]
+  flutter-scout screenshot [-o <path>] [--target <target>] [--native]
+  flutter-scout crop <target> [-o <path>] [--native]
   flutter-scout evidence [-o <dir>] [--last <n>]
   flutter-scout replay [session.json] [--verbose]
 ''');

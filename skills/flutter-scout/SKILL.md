@@ -85,7 +85,25 @@ flutter-scout annotations list
 
 Annotations contain the user's comment plus the selected widget metadata. They are persistent review markers, so code fixes and hot reloads do not automatically remove them. `inspect` also includes top-level `annotationMode` and `annotations` fields, but `annotations list` is the clearest handoff from manual review to agent work.
 
-Read `target.snapshotRect` as the original captured geometry and `target.liveRect` as current matched geometry. If `target.liveMatched` is false, run `flutter-scout annotations check` to mark missing open targets as `stale_target`. After fixing and verifying an annotation, explicitly resolve it:
+**Handoff (block until the user is done).** Instead of polling, ask the user to annotate and tap the **"Send to agent"** button in the overlay, then block on:
+
+```bash
+flutter-scout annotations wait --timeout 600 --poll 1000
+```
+
+`wait` returns the full annotation list the moment the user taps "Send to agent" (`"handoff": true`). On timeout it returns `"timedOut": true, "handoff": false` — just call it again to keep waiting. This removes the need for the user to type a "check annotations" message.
+
+**Crops (see what the user saw).** Each annotation carries an in-app screenshot of the flagged widget. `annotations list`/`wait` materialize them under `.flutter_scout/crops/` and expose `beforeCropPath` (captured when the annotation was created). Read that image to understand visual bugs ("too wide", "misaligned") that text alone can't convey. If `beforeCropNeedsNative` is true the widget is a platform view (map/webview); the CLI falls back to a native capture automatically, or sets `beforeCropMissing` when unavailable.
+
+Read `target.snapshotRect` as the original captured geometry and `target.liveRect` as current matched geometry. If `target.liveMatched` is false, run `flutter-scout annotations check` to mark missing open targets as `stale_target`.
+
+**Verify and close the loop.** After fixing a widget and hot-reloading, mark it fixed — this sets status `pending_review` and captures an `afterCropPath` so the user gets a before/after to confirm:
+
+```bash
+flutter-scout annotations fixed ann_001 --note "Shortened label"
+```
+
+`pending_review` pins render amber in the overlay (vs teal for open). The user then confirms with `resolve` or sends it back with `reopen`:
 
 ```bash
 flutter-scout annotations check
@@ -138,7 +156,7 @@ flutter-scout crop btn.save_supplier -o /tmp/save_button.png
 flutter-scout screenshot -o /tmp/current_screen.png
 ```
 
-Prefer `bounds` and crops over full screenshots when inspecting one control or dialog on iOS Simulator. Full screenshots are supported for iOS Simulator sessions and macOS app-window attach sessions. Targeted crops are currently iOS Simulator-only; macOS attach returns `crop_unsupported_target` for crops instead of producing misaligned visual evidence.
+Prefer `bounds` and crops over full screenshots when inspecting one control or dialog. `screenshot` and `crop` render in-app by default (works on any platform, including physical devices), and report `"backend": "in_app_capture"`. When the captured region contains a platform view (map, webview, native video) that would render blank, Scout automatically falls back to a native capture. Pass `--native` to force the native backend (iOS Simulator `simctl` / macOS app-window `screencapture`); native crops remain iOS Simulator-only and macOS attach returns `crop_unsupported_target`.
 
 `tap-text` activates the nearest safe actionable ancestor and returns both `target` and `textTarget`. Short labels like `OK` require exact matches. If the matched text maps to a different semantic action, Scout returns `tap_text_target_mismatch` instead of tapping. Use the explicit handle reported in the error, coordinates, or `tap-text --allow-mismatch` only when that mismatch is intentional. If a broad ancestor would be unsafe, Scout can tap the visible text point and report `activation.strategy:"broad_ancestor_text_point"`; if no actionable ancestor exists but the text point is hit-testable, it reports `activation.strategy:"visible_text_point"`.
 
@@ -161,10 +179,12 @@ flutter-scout status
 flutter-scout ensure --device <simulator-id> --project <flutter-app-path>
 flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
 flutter-scout annotations list
+flutter-scout annotations wait --timeout 600 --poll 1000
 flutter-scout annotations targets
 flutter-scout annotations enable
 flutter-scout annotations disable
 flutter-scout annotations check
+flutter-scout annotations fixed ann_001 --note "Shortened label"
 flutter-scout annotations resolve ann_001 --note "Fixed"
 flutter-scout annotations dismiss ann_002
 flutter-scout annotations clear --resolved

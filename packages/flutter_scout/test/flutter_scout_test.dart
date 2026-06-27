@@ -233,6 +233,50 @@ void main() {
     });
   });
 
+  test('annotation fixed requires exactly one id', () async {
+    await _withTempCwd(() async {
+      final missingId = await FlutterScoutCli().run(['annotations', 'fixed']);
+      final extraId = await FlutterScoutCli().run([
+        'annotations',
+        'fixed',
+        'ann_001',
+        'ann_002',
+      ]);
+
+      expect(missingId, 1);
+      expect(extraId, 1);
+    });
+  });
+
+  test('annotation wait rejects positional arguments', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run([
+        'annotations',
+        'wait',
+        'extra',
+      ]);
+
+      expect(exitCode, 1);
+    });
+  });
+
+  test('annotation wait without a session fails cleanly', () async {
+    await _withTempCwd(() async {
+      // No vm_uri recorded -> not_attached -> exit 1 without entering the
+      // poll loop or hanging.
+      final exitCode = await FlutterScoutCli().run([
+        'annotations',
+        'wait',
+        '--timeout',
+        '1',
+        '--poll',
+        '200',
+      ]);
+
+      expect(exitCode, 1);
+    });
+  });
+
   test('help exits successfully', () async {
     final exitCode = await FlutterScoutCli().run(['--help']);
 

@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -27,6 +28,9 @@ class FlutterScoutHelper {
     _registered = true;
     _runtime.install();
   }
+
+  @visibleForTesting
+  static FlutterScoutRuntime get debugRuntime => _runtime;
 }
 
 class FlutterScoutRuntime {
@@ -36,6 +40,7 @@ class FlutterScoutRuntime {
   final DateTime _installedAt = DateTime.now();
   int _nextSyntheticPointer = 1000000;
   int _nextAnnotationId = 1;
+  int _annotationHandoffSeq = 0;
   bool _annotationMode = false;
   OverlayEntry? _annotationOverlayEntry;
   bool _annotationOverlayInstallScheduled = false;
@@ -46,6 +51,7 @@ class FlutterScoutRuntime {
     _installErrorHooks();
     _registerExtension('ext.flutter_scout.inspect', _handleInspect);
     _registerExtension('ext.flutter_scout.annotations', _handleAnnotations);
+    _registerExtension('ext.flutter_scout.capture', _handleCapture);
     _registerExtension('ext.flutter_scout.tap', _handleTap);
     _registerExtension('ext.flutter_scout.tapText', _handleTapText);
     _registerExtension('ext.flutter_scout.longPress', _handleLongPress);
@@ -61,6 +67,33 @@ class FlutterScoutRuntime {
 
   int get _activeAnnotationCount =>
       _annotations.where((annotation) => annotation.isActive).length;
+
+  @visibleForTesting
+  List<ScoutAnnotation> get debugAnnotations => _annotations;
+
+  @visibleForTesting
+  int get debugHandoffSeq => _annotationHandoffSeq;
+
+  @visibleForTesting
+  void debugSignalHandoff() => _signalAnnotationHandoff();
+
+  @visibleForTesting
+  Future<Uint8List?> debugCaptureRegion({Rect? rect, double padding = 12}) async {
+    final result = await _captureRegion(rect: rect, padding: padding);
+    return result.bytes;
+  }
+
+  @visibleForTesting
+  Future<void> debugCaptureAnnotationCrop(
+    ScoutAnnotation annotation, {
+    required String slot,
+  }) {
+    return _captureAnnotationCrop(annotation, slot: slot);
+  }
+
+  @visibleForTesting
+  bool debugMarkFixed(String id) =>
+      _updateAnnotationStatus(id: id, status: 'pending_review');
 
   void _installErrorHooks() {
     _previousFlutterError = FlutterError.onError;
@@ -236,6 +269,35 @@ class FlutterScoutRuntime {
         case 'check':
           _refreshStaleAnnotationStatuses(_annotationTargets());
           break;
+        case 'mark-fixed':
+          final id = params['id'];
+          final updated = _updateAnnotationStatus(
+            id: id,
+            status: 'pending_review',
+            note: params['note'],
+          );
+          if (!updated) return _annotationMissing(id);
+          final annotation = _annotations.firstWhere(
+            (annotation) => annotation.id == id,
+          );
+          final live = _liveAnnotationTarget(
+            annotation,
+            _annotationTargets(),
+          );
+          await _captureAnnotationCrop(
+            annotation,
+            slot: 'after',
+            liveTarget: live,
+          );
+          break;
+        case 'get-crop':
+          return _annotationCropResponse(
+            params['id'],
+            params['slot'] ?? 'before',
+          );
+        case 'signal-handoff':
+          _signalAnnotationHandoff();
+          break;
         case 'list':
         case 'targets':
           break;
@@ -250,6 +312,39 @@ class FlutterScoutRuntime {
     } catch (error) {
       return _fail('annotations_failed', error.toString());
     }
+  }
+
+  developer.ServiceExtensionResponse _annotationCropResponse(
+    String? id,
+    String slot,
+  ) {
+    if (id == null || id.isEmpty) return _annotationMissing(id);
+    ScoutAnnotation? annotation;
+    for (final candidate in _annotations) {
+      if (candidate.id == id) {
+        annotation = candidate;
+        break;
+      }
+    }
+    if (annotation == null) return _annotationMissing(id);
+    final isAfter = slot == 'after';
+    final bytes = isAfter
+        ? annotation.afterCropPng
+        : annotation.beforeCropPng;
+    final needsNative = isAfter
+        ? annotation.afterCropNeedsNative
+        : annotation.beforeCropNeedsNative;
+    final rect = isAfter
+        ? annotation.afterCropRect
+        : annotation.beforeCropRect;
+    return _ok({
+      'id': id,
+      'slot': slot,
+      'hasCrop': bytes != null,
+      'needsNative': needsNative,
+      'rect': ?rect,
+      if (bytes != null) 'bytes': base64Encode(bytes),
+    });
   }
 
   developer.ServiceExtensionResponse _annotationMissing(String? id) {
@@ -312,11 +407,208 @@ class FlutterScoutRuntime {
     _annotationRevision.value++;
   }
 
+  void _signalAnnotationHandoff() {
+    _annotationHandoffSeq++;
+    _bumpAnnotationRevision();
+  }
+
+  RenderView? _primaryRenderView() {
+    final views = RendererBinding.instance.renderViews;
+    if (views.isEmpty) return null;
+    final implicitId =
+        WidgetsBinding.instance.platformDispatcher.implicitView?.viewId;
+    for (final view in views) {
+      if (view.flutterView.viewId == implicitId) return view;
+    }
+    return views.first;
+  }
+
+  /// Captures a PNG of [rect] (logical coordinates, full screen when null) by
+  /// rasterising the root layer. Returns base64 bytes plus a [needsNative] flag
+  /// when a platform view (map/webview/native texture) overlaps the region and
+  /// would render blank, signalling the CLI to fall back to a native capture.
+  Future<_CaptureResult> _captureRegion({
+    Rect? rect,
+    double padding = 12,
+    double? pixelRatio,
+  }) async {
+    final renderView = _primaryRenderView();
+    if (renderView == null) {
+      return const _CaptureResult.failure('no_render_view');
+    }
+    // RenderView.layer is @protected but is the stable, documented way to reach
+    // the root OffsetLayer for rasterising the whole view.
+    // ignore: invalid_use_of_protected_member
+    final layer = renderView.layer;
+    if (layer is! OffsetLayer) {
+      return const _CaptureResult.failure('no_offset_layer');
+    }
+    await _waitForFrame();
+    final screen = Offset.zero & renderView.size;
+    var bounds = rect == null ? screen : rect.inflate(padding);
+    bounds = bounds.intersect(screen);
+    if (bounds.isEmpty || bounds.width <= 0 || bounds.height <= 0) {
+      bounds = screen;
+    }
+    // Use the captured view's own ratio (matches _primaryRenderView's choice)
+    // rather than views.first, which could differ or be empty in multi-view.
+    final dpr = pixelRatio ?? renderView.flutterView.devicePixelRatio;
+    final needsNative = _regionHasPlatformView(renderView, bounds);
+    // The root layer is a TransformLayer that already bakes in the device pixel
+    // ratio, so toImage must receive bounds in PHYSICAL pixels with a pixelRatio
+    // of 1.0 — otherwise the dpr scaling is applied twice and the content is
+    // shifted off-screen.
+    final physicalBounds = Rect.fromLTRB(
+      bounds.left * dpr,
+      bounds.top * dpr,
+      bounds.right * dpr,
+      bounds.bottom * dpr,
+    );
+    try {
+      final image = await layer.toImage(physicalBounds, pixelRatio: 1.0);
+      final width = image.width;
+      final height = image.height;
+      final byteData = await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      image.dispose();
+      if (byteData == null) {
+        return const _CaptureResult.failure('encode_failed');
+      }
+      return _CaptureResult(
+        bytes: byteData.buffer.asUint8List(),
+        width: width,
+        height: height,
+        pixelRatio: dpr,
+        bounds: bounds,
+        needsNative: needsNative,
+      );
+    } catch (error) {
+      return _CaptureResult.failure(
+        'capture_failed',
+        needsNative: needsNative,
+        bounds: bounds,
+      );
+    }
+  }
+
+  bool _regionHasPlatformView(RenderObject root, Rect bounds) {
+    var found = false;
+    void visit(RenderObject node) {
+      if (found) return;
+      final typeName = node.runtimeType.toString();
+      final isPlatformSurface =
+          typeName.contains('PlatformView') ||
+          typeName.contains('Texture') ||
+          typeName.contains('UiKitView') ||
+          typeName.contains('AndroidView') ||
+          typeName.contains('AppKitView') ||
+          typeName.contains('PlatformViewSurface');
+      if (isPlatformSurface && node is RenderBox && node.hasSize) {
+        try {
+          final transform = node.getTransformTo(null);
+          final globalRect = MatrixUtils.transformRect(
+            transform,
+            Offset.zero & node.size,
+          );
+          if (globalRect.overlaps(bounds)) {
+            found = true;
+            return;
+          }
+        } catch (_) {
+          // Unable to resolve geometry; assume it could overlap.
+          found = true;
+          return;
+        }
+      }
+      node.visitChildren(visit);
+    }
+
+    visit(root);
+    return found;
+  }
+
+  Future<developer.ServiceExtensionResponse> _handleCapture(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final mode = params['mode'] ?? 'screen';
+      final native = params['native'] ?? 'auto';
+      Rect? rect;
+      if (mode == 'crop') {
+        final parsed = _parseRectParam(params['rect']);
+        if (parsed == null) {
+          return _fail(
+            'capture_missing_rect',
+            'capture mode=crop requires rect=left,top,width,height.',
+          );
+        }
+        rect = parsed;
+      }
+      final padding =
+          double.tryParse(params['padding'] ?? '') ?? (mode == 'crop' ? 12 : 0);
+      final pixelRatio = double.tryParse(params['pixelRatio'] ?? '');
+      final result = await _captureRegion(
+        rect: rect,
+        padding: padding,
+        pixelRatio: pixelRatio,
+      );
+      final boundsJson = result.bounds == null
+          ? null
+          : [
+              result.bounds!.left,
+              result.bounds!.top,
+              result.bounds!.width,
+              result.bounds!.height,
+            ];
+      if (result.needsNative && native != 'off') {
+        return _ok({
+          'mode': mode,
+          'needsNative': true,
+          'rect': ?boundsJson,
+          'reason': 'platform_view_in_region',
+        });
+      }
+      if (result.bytes == null) {
+        return _fail(
+          'capture_failed',
+          'In-app capture failed (${result.error}).',
+          extra: {
+            'needsNative': result.needsNative,
+            'rect': ?boundsJson,
+          },
+        );
+      }
+      return _ok({
+        'mode': mode,
+        'needsNative': result.needsNative,
+        'bytes': base64Encode(result.bytes!),
+        'width': result.width,
+        'height': result.height,
+        'pixelRatio': result.pixelRatio,
+        'rect': ?boundsJson,
+      });
+    } catch (error) {
+      return _fail('capture_failed', error.toString());
+    }
+  }
+
+  Rect? _parseRectParam(String? value) {
+    if (value == null || value.isEmpty) return null;
+    final parts = value.split(',');
+    if (parts.length < 4) return null;
+    final nums = parts.map((part) => double.tryParse(part.trim())).toList();
+    if (nums.any((n) => n == null)) return null;
+    return Rect.fromLTWH(nums[0]!, nums[1]!, nums[2]!, nums[3]!);
+  }
+
   Map<String, Object?> _annotationsStateJson({bool includeTargets = false}) {
     final snapshot = _snapshot();
     final liveTargets = _annotationTargets();
     return {
       'annotationMode': _annotationMode,
+      'handoffSeq': _annotationHandoffSeq,
       'screen': snapshot.screen,
       'routeGuess': snapshot.routeGuess,
       'annotations': _annotationJsonList(liveTargets: liveTargets),
@@ -339,12 +631,14 @@ class FlutterScoutRuntime {
     ];
   }
 
-  List<Rect> _annotationPinRects(List<ScoutAnnotationTarget> liveTargets) {
+  List<({Rect rect, String status})> _annotationPins(
+    List<ScoutAnnotationTarget> liveTargets,
+  ) {
     return [
       for (final annotation in _annotations)
         if (annotation.isActive)
           if (_liveAnnotationTarget(annotation, liveTargets) case final target?)
-            target.rect,
+            (rect: target.rect, status: annotation.status),
     ];
   }
 
@@ -400,7 +694,31 @@ class FlutterScoutRuntime {
     _nextAnnotationId++;
     _annotations.add(annotation);
     _bumpAnnotationRevision();
+    unawaited(_captureAnnotationCrop(annotation, slot: 'before'));
     return annotation;
+  }
+
+  /// Rasterises the annotation's target region and stashes the PNG on the
+  /// annotation so the CLI can serve it later via the `get-crop` action.
+  Future<void> _captureAnnotationCrop(
+    ScoutAnnotation annotation, {
+    required String slot,
+    ScoutAnnotationTarget? liveTarget,
+  }) async {
+    final target = liveTarget ?? annotation.target;
+    final rect = target.rect;
+    final rectJson = [rect.left, rect.top, rect.width, rect.height];
+    final result = await _captureRegion(rect: rect);
+    if (slot == 'before') {
+      annotation.beforeCropRect = rectJson;
+      annotation.beforeCropNeedsNative = result.needsNative;
+      annotation.beforeCropPng = result.bytes;
+    } else {
+      annotation.afterCropRect = rectJson;
+      annotation.afterCropNeedsNative = result.needsNative;
+      annotation.afterCropPng = result.bytes;
+    }
+    _bumpAnnotationRevision();
   }
 
   List<ScoutAnnotationTarget> annotationCandidatesAt(Offset point) {
@@ -1264,10 +1582,28 @@ class FlutterScoutRuntime {
     try {
       final result = HitTestResult();
       WidgetsBinding.instance.hitTestInView(result, point, _primaryViewId);
-      return result.path.any((entry) => identical(entry.target, target));
+      if (result.path.any((entry) => identical(entry.target, target))) {
+        return true;
+      }
     } catch (_) {
-      return false;
+      // Fall through to the overlay-aware fallback below.
     }
+    // While annotation mode is active the overlay paints a full-screen opaque
+    // gesture layer that absorbs the global hit test, truncating its path
+    // before it reaches app widgets. Fall back to a direct hit test against the
+    // target's own subtree so widgets remain selectable underneath the overlay.
+    if (_annotationMode && target is RenderBox && target.attached) {
+      try {
+        final local = target.globalToLocal(point);
+        if (target.size.contains(local)) {
+          final boxResult = BoxHitTestResult();
+          if (target.hitTest(boxResult, position: local)) return true;
+        }
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
   }
 
   List<ScoutAnnotationTarget> _removeOversizedModalTargets(
@@ -2848,6 +3184,7 @@ class _FlutterScoutAnnotationOverlayState
   int _candidateIndex = 0;
   int _lastCollectedRevision = -1;
   bool _targetRefreshScheduled = false;
+  bool _handoffSent = false;
 
   static const double _toggleButtonMargin = 12;
   static const double _toggleButtonHeight = 48;
@@ -2905,6 +3242,14 @@ class _FlutterScoutAnnotationOverlayState
       _selectedTarget = null;
       _currentCandidates = const [];
       _commentController.clear();
+    });
+  }
+
+  void _sendToAgent() {
+    widget.runtime._signalAnnotationHandoff();
+    setState(() => _handoffSent = true);
+    Future<void>.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _handoffSent = false);
     });
   }
 
@@ -2995,7 +3340,7 @@ class _FlutterScoutAnnotationOverlayState
                   child: CustomPaint(
                     painter: _FlutterScoutAnnotationPainter(
                       targets: _visibleTargets,
-                      annotationPinRects: widget.runtime._annotationPinRects(
+                      annotationPins: widget.runtime._annotationPins(
                         _visibleTargets,
                       ),
                       selectedTarget: _selectedTarget,
@@ -3019,6 +3364,22 @@ class _FlutterScoutAnnotationOverlayState
                   });
                 },
                 onSave: _saveComment,
+              ),
+            if (enabled &&
+                _selectedTarget == null &&
+                widget.runtime._activeAnnotationCount > 0)
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: MediaQuery.paddingOf(context).bottom + 12,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: _AnnotationHandoffButton(
+                    sent: _handoffSent,
+                    count: widget.runtime._activeAnnotationCount,
+                    onPressed: _sendToAgent,
+                  ),
+                ),
               ),
             Positioned(
               left: toggleButtonOffset.dx,
@@ -3083,6 +3444,32 @@ class _AnnotationToggleButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _AnnotationHandoffButton extends StatelessWidget {
+  const _AnnotationHandoffButton({
+    required this.sent,
+    required this.count,
+    required this.onPressed,
+  });
+
+  final bool sent;
+  final int count;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return FilledButton.icon(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: sent ? scheme.tertiary : scheme.primary,
+        foregroundColor: sent ? scheme.onTertiary : scheme.onPrimary,
+      ),
+      icon: Icon(sent ? Icons.check_circle : Icons.send),
+      label: Text(sent ? 'Sent to agent' : 'Send $count to agent'),
     );
   }
 }
@@ -3173,14 +3560,14 @@ class _AnnotationCommentPanel extends StatelessWidget {
 class _FlutterScoutAnnotationPainter extends CustomPainter {
   const _FlutterScoutAnnotationPainter({
     required this.targets,
-    required this.annotationPinRects,
+    required this.annotationPins,
     required this.selectedTarget,
     required this.colorScheme,
     required this.annotationRevision,
   });
 
   final List<ScoutAnnotationTarget> targets;
-  final List<Rect> annotationPinRects;
+  final List<({Rect rect, String status})> annotationPins;
   final ScoutAnnotationTarget? selectedTarget;
   final ColorScheme colorScheme;
   final int annotationRevision;
@@ -3207,19 +3594,20 @@ class _FlutterScoutAnnotationPainter extends CustomPainter {
       canvas.drawRect(selected.rect, selectedPaint);
     }
 
-    final pinPaint = Paint()..color = colorScheme.tertiary;
     final textPainter = TextPainter(
       textDirection: TextDirection.ltr,
       textAlign: TextAlign.center,
     );
-    for (var i = 0; i < annotationPinRects.length; i++) {
-      final rect = annotationPinRects[i];
+    for (var i = 0; i < annotationPins.length; i++) {
+      final pin = annotationPins[i];
+      final rect = pin.rect;
       final center = Offset(rect.left + 10, rect.top + 10);
-      canvas.drawCircle(center, 10, pinPaint);
+      final pinColor = _pinColor(pin.status);
+      canvas.drawCircle(center, 10, Paint()..color = pinColor);
       textPainter.text = TextSpan(
         text: '${i + 1}',
         style: TextStyle(
-          color: colorScheme.onTertiary,
+          color: _onPinColor(pin.status),
           fontSize: 11,
           fontWeight: FontWeight.w700,
         ),
@@ -3229,10 +3617,32 @@ class _FlutterScoutAnnotationPainter extends CustomPainter {
     }
   }
 
+  Color _pinColor(String status) {
+    switch (status) {
+      case 'pending_review':
+        return const Color(0xFFFFB300); // amber: agent says fixed, review me
+      case 'stale_target':
+        return colorScheme.error;
+      default:
+        return colorScheme.tertiary;
+    }
+  }
+
+  Color _onPinColor(String status) {
+    switch (status) {
+      case 'pending_review':
+        return const Color(0xFF3E2723);
+      case 'stale_target':
+        return colorScheme.onError;
+      default:
+        return colorScheme.onTertiary;
+    }
+  }
+
   @override
   bool shouldRepaint(covariant _FlutterScoutAnnotationPainter oldDelegate) {
     return oldDelegate.targets != targets ||
-        oldDelegate.annotationPinRects != annotationPinRects ||
+        oldDelegate.annotationPins != annotationPins ||
         oldDelegate.selectedTarget != selectedTarget ||
         oldDelegate.colorScheme != colorScheme ||
         oldDelegate.annotationRevision != annotationRevision;
@@ -3512,7 +3922,24 @@ class ScoutAnnotation {
   DateTime? updatedAt;
   String? note;
 
-  bool get isActive => status == 'open' || status == 'stale_target';
+  /// PNG bytes of the annotated widget captured the moment the annotation was
+  /// created (the "before" crop). Null until the in-app capture completes.
+  Uint8List? beforeCropPng;
+
+  /// Logical [left, top, width, height] used for the before crop, retained so
+  /// the CLI can re-crop from a native screenshot when [beforeCropNeedsNative].
+  List<double>? beforeCropRect;
+  bool beforeCropNeedsNative = false;
+
+  /// PNG bytes captured when the annotation is marked fixed (the "after" crop).
+  Uint8List? afterCropPng;
+  List<double>? afterCropRect;
+  bool afterCropNeedsNative = false;
+
+  bool get isActive =>
+      status == 'open' ||
+      status == 'stale_target' ||
+      status == 'pending_review';
 
   Map<String, Object?> toJson({ScoutAnnotationTarget? liveTarget}) {
     final targetJson = target.toJson();
@@ -3547,6 +3974,12 @@ class ScoutAnnotation {
       'liveStatus': status == 'open' && liveTarget == null
           ? 'stale_target'
           : status,
+      'hasBeforeCrop': beforeCropPng != null,
+      'beforeCropNeedsNative': beforeCropNeedsNative,
+      if (beforeCropRect != null) 'beforeCropRect': beforeCropRect,
+      'hasAfterCrop': afterCropPng != null,
+      'afterCropNeedsNative': afterCropNeedsNative,
+      if (afterCropRect != null) 'afterCropRect': afterCropRect,
       'target': targetJson,
     };
   }
@@ -3627,6 +4060,34 @@ class ScoutAnnotationTarget {
       if (scoutNodeId != null) 'scoutNodeId': scoutNodeId,
     };
   }
+}
+
+class _CaptureResult {
+  const _CaptureResult({
+    required this.bytes,
+    required this.width,
+    required this.height,
+    required this.pixelRatio,
+    required this.bounds,
+    required this.needsNative,
+  }) : error = null;
+
+  const _CaptureResult.failure(
+    this.error, {
+    this.needsNative = false,
+    this.bounds,
+  }) : bytes = null,
+       width = 0,
+       height = 0,
+       pixelRatio = 1;
+
+  final Uint8List? bytes;
+  final int width;
+  final int height;
+  final double pixelRatio;
+  final Rect? bounds;
+  final bool needsNative;
+  final String? error;
 }
 
 class _EditableCandidate {
