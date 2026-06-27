@@ -77,4 +77,44 @@ void main() {
 
     expect(find.text('Custom phone: 60151234567'), findsOneWidget);
   });
+
+  testWidgets('stress lab hub opens and lists destinations', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const ScoutTestApp());
+
+    await tester.tap(find.byKey(const ValueKey('stress_lab')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Scout Stress Lab'), findsOneWidget);
+    expect(find.byKey(const ValueKey('lab_grid')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lab_long_list')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lab_mega_form')), findsOneWidget);
+  });
+
+  testWidgets('mega form opens and accepts input', (WidgetTester tester) async {
+    await tester.pumpWidget(const ScoutTestApp());
+
+    await tester.tap(find.byKey(const ValueKey('stress_lab')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('lab_mega_form')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Mega form'), findsOneWidget);
+    expect(find.byKey(const ValueKey('mega_form_scroll')), findsOneWidget);
+
+    // Name and email sit at the top of the lazily-built form.
+    await tester.enterText(
+      find.byKey(const ValueKey('mega_name')),
+      'QA Customer',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('mega_email')),
+      'qa@example.com',
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('QA Customer'), findsOneWidget);
+    expect(find.text('qa@example.com'), findsOneWidget);
+  });
 }

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 
+import 'screens/stress_lab_hub.dart';
+
 void main() {
   FlutterScoutBinding.ensureInitialized();
   runApp(const ScoutTestApp());
@@ -151,6 +153,17 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                     key: const ValueKey('custom_phone'),
                     onPressed: _openCustomPhoneDialog,
                     child: const Text('Custom phone'),
+                  ),
+                  FilledButton.tonal(
+                    key: const ValueKey('stress_lab'),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const StressLabHub(),
+                        ),
+                      );
+                    },
+                    child: const Text('Stress Lab'),
                   ),
                 ],
               ),
