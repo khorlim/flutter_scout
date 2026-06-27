@@ -2661,16 +2661,49 @@ print(String(data: data, encoding: .utf8)!)
   }
 
   Future<_FlutterDevice?> _resolveFlutterDevice(String requested) async {
+    // Fastest path: desktop and web targets use fixed Flutter device ids
+    // (`macos`, `chrome`, ...) that need no discovery at all, so resolve them
+    // from a constant instead of paying ~7s for `flutter devices --machine`.
+    final wellKnown = _resolveWellKnownDevice(requested);
+    if (wellKnown != null) return wellKnown;
     // Fast path: resolve iOS Simulator targets directly through `xcrun simctl`
     // (~0.1s) instead of booting the Flutter tool via `flutter devices
     // --machine` (~7s). This call runs on every command, so the simctl path
     // shaves seconds off both cold launches and warm `ensure`/`status` loops.
     final simulatorDevice = await _resolveSimulatorDevice(requested);
     if (simulatorDevice != null) return simulatorDevice;
-    // Fallback: physical devices, macOS, and web are only known to the Flutter
-    // tool, so pay the slower discovery cost when simctl has no match.
+    // Fallback: physical devices are only known to the Flutter tool, so pay the
+    // slower discovery cost when neither fast path matches.
     return _resolveDeviceViaFlutter(requested);
   }
+
+  /// Resolves the fixed Flutter desktop/web device ids without spawning a
+  /// process. These ids are constants, so `flutter run -d <id>` reports a clear
+  /// error later if the platform is not enabled. Fields mirror what `flutter
+  /// devices --machine` returns (null platform/category, `emulator: false`), so
+  /// downstream screenshot routing is unchanged.
+  _FlutterDevice? _resolveWellKnownDevice(String requested) {
+    final name = wellKnownDeviceName(requested);
+    if (name == null) return null;
+    return _FlutterDevice(
+      id: requested,
+      name: name,
+      platform: null,
+      category: null,
+      emulator: false,
+    );
+  }
+
+  /// Returns the display name for a fixed Flutter desktop/web device id, or null
+  /// for anything that needs real discovery. Exposed for testing.
+  static String? wellKnownDeviceName(String id) => const <String, String>{
+    'macos': 'macOS',
+    'windows': 'Windows',
+    'linux': 'Linux',
+    'chrome': 'Chrome',
+    'edge': 'Edge',
+    'web-server': 'Web Server',
+  }[id];
 
   Future<_FlutterDevice?> _resolveSimulatorDevice(String requested) async {
     final ProcessResult result;

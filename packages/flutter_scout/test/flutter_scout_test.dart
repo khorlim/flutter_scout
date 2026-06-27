@@ -61,6 +61,21 @@ void main() {
     });
   });
 
+  group('wellKnownDeviceName', () {
+    test('resolves fixed desktop and web ids', () {
+      expect(FlutterScoutCli.wellKnownDeviceName('macos'), 'macOS');
+      expect(FlutterScoutCli.wellKnownDeviceName('chrome'), 'Chrome');
+      expect(FlutterScoutCli.wellKnownDeviceName('windows'), 'Windows');
+      expect(FlutterScoutCli.wellKnownDeviceName('web-server'), 'Web Server');
+    });
+
+    test('returns null for ids that need real discovery', () {
+      expect(FlutterScoutCli.wellKnownDeviceName('macOS'), isNull);
+      expect(FlutterScoutCli.wellKnownDeviceName('00008120-001'), isNull);
+      expect(FlutterScoutCli.wellKnownDeviceName(''), isNull);
+    });
+  });
+
   test('status reports successfully before attach', () async {
     await _withTempCwd(() async {
       final exitCode = await FlutterScoutCli().run(['status']);
