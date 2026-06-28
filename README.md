@@ -1,41 +1,36 @@
 # Flutter Scout
 
-Flutter Scout is an agent-oriented eyes-and-hands bridge for Flutter simulator apps.
+Flutter Scout is an agent-oriented **eyes-and-hands bridge** for Flutter simulator apps. An AI agent inspects the running app, drives real feature flows, reads exactly what changed after each action, and catches hard runtime errors — with no per-screen test scaffolding in the app.
 
-The current vertical slice implements:
+```text
+ensure/attach → inspect → act → reload/restart after edits → read delta + errors → crop → replay
+```
 
-- a main-only Flutter helper initializer
-- a registration initializer for apps that already create a custom debug binding
-- VM service extensions for inspect, tap, tap-text, long press, input, fill, scroll, swipe, back, and wait-stable
-- a Dart CLI that can ensure, launch, or attach to a simulator app
-- stale session validation and exact device resolution for launch/attach
-- `doctor`, `status`, `stop`, and `bounds` commands for setup and cleanup
-- extension readiness preflight after launch/attach
-- attach-first `ensure`, hot reload, and hot restart commands to avoid rebuilds
-- status hot-update capability hints so agents know whether reload/restart can avoid a rebuild
-- reload diagnostics that distinguish rejected VM reloads from reachable apps still running old code
-- compact default action output, with full before/after data behind `--verbose`
-- compact inspect snapshots
-- addressable text targets for bounds/crops and safer `tap-text` activation through nearest actionable ancestors or visible text-point fallback
-- split text visibility in inspect summaries with `visibleText`, `hitTestableText`, and `offscreenText`
-- stable handles for common icon-only Material actions and glyph text such as add, back, save, duplicate, delete, download, search, close, edit, and more
-- inferred button handles for unlabeled gesture targets with clear contained action text, such as payment, confirm, done, create order, login, and save actions
-- stale helper diagnostics and CLI-side `tap-text` fallback for attached apps still running an older helper protocol
-- duplicate-safe field handles and field values
-- viewport-aware inspect metadata for offscreen or partially visible controls
-- offscreen target protection: target taps fail with `target_not_visible` until the control has a visible safe tap point
-- coordinate-aware scroll and swipe gestures
-- per-field fill results and before/after action deltas
-- screenshot capture through `xcrun simctl` for iOS Simulator sessions and app-window `screencapture` for macOS attach sessions
-- targeted crops through `xcrun simctl` for iOS Simulator sessions
-- log capture for Flutter Scout launches
-- attach-aware log diagnostics for human/IDE-owned sessions
-- evidence bundles that collect status, inspect, logs, screenshot, and session replay files
-- hard runtime signal capture through Flutter/platform error hooks with severity, blocking, phase, age, and stale facts
-- replayable sessions with a concise transcript in replay output
-- launch timing metrics for Scout-owned launches, including total, build, sync, VM service, and ready timing
-- an in-app annotation overlay for selecting visible widgets, adding comments, and exposing those comments to agents
-- a sample Flutter app for simulator verification
+## Documentation map
+
+Start here based on what you need:
+
+| Goal | Read |
+| --- | --- |
+| Use Scout to verify a Flutter app (agent loop + command reference) | [`skills/flutter-scout/SKILL.md`](skills/flutter-scout/SKILL.md) |
+| Install and wire Scout into an app | [`skills/flutter-scout-setup/SKILL.md`](skills/flutter-scout-setup/SKILL.md) |
+| Modify Scout's own code (file map, request flow, conventions) | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| Understand the product goals and design rationale | [`goal.md`](goal.md) |
+
+`SKILL.md` is the source of truth for agent-facing command behavior; the sections below are a human-readable overview.
+
+## Capabilities
+
+- **Sessions & lifecycle** — attach-first `ensure`, explicit `launch`/`attach`, exact device resolution, stale-session validation, extension-readiness preflight, `doctor`/`status`/`stop`, and launch timing metrics.
+- **Perception** — compact `inspect` snapshots with stable handles (keys, semantics, tooltips, Material icons/glyphs, inferred button labels), split text visibility (`visibleText`/`hitTestableText`/`offscreenText`), viewport metadata, and duplicate-safe field handles.
+- **Acting** — tap, tap-text, long-press, input, fill, coordinate-aware scroll/swipe, scroll-to, back; compact action output with per-field fill results and before/after deltas (`--verbose` for full payloads).
+- **Hot update** — attach-first reload/restart with capability hints and reload diagnostics that separate rejected VM reloads from apps still running old code.
+- **Visual & log evidence** — in-app and native screenshots/crops, attach-aware log capture, and shareable `evidence` bundles.
+- **Runtime signals** — hard Flutter/platform error capture with `severity`, `blocking`, `phase`, `ageMs`, and `stale` facts.
+- **Annotation handoff** — an in-app overlay where a human flags widgets and comments, then hands off to the agent (see [Annotation Mode](#annotation-mode)).
+- **Replay** — record sessions and replay flows after a fix, with a concise transcript.
+
+Two initializers cover integration: a main-only helper for fresh apps, and a registration call for apps that already create a custom debug binding (see [App Integration](#app-integration)). A sample app for simulator verification lives in `apps/scout_test_app`.
 
 ## Packages
 

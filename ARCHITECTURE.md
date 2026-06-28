@@ -48,8 +48,8 @@ the shell; command groups are `extension`s.
 |------|----------------|
 | `flutter_scout_cli.dart` | `run()` dispatch, `_call`/`_connect`, device resolution, VM-uri discovery, session-file IO, process inspection, usage. Top-level `_sessionDir` getters. |
 | `cli_session.dart` | launch / attach / ensure / status / doctor / stop. |
-| `cli_annotations.dart` | `annotations` command + crop materialization (cache keyed by capture identity, native fallback). |
-| `cli_actions.dart` | bounds, tap, input, tap-text, long-press, fill, wait, reload/restart, scroll/swipe/scroll-to, back, deeplink, logs. |
+| `cli_annotations.dart` | `bounds`, `annotations` command + crop materialization (cache keyed by capture identity, native fallback). |
+| `cli_actions.dart` | tap, input, tap-text, long-press, fill, wait, reload/restart, scroll/swipe/scroll-to, back, deeplink, logs. |
 | `cli_capture.dart` | screenshot / crop, `_inAppCapture`, `_cropPngBytes`. |
 | `cli_evidence.dart` | evidence bundle, replay, transcript formatting. |
 | `cli_results.dart` | VM response printing, protocol diagnostics, result compaction. |
@@ -79,5 +79,7 @@ commands. Key pieces:
 - The runtime is one library: any new private member is visible to all parts.
 - Keep the public API (`run()`, `FlutterScoutRuntime` public methods, the
   `RuntimeAnnotations` extension) stable; tests call these directly.
-- After changes: `flutter analyze` + `flutter test` in both packages; for
-  behavior changes, smoke-test on a simulator (see SKILL.md).
+- After changes, keep both packages green — the CLI is pure Dart, the helper is a
+  Flutter package: `dart analyze`/`dart test` in `packages/flutter_scout`,
+  `flutter analyze`/`flutter test` in `packages/flutter_scout_helper`. For behavior
+  changes, smoke-test on a simulator (see SKILL.md).
