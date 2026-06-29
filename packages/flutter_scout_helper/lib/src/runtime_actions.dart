@@ -411,9 +411,36 @@ extension _RuntimeActions on FlutterScoutRuntime {
         );
       }
 
+      // Bound a single call so it always returns before the CLI's VM-service
+      // RPC timeout (20s), no matter how deep the target. A very deep target
+      // (e.g. a keyed row thousands of items down a lazy list) can need
+      // hundreds of scrolls; rather than block until the transport times out
+      // with an opaque error, stop at the budget and report progress with a
+      // resume hint. scroll-to resumes from the new position, so the agent just
+      // calls it again to continue. The budget sits well under 20s so the final
+      // snapshot and RPC serialization still complete inside the transport
+      // window even on a slow tree.
+      final budgetDeadline = DateTime.now().add(
+        const Duration(milliseconds: 12000),
+      );
       var current = before;
       var scrolls = 0;
       while (scrolls < maxScrolls) {
+        if (DateTime.now().isAfter(budgetDeadline)) {
+          final after = _snapshot();
+          return _scrollToFailure(
+            before: before,
+            after: after,
+            scrolls: scrolls,
+            reason: 'time_budget_exhausted',
+            message:
+                'Scrolled $scrolls time(s) toward `$target` but reached the '
+                'per-call time budget before it became visible. The scrollable '
+                'is still moving — run `scroll-to $target` again to continue '
+                'from here.',
+            target: target,
+          );
+        }
         final start = _scrollStartFor(current, direction);
         if (start == null) {
           final after = _snapshot();
@@ -444,8 +471,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
             target: target,
           );
         }
-        // Stop early if the scrollable did not move (hit an edge).
-        if (!_geometryChanged(current, after)) {
+        // Stop early only if the scrollable genuinely did not move (hit an
+        // edge). Use viewport-content movement, not just per-id geometry, so a
+        // lazy list whose visible children fully turn over each step is not
+        // mistaken for a pinned scrollable.
+        if (!_viewportMoved(current, after)) {
           return _scrollToFailure(
             before: before,
             after: after,
@@ -629,11 +659,39 @@ extension _RuntimeActions on FlutterScoutRuntime {
     });
   }
 
+  /// Drive the rendering pipeline to flush a deferred frame when the engine
+  /// has stopped delivering vsync, so a follow-up snapshot reflects post-action
+  /// state instead of the stale, pre-action render tree.
+  ///
+  /// A desktop Flutter window that is not the frontmost/key window stops
+  /// receiving frame callbacks from the embedder. A tapped callback's
+  /// `setState` then never produces a serviced frame, so without this the
+  /// action looks like `activated_no_observed_change` even though it ran.
+  void _pumpPendingFrame() {
+    final binding = WidgetsBinding.instance;
+    // Only step in when the embedder has stopped delivering frames — i.e. a
+    // backgrounded/occluded desktop window where `framesEnabled` is false. In
+    // that state `setState` never schedules a serviced frame, so dirtied
+    // elements are deferred indefinitely and a follow-up snapshot reads stale,
+    // pre-action UI. Driving `handleDrawFrame` flushes that pending build,
+    // layout, and paint synchronously.
+    //
+    // When frames are enabled the engine services its own frames; pumping on
+    // top of that would fight in-flight animations (scroll ballistics, route
+    // transitions) and corrupt their timing, so leave those entirely to the
+    // engine.
+    if (binding.framesEnabled) return;
+    if (binding.schedulerPhase != SchedulerPhase.idle) return;
+    binding.handleBeginFrame(null);
+    binding.handleDrawFrame();
+  }
+
   Future<void> _waitForFrame() async {
     await WidgetsBinding.instance.endOfFrame.timeout(
       const Duration(milliseconds: 500),
       onTimeout: () {},
     );
+    _pumpPendingFrame();
   }
 
   Future<bool> _waitStable({
@@ -651,6 +709,10 @@ extension _RuntimeActions on FlutterScoutRuntime {
         frameTimeout,
         onTimeout: () {},
       );
+      // A backgrounded desktop window receives no vsync, so the awaited frame
+      // may never have run. Drive it ourselves so the stability check and the
+      // snapshot that follows reflect post-action state.
+      _pumpPendingFrame();
       if (!WidgetsBinding.instance.hasScheduledFrame) {
         quietFrames++;
         if (quietFrames >= 2) return true;
@@ -741,5 +803,4 @@ extension _RuntimeActions on FlutterScoutRuntime {
       'recentErrors': _recentErrors(),
     });
   }
-
 }

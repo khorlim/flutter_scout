@@ -139,6 +139,31 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     return _changedGeometryIds(before, after).isNotEmpty;
   }
 
+  /// Whether the viewport content actually moved between two snapshots.
+  ///
+  /// More robust than [_geometryChanged] alone for lazy lists/grids: a single
+  /// scroll step can replace every visible child, so no node id survives into
+  /// the next snapshot and a pure geometry comparison finds nothing in common
+  /// and wrongly concludes the scrollable did not move. Treat a change in the
+  /// set of visible text or built interactables as movement too, so scroll-to
+  /// only reports `reached_scroll_end` when the content is genuinely pinned.
+  bool _viewportMoved(ScoutSnapshot before, ScoutSnapshot after) {
+    if (_geometryChanged(before, after)) return true;
+    final beforeText = before.visibleText.toSet();
+    final afterText = after.visibleText.toSet();
+    if (beforeText.length != afterText.length ||
+        !beforeText.containsAll(afterText)) {
+      return true;
+    }
+    final beforeActions = before.interactables.map((node) => node.id).toSet();
+    final afterActions = after.interactables.map((node) => node.id).toSet();
+    if (beforeActions.length != afterActions.length ||
+        !beforeActions.containsAll(afterActions)) {
+      return true;
+    }
+    return false;
+  }
+
   Map<String, Object?> _delta(ScoutSnapshot before, ScoutSnapshot after) {
     final beforeText = before.visibleText.toSet();
     final afterText = after.visibleText.toSet();

@@ -1198,6 +1198,11 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       final label = node.label?.trim();
       final rect = node.rect;
       if (label == null || rect == null) continue;
+      // Ignore text that cannot be hit (e.g. the base screen sitting behind a
+      // dialog's modal barrier); the keypad's own value display is on top and
+      // hit-testable, so this keeps an unrelated digit-bearing label from
+      // winning as the current value.
+      if (!node.hitTestable) continue;
       if (RegExp(r'^\d$').hasMatch(label)) continue;
       final digits = _digitsOnly(label);
       if (digits.length < 2) continue;
