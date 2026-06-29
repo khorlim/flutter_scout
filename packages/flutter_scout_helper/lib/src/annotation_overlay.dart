@@ -25,6 +25,23 @@ class _FlutterScoutAnnotationOverlayState
   int _lastCollectedRevision = -1;
   bool _targetRefreshScheduled = false;
   bool _handoffSent = false;
+  // The pin whose delete popup is open (tapped an existing annotation pin).
+  // Carries everything the exit ghost needs so it can always animate out even
+  // if the live target list shifts before delete.
+  ({String id, String comment, Offset at, String status, int number})?
+  _selectedPin;
+  // Ghost pins animating out after deletion (kept mounted until the exit ends).
+  final List<({int ghost, Offset center, String status, int number})>
+  _exitingPins = [];
+  int _nextGhost = 0;
+
+  // A pin reticle is centered this far in from its target's top-left corner;
+  // taps within [_pinHitRadius] of that center open the pin's delete popup.
+  static const double _pinAnchorInset = 10;
+  static const double _pinHitRadius = 18;
+
+  Offset _pinCenter(Rect rect) =>
+      Offset(rect.left + _pinAnchorInset, rect.top + _pinAnchorInset);
 
   static const double _toggleButtonMargin = 12;
   static const double _toggleButtonHeight = 48;
@@ -42,8 +59,111 @@ class _FlutterScoutAnnotationOverlayState
         _selectedTarget = null;
         _currentCandidates = const [];
         _commentController.clear();
+        _selectedPin = null;
+        _exitingPins.clear();
       });
     }
+  }
+
+  /// Tap router: if the tap lands on an existing annotation pin, open its
+  /// delete popup; otherwise start/cycle a new target selection.
+  void _handleTap(Offset point) {
+    final pins = widget.runtime._annotationPins(_visibleTargets);
+    ({Rect rect, String status, String id, String comment})? picked;
+    var pickedNumber = 0;
+    var bestDistance = _pinHitRadius;
+    for (var i = 0; i < pins.length; i++) {
+      final distance = (point - _pinCenter(pins[i].rect)).distance;
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        picked = pins[i];
+        pickedNumber = i + 1;
+      }
+    }
+    if (picked != null) {
+      final hit = picked;
+      final number = pickedNumber;
+      setState(() {
+        _selectedPin = (
+          id: hit.id,
+          comment: hit.comment,
+          at: _pinCenter(hit.rect),
+          status: hit.status,
+          number: number,
+        );
+        _selectedTarget = null;
+        _currentCandidates = const [];
+        _commentController.clear();
+      });
+      return;
+    }
+    if (_selectedPin != null) {
+      setState(() => _selectedPin = null);
+    }
+    _selectAt(point);
+  }
+
+  void _deleteSelectedPin() {
+    final pin = _selectedPin;
+    if (pin == null) return;
+    // Spawn a ghost from the data captured when the popup opened, so the exit
+    // animation always plays even though removeAnnotation drops the real pin
+    // immediately and the live target list may have shifted.
+    setState(() {
+      _exitingPins.add((
+        ghost: _nextGhost++,
+        center: pin.at,
+        status: pin.status,
+        number: pin.number,
+      ));
+      _selectedPin = null;
+    });
+    widget.runtime.removeAnnotation(pin.id);
+  }
+
+  /// Live annotation pins (animated, keyed by id) plus any ghosts animating out.
+  List<Widget> _buildPins() {
+    final clearRects = widget.runtime._captureClearRects;
+    final pins = widget.runtime._annotationPins(_visibleTargets);
+    final widgets = <Widget>[];
+    for (var i = 0; i < pins.length; i++) {
+      final pin = pins[i];
+      final center = _pinCenter(pin.rect);
+      widgets.add(
+        _ScoutPin(
+          key: ValueKey('pin_${pin.id}'),
+          center: center,
+          status: pin.status,
+          number: i + 1,
+          // Hidden for the frame(s) its region is captured, so it never lands
+          // in a crop; stays mounted so it doesn't re-animate afterward. Use the
+          // reticle's bounding box (+ glow), not just the center, so a neighbour
+          // pin's halo near a crop edge can't bleed in either.
+          dimmed: clearRects.any(
+            (r) => r.overlaps(
+              Rect.fromCircle(center: center, radius: _ScoutPin.size / 2 + 10),
+            ),
+          ),
+        ),
+      );
+    }
+    for (final g in _exitingPins) {
+      widgets.add(
+        _ScoutPin(
+          key: ValueKey('exit_${g.ghost}'),
+          center: g.center,
+          status: g.status,
+          number: g.number,
+          exiting: true,
+          onExited: () {
+            if (mounted) {
+              setState(() => _exitingPins.removeWhere((e) => e.ghost == g.ghost));
+            }
+          },
+        ),
+      );
+    }
+    return widgets;
   }
 
   void _selectAt(Offset point) {
@@ -176,20 +296,18 @@ class _FlutterScoutAnnotationOverlayState
               Positioned.fill(
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
-                  onTapUp: (details) => _selectAt(details.localPosition),
+                  onTapUp: (details) => _handleTap(details.localPosition),
                   child: CustomPaint(
                     painter: _FlutterScoutAnnotationPainter(
                       targets: _visibleTargets,
-                      annotationPins: widget.runtime._annotationPins(
-                        _visibleTargets,
-                      ),
                       selectedTarget: _selectedTarget,
-                      colorScheme: Theme.of(context).colorScheme,
+                      clearRects: widget.runtime._captureClearRects,
                       annotationRevision: revision,
                     ),
                   ),
                 ),
               ),
+            if (enabled) ..._buildPins(),
             if (enabled && _selectedTarget != null)
               _AnnotationCommentPanel(
                 target: _selectedTarget!,
@@ -205,8 +323,16 @@ class _FlutterScoutAnnotationOverlayState
                 },
                 onSave: _saveComment,
               ),
+            if (enabled && _selectedPin != null)
+              _AnnotationPinPopup(
+                anchor: _selectedPin!.at,
+                comment: _selectedPin!.comment,
+                onDelete: _deleteSelectedPin,
+                onClose: () => setState(() => _selectedPin = null),
+              ),
             if (enabled &&
                 _selectedTarget == null &&
+                _selectedPin == null &&
                 widget.runtime._activeAnnotationCount > 0)
               Positioned(
                 left: 12,
@@ -254,36 +380,11 @@ class _AnnotationToggleButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: enabled ? scheme.primary : scheme.surface,
-      elevation: 6,
-      shape: const StadiumBorder(),
-      child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: onPressed,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.edit_note,
-                color: enabled ? scheme.onPrimary : scheme.onSurface,
-              ),
-              if (count > 0) ...[
-                const SizedBox(width: 6),
-                Text(
-                  '$count',
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                    color: enabled ? scheme.onPrimary : scheme.onSurface,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
+    return ScoutPill(
+      icon: enabled ? Icons.my_location : Icons.add_location_alt_outlined,
+      active: enabled,
+      count: count,
+      onPressed: onPressed,
     );
   }
 }
@@ -301,15 +402,109 @@ class _AnnotationHandoffButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return FilledButton.icon(
-      onPressed: onPressed,
-      style: FilledButton.styleFrom(
-        backgroundColor: sent ? scheme.tertiary : scheme.primary,
-        foregroundColor: sent ? scheme.onTertiary : scheme.onPrimary,
+    return AnimatedSwitcher(
+      duration: ScoutMotion.base,
+      switchInCurve: ScoutMotion.enter,
+      transitionBuilder: (child, anim) =>
+          FadeTransition(opacity: anim, child: child),
+      child: sent
+          ? ScoutButton(
+              key: const ValueKey('sent'),
+              label: 'Sent',
+              icon: Icons.check_circle_outline,
+              kind: ScoutButtonKind.ghost,
+              onPressed: () {},
+            )
+          : ScoutButton(
+              key: const ValueKey('send'),
+              label: 'Send $count to agent',
+              icon: Icons.podcasts,
+              onPressed: onPressed,
+            ),
+    );
+  }
+}
+
+class _AnnotationPinPopup extends StatelessWidget {
+  const _AnnotationPinPopup({
+    required this.anchor,
+    required this.comment,
+    required this.onDelete,
+    required this.onClose,
+  });
+
+  final Offset anchor;
+  final String comment;
+  final VoidCallback onDelete;
+  final VoidCallback onClose;
+
+  static const double _width = 260;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final padding = MediaQuery.paddingOf(context);
+    // Anchor just below-right of the pin, clamped on-screen.
+    final maxLeft = size.width - _width - 12;
+    final left = maxLeft <= 12 ? 12.0 : (anchor.dx - 12).clamp(12.0, maxLeft);
+    final minTop = padding.top + 12;
+    final maxTop = size.height - padding.bottom - 160;
+    final top = maxTop <= minTop
+        ? minTop
+        : (anchor.dy + 18).clamp(minTop, maxTop);
+    return Positioned(
+      left: left,
+      top: top,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: ScoutMotion.base,
+        curve: ScoutMotion.enter,
+        builder: (context, t, child) => Opacity(
+          opacity: t.clamp(0.0, 1.0),
+          child: Transform.scale(
+            scale: 0.9 + 0.1 * t,
+            alignment: Alignment.topLeft,
+            child: child,
+          ),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: _width),
+          child: ScoutPanel(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('NOTE', style: ScoutType.meta),
+                const SizedBox(height: ScoutSpace.xs),
+                Text(
+                  comment,
+                  maxLines: 4,
+                  overflow: TextOverflow.ellipsis,
+                  style: ScoutType.body,
+                ),
+                const SizedBox(height: ScoutSpace.m),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    ScoutButton(
+                      label: 'Close',
+                      kind: ScoutButtonKind.ghost,
+                      onPressed: onClose,
+                    ),
+                    const SizedBox(width: ScoutSpace.s),
+                    ScoutButton(
+                      label: 'Delete',
+                      icon: Icons.delete_outline,
+                      kind: ScoutButtonKind.danger,
+                      onPressed: onDelete,
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
-      icon: Icon(sent ? Icons.check_circle : Icons.send),
-      label: Text(sent ? 'Sent to agent' : 'Send $count to agent'),
     );
   }
 }
@@ -333,63 +528,78 @@ class _AnnotationCommentPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
     return Positioned(
       left: 12,
       right: 12,
       bottom: MediaQuery.paddingOf(context).bottom + 12,
-      child: Material(
-        color: scheme.surface,
-        elevation: 8,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                target.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.titleSmall,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '${target.widgetType} - ${candidateIndex + 1} of $candidateCount',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: ScoutMotion.base,
+        curve: ScoutMotion.enter,
+        builder: (context, t, child) => Opacity(
+          opacity: t.clamp(0.0, 1.0),
+          child: Transform.translate(
+            offset: Offset(0, (1 - t) * 18),
+            child: child,
+          ),
+        ),
+        child: ScoutPanel(
+          // TextField requires a Material ancestor; transparency keeps the look.
+          child: Material(
+            type: MaterialType.transparency,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: const BoxDecoration(
+                        color: ScoutColors.signal,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: ScoutSpace.s),
+                    Expanded(
+                      child: Text(
+                        target.displayName.toUpperCase(),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: ScoutType.label,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: controller,
-                autofocus: true,
-                minLines: 2,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: 'Comment',
-                  border: OutlineInputBorder(),
+                const SizedBox(height: ScoutSpace.xs + 2),
+                Text(
+                  '${target.widgetType} · ${candidateIndex + 1}/$candidateCount',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: ScoutType.meta,
                 ),
-                textInputAction: TextInputAction.newline,
-              ),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(onPressed: onCancel, child: const Text('Cancel')),
-                  const SizedBox(width: 8),
-                  FilledButton.icon(
-                    onPressed: onSave,
-                    icon: const Icon(Icons.check),
-                    label: const Text('Save'),
-                  ),
-                ],
-              ),
-            ],
+                const SizedBox(height: ScoutSpace.m),
+                ScoutField(controller: controller),
+                const SizedBox(height: ScoutSpace.m),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    ScoutButton(
+                      label: 'Cancel',
+                      kind: ScoutButtonKind.ghost,
+                      onPressed: onCancel,
+                    ),
+                    const SizedBox(width: ScoutSpace.s),
+                    ScoutButton(
+                      label: 'Save',
+                      icon: Icons.check,
+                      onPressed: onSave,
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -397,95 +607,195 @@ class _AnnotationCommentPanel extends StatelessWidget {
   }
 }
 
+/// Paints the HUD field: a faint scrim, hairline reticle outlines on candidate
+/// targets, and a bright corner-ticked frame on the selected target. Pins are
+/// drawn as animated widgets above this layer (see [_ScoutPin]).
 class _FlutterScoutAnnotationPainter extends CustomPainter {
   const _FlutterScoutAnnotationPainter({
     required this.targets,
-    required this.annotationPins,
     required this.selectedTarget,
-    required this.colorScheme,
+    required this.clearRects,
     required this.annotationRevision,
   });
 
   final List<ScoutAnnotationTarget> targets;
-  final List<({Rect rect, String status})> annotationPins;
   final ScoutAnnotationTarget? selectedTarget;
-  final ColorScheme colorScheme;
+  final List<Rect> clearRects;
   final int annotationRevision;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final scrim = Paint()..color = colorScheme.scrim.withValues(alpha: 0.08);
-    canvas.drawRect(Offset.zero & size, scrim);
+    // Carve out any region currently being rasterised so Scout's chrome never
+    // lands in a crop/screenshot (without blanking the whole overlay).
+    for (final rect in clearRects) {
+      canvas.clipRect(rect, clipOp: ui.ClipOp.difference);
+    }
+    canvas.drawRect(Offset.zero & size, Paint()..color = ScoutColors.scrim);
 
     final outline = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1
-      ..color = colorScheme.primary.withValues(alpha: 0.28);
+      ..color = ScoutColors.signal.withValues(alpha: 0.22);
     for (final target in targets.take(220)) {
-      canvas.drawRect(target.rect, outline);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          target.rect.deflate(0.5),
+          const Radius.circular(3),
+        ),
+        outline,
+      );
     }
 
     final selected = selectedTarget;
     if (selected != null) {
-      final selectedPaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3
-        ..color = colorScheme.primary;
-      canvas.drawRect(selected.rect, selectedPaint);
-    }
-
-    final textPainter = TextPainter(
-      textDirection: TextDirection.ltr,
-      textAlign: TextAlign.center,
-    );
-    for (var i = 0; i < annotationPins.length; i++) {
-      final pin = annotationPins[i];
-      final rect = pin.rect;
-      final center = Offset(rect.left + 10, rect.top + 10);
-      final pinColor = _pinColor(pin.status);
-      canvas.drawCircle(center, 10, Paint()..color = pinColor);
-      textPainter.text = TextSpan(
-        text: '${i + 1}',
-        style: TextStyle(
-          color: _onPinColor(pin.status),
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-        ),
+      final r = selected.rect;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(r, const Radius.circular(4)),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..color = ScoutColors.signal.withValues(alpha: 0.6),
       );
-      textPainter.layout(minWidth: 20, maxWidth: 20);
-      textPainter.paint(canvas, center - const Offset(10, 7));
+      final tick = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5
+        ..strokeCap = StrokeCap.round
+        ..color = ScoutColors.signal;
+      const len = 11.0;
+      _corner(canvas, r.topLeft, const Offset(1, 0), const Offset(0, 1), len, tick);
+      _corner(canvas, r.topRight, const Offset(-1, 0), const Offset(0, 1), len, tick);
+      _corner(canvas, r.bottomLeft, const Offset(1, 0), const Offset(0, -1), len, tick);
+      _corner(canvas, r.bottomRight, const Offset(-1, 0), const Offset(0, -1), len, tick);
     }
   }
 
-  Color _pinColor(String status) {
-    switch (status) {
-      case 'pending_review':
-        return const Color(0xFFFFB300); // amber: agent says fixed, review me
-      case 'stale_target':
-        return colorScheme.error;
-      default:
-        return colorScheme.tertiary;
-    }
-  }
-
-  Color _onPinColor(String status) {
-    switch (status) {
-      case 'pending_review':
-        return const Color(0xFF3E2723);
-      case 'stale_target':
-        return colorScheme.onError;
-      default:
-        return colorScheme.onTertiary;
-    }
+  void _corner(Canvas c, Offset o, Offset dx, Offset dy, double len, Paint p) {
+    c.drawLine(o, o + dx * len, p);
+    c.drawLine(o, o + dy * len, p);
   }
 
   @override
   bool shouldRepaint(covariant _FlutterScoutAnnotationPainter oldDelegate) {
+    // clearRects is a single mutable list reused across builds, so comparing it
+    // is a no-op; the revision bumps whenever clearRects changes, which is what
+    // actually drives repaints during capture.
     return oldDelegate.targets != targets ||
-        oldDelegate.annotationPins != annotationPins ||
         oldDelegate.selectedTarget != selectedTarget ||
-        oldDelegate.colorScheme != colorScheme ||
         oldDelegate.annotationRevision != annotationRevision;
+  }
+}
+
+/// An animated pin marker (HUD reticle badge) drawn above the painter layer.
+/// Pops in on mount; on [exiting] it scales/fades out then calls [onExited].
+class _ScoutPin extends StatefulWidget {
+  const _ScoutPin({
+    super.key,
+    required this.center,
+    required this.status,
+    required this.number,
+    this.dimmed = false,
+    this.exiting = false,
+    this.onExited,
+  });
+
+  final Offset center;
+  final String status;
+  final int number;
+  final bool dimmed; // hidden for one frame while its region is being captured
+  final bool exiting;
+  final VoidCallback? onExited;
+
+  static const double size = 26;
+
+  @override
+  State<_ScoutPin> createState() => _ScoutPinState();
+}
+
+class _ScoutPinState extends State<_ScoutPin>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: ScoutMotion.base,
+    reverseDuration: ScoutMotion.fast,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.exiting) {
+      _c.value = 1;
+      _runExit();
+    } else {
+      _c.forward();
+    }
+  }
+
+  @override
+  void didUpdateWidget(_ScoutPin old) {
+    super.didUpdateWidget(old);
+    if (widget.exiting && !old.exiting) _runExit();
+  }
+
+  void _runExit() {
+    _c.reverse().then((_) {
+      if (mounted) widget.onExited?.call();
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = ScoutColors.forStatus(widget.status);
+    return Positioned(
+      left: widget.center.dx - _ScoutPin.size / 2,
+      top: widget.center.dy - _ScoutPin.size / 2,
+      child: IgnorePointer(
+        child: AnimatedBuilder(
+          animation: _c,
+          builder: (context, child) {
+            final t = ScoutMotion.pop.transform(_c.value.clamp(0.0, 1.0));
+            return Opacity(
+              opacity: widget.dimmed ? 0 : _c.value.clamp(0.0, 1.0),
+              child: Transform.scale(scale: 0.4 + 0.6 * t, child: child),
+            );
+          },
+          child: _PinReticle(accent: accent, number: widget.number),
+        ),
+      ),
+    );
+  }
+}
+
+class _PinReticle extends StatelessWidget {
+  const _PinReticle({required this.accent, required this.number});
+
+  final Color accent;
+  final int number;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: _ScoutPin.size,
+      height: _ScoutPin.size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: ScoutColors.glass,
+        shape: BoxShape.circle,
+        border: Border.all(color: accent, width: 2),
+        boxShadow: [
+          BoxShadow(color: accent.withValues(alpha: 0.5), blurRadius: 10, spreadRadius: -2),
+        ],
+      ),
+      child: Text(
+        '$number',
+        style: ScoutType.numeral.copyWith(color: accent, fontSize: 12),
+      ),
+    );
   }
 }
 

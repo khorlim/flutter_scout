@@ -75,8 +75,10 @@ void main() {
       expect(annotation.isActive, isTrue);
 
       // Let the fire-and-forget before-crop capture finish (500ms frame wait
-      // plus encode).
-      await Future<void>.delayed(const Duration(milliseconds: 800));
+      // plus encode). Capture waits two frames for a deterministic clean
+      // raster; with no frame pump in tests each hits the 500ms frame timeout,
+      // so allow > 2× that here (a real app pumps frames in ~16ms each).
+      await Future<void>.delayed(const Duration(milliseconds: 1300));
       expect(annotation.beforeCropPng, isNotNull,
           reason: 'before crop should be captured in-app at creation');
 

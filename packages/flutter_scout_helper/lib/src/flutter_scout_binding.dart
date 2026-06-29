@@ -8,6 +8,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
+part 'scout_design.dart';
 part 'annotation_overlay.dart';
 part 'models.dart';
 part 'runtime_annotations.dart';
@@ -49,6 +50,11 @@ class FlutterScoutRuntime {
   int _nextSyntheticPointer = 1000000;
   int _nextAnnotationId = 1;
   int _annotationHandoffSeq = 0;
+  // Logical bounds currently being rasterised. The overlay omits its chrome
+  // (scrim/outlines/pins) *inside* these rects so captures stay clean — without
+  // blanking the whole overlay, which caused a visible flash on save. A list so
+  // overlapping captures compose; entries are added/removed by _captureRegion.
+  final List<Rect> _captureClearRects = <Rect>[];
   bool _annotationMode = false;
   OverlayEntry? _annotationOverlayEntry;
   bool _annotationOverlayInstallScheduled = false;

@@ -232,7 +232,6 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     if (layer is! OffsetLayer) {
       return const _CaptureResult.failure('no_offset_layer');
     }
-    await _waitForFrame();
     final screen = Offset.zero & renderView.size;
     var bounds = rect == null ? screen : rect.inflate(padding);
     bounds = bounds.intersect(screen);
@@ -253,13 +252,39 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       bounds.right * dpr,
       bounds.bottom * dpr,
     );
+    // Omit Scout's overlay chrome only inside `bounds` so the crop stays clean,
+    // then capture synchronously and restore immediately — the chrome is absent
+    // for ~one frame in a small rect, not a full-screen multi-frame blank.
+    ui.Image? image;
+    _captureClearRects.add(bounds);
+    _bumpAnnotationRevision();
     try {
-      final image = await layer.toImage(physicalBounds, pixelRatio: 1.0);
+      // Wait two frames, not one: `endOfFrame` can resolve against a frame that
+      // was already in flight when we added the clear rect (capture is usually
+      // triggered right after another revision bump). The first await drains any
+      // such in-flight frame; the second guarantees a frame built *with* the
+      // clear rect has been composited before the synchronous raster reads it —
+      // otherwise chrome could intermittently bleed into the crop.
+      await _waitForFrame();
+      await _waitForFrame();
+      image = layer.toImageSync(physicalBounds, pixelRatio: 1.0);
+    } catch (_) {
+      // image stays null; handled below.
+    } finally {
+      _captureClearRects.remove(bounds);
+      _bumpAnnotationRevision();
+    }
+    if (image == null) {
+      return _CaptureResult.failure(
+        'capture_failed',
+        needsNative: needsNative,
+        bounds: bounds,
+      );
+    }
+    try {
       final width = image.width;
       final height = image.height;
-      final byteData = await image.toByteData(
-        format: ui.ImageByteFormat.png,
-      );
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
       if (byteData == null) {
         return const _CaptureResult.failure('encode_failed');
@@ -420,14 +445,19 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     ];
   }
 
-  List<({Rect rect, String status})> _annotationPins(
+  List<({Rect rect, String status, String id, String comment})> _annotationPins(
     List<ScoutAnnotationTarget> liveTargets,
   ) {
     return [
       for (final annotation in _annotations)
         if (annotation.isActive)
           if (_liveAnnotationTarget(annotation, liveTargets) case final target?)
-            (rect: target.rect, status: annotation.status),
+            (
+              rect: target.rect,
+              status: annotation.status,
+              id: annotation.id,
+              comment: annotation.comment,
+            ),
     ];
   }
 
@@ -485,6 +515,17 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     _bumpAnnotationRevision();
     unawaited(_captureAnnotationCrop(annotation, slot: 'before'));
     return annotation;
+  }
+
+  /// Removes the annotation with [id] (mirrors [addAnnotation]). Returns whether
+  /// an annotation was actually removed, and bumps the revision so the overlay
+  /// and any `annotations list` reflect the deletion.
+  bool removeAnnotation(String id) {
+    final before = _annotations.length;
+    _annotations.removeWhere((annotation) => annotation.id == id);
+    final removed = _annotations.length != before;
+    if (removed) _bumpAnnotationRevision();
+    return removed;
   }
 
   /// Rasterises the annotation's target region and stashes the PNG on the

@@ -35,7 +35,8 @@ accessible because all parts share one library).
 | `runtime_snapshot.dart` | `_snapshot` (reads the widget tree) + annotation target collection + hit testing. |
 | `runtime_nodes.dart` | Node post-processing: compaction, label inference, id disambiguation, visual tree, geometry helpers. *(largest part; a future split candidate.)* |
 | `runtime_internals.dart` | Low-level pointer dispatch, tree walk, snapshot delta, `_ok`/`_fail` JSON responses. |
-| `annotation_overlay.dart` | Overlay widgets: toggle + "Send to agent" buttons, comment panel, target/pin painter. |
+| `annotation_overlay.dart` | Overlay widgets: toggle pill, "Send to agent" button, comment panel, pin popup, animated pin reticles, target painter. |
+| `scout_design.dart` | The **"Recon HUD" design system** — tokens (`ScoutColors`/`Space`/`Radius`/`Type`/`Motion`) + primitives (`ScoutPanel`/`Button`/`Pill`/`Field`). Use it, not Material, for Scout chrome. See `docs/scout-design-system.md`. |
 | `models.dart` | Data types: `ScoutSnapshot`, `ScoutNode`, `ScoutAnnotation`, `ScoutAnnotationTarget`, `_CaptureResult`, … |
 
 ## packages/flutter_scout (CLI)
