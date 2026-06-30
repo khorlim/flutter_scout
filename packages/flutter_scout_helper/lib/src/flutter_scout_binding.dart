@@ -34,7 +34,12 @@ class FlutterScoutHelper {
   static final FlutterScoutRuntime _runtime = FlutterScoutRuntime();
 
   static void ensureRegistered() {
-    if (_registered) return;
+    // Scout is a debug/profile-only tool. Bail in release so nothing it does —
+    // VM service extensions, error-handler hooks, the overlay — is wired into a
+    // production build. (Matches the kReleaseMode guards in _broadcastVmUri and
+    // the overlay install; profile mode keeps Scout because its VM service is
+    // available there.)
+    if (kReleaseMode || _registered) return;
     _registered = true;
     _runtime.install();
   }
