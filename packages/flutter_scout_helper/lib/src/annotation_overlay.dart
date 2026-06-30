@@ -157,7 +157,9 @@ class _FlutterScoutAnnotationOverlayState
           exiting: true,
           onExited: () {
             if (mounted) {
-              setState(() => _exitingPins.removeWhere((e) => e.ghost == g.ghost));
+              setState(
+                () => _exitingPins.removeWhere((e) => e.ghost == g.ghost),
+              );
             }
           },
         ),
@@ -294,15 +296,18 @@ class _FlutterScoutAnnotationOverlayState
           children: [
             if (enabled)
               Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTapUp: (details) => _handleTap(details.localPosition),
-                  child: CustomPaint(
-                    painter: _FlutterScoutAnnotationPainter(
-                      targets: _visibleTargets,
-                      selectedTarget: _selectedTarget,
-                      clearRects: widget.runtime._captureClearRects,
-                      annotationRevision: revision,
+                child: _ScoutHitTestGate(
+                  runtime: widget.runtime,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTapUp: (details) => _handleTap(details.localPosition),
+                    child: CustomPaint(
+                      painter: _FlutterScoutAnnotationPainter(
+                        targets: _visibleTargets,
+                        selectedTarget: _selectedTarget,
+                        clearRects: widget.runtime._captureClearRects,
+                        annotationRevision: revision,
+                      ),
                     ),
                   ),
                 ),
@@ -509,7 +514,10 @@ class _AnnotationPinPopup extends StatelessWidget {
   }
 }
 
-class _AnnotationCommentPanel extends StatelessWidget {
+/// A compact comment dialog anchored beside the selected widget. It scales/fades
+/// in from the edge nearest the target, animates back out before dismissing, and
+/// reflows to stay on-screen and above the software keyboard.
+class _AnnotationCommentPanel extends StatefulWidget {
   const _AnnotationCommentPanel({
     required this.target,
     required this.candidateIndex,
@@ -527,84 +535,234 @@ class _AnnotationCommentPanel extends StatelessWidget {
   final VoidCallback onSave;
 
   @override
+  State<_AnnotationCommentPanel> createState() =>
+      _AnnotationCommentPanelState();
+}
+
+class _AnnotationCommentPanelState extends State<_AnnotationCommentPanel>
+    with SingleTickerProviderStateMixin {
+  static const double _maxWidth = 300;
+  static const double _gap = ScoutSpace.m;
+  static const double _margin = ScoutSpace.m;
+
+  final GlobalKey _panelKey = GlobalKey();
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: ScoutMotion.base,
+    reverseDuration: ScoutMotion.fast,
+  );
+  late final Animation<double> _anim = CurvedAnimation(
+    parent: _controller,
+    curve: ScoutMotion.enter,
+    reverseCurve: ScoutMotion.exit,
+  );
+  Size? _measured;
+  bool _closing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _dismiss(VoidCallback after) async {
+    if (_closing) return;
+    _closing = true;
+    FocusScope.of(context).unfocus();
+    try {
+      await _controller.reverse();
+    } finally {
+      if (mounted) after();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Positioned(
-      left: 12,
-      right: 12,
-      bottom: MediaQuery.paddingOf(context).bottom + 12,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween(begin: 0, end: 1),
-        duration: ScoutMotion.base,
-        curve: ScoutMotion.enter,
-        builder: (context, t, child) => Opacity(
-          opacity: t.clamp(0.0, 1.0),
-          child: Transform.translate(
-            offset: Offset(0, (1 - t) * 18),
-            child: child,
-          ),
-        ),
-        child: ScoutPanel(
-          // TextField requires a Material ancestor; transparency keeps the look.
-          child: Material(
-            type: MaterialType.transparency,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: const BoxDecoration(
-                        color: ScoutColors.signal,
-                        shape: BoxShape.circle,
+    final media = MediaQuery.of(context);
+    final screen = media.size;
+    final keyboard = media.viewInsets.bottom;
+    final available = screen.width - _margin * 2;
+    final width = available < _maxWidth ? available : _maxWidth;
+    final estimate = _measured ?? Size(width, 220);
+    final placement = scoutAnnotationDialogPlacement(
+      target: widget.target.visibleRect,
+      dialog: Size(width, estimate.height),
+      screen: screen,
+      safeArea: media.padding,
+      keyboardInset: keyboard,
+      gap: _gap,
+      margin: _margin,
+    );
+
+    // Re-measure after layout so positioning uses the dialog's real height
+    // (content and keyboard state vary); AnimatedPositioned smooths the move.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final size = _panelKey.currentContext?.size;
+      if (size != null && size != _measured) {
+        setState(() => _measured = size);
+      }
+    });
+
+    return AnimatedPositioned(
+      duration: ScoutMotion.base,
+      curve: ScoutMotion.enter,
+      left: placement.offset.dx,
+      top: placement.offset.dy,
+      width: width,
+      child: AnimatedBuilder(
+        animation: _anim,
+        builder: (context, child) {
+          final t = _anim.value.clamp(0.0, 1.0);
+          return Opacity(
+            opacity: t,
+            child: Transform.scale(
+              scale: 0.9 + 0.1 * t,
+              alignment: placement.origin,
+              child: child,
+            ),
+          );
+        },
+        child: KeyedSubtree(
+          key: _panelKey,
+          child: ScoutPanel(
+            // TextField requires a Material ancestor; transparency keeps look.
+            child: Material(
+              type: MaterialType.transparency,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: const BoxDecoration(
+                          color: ScoutColors.signal,
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: ScoutSpace.s),
-                    Expanded(
-                      child: Text(
-                        target.displayName.toUpperCase(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: ScoutType.label,
+                      const SizedBox(width: ScoutSpace.s),
+                      Expanded(
+                        child: Text(
+                          widget.target.displayName.toUpperCase(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: ScoutType.label,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: ScoutSpace.xs + 2),
-                Text(
-                  '${target.widgetType} · ${candidateIndex + 1}/$candidateCount',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: ScoutType.meta,
-                ),
-                const SizedBox(height: ScoutSpace.m),
-                ScoutField(controller: controller),
-                const SizedBox(height: ScoutSpace.m),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    ScoutButton(
-                      label: 'Cancel',
-                      kind: ScoutButtonKind.ghost,
-                      onPressed: onCancel,
-                    ),
-                    const SizedBox(width: ScoutSpace.s),
-                    ScoutButton(
-                      label: 'Save',
-                      icon: Icons.check,
-                      onPressed: onSave,
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                  const SizedBox(height: ScoutSpace.xs + 2),
+                  Text(
+                    '${widget.target.widgetType} · '
+                    '${widget.candidateIndex + 1}/${widget.candidateCount}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: ScoutType.meta,
+                  ),
+                  const SizedBox(height: ScoutSpace.m),
+                  ScoutField(controller: widget.controller),
+                  const SizedBox(height: ScoutSpace.m),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      ScoutButton(
+                        label: 'Cancel',
+                        kind: ScoutButtonKind.ghost,
+                        onPressed: () => _dismiss(widget.onCancel),
+                      ),
+                      const SizedBox(width: ScoutSpace.s),
+                      ScoutButton(
+                        label: 'Save',
+                        icon: Icons.check,
+                        onPressed: () => _dismiss(widget.onSave),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// Places the comment dialog beside [target]: to its right if the dialog fits,
+/// else to its left, else below/above when neither side has room. The result is
+/// clamped within the safe area and kept above the keyboard ([keyboardInset]).
+/// [origin] is the scale-transform anchor so the dialog grows from the edge
+/// nearest the target. Pure and side-effect free for testability.
+@visibleForTesting
+({Offset offset, Alignment origin}) scoutAnnotationDialogPlacement({
+  required Rect target,
+  required Size dialog,
+  required Size screen,
+  required EdgeInsets safeArea,
+  required double keyboardInset,
+  double gap = ScoutSpace.m,
+  double margin = ScoutSpace.m,
+}) {
+  double clampD(double value, double lo, double hi) {
+    if (hi < lo) return lo;
+    if (value < lo) return lo;
+    if (value > hi) return hi;
+    return value;
+  }
+
+  final safeLeft = margin;
+  final safeRight = screen.width - margin;
+  final safeTop = safeArea.top + margin;
+  final safeBottom = screen.height - keyboardInset - margin;
+
+  double left;
+  var origin = Alignment.centerLeft;
+  var beside = true;
+  final rightSpace = safeRight - (target.right + gap);
+  final leftSpace = (target.left - gap) - safeLeft;
+  if (dialog.width <= rightSpace) {
+    left = target.right + gap;
+    origin = Alignment.centerLeft;
+  } else if (dialog.width <= leftSpace) {
+    left = target.left - gap - dialog.width;
+    origin = Alignment.centerRight;
+  } else {
+    beside = false;
+    left = clampD(
+      target.center.dx - dialog.width / 2,
+      safeLeft,
+      safeRight - dialog.width,
+    );
+  }
+
+  double top;
+  if (beside) {
+    top = target.center.dy - dialog.height / 2;
+  } else {
+    final below = target.bottom + gap;
+    final above = target.top - gap - dialog.height;
+    if (below + dialog.height <= safeBottom) {
+      top = below;
+      origin = Alignment.topCenter;
+    } else if (above >= safeTop) {
+      top = above;
+      origin = Alignment.bottomCenter;
+    } else {
+      top = target.center.dy - dialog.height / 2;
+      origin = Alignment.topCenter;
+    }
+  }
+  top = clampD(top, safeTop, safeBottom - dialog.height);
+  return (offset: Offset(left, top), origin: origin);
 }
 
 /// Paints the HUD field: a faint scrim, hairline reticle outlines on candidate
@@ -662,10 +820,38 @@ class _FlutterScoutAnnotationPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round
         ..color = ScoutColors.signal;
       const len = 11.0;
-      _corner(canvas, r.topLeft, const Offset(1, 0), const Offset(0, 1), len, tick);
-      _corner(canvas, r.topRight, const Offset(-1, 0), const Offset(0, 1), len, tick);
-      _corner(canvas, r.bottomLeft, const Offset(1, 0), const Offset(0, -1), len, tick);
-      _corner(canvas, r.bottomRight, const Offset(-1, 0), const Offset(0, -1), len, tick);
+      _corner(
+        canvas,
+        r.topLeft,
+        const Offset(1, 0),
+        const Offset(0, 1),
+        len,
+        tick,
+      );
+      _corner(
+        canvas,
+        r.topRight,
+        const Offset(-1, 0),
+        const Offset(0, 1),
+        len,
+        tick,
+      );
+      _corner(
+        canvas,
+        r.bottomLeft,
+        const Offset(1, 0),
+        const Offset(0, -1),
+        len,
+        tick,
+      );
+      _corner(
+        canvas,
+        r.bottomRight,
+        const Offset(-1, 0),
+        const Offset(0, -1),
+        len,
+        tick,
+      );
     }
   }
 
@@ -788,7 +974,11 @@ class _PinReticle extends StatelessWidget {
         shape: BoxShape.circle,
         border: Border.all(color: accent, width: 2),
         boxShadow: [
-          BoxShadow(color: accent.withValues(alpha: 0.5), blurRadius: 10, spreadRadius: -2),
+          BoxShadow(
+            color: accent.withValues(alpha: 0.5),
+            blurRadius: 10,
+            spreadRadius: -2,
+          ),
         ],
       ),
       child: Text(
@@ -799,3 +989,37 @@ class _PinReticle extends StatelessWidget {
   }
 }
 
+/// Wraps the overlay's full-screen absorber so it stays opaque to real user
+/// taps (selecting targets) but becomes hit-test-transparent while Scout is
+/// collecting annotation targets. That lets the collection-time global hit
+/// test pass through to the app and resolve the true topmost responder,
+/// keeping occluded Stack siblings out of the target list.
+class _ScoutHitTestGate extends SingleChildRenderObjectWidget {
+  const _ScoutHitTestGate({required this.runtime, required Widget super.child});
+
+  final FlutterScoutRuntime runtime;
+
+  @override
+  _RenderScoutHitTestGate createRenderObject(BuildContext context) =>
+      _RenderScoutHitTestGate(runtime);
+
+  @override
+  void updateRenderObject(
+    BuildContext context,
+    _RenderScoutHitTestGate renderObject,
+  ) {
+    renderObject.runtime = runtime;
+  }
+}
+
+class _RenderScoutHitTestGate extends RenderProxyBox {
+  _RenderScoutHitTestGate(this.runtime);
+
+  FlutterScoutRuntime runtime;
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    if (runtime._collectingAnnotationTargets) return false;
+    return super.hitTest(result, position: position);
+  }
+}

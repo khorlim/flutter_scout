@@ -57,6 +57,12 @@ class FlutterScoutRuntime {
   // overlapping captures compose; entries are added/removed by _captureRegion.
   final List<Rect> _captureClearRects = <Rect>[];
   bool _annotationMode = false;
+  // True only while collecting annotation targets. The overlay's full-screen
+  // absorber goes hit-test-transparent during this window so the global hit
+  // test reaches the app and returns the real topmost (occlusion-aware) path,
+  // instead of us falling back to a per-target self hit test that can't see
+  // Stack siblings painted on top.
+  bool _collectingAnnotationTargets = false;
   OverlayEntry? _annotationOverlayEntry;
   bool _annotationOverlayInstallScheduled = false;
   FlutterExceptionHandler? _previousFlutterError;
@@ -94,7 +100,10 @@ class FlutterScoutRuntime {
   void debugSignalHandoff() => _signalAnnotationHandoff();
 
   @visibleForTesting
-  Future<Uint8List?> debugCaptureRegion({Rect? rect, double padding = 12}) async {
+  Future<Uint8List?> debugCaptureRegion({
+    Rect? rect,
+    double padding = 12,
+  }) async {
     final result = await _captureRegion(rect: rect, padding: padding);
     return result.bytes;
   }
@@ -110,6 +119,13 @@ class FlutterScoutRuntime {
   @visibleForTesting
   bool debugMarkFixed(String id) =>
       _updateAnnotationStatus(id: id, status: 'pending_review');
+
+  @visibleForTesting
+  void debugSetAnnotationMode(bool enabled) => _setAnnotationMode(enabled);
+
+  @visibleForTesting
+  List<ScoutAnnotationTarget> debugVisibleAnnotationTargets() =>
+      visibleAnnotationTargets();
 
   void _installErrorHooks() {
     _previousFlutterError = FlutterError.onError;
@@ -233,6 +249,4 @@ class FlutterScoutRuntime {
       return _fail('inspect_failed', error.toString());
     }
   }
-
 }
-
