@@ -132,20 +132,18 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return depth;
   }
 
-  bool _isScoutOverlayElement(Element element) {
-    var isScout = _isScoutOverlayWidget(element.widget);
-    element.visitAncestorElements((ancestor) {
-      if (_isScoutOverlayWidget(ancestor.widget)) {
-        isScout = true;
-        return false;
-      }
-      return true;
-    });
-    return isScout;
-  }
-
   bool _isScoutOverlayWidget(Widget widget) {
     return widget.runtimeType.toString().startsWith('_FlutterScout');
+  }
+
+  /// The id [_nodeFromElement] would assign, computed directly from values the
+  /// annotation walk already has. Avoids rebuilding a whole node (which re-runs
+  /// an ancestor-walk, a rect computation, a label scan and a hit test) just to
+  /// read its id — the hot redundancy in annotation-target collection.
+  String? _scoutNodeIdFor(Element element, Widget widget, String? label) {
+    final kind = _kindFor(widget, element);
+    if (kind == null) return null;
+    return _stableId(kind, label, widget.key, widget.runtimeType.toString());
   }
 
   ScoutNode? _nodeFromElement(Element element) {
@@ -1308,5 +1306,4 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     });
     return result;
   }
-
 }

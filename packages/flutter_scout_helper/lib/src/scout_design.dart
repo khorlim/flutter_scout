@@ -152,7 +152,11 @@ BoxDecoration scoutGlass({
     border: Border.all(color: edge, width: 1),
     boxShadow: [
       BoxShadow(color: glow, blurRadius: 22, spreadRadius: -6),
-      const BoxShadow(color: Color(0x55000000), blurRadius: 14, spreadRadius: -8),
+      const BoxShadow(
+        color: Color(0x55000000),
+        blurRadius: 14,
+        spreadRadius: -8,
+      ),
     ],
   );
 }
@@ -207,14 +211,38 @@ class _ScoutCornerTicksPainter extends CustomPainter {
     canvas.drawLine(Offset(i, i), Offset(i + len, i), paint);
     canvas.drawLine(Offset(i, i), Offset(i, i + len), paint);
     // top-right
-    canvas.drawLine(Offset(size.width - i, i), Offset(size.width - i - len, i), paint);
-    canvas.drawLine(Offset(size.width - i, i), Offset(size.width - i, i + len), paint);
+    canvas.drawLine(
+      Offset(size.width - i, i),
+      Offset(size.width - i - len, i),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(size.width - i, i),
+      Offset(size.width - i, i + len),
+      paint,
+    );
     // bottom-left
-    canvas.drawLine(Offset(i, size.height - i), Offset(i + len, size.height - i), paint);
-    canvas.drawLine(Offset(i, size.height - i), Offset(i, size.height - i - len), paint);
+    canvas.drawLine(
+      Offset(i, size.height - i),
+      Offset(i + len, size.height - i),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(i, size.height - i),
+      Offset(i, size.height - i - len),
+      paint,
+    );
     // bottom-right
-    canvas.drawLine(Offset(size.width - i, size.height - i), Offset(size.width - i - len, size.height - i), paint);
-    canvas.drawLine(Offset(size.width - i, size.height - i), Offset(size.width - i, size.height - i - len), paint);
+    canvas.drawLine(
+      Offset(size.width - i, size.height - i),
+      Offset(size.width - i - len, size.height - i),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(size.width - i, size.height - i),
+      Offset(size.width - i, size.height - i - len),
+      paint,
+    );
   }
 
   @override
@@ -265,7 +293,13 @@ class _ScoutButtonState extends State<ScoutButton> {
         width: 1,
       ),
       boxShadow: solid
-          ? [BoxShadow(color: accent.withValues(alpha: 0.35), blurRadius: 16, spreadRadius: -6)]
+          ? [
+              BoxShadow(
+                color: accent.withValues(alpha: 0.35),
+                blurRadius: 16,
+                spreadRadius: -6,
+              ),
+            ]
           : null,
     );
     return GestureDetector(
@@ -292,7 +326,10 @@ class _ScoutButtonState extends State<ScoutButton> {
                 Icon(widget.icon, size: 16, color: fg),
                 const SizedBox(width: ScoutSpace.s),
               ],
-              Text(widget.label.toUpperCase(), style: ScoutType.label.copyWith(color: fg)),
+              Text(
+                widget.label.toUpperCase(),
+                style: ScoutType.label.copyWith(color: fg),
+              ),
             ],
           ),
         ),
@@ -401,7 +438,10 @@ class ScoutPill extends StatelessWidget {
             Icon(icon, size: 18, color: fg),
             if (label != null) ...[
               const SizedBox(width: ScoutSpace.s),
-              Text(label!.toUpperCase(), style: ScoutType.label.copyWith(color: fg)),
+              Text(
+                label!.toUpperCase(),
+                style: ScoutType.label.copyWith(color: fg),
+              ),
             ],
             if (count != null && count! > 0) ...[
               const SizedBox(width: ScoutSpace.s),
@@ -413,7 +453,10 @@ class ScoutPill extends StatelessWidget {
                       : tint.withValues(alpha: 0.18),
                   borderRadius: BorderRadius.circular(ScoutRadius.pill),
                 ),
-                child: Text('$count', style: ScoutType.numeral.copyWith(color: fg)),
+                child: Text(
+                  '$count',
+                  style: ScoutType.numeral.copyWith(color: fg),
+                ),
               ),
             ],
           ],

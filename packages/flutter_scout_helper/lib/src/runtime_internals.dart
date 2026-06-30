@@ -131,6 +131,31 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     element.visitChildElements((Element child) => _walk(child, visitor));
   }
 
+  /// Like [_walk] but prunes whole subtrees that are hidden (Offstage, etc.) or
+  /// belong to the Scout overlay. Pruning during descent — rather than visiting
+  /// every element and walking its ancestors to test visibility — is what makes
+  /// annotation-target collection cheap on apps that keep many offstage subtrees
+  /// mounted (e.g. an IndexedStack tab bar). Callers no longer need their own
+  /// `_isHiddenByAncestor`/`_isScoutOverlayElement` checks.
+  void _walkVisible(Element element, void Function(Element element) visitor) {
+    visitor(element);
+    if (_hidesSubtree(element) || _isScoutOverlayWidget(element.widget)) {
+      return;
+    }
+    element.visitChildElements((Element child) => _walkVisible(child, visitor));
+  }
+
+  /// Whether [element]'s widget hides its own subtree from view/interaction —
+  /// the per-element form of the conditions [_isHiddenByAncestor] looks for.
+  bool _hidesSubtree(Element element) {
+    final widget = element.widget;
+    if (widget is Offstage) return widget.offstage;
+    if (widget is Visibility) return !widget.visible && !widget.maintainSize;
+    if (widget is TickerMode) return !widget.enabled;
+    if (widget is IgnorePointer) return widget.ignoring;
+    return false;
+  }
+
   bool _changed(ScoutSnapshot before, ScoutSnapshot after) =>
       jsonEncode(before.summaryJson()) != jsonEncode(after.summaryJson()) ||
       _geometryChanged(before, after);

@@ -69,10 +69,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
           final annotation = _annotations.firstWhere(
             (annotation) => annotation.id == id,
           );
-          final live = _liveAnnotationTarget(
-            annotation,
-            _annotationTargets(),
-          );
+          final live = _liveAnnotationTarget(annotation, _annotationTargets());
           await _captureAnnotationCrop(
             annotation,
             slot: 'after',
@@ -117,15 +114,11 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     }
     if (annotation == null) return _annotationMissing(id);
     final isAfter = slot == 'after';
-    final bytes = isAfter
-        ? annotation.afterCropPng
-        : annotation.beforeCropPng;
+    final bytes = isAfter ? annotation.afterCropPng : annotation.beforeCropPng;
     final needsNative = isAfter
         ? annotation.afterCropNeedsNative
         : annotation.beforeCropNeedsNative;
-    final rect = isAfter
-        ? annotation.afterCropRect
-        : annotation.beforeCropRect;
+    final rect = isAfter ? annotation.afterCropRect : annotation.beforeCropRect;
     return _ok({
       'id': id,
       'slot': slot,
@@ -388,10 +381,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
         return _fail(
           'capture_failed',
           'In-app capture failed (${result.error}).',
-          extra: {
-            'needsNative': result.needsNative,
-            'rect': ?boundsJson,
-          },
+          extra: {'needsNative': result.needsNative, 'rect': ?boundsJson},
         );
       }
       return _ok({
@@ -571,7 +561,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   }
 
   void _scheduleAnnotationOverlayInstall() {
-    if (kReleaseMode || _annotationOverlayEntry != null) return;
+    if (!kDebugMode || _annotationOverlayEntry != null) return;
     if (_annotationOverlayInstallScheduled) return;
     _annotationOverlayInstallScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -581,7 +571,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   }
 
   void _installAnnotationOverlayIfPossible() {
-    if (kReleaseMode || _annotationOverlayEntry != null) return;
+    if (!kDebugMode || _annotationOverlayEntry != null) return;
     final root = WidgetsBinding.instance.rootElement;
     if (root == null) {
       _scheduleAnnotationOverlayInstall();
@@ -607,5 +597,4 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     });
     return result;
   }
-
 }
