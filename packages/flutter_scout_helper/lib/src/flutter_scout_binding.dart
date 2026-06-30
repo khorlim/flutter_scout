@@ -34,12 +34,11 @@ class FlutterScoutHelper {
   static final FlutterScoutRuntime _runtime = FlutterScoutRuntime();
 
   static void ensureRegistered() {
-    // Scout is a debug/profile-only tool. Bail in release so nothing it does —
-    // VM service extensions, error-handler hooks, the overlay — is wired into a
-    // production build. (Matches the kReleaseMode guards in _broadcastVmUri and
-    // the overlay install; profile mode keeps Scout because its VM service is
-    // available there.)
-    if (kReleaseMode || _registered) return;
+    // Scout is a debug-only tool. Bail outside debug so nothing it does — VM
+    // service extensions, error-handler hooks, the overlay — is wired into a
+    // profile or release build. (Matches the kDebugMode guards in
+    // _broadcastVmUri and the overlay install.)
+    if (!kDebugMode || _registered) return;
     _registered = true;
     _runtime.install();
   }
@@ -227,7 +226,7 @@ class FlutterScoutRuntime {
   }
 
   void _broadcastVmUri() {
-    if (kReleaseMode) return;
+    if (!kDebugMode) return;
     unawaited(
       developer.Service.getInfo().then((developer.ServiceProtocolInfo info) {
         final uri = info.serverUri;

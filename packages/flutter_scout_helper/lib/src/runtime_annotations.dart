@@ -561,7 +561,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   }
 
   void _scheduleAnnotationOverlayInstall() {
-    if (kReleaseMode || _annotationOverlayEntry != null) return;
+    if (!kDebugMode || _annotationOverlayEntry != null) return;
     if (_annotationOverlayInstallScheduled) return;
     _annotationOverlayInstallScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -571,7 +571,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   }
 
   void _installAnnotationOverlayIfPossible() {
-    if (kReleaseMode || _annotationOverlayEntry != null) return;
+    if (!kDebugMode || _annotationOverlayEntry != null) return;
     final root = WidgetsBinding.instance.rootElement;
     if (root == null) {
       _scheduleAnnotationOverlayInstall();
