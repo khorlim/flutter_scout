@@ -9,6 +9,7 @@ extension _CliSession on FlutterScoutCli {
       ..addOption('project', defaultsTo: Directory.current.path)
       ..addOption('target')
       ..addOption('flavor')
+      ..addOption('name')
       ..addMultiOption('dart-define')
       ..addMultiOption('dart-define-from-file')
       ..addFlag('verbose', defaultsTo: false);
@@ -17,7 +18,7 @@ extension _CliSession on FlutterScoutCli {
     if (device == null || device.isEmpty) {
       throw const ScoutCliException(
         'missing_device',
-        'Usage: flutter-scout launch --device <simulator-id> [--project <path>]',
+        'Usage: flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>]',
       );
     }
     final project = p.normalize(p.absolute(parsed.option('project')!));
@@ -56,6 +57,10 @@ extension _CliSession on FlutterScoutCli {
       for (final value in parsed.multiOption('dart-define-from-file')) ...[
         '--dart-define-from-file',
         value,
+      ],
+      if (parsed.option('name')?.isNotEmpty ?? false) ...[
+        '--dart-define',
+        '$kScoutInstanceDefine=${parsed.option('name')}',
       ],
       if (parsed.flag('verbose')) '--verbose',
     ];
@@ -236,6 +241,7 @@ extension _CliSession on FlutterScoutCli {
       ..addOption('project', defaultsTo: Directory.current.path)
       ..addOption('target')
       ..addOption('flavor')
+      ..addOption('name')
       ..addMultiOption('dart-define')
       ..addMultiOption('dart-define-from-file')
       ..addFlag('verbose', defaultsTo: false);
@@ -302,6 +308,10 @@ extension _CliSession on FlutterScoutCli {
       for (final value in parsed.multiOption('dart-define-from-file')) ...[
         '--dart-define-from-file',
         value,
+      ],
+      if (parsed.option('name')?.isNotEmpty ?? false) ...[
+        '--name',
+        parsed.option('name')!,
       ],
       if (parsed.flag('verbose')) '--verbose',
     ];
@@ -501,5 +511,4 @@ extension _CliSession on FlutterScoutCli {
     );
     return 0;
   }
-
 }

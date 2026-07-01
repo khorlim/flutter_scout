@@ -248,5 +248,4 @@ extension _CliEvidence on FlutterScoutCli {
       return {'ok': false, 'url': url, 'error': error.toString()};
     }
   }
-
 }

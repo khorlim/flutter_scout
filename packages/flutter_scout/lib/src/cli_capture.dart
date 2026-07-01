@@ -36,11 +36,7 @@ extension _CliCapture on FlutterScoutCli {
       if (capture?.bytes != null) {
         File(output).writeAsBytesSync(capture!.bytes!);
         stdout.writeln(
-          jsonEncode({
-            'ok': true,
-            'path': output,
-            'backend': 'in_app_capture',
-          }),
+          jsonEncode({'ok': true, 'path': output, 'backend': 'in_app_capture'}),
         );
         return 0;
       }
@@ -183,7 +179,10 @@ extension _CliCapture on FlutterScoutCli {
       width: width,
       height: height,
     );
-    return (bytes: img.encodePng(cropped), pixelRect: [left, top, width, height]);
+    return (
+      bytes: img.encodePng(cropped),
+      pixelRect: [left, top, width, height],
+    );
   }
 
   /// Asks the in-app helper to rasterise the screen (or a crop rect). Returns
@@ -216,5 +215,4 @@ extension _CliCapture on FlutterScoutCli {
       return null;
     }
   }
-
 }

@@ -80,6 +80,12 @@ Use `launch` when you explicitly need Scout to start a new Flutter run:
 dart run bin/flutter_scout.dart launch --device <simulator-id> --project ../../apps/scout_test_app
 ```
 
+Add `--name <label>` (on `launch` or `ensure`) to distinguish concurrent sessions — e.g. one debug window per worktree on macOS/desktop. Scout injects it as a `--dart-define` and the in-app helper paints a small bottom-left HUD badge with that label in debug builds; tap the badge to collapse it to a dot when it's in the way:
+
+```bash
+dart run bin/flutter_scout.dart launch --device macos --project ../../apps/scout_test_app --name feature-a
+```
+
 Successful launch and attach responses include `ready`. If the VM service is available but the helper extension is missing, the command returns `ready:false` with `reason:"helper_extension_missing"` and the expected initializer.
 
 Or attach to an already running app:

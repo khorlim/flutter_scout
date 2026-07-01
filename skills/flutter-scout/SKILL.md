@@ -59,6 +59,14 @@ flutter-scout attach --debug-url <vm-service-url>
 flutter-scout launch --device <simulator-id> --project <flutter-app-path>
 ```
 
+To tell several concurrent sessions apart (for example one debug window per worktree on macOS/desktop), pass `--name <label>`. Scout injects it as a `--dart-define` and the in-app helper paints a small bottom-left badge with that label (debug builds only); tapping the badge collapses it to a dot so it never blocks app UI:
+
+```bash
+flutter-scout launch --device macos --project <flutter-app-path> --name feature-a
+```
+
+`--name` works on both `launch` and `ensure`.
+
 Launch validates the exact requested device and emits compact progress events. If launch was interrupted or you need to stop a Scout-owned run:
 
 ```bash

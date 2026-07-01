@@ -3,6 +3,84 @@ part of 'flutter_scout_binding.dart';
 // part: in-app annotation overlay widgets (toggle + send-to-agent buttons,
 // comment panel, target/pin painter) rendered on top of the running app.
 
+/// Instance label injected by the CLI's `--name` flag as
+/// `--dart-define=FLUTTER_SCOUT_INSTANCE=<label>`. Empty when unset. Lets
+/// several worktree sessions of the same desktop app be told apart on screen.
+const String _scoutInstanceLabel = String.fromEnvironment(
+  'FLUTTER_SCOUT_INSTANCE',
+);
+
+/// A small HUD badge pinned to the bottom-left that names the running Scout
+/// session. Renders nothing unless a `--name` label was passed, so it stays
+/// invisible for ordinary single-instance runs. Tapping toggles between the
+/// full label and a compact dot, so it never permanently blocks app UI.
+class _ScoutInstanceBadge extends StatefulWidget {
+  const _ScoutInstanceBadge();
+
+  @override
+  State<_ScoutInstanceBadge> createState() => _ScoutInstanceBadgeState();
+}
+
+class _ScoutInstanceBadgeState extends State<_ScoutInstanceBadge> {
+  bool _collapsed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_scoutInstanceLabel.isEmpty) return const SizedBox.shrink();
+    return Positioned(
+      left: ScoutSpace.m,
+      bottom: MediaQuery.paddingOf(context).bottom + ScoutSpace.m,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => setState(() => _collapsed = !_collapsed),
+        child: AnimatedContainer(
+          duration: ScoutMotion.base,
+          curve: ScoutMotion.enter,
+          padding: EdgeInsets.symmetric(
+            horizontal: _collapsed ? ScoutSpace.s : ScoutSpace.m,
+            vertical: ScoutSpace.s,
+          ),
+          decoration: BoxDecoration(
+            color: ScoutColors.glass,
+            borderRadius: BorderRadius.circular(ScoutRadius.pill),
+            border: Border.all(color: ScoutColors.border, width: 1),
+            boxShadow: [
+              BoxShadow(
+                color: ScoutColors.signal.withValues(alpha: 0.22),
+                blurRadius: 18,
+                spreadRadius: -6,
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.my_location,
+                size: 16,
+                color: ScoutColors.signal,
+              ),
+              AnimatedSize(
+                duration: ScoutMotion.base,
+                curve: ScoutMotion.enter,
+                child: _collapsed
+                    ? const SizedBox.shrink()
+                    : Padding(
+                        padding: const EdgeInsets.only(left: ScoutSpace.s),
+                        child: Text(
+                          _scoutInstanceLabel.toUpperCase(),
+                          style: ScoutType.label,
+                        ),
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _FlutterScoutAnnotationOverlay extends StatefulWidget {
   const _FlutterScoutAnnotationOverlay({required this.runtime});
 
@@ -294,6 +372,7 @@ class _FlutterScoutAnnotationOverlayState
         }
         return Stack(
           children: [
+            const _ScoutInstanceBadge(),
             if (enabled)
               Positioned.fill(
                 child: _ScoutHitTestGate(

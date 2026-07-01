@@ -1266,8 +1266,8 @@ Flutter Scout
 
 Usage:
   flutter-scout attach [--debug-url <url>] [--device <simulator-id>]
-  flutter-scout launch --device <simulator-id> [--project <path>]
-  flutter-scout ensure --device <simulator-id> [--project <path>]
+  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>]
+  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>]
   flutter-scout status
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
@@ -1299,6 +1299,13 @@ Usage:
 
   bool _isNumeric(String value) => double.tryParse(value) != null;
 }
+
+/// Compile-time define the CLI injects (via `--name`) so the in-app helper can
+/// render an instance-label badge. Lets several worktree sessions of the same
+/// macOS/desktop app be told apart on screen. Must match the key the helper
+/// reads with `String.fromEnvironment`.
+const String kScoutInstanceDefine = 'FLUTTER_SCOUT_INSTANCE';
+
 Directory get _sessionDir =>
     Directory(p.join(Directory.current.path, '.flutter_scout'));
 String get _vmUriFile => p.join(_sessionDir.path, 'vm_uri.txt');

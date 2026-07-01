@@ -465,5 +465,4 @@ extension _CliResults on FlutterScoutCli {
     }
     return null;
   }
-
 }
