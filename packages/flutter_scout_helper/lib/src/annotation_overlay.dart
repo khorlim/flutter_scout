@@ -551,7 +551,7 @@ class _AnnotationCommentPanelState extends State<_AnnotationCommentPanel>
     duration: ScoutMotion.base,
     reverseDuration: ScoutMotion.fast,
   );
-  late final Animation<double> _anim = CurvedAnimation(
+  late final CurvedAnimation _anim = CurvedAnimation(
     parent: _controller,
     curve: ScoutMotion.enter,
     reverseCurve: ScoutMotion.exit,
@@ -567,6 +567,9 @@ class _AnnotationCommentPanelState extends State<_AnnotationCommentPanel>
 
   @override
   void dispose() {
+    // Dispose the CurvedAnimation before its parent so it deregisters its
+    // status listener from the controller.
+    _anim.dispose();
     _controller.dispose();
     super.dispose();
   }
