@@ -172,12 +172,18 @@ class FlutterScoutCli {
   }
 
   Future<_VmUriValidation> _validateVmUri(String uri) async {
+    VmService? service;
     try {
-      final service = await _connect(uri);
-      await service.dispose();
+      service = await _connect(uri);
+      // A dead app can leave a DDS/VM socket that still completes the WebSocket
+      // handshake but never answers RPCs. Require a real response so discovery
+      // never hands back a zombie URI that would later hang a readiness check.
+      await service.getVM().timeout(const Duration(seconds: 5));
       return const _VmUriValidation(ok: true);
     } catch (error) {
       return _VmUriValidation(ok: false, error: error.toString());
+    } finally {
+      await service?.dispose();
     }
   }
 
@@ -218,14 +224,29 @@ class FlutterScoutCli {
     final deadline = DateTime.now().add(timeout);
     _ScoutReady? last;
     while (DateTime.now().isBefore(deadline)) {
-      last = await _checkScoutReady(uri);
+      // Bound each attempt by the remaining budget. The deadline is only
+      // re-checked between attempts, so an unbounded attempt (e.g. an RPC to an
+      // unresponsive VM service) would otherwise defeat it and hang forever.
+      final remaining = deadline.difference(DateTime.now());
+      final attemptBudget = remaining < const Duration(seconds: 1)
+          ? const Duration(seconds: 1)
+          : remaining;
+      try {
+        last = await _checkScoutReady(uri).timeout(attemptBudget);
+      } on TimeoutException {
+        return const _ScoutReady(
+          ready: false,
+          reason: 'helper_extension_check_timeout',
+          expected: 'FlutterScoutBinding.ensureInitialized()',
+        );
+      }
       if (last.ready) return last;
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
     return last ??
         const _ScoutReady(
           ready: false,
-          reason: 'helper_extension_check_failed',
+          reason: 'helper_extension_check_timeout',
           expected: 'FlutterScoutBinding.ensureInitialized()',
         );
   }
@@ -633,7 +654,7 @@ print(String(data: data, encoding: .utf8)!)
   }
 
   Future<String> _findMainIsolate(VmService service) async {
-    final vm = await service.getVM();
+    final vm = await service.getVM().timeout(const Duration(seconds: 5));
     final isolates = vm.isolates ?? const <IsolateRef>[];
     if (isolates.isEmpty || isolates.first.id == null) {
       throw const ScoutCliException('no_isolate', 'No Dart isolate found.');

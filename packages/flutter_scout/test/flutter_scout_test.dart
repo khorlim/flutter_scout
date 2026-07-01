@@ -48,7 +48,10 @@ void main() {
     });
 
     test('skips unavailable devices', () {
-      expect(FlutterScoutCli.parseSimctlDevices(payload, 'CCCC-UNAVAIL'), isNull);
+      expect(
+        FlutterScoutCli.parseSimctlDevices(payload, 'CCCC-UNAVAIL'),
+        isNull,
+      );
     });
 
     test('returns null for an unknown target', () {
@@ -282,6 +285,52 @@ void main() {
 
     expect(exitCode, 0);
   });
+
+  test(
+    'attach fails fast against an unresponsive vm service',
+    () async {
+      // A socket that completes the WebSocket handshake but never answers a
+      // VM-service RPC reproduces the dead-DDS state that used to make
+      // launch/ensure/attach hang indefinitely at 0% CPU. Attach must give up
+      // quickly instead of blocking forever.
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final sockets = <WebSocket>[];
+      server.listen((request) async {
+        if (WebSocketTransformer.isUpgradeRequest(request)) {
+          sockets.add(await WebSocketTransformer.upgrade(request));
+          // Intentionally never respond to any RPC.
+        } else {
+          request.response.statusCode = HttpStatus.badRequest;
+          await request.response.close();
+        }
+      });
+      addTearDown(() async {
+        for (final socket in sockets) {
+          await socket.close();
+        }
+        await server.close(force: true);
+      });
+
+      await _withTempCwd(() async {
+        final uri = 'ws://127.0.0.1:${server.port}/zombie/ws';
+        final stopwatch = Stopwatch()..start();
+        final exitCode = await FlutterScoutCli().run([
+          'attach',
+          '--debug-url',
+          uri,
+        ]);
+        stopwatch.stop();
+
+        expect(exitCode, 1);
+        expect(
+          stopwatch.elapsed,
+          lessThan(const Duration(seconds: 30)),
+          reason: 'attach should fail fast, not hang, on a dead vm service',
+        );
+      });
+    },
+    timeout: const Timeout(Duration(seconds: 45)),
+  );
 }
 
 Future<void> _withTempCwd(Future<void> Function() body) async {
