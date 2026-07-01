@@ -212,7 +212,7 @@ void main() {
   );
 
   testWidgets(
-    'a tappable container is surfaced and labeled from a contained text sibling',
+    'a tappable container with no own text is labeled from its content',
     (tester) async {
       FlutterScoutHelper.ensureRegistered();
       final runtime = FlutterScoutHelper.debugRuntime;
@@ -224,19 +224,13 @@ void main() {
               child: SizedBox(
                 width: 200,
                 height: 100,
-                // The label is a sibling of the tappable layer, not inside its
-                // own subtree, so only inspect-style cross-node inference can
-                // attach it. This mirrors the real "Add Appointment" card.
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {},
-                      ),
-                    ),
-                    const Center(child: Text('OpenReport')),
-                  ],
+                // The tappable has no text of its own; its label must be borrowed
+                // from the text it contains. Mirrors the real "Add Appointment"
+                // card (a GestureDetector wrapping the label).
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {},
+                  child: const Center(child: Text('OpenReport')),
                 ),
               ),
             ),
@@ -321,6 +315,74 @@ void main() {
       await tester.pump();
     },
   );
+
+  testWidgets('nested sub-regions and content rows are each selectable', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+
+    // Mirrors the "Add Appointment" empty state: a tappable card wrapping a
+    // margined filled box wrapping a Row(icon + label).
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 320,
+              height: 140,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {},
+                child: Column(
+                  children: [
+                    Container(
+                      margin: const EdgeInsets.all(20),
+                      decoration: const BoxDecoration(color: Color(0xFFE7E7FF)),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add),
+                          SizedBox(width: 8),
+                          Text('OpenReport'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    runtime.debugSetAnnotationMode(true);
+    await tester.pumpAndSettle();
+
+    final targets = runtime.debugVisibleAnnotationTargets();
+
+    // The card (the only interactive target here) stays selectable; the margined
+    // filled box is a distinct nested region that must survive collapse; and the
+    // icon+label Row surfaces as a groupable content row.
+    expect(
+      targets.any((t) => t.kind == 'tap' || t.kind == 'btn'),
+      isTrue,
+      reason: 'card should be selectable',
+    );
+    expect(
+      targets.any((t) => t.kind == 'widget' && t.label == 'OpenReport'),
+      isTrue,
+      reason: 'inset filled box should survive collapse',
+    );
+    expect(
+      targets.any((t) => t.kind == 'layout' && t.label == 'OpenReport'),
+      isTrue,
+      reason: 'content row should be selectable',
+    );
+
+    runtime.debugSetAnnotationMode(false);
+    await tester.pump();
+  });
 
   group('scoutAnnotationDialogPlacement', () {
     const screen = Size(400, 800);

@@ -125,6 +125,16 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final screen = _screenName(root, route);
     final modalElement = _activeAnnotationModalElement(root);
     final targets = <ScoutAnnotationTarget>[];
+    // Containers (cards/tiles/rows/buttons) are gated by whether they hold a
+    // visible leaf, decided after the walk: a covered container has none, a
+    // padded icon button has the (small, off-center) icon. Point-sampling a
+    // mostly-empty box is unreliable, so we defer them here. Keyed by render
+    // object, not element: some widgets (e.g. CupertinoButton) rebuild their
+    // element identity between passes while reusing the same render object, so
+    // an element-keyed link between a leaf and its container can miss.
+    final containerCandidates =
+        <({RenderObject render, ScoutAnnotationTarget target})>[];
+    final rendersWithVisibleLeaf = <RenderObject>{};
     _walkVisible(root, (Element element) {
       if (!_isInsideActiveAnnotationModal(element, modalElement)) return;
       final widget = element.widget;
@@ -140,7 +150,12 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           !interactive &&
           (kind == 'widget' || kind == 'layout') &&
           _paintsVisibleSurface(element);
-      final container = interactive || surface;
+      // Row/Column/Wrap that group content (an icon + a label, a stat pair) are
+      // worth pointing at as a unit for fine tweaks. Stack is excluded — it is
+      // usually a positioning layer, not a visual group. Groupings only survive
+      // if inference finds them a label (see _keepAnnotationTarget).
+      final grouping = !interactive && (widget is Flex || widget is Wrap);
+      final container = interactive || surface || grouping;
 
       // Cheap usefulness filter FIRST, before any geometry or hit testing, so
       // the many plain layout widgets that can never be a target cost nothing
@@ -166,51 +181,71 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         }
       }
 
-      // Geometry + occlusion gate only for plausible targets.
+      // Geometry only for plausible targets.
       final rect = _rectFor(element);
       if (rect == null || rect.width < 1 || rect.height < 1) return;
       final visibleRect = _visibleRectFor(rect);
       if (visibleRect == null) return;
-      if (!_annotationTargetReceivesHit(element, rect, container: container)) {
-        return;
-      }
+      // Leaves (text/icons/images) must themselves be the topmost responder —
+      // the strict occlusion gate. Containers skip it and are gated post-walk by
+      // holding a visible leaf.
+      if (!container && !_leafReceivesHit(element, rect)) return;
 
       label ??= _labelFor(element, widget);
       final ancestors = _ancestorSummary(element);
-      targets.add(
-        ScoutAnnotationTarget(
-          id: _annotationTargetId(
-            kind: kind,
-            widgetType: widgetType,
-            key: key,
-            label: label,
-            text: text,
-            rect: rect,
-            ancestors: ancestors,
-          ),
-          stableId: _stableAnnotationId(
-            kind: kind,
-            widgetType: widgetType,
-            key: key,
-            label: label,
-            text: text,
-          ),
+      final target = ScoutAnnotationTarget(
+        id: _annotationTargetId(
           kind: kind,
           widgetType: widgetType,
           key: key,
           label: label,
           text: text,
-          screen: screen,
-          routeGuess: route,
           rect: rect,
-          visibleRect: visibleRect,
-          visibleFraction: _visibleFraction(rect, visibleRect),
-          depth: _elementDepth(element),
-          ancestorSummary: ancestors,
-          scoutNodeId: _scoutNodeIdFor(element, widget, label),
+          ancestors: ancestors,
         ),
+        stableId: _stableAnnotationId(
+          kind: kind,
+          widgetType: widgetType,
+          key: key,
+          label: label,
+          text: text,
+        ),
+        kind: kind,
+        widgetType: widgetType,
+        key: key,
+        label: label,
+        text: text,
+        screen: screen,
+        routeGuess: route,
+        rect: rect,
+        visibleRect: visibleRect,
+        visibleFraction: _visibleFraction(rect, visibleRect),
+        depth: _elementDepth(element),
+        ancestorSummary: ancestors,
+        scoutNodeId: _scoutNodeIdFor(element, widget, label),
       );
+      final render = element.renderObject;
+      if (container) {
+        if (render != null) {
+          containerCandidates.add((render: render, target: target));
+        }
+      } else {
+        targets.add(target);
+        // A visible leaf makes every render object on its ancestor chain "have
+        // content", so the enclosing containers survive the gate below.
+        for (RenderObject? node = render; node != null; node = node.parent) {
+          rendersWithVisibleLeaf.add(node);
+        }
+      }
     });
+
+    for (final candidate in containerCandidates) {
+      // A container is kept when it holds a visible leaf descendant — i.e. some
+      // of its own content is on screen (a covered container has none).
+      if (rendersWithVisibleLeaf.contains(candidate.render)) {
+        targets.add(candidate.target);
+      }
+    }
 
     final enriched = _inferAnnotationTargetLabels(
       targets,
@@ -254,38 +289,51 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     return result;
   }
 
-  // Apps nest decorated containers (card > padded box > inner box), so one
-  // logical card can yield several same-label boxes. Keep only the outermost
-  // box per label: drop a container target when another container with the same
-  // label fully contains it. Distinct same-label items (e.g. several "0.00"
-  // cards) sit side by side — neither contains the other — so both survive.
+  // A chain of wrapper widgets (GestureDetector > LabelWidget > Padding …) can
+  // render one logical box at nearly the same rect several times, all carrying
+  // the same inferred label. Collapse only those near-identical duplicates,
+  // keeping the largest. Distinct nested sub-regions (a card and the padded
+  // panel inside it) have meaningfully different rects and all survive, so the
+  // user can point at each — as do side-by-side same-label items.
   List<ScoutAnnotationTarget> _collapseNestedContainers(
     List<ScoutAnnotationTarget> targets,
   ) {
-    const tolerance = 2.0;
-    bool contains(Rect outer, Rect inner) =>
-        outer.left - tolerance <= inner.left &&
-        outer.top - tolerance <= inner.top &&
-        outer.right + tolerance >= inner.right &&
-        outer.bottom + tolerance >= inner.bottom;
-    return [
-      for (final target in targets)
-        if (!_isContainerKind(target.kind) ||
-            (target.label ?? '').trim().isEmpty)
-          target
-        else if (!targets.any((other) {
-          if (identical(other, target) || !_isContainerKind(other.kind)) {
-            return false;
-          }
-          if ((other.label ?? '').toLowerCase().trim() !=
-              (target.label ?? '').toLowerCase().trim()) {
-            return false;
-          }
-          return _rectArea(other.rect) > _rectArea(target.rect) &&
-              contains(other.rect, target.rect);
-        }))
-          target,
-    ];
+    const tolerance = 6.0;
+    bool nearlyEqual(Rect a, Rect b) =>
+        (a.left - b.left).abs() <= tolerance &&
+        (a.top - b.top).abs() <= tolerance &&
+        (a.right - b.right).abs() <= tolerance &&
+        (a.bottom - b.bottom).abs() <= tolerance;
+
+    final byLabel = <String, List<ScoutAnnotationTarget>>{};
+    final kept = <ScoutAnnotationTarget>[];
+    for (final target in targets) {
+      if (!_isContainerKind(target.kind) ||
+          (target.label ?? '').trim().isEmpty) {
+        kept.add(target);
+      } else {
+        (byLabel[target.label!.toLowerCase().trim()] ??= []).add(target);
+      }
+    }
+    for (final group in byLabel.values) {
+      // Highest-rank first (keyed > btn > tap > surface/layout) then largest,
+      // so when a wrapper chain collapses we keep the most meaningful kind — a
+      // tappable card, not the anonymous layout/box rendered at the same rect.
+      group.sort((a, b) {
+        final rank = _annotationTargetRank(
+          b,
+        ).compareTo(_annotationTargetRank(a));
+        if (rank != 0) return rank;
+        return _rectArea(b.rect).compareTo(_rectArea(a.rect));
+      });
+      final keptInGroup = <ScoutAnnotationTarget>[];
+      for (final target in group) {
+        if (keptInGroup.any((k) => nearlyEqual(k.rect, target.rect))) continue;
+        keptInGroup.add(target);
+      }
+      kept.addAll(keptInGroup);
+    }
+    return kept;
   }
 
   // Mirrors inspect's `_inferActionableLabel`: a tappable container that has no
@@ -439,6 +487,12 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final decoration = widget.decoration;
       return decoration != null && _decorationFillVisible(decoration);
     }
+    // CircleAvatar and other implicitly-animated boxes paint their fill through
+    // an AnimatedContainer (which folds any `color` into its decoration).
+    if (widget is AnimatedContainer) {
+      final decoration = widget.decoration;
+      return decoration != null && _decorationFillVisible(decoration);
+    }
     if (widget is DecoratedBox) {
       return _decorationFillVisible(widget.decoration);
     }
@@ -499,11 +553,11 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     return result;
   }
 
-  bool _annotationTargetReceivesHit(
-    Element element,
-    Rect rect, {
-    required bool container,
-  }) {
+  // A leaf (text/icon/image) is visible only if it is itself the topmost
+  // responder at one of a few sample points — occlusion-aware, so a leaf buried
+  // under an opaque sibling is dropped (and, via the container gate, so is any
+  // container that holds only buried leaves).
+  bool _leafReceivesHit(Element element, Rect rect) {
     final renderObject = element.renderObject;
     if (renderObject == null) return false;
     final visible = _visibleRectFor(rect);
@@ -518,18 +572,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       Offset(visible.right - insetX, visible.bottom - insetY),
     ];
     for (final point in points) {
-      // Both tests are occlusion-aware (a widget buried under an opaque sibling
-      // won't be in the hit path), which is what keeps stacked clutter out.
-      // Container targets (cards, tiles, rows, panels) often paint nothing
-      // hit-testable of their own and defer to a child, so we accept them when
-      // the container OR any of its descendants is the topmost responder — i.e.
-      // some of its own content is actually visible at this point. Plain targets
-      // must themselves be the topmost responder.
-      if (container) {
-        if (_hitPathTouchesSubtree(point, renderObject)) return true;
-      } else if (_hitTestPathContainsRenderObject(point, renderObject)) {
-        return true;
-      }
+      if (_hitTestPathContainsRenderObject(point, renderObject)) return true;
     }
     return false;
   }
@@ -556,21 +599,6 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       point,
       (result) => result.path.any((entry) => identical(entry.target, target)),
     );
-  }
-
-  // True when [target] or one of its descendants is hit at [point] — i.e. part
-  // of the target's own subtree is the topmost (visible) thing there.
-  bool _hitPathTouchesSubtree(Offset point, RenderObject target) {
-    return _hitTest(point, (result) {
-      for (final entry in result.path) {
-        final hit = entry.target;
-        if (hit is! RenderObject) continue;
-        for (RenderObject? node = hit; node != null; node = node.parent) {
-          if (identical(node, target)) return true;
-        }
-      }
-      return false;
-    });
   }
 
   List<ScoutAnnotationTarget> _removeOversizedModalTargets(

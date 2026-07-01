@@ -204,10 +204,14 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     }
     if (widget is ButtonStyleButton ||
         widget is IconButton ||
-        widget is FloatingActionButton) {
+        widget is FloatingActionButton ||
+        widget is CupertinoButton) {
       return 'btn';
     }
-    if (widget is GestureDetector || widget is InkWell || widget is ListTile) {
+    if (widget is GestureDetector ||
+        widget is InkWell ||
+        widget is InkResponse ||
+        widget is ListTile) {
       return 'tap';
     }
     return null;
@@ -280,17 +284,25 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final own = _ownText(widget);
     if (own != null && own.trim().isNotEmpty) {
       final iconText = _iconLabelForText(own);
-      return iconText ?? own.trim();
+      if (iconText != null) return iconText;
+      if (_hasWord(own)) return own.trim();
     }
     final text = _textBelow(element);
     if (text != null && text.isNotEmpty) {
       final iconText = _iconLabelForText(text);
-      return iconText ?? text;
+      if (iconText != null) return iconText;
+      if (_hasWord(text)) return text.trim();
     }
+    // Icon-only controls (e.g. a bell button) yield only a font glyph as text,
+    // which is not a usable label; fall back to the icon's name so the control
+    // is still selectable.
     final icon = _iconLabelBelow(element);
     if (icon != null && icon.isNotEmpty) return icon;
     return null;
   }
+
+  static final RegExp _wordChar = RegExp(r'[A-Za-z0-9]');
+  bool _hasWord(String value) => _wordChar.hasMatch(value);
 
   String? _validationMessageForFieldWidget(Widget widget) {
     if (widget is TextField) {
