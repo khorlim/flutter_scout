@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 
@@ -143,6 +145,19 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                       );
                     },
                     child: const Text('Trigger error'),
+                  ),
+                  TextButton(
+                    key: const ValueKey('emit_logs'),
+                    onPressed: () {
+                      // ignore: avoid_print
+                      print('SCOUT_LOG_PRINT hello-from-print');
+                      debugPrint('SCOUT_LOG_DEBUGPRINT hello-from-debugprint');
+                      developer.log(
+                        'SCOUT_LOG_DEVLOG hello-from-devlog',
+                        name: 'scout.test',
+                      );
+                    },
+                    child: const Text('Emit logs'),
                   ),
                   TextButton(
                     key: const ValueKey('show_ok_dialog'),

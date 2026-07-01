@@ -235,6 +235,8 @@ flutter-scout evidence -o /tmp/flutter_scout_evidence
 flutter-scout stop --clear-session
 ```
 
+For Scout-owned `launch`/`ensure` sessions, `logs` captures `print`, `debugPrint`, and `dart:developer` `log()` output. Capture runs over a dedicated VM-service listener (Stdout, Stderr, and Logging streams), so it keeps working across hot reload, hot restart, and app backgrounding rather than depending on the fragile Flutter tool console.
+
 If `logs` reports `source:"attach_only_session"` and `available:false`, Scout is attached to a VS Code/Cursor/terminal-owned Flutter run. Scout can still inspect and act, but cannot read that owner console. Use the owning terminal or IDE console for those app logs, run `flutter logs` separately, or start with `flutter-scout ensure`/`launch` when Scout should own log capture.
 
 If `logs --contains <text>` reports `available:true` and `matched:0`, Scout did read a non-empty Scout-owned log but no lines matched that filter. Broaden the search or inspect the app's own logging path.

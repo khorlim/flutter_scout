@@ -374,7 +374,7 @@ extension _CliActions on FlutterScoutCli {
           'lines': const <String>[],
       };
     }
-    final allLines = file.readAsLinesSync();
+    final allLines = _dedupeVmStdoutEcho(file.readAsLinesSync());
     if (summary) {
       final summary = _summarizeLogLines(allLines, last: last);
       return {
@@ -440,31 +440,157 @@ extension _CliActions on FlutterScoutCli {
     required String logFile,
   }) async {
     IOSink? sink;
-    VmService? service;
-    StreamSubscription<Event>? subscription;
     try {
       Directory(p.dirname(logFile)).createSync(recursive: true);
       sink = File(logFile).openWrite(mode: FileMode.append);
-      service = await vmServiceConnectUri(_normalizeVmUri(vmUri));
-      subscription = service.onLoggingEvent.listen((event) async {
-        sink?.writeln(await _formatVmLogEvent(service!, event));
-      });
-      await service.streamListen(EventStreams.kLogging);
-      sink.writeln(
-        '[flutter_scout] VM logging listener attached ${DateTime.now().toIso8601String()}',
-      );
-      await sink.flush();
-      await service.onDone;
-      return 0;
+      var writeChain = Future<void>.value();
+
+      Future<void> writeLine(String line) {
+        writeChain = writeChain.then((_) async {
+          sink?.writeln(line);
+          await sink?.flush();
+        });
+        return writeChain;
+      }
+
+      while (true) {
+        final appPid = _readPid();
+        if (appPid != null && !await _processExists(appPid)) {
+          await writeLine(
+            '[flutter_scout] VM logging listener stopped: Flutter run process exited ${DateTime.now().toIso8601String()}',
+          );
+          return 0;
+        }
+
+        VmService? service;
+        final subscriptions = <StreamSubscription<Event>>[];
+        try {
+          service = await vmServiceConnectUri(_normalizeVmUri(vmUri));
+          final connected = service;
+          // developer.log / dart:developer records arrive on the Logging stream.
+          subscriptions.add(
+            connected.onLoggingEvent.listen((event) {
+              unawaited(() async {
+                try {
+                  await writeLine(await _formatVmLogEvent(connected, event));
+                } catch (error) {
+                  await writeLine(
+                    '[flutter_scout] VM logging event format failed: $error',
+                  );
+                }
+              }());
+            }),
+          );
+          // print / debugPrint / stdout / stderr arrive on the Stdout & Stderr
+          // streams. The flutter-tool console redirect only carries these while
+          // its own device connection is alive, so it drops them whenever the
+          // app is backgrounded and never sees them in attach-only sessions.
+          // Capturing the VM streams directly makes log capture comprehensive
+          // and resilient to those cases.
+          subscriptions.add(
+            connected.onStdoutEvent.listen((event) {
+              unawaited(_writeVmWriteEvent('STDOUT', event, writeLine));
+            }),
+          );
+          subscriptions.add(
+            connected.onStderrEvent.listen((event) {
+              unawaited(_writeVmWriteEvent('STDERR', event, writeLine));
+            }),
+          );
+          await connected.streamListen(EventStreams.kLogging);
+          await _tryStreamListen(connected, EventStreams.kStdout);
+          await _tryStreamListen(connected, EventStreams.kStderr);
+          await writeLine(
+            '[flutter_scout] VM logging listener attached ${DateTime.now().toIso8601String()}',
+          );
+          await connected.onDone;
+          await writeLine(
+            '[flutter_scout] VM logging listener disconnected ${DateTime.now().toIso8601String()}; reconnecting',
+          );
+        } catch (error) {
+          await writeLine('[flutter_scout] VM logging listener failed: $error');
+        } finally {
+          for (final subscription in subscriptions) {
+            await subscription.cancel();
+          }
+          await service?.dispose();
+          await writeChain;
+        }
+
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
     } catch (error) {
       sink ??= File(logFile).openWrite(mode: FileMode.append);
       sink.writeln('[flutter_scout] VM logging listener failed: $error');
       await sink.flush();
       return 1;
     } finally {
-      await subscription?.cancel();
-      await service?.dispose();
       await sink?.close();
+    }
+  }
+
+  /// Collapses flutter-tool console echoes of app stdout/stderr that Scout's
+  /// own VM listener already captured. The `flutter run` console (redirected
+  /// into the log file) and the VM Stdout/Stderr streams both observe the same
+  /// app output, so in a healthy foreground session the same print/debugPrint
+  /// line lands twice: once bare (`flutter: msg`) and once VM-tagged
+  /// (`[ts] [VM_STDOUT] flutter: msg`). We keep the timestamped VM copy and drop
+  /// the bare echo, matched by count so genuinely repeated prints and
+  /// startup-only lines (captured before the VM listener attached) survive.
+  List<String> _dedupeVmStdoutEcho(List<String> lines) {
+    final vmTag = RegExp(r'^\[[^\]]*\] \[VM_STD(?:OUT|ERR)\] (.*)$');
+    final vmPayloads = <String, int>{};
+    for (final line in lines) {
+      final match = vmTag.firstMatch(line);
+      if (match != null) {
+        final payload = match.group(1)!;
+        vmPayloads[payload] = (vmPayloads[payload] ?? 0) + 1;
+      }
+    }
+    if (vmPayloads.isEmpty) return lines;
+    final result = <String>[];
+    for (final line in lines) {
+      final remaining = vmPayloads[line];
+      if (remaining != null && remaining > 0) {
+        vmPayloads[line] = remaining - 1;
+        continue;
+      }
+      result.add(line);
+    }
+    return result;
+  }
+
+  Future<void> _tryStreamListen(VmService service, String stream) async {
+    try {
+      await service.streamListen(stream);
+    } catch (_) {
+      // The stream may be unavailable or already subscribed on this client;
+      // keep the other streams working rather than failing the whole listener.
+    }
+  }
+
+  Future<void> _writeVmWriteEvent(
+    String stream,
+    Event event,
+    Future<void> Function(String) writeLine,
+  ) async {
+    final bytes = event.bytes;
+    if (bytes == null || bytes.isEmpty) return;
+    String text;
+    try {
+      text = utf8.decode(base64.decode(bytes), allowMalformed: true);
+    } catch (_) {
+      return;
+    }
+    if (text.isEmpty) return;
+    final timestamp = event.timestamp != null && event.timestamp! > 0
+        ? DateTime.fromMillisecondsSinceEpoch(
+            event.timestamp!,
+          ).toIso8601String()
+        : DateTime.now().toIso8601String();
+    for (final line in const LineSplitter().convert(_stripAnsi(text))) {
+      if (line.isEmpty) continue;
+      await writeLine('[$timestamp] [VM_$stream] $line');
     }
   }
 
@@ -500,8 +626,11 @@ extension _CliActions on FlutterScoutCli {
       '[$loggerName]',
       if (extras.isNotEmpty) extras,
       message,
-      if (error.isNotEmpty) 'error=$error',
-      if (stackTrace.isNotEmpty) 'stack=$stackTrace',
+      // A null error/stackTrace ref resolves to the literal string 'null';
+      // emitting `error=null` both adds noise and trips the log summarizer's
+      // substring-based error counter, so treat it as absent.
+      if (error.isNotEmpty && error != 'null') 'error=$error',
+      if (stackTrace.isNotEmpty && stackTrace != 'null') 'stack=$stackTrace',
     ].where((part) => part.isNotEmpty).join(' ');
   }
 
@@ -536,5 +665,4 @@ extension _CliActions on FlutterScoutCli {
 
   String _stripAnsi(String value) =>
       value.replaceAll(RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]'), '');
-
 }
