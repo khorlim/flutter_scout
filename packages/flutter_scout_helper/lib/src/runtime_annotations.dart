@@ -31,6 +31,25 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
           }
           _bumpAnnotationRevision();
           break;
+        case 'delete':
+          final ids = _annotationDeleteIds(params);
+          if (ids.isEmpty) {
+            return _fail(
+              'annotation_ids_required',
+              'annotations delete requires at least one id.',
+            );
+          }
+          final removed = <String>[];
+          final notFound = <String>[];
+          for (final id in ids) {
+            (removeAnnotation(id) ? removed : notFound).add(id);
+          }
+          await _waitForFrame();
+          return _ok({
+            ..._annotationsStateJson(),
+            'removed': removed,
+            'notFound': notFound,
+          });
         case 'resolve':
           final updated = _updateAnnotationStatus(
             id: params['id'],
@@ -505,6 +524,21 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     _bumpAnnotationRevision();
     unawaited(_captureAnnotationCrop(annotation, slot: 'before'));
     return annotation;
+  }
+
+  /// Collects the ids targeted by a `delete` action from either `ids`
+  /// (comma-separated, the CLI form) or a single `id`, de-duplicated and
+  /// trimmed so the removed/notFound report has no blanks or repeats.
+  List<String> _annotationDeleteIds(Map<String, String> params) {
+    final ids = <String>[];
+    for (final raw in [params['ids'], params['id']]) {
+      if (raw == null) continue;
+      for (final part in raw.split(',')) {
+        final id = part.trim();
+        if (id.isNotEmpty && !ids.contains(id)) ids.add(id);
+      }
+    }
+    return ids;
   }
 
   /// Removes the annotation with [id] (mirrors [addAnnotation]). Returns whether

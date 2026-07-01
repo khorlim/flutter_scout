@@ -48,13 +48,14 @@ extension _CliAnnotations on FlutterScoutCli {
   Future<int> _annotations(List<String> args) async {
     final action = args.isEmpty ? 'list' : args.first;
     const usage =
-        'Usage: flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|fixed|check|wait|signal-handoff]';
+        'Usage: flutter-scout annotations [list|targets|enable|disable|clear|delete|resolve|dismiss|reopen|fixed|check|wait|signal-handoff]';
     const allowed = {
       'list',
       'targets',
       'enable',
       'disable',
       'clear',
+      'delete',
       'resolve',
       'dismiss',
       'reopen',
@@ -101,6 +102,17 @@ extension _CliAnnotations on FlutterScoutCli {
         if (note != null && note.isNotEmpty) {
           params['note'] = note;
         }
+        break;
+      case 'delete':
+        final parser = ArgParser();
+        final parsed = _parseAnnotationArgs(parser, args.skip(1), usage);
+        if (parsed.rest.isEmpty) {
+          throw const ScoutCliException(
+            'usage',
+            'Usage: flutter-scout annotations delete <annotation-id> [<annotation-id> ...]',
+          );
+        }
+        params['ids'] = parsed.rest.join(',');
         break;
       case 'clear':
         final parser = ArgParser()
@@ -188,11 +200,9 @@ extension _CliAnnotations on FlutterScoutCli {
         final annotations = state['annotations'];
         if (annotations is List) await _attachCropPaths(annotations);
         stdout.writeln(
-          const JsonEncoder.withIndent('  ').convert({
-            ...state,
-            'handoff': true,
-            'timedOut': false,
-          }),
+          const JsonEncoder.withIndent(
+            '  ',
+          ).convert({...state, 'handoff': true, 'timedOut': false}),
         );
         return 0;
       }
@@ -209,11 +219,9 @@ extension _CliAnnotations on FlutterScoutCli {
     final annotations = timeoutState['annotations'];
     if (annotations is List) await _attachCropPaths(annotations);
     stdout.writeln(
-      const JsonEncoder.withIndent('  ').convert({
-        ...timeoutState,
-        'handoff': false,
-        'timedOut': true,
-      }),
+      const JsonEncoder.withIndent(
+        '  ',
+      ).convert({...timeoutState, 'handoff': false, 'timedOut': true}),
     );
     return 0;
   }
@@ -297,7 +305,10 @@ extension _CliAnnotations on FlutterScoutCli {
     return null;
   }
 
-  Future<String?> _nativeCropToFile(List<num> rectLogical, String outPath) async {
+  Future<String?> _nativeCropToFile(
+    List<num> rectLogical,
+    String outPath,
+  ) async {
     final shotPath = p.join(
       _sessionDir.path,
       'screenshots',
@@ -343,5 +354,4 @@ extension _CliAnnotations on FlutterScoutCli {
       throw ScoutCliException('usage', '$usage\n${error.message}');
     }
   }
-
 }

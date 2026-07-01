@@ -94,6 +94,63 @@ void main() {
     await tester.pump();
   });
 
+  testWidgets('removeAnnotation deletes only the requested id', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+
+    const target = ScoutAnnotationTarget(
+      id: 't1',
+      stableId: 's1',
+      kind: 'text',
+      widgetType: 'Text',
+      key: null,
+      label: 'hello scout',
+      text: 'hello scout',
+      screen: '/',
+      routeGuess: '/',
+      rect: Rect.fromLTWH(0, 0, 120, 40),
+      visibleRect: Rect.fromLTWH(0, 0, 120, 40),
+      visibleFraction: 1,
+      depth: 1,
+      ancestorSummary: <String>[],
+      scoutNodeId: null,
+    );
+
+    // Seed the list directly so the `delete` action's removed/notFound
+    // reporting (built on removeAnnotation) is exercised without the async
+    // before-crop capture that addAnnotation kicks off.
+    runtime.debugAnnotations
+      ..clear()
+      ..add(
+        ScoutAnnotation(
+          id: 'ann_001',
+          createdAt: DateTime(2024),
+          comment: 'first',
+          status: 'open',
+          target: target,
+        ),
+      )
+      ..add(
+        ScoutAnnotation(
+          id: 'ann_002',
+          createdAt: DateTime(2024),
+          comment: 'second',
+          status: 'open',
+          target: target,
+        ),
+      );
+
+    expect(runtime.removeAnnotation('ann_001'), isTrue, reason: 'removed');
+    expect(runtime.removeAnnotation('ann_404'), isFalse, reason: 'notFound');
+    expect(
+      runtime.debugAnnotations.map((annotation) => annotation.id),
+      ['ann_002'],
+      reason: 'untargeted pins must survive',
+    );
+
+    runtime.debugAnnotations.clear();
+  });
+
   testWidgets(
     'annotation targets exclude non-interactive content under an opaque layer',
     (tester) async {

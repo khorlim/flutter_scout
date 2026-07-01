@@ -97,13 +97,21 @@ flutter-scout annotations wait --timeout 600 --poll 1000
 
 Read `target.snapshotRect` as the original captured geometry and `target.liveRect` as current matched geometry. If `target.liveMatched` is false, run `flutter-scout annotations check` to mark missing open targets as `stale_target`.
 
-**Verify and close the loop.** After fixing a widget and hot-reloading, mark it fixed — this sets status `pending_review` and captures an `afterCropPath` so the user gets a before/after to confirm:
+**Verify and close the loop.** After fixing a widget and hot-reloading, mark it fixed — this sets status `pending_review` and captures an `afterCropPath` so you (and the user) get a before/after:
 
 ```bash
 flutter-scout annotations fixed ann_001 --note "Shortened label"
 ```
 
-`pending_review` pins render amber in the overlay (vs teal for open). The user then confirms with `resolve` or sends it back with `reopen`:
+Then **clear the pins you handled** so the overlay does not accumulate stale review markers. Delete only the ids you actually addressed, and report each one to the user (id + comment + what you did). Capture the `fixed` before/after first (above) so the evidence survives in the conversation even though the pin is gone:
+
+```bash
+flutter-scout annotations delete ann_001 ann_003
+```
+
+`delete` hard-removes those ids and returns `removed` (deleted) and `notFound` (unknown id) lists — use them to report accurately, and never blanket-delete pins you did not address. Do not delete a pin you could not fix; leave it for the user (optionally `reopen`/`fixed` to reflect state).
+
+If the user prefers to confirm fixes themselves, use the manual path instead of `delete`: `fixed` leaves an amber `pending_review` pin (vs teal for open), and the user closes it out:
 
 ```bash
 flutter-scout annotations check
@@ -201,6 +209,7 @@ flutter-scout annotations enable
 flutter-scout annotations disable
 flutter-scout annotations check
 flutter-scout annotations fixed ann_001 --note "Shortened label"
+flutter-scout annotations delete ann_001 ann_003
 flutter-scout annotations resolve ann_001 --note "Fixed"
 flutter-scout annotations dismiss ann_002
 flutter-scout annotations clear --resolved
@@ -263,4 +272,4 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Use coordinate scroll/swipe starts when the default gesture may hit the wrong layer.
 - Use `tap <x> <y>` or `tap --x <x> --y <y>` for coordinate taps.
 - Keep `.flutter_scout/` as runtime state; do not commit it.
-- Do not expect annotations to disappear after fixes; use `snapshotRect` versus `liveRect` for evidence, then explicitly `resolve` or `dismiss` annotations when done.
+- Annotations do not disappear on their own after fixes; use `snapshotRect` versus `liveRect` for evidence, mark each handled pin `fixed` to capture the before/after, then `delete` the ids you addressed (report `removed`/`notFound`) so the overlay stays clean. Never blanket-delete pins you did not fix.
