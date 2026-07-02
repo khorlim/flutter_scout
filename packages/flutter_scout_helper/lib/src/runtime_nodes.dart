@@ -482,7 +482,15 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       return null;
     }
     final topLeft = renderObject.localToGlobal(Offset.zero);
-    return topLeft & renderObject.size;
+    final rect = topLeft & renderObject.size;
+    // A degenerate/invalid transform (or a non-finite size) can make
+    // localToGlobal return NaN or Infinity, producing a non-finite rect. Such
+    // a rect is not a real, tappable region, and any downstream `.round()` or
+    // JSON serialization would throw ("Unsupported operation: Infinity or NaN
+    // toInt"), breaking inspect/tap/waitStable for the entire screen. Treat it
+    // as having no geometry; every caller already handles a null rect.
+    if (!rect.isFinite) return null;
+    return rect;
   }
 
   Offset? _pointForTarget(String? target, Map<String, String> params) {

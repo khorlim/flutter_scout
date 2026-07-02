@@ -427,4 +427,41 @@ void main() {
       expect(p.offset.dx + dialog.width, lessThanOrEqualTo(400 - 12));
     });
   });
+
+  testWidgets('snapshot tolerates widgets with non-finite geometry', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              const Text('finite sibling'),
+              // A NaN transform makes localToGlobal return non-finite
+              // offsets; the snapshot must skip such rects instead of
+              // throwing "Unsupported operation: Infinity or NaN toInt".
+              // ExcludeSemantics keeps the test binding's semantics flush
+              // from asserting on the same NaN before Scout runs.
+              ExcludeSemantics(
+                child: Transform(
+                  transform: Matrix4.identity()..setEntry(0, 0, double.nan),
+                  child: const SizedBox(
+                    width: 100,
+                    height: 40,
+                    child: Text('nan zone'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final snapshot = runtime.debugSnapshot();
+    expect(snapshot.visibleText, contains('finite sibling'));
+  });
 }

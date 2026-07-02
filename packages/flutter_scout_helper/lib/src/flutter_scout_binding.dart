@@ -132,6 +132,9 @@ class FlutterScoutRuntime {
   List<ScoutAnnotationTarget> debugVisibleAnnotationTargets() =>
       visibleAnnotationTargets();
 
+  @visibleForTesting
+  ScoutSnapshot debugSnapshot() => _snapshot();
+
   void _installErrorHooks() {
     _previousFlutterError = FlutterError.onError;
     FlutterError.onError = (FlutterErrorDetails details) {
