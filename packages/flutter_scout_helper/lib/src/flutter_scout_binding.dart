@@ -27,7 +27,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 2;
+const int scoutHelperProtocolVersion = 3;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -178,9 +178,11 @@ class FlutterScoutRuntime {
   Future<void> debugDispatchTap(Offset point) => _dispatchTap(point);
 
   /// Test-only view of wait-for condition evaluation against a snapshot.
+  /// [conditions] uses wait-for param names: text, gone, target, selected,
+  /// screen, field (`<handle>=<value>`).
   @visibleForTesting
-  bool debugWaitForConditionsMet({String? text, String? gone}) =>
-      _waitForConditionsMet(snapshot: _snapshot(), text: text, gone: gone);
+  bool debugWaitForConditionsMet(Map<String, String> conditions) =>
+      _waitForConditionsMet(snapshot: _snapshot(), params: conditions);
 
   /// Test-only: run deferred frames with an advancing clock, as the
   /// observation windows do on a backgrounded desktop window.
@@ -188,6 +190,25 @@ class FlutterScoutRuntime {
   Future<void> debugDrainDeferredFrames({
     Duration budget = const Duration(milliseconds: 1500),
   }) => _drainDeferredFrames(budget: budget);
+
+  /// Test-only view of the tap-text near-match suggestions.
+  @visibleForTesting
+  List<String> debugTextSuggestions(String query) =>
+      _textSuggestions(_snapshot().visibleText, query);
+
+  /// Test-only: runs the post-action expectation wait exactly as
+  /// tap/tap-text/input/fill do for `expect*` params, returning the decoded
+  /// response payload.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugActionExpectation(
+    Map<String, String> params,
+  ) async {
+    final response = await _respondWithExpectation(params, {
+      'action': 'debug',
+      'result': 'changed',
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
 
   void _installErrorHooks() {
     _previousFlutterError = FlutterError.onError;
@@ -334,6 +355,8 @@ class FlutterScoutRuntime {
     final payload = <String, Object?>{
       'screen': snapshot.screen,
       'routeGuess': snapshot.routeGuess,
+      'viewSignature': snapshot.viewSignature,
+      'visibleTextHash': snapshot.visibleTextHash,
       'idle': snapshot.idle,
       'devicePixelRatio': snapshot.devicePixelRatio,
       'logicalSize': [snapshot.logicalSize.width, snapshot.logicalSize.height],
@@ -398,6 +421,7 @@ class FlutterScoutRuntime {
       'kind': node.kind,
       if (node.label != null) 'label': node.label,
       if (node.selected != null) 'selected': node.selected,
+      if (node.altIds.isNotEmpty) 'altIds': node.altIds,
       if (!node.enabled) 'enabled': false,
       if (!node.hitTestable) 'hitTestable': false,
       if (node.visibleFraction == 0) 'offscreen': true,

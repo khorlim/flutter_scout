@@ -45,7 +45,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final stable = actionSnapshot.stable;
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
-      return _ok({
+      return _respondWithExpectation(params, {
         'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
         'stable': stable,
         'result': _tapResult(changed: changed, node: node),
@@ -87,7 +87,13 @@ extension _RuntimeActions on FlutterScoutRuntime {
       }
       final match = _findVisibleTextMatch(text);
       if (match == null) {
-        return _fail('text_not_found', 'No visible text matched `$text`.');
+        final suggestions = _textSuggestions(before.visibleText, text);
+        return _fail(
+          'text_not_found',
+          'No visible text matched `$text`.'
+              '${suggestions.isEmpty ? '' : ' Did you mean: ${suggestions.map((s) => '`$s`').join(', ')}?'}',
+          extra: {if (suggestions.isNotEmpty) 'didYouMean': suggestions},
+        );
       }
       final targetNode = match.actionable ?? match.text;
       if (_unsafeTapTextActivation(match, text) &&
@@ -120,7 +126,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final stable = actionSnapshot.stable;
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
-      return _ok({
+      return _respondWithExpectation(params, {
         'action': 'tap-text $text',
         'stable': stable,
         'result': _tapResult(changed: changed, node: targetNode),
@@ -145,6 +151,30 @@ extension _RuntimeActions on FlutterScoutRuntime {
     } catch (error) {
       return _fail('tap_text_failed', error.toString());
     }
+  }
+
+  /// Fuzzy near-matches for a failed tap-text, so the agent's next attempt
+  /// doesn't need a full re-inspect: containment either way, shared tokens,
+  /// and shared prefixes all score.
+  List<String> _textSuggestions(List<String> visibleText, String query) {
+    final q = query.toLowerCase().trim();
+    if (q.isEmpty) return const [];
+    final qTokens = q.split(RegExp(r'\s+')).toSet();
+    final scored = <(String, int)>[];
+    for (final value in visibleText) {
+      final v = value.toLowerCase();
+      var score = 0;
+      if (v.contains(q) || q.contains(v)) score += 3;
+      score += qTokens.intersection(v.split(RegExp(r'\s+')).toSet()).length * 2;
+      var shared = 0;
+      while (shared < q.length && shared < v.length && q[shared] == v[shared]) {
+        shared++;
+      }
+      if (shared >= 3) score += 1;
+      if (score > 0) scored.add((value, score));
+    }
+    scored.sort((a, b) => b.$2.compareTo(a.$2));
+    return scored.take(3).map((entry) => entry.$1).toList(growable: false);
   }
 
   /// A no-change tap on an already-selected target (active tab, checked
@@ -222,7 +252,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       _setEditableText(editable, value);
       final stable = await _waitStableForAction(params);
       final after = _snapshot();
-      return _ok({
+      return _respondWithExpectation(params, {
         'action': 'input ${target ?? 'focused'}',
         'stable': stable,
         'result': _changed(before, after) ? 'changed' : 'unchanged',
@@ -337,7 +367,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
 
       final stable = await _waitStableForAction(params);
       final after = _snapshot();
-      return _ok({
+      return _respondWithExpectation(params, {
         'action': 'fill',
         'stable': stable,
         'filled': filled,
@@ -679,78 +709,208 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params,
   ) async {
     try {
-      final text = params['text'];
-      final gone = params['gone'];
-      if ((text == null || text.isEmpty) && (gone == null || gone.isEmpty)) {
+      if (!_hasWaitConditions(params)) {
         return _fail(
           'usage',
-          'Provide `text` (wait until visible) and/or `gone` (wait until absent).',
+          'Provide at least one condition: text, gone, target, selected, '
+              'screen, or field=<handle>=<value>.',
         );
       }
-      final timeoutMs = int.tryParse(params['timeoutMs'] ?? '') ?? 5000;
-      final pollMs = (int.tryParse(params['pollMs'] ?? '') ?? 150).clamp(
-        16,
-        2000,
+      final conditions = _describeWaitConditions(params);
+      final outcome = await _awaitConditions(params);
+      if (outcome.met) {
+        return _ok({
+          'action': 'wait-for',
+          'result': 'met',
+          'waitedMs': outcome.waitedMs,
+          'polls': outcome.polls,
+          'conditions': conditions,
+          'recentErrors': _recentErrors(),
+        });
+      }
+      if (outcome.blocked) {
+        return _fail(
+          'blocking_error_during_wait',
+          'A fresh blocking error surfaced while waiting; the awaited UI change is unlikely to arrive.',
+          extra: {
+            'result': 'blocked',
+            'waitedMs': outcome.waitedMs,
+            'polls': outcome.polls,
+            'conditions': conditions,
+          },
+        );
+      }
+      return _fail(
+        'wait_for_timeout',
+        'Conditions not met within ${outcome.waitedMs}ms: '
+            '${conditions.entries.map((e) => '${e.key}=`${e.value}`').join(', ')}.',
+        extra: {
+          'result': 'timeout',
+          'waitedMs': outcome.waitedMs,
+          'polls': outcome.polls,
+          'conditions': conditions,
+          'visibleText': outcome.visibleText,
+        },
       );
-      final stopwatch = Stopwatch()..start();
-      var polls = 0;
-      while (true) {
-        polls += 1;
-        _pumpPendingFrame();
-        await _drainDeferredFrames(budget: Duration(milliseconds: pollMs));
-        final snapshot = _snapshot();
-        if (_waitForConditionsMet(snapshot: snapshot, text: text, gone: gone)) {
-          return _ok({
-            'action': 'wait-for',
-            'result': 'met',
-            'waitedMs': stopwatch.elapsedMilliseconds,
-            'polls': polls,
-            if (text != null && text.isNotEmpty) 'text': text,
-            if (gone != null && gone.isNotEmpty) 'gone': gone,
-            'recentErrors': _recentErrors(),
-          });
-        }
-        final blocking = snapshot.recentErrors.any(
-          (error) => error['blocking'] == true && error['stale'] != true,
-        );
-        if (blocking) {
-          return _fail(
-            'blocking_error_during_wait',
-            'A fresh blocking error surfaced while waiting; the awaited UI change is unlikely to arrive.',
-            extra: {
-              'result': 'blocked',
-              'waitedMs': stopwatch.elapsedMilliseconds,
-              'polls': polls,
-            },
-          );
-        }
-        if (stopwatch.elapsedMilliseconds >= timeoutMs) {
-          return _fail(
-            'wait_for_timeout',
-            'Condition not met within ${timeoutMs}ms'
-                '${text != null && text.isNotEmpty ? '; `$text` never became visible' : ''}'
-                '${gone != null && gone.isNotEmpty ? '; `$gone` is still visible' : ''}.',
-            extra: {
-              'result': 'timeout',
-              'waitedMs': stopwatch.elapsedMilliseconds,
-              'polls': polls,
-              'visibleText': snapshot.visibleText,
-            },
-          );
-        }
-        await Future<void>.delayed(Duration(milliseconds: pollMs));
-      }
     } catch (error) {
       return _fail('wait_for_failed', error.toString());
     }
   }
 
-  /// Case-insensitive substring match over the currently visible text.
+  /// Polls snapshots (driving deferred frames on backgrounded windows) until
+  /// every condition in [params] holds, a fresh blocking error appears, or
+  /// the timeout elapses. Shared by wait-for and action `expect*` params.
+  Future<
+    ({
+      bool met,
+      bool blocked,
+      int waitedMs,
+      int polls,
+      List<String> visibleText,
+    })
+  >
+  _awaitConditions(
+    Map<String, String> params, {
+    String prefix = '',
+    String timeoutParam = 'timeoutMs',
+    int defaultTimeoutMs = 5000,
+  }) async {
+    final timeoutMs =
+        int.tryParse(params[timeoutParam] ?? '') ?? defaultTimeoutMs;
+    final pollMs = (int.tryParse(params['pollMs'] ?? '') ?? 150).clamp(
+      16,
+      2000,
+    );
+    final stopwatch = Stopwatch()..start();
+    var polls = 0;
+    while (true) {
+      polls += 1;
+      _pumpPendingFrame();
+      await _drainDeferredFrames(budget: Duration(milliseconds: pollMs));
+      final snapshot = _snapshot();
+      if (_waitForConditionsMet(
+        snapshot: snapshot,
+        params: params,
+        prefix: prefix,
+      )) {
+        return (
+          met: true,
+          blocked: false,
+          waitedMs: stopwatch.elapsedMilliseconds,
+          polls: polls,
+          visibleText: snapshot.visibleText,
+        );
+      }
+      final blocking = snapshot.recentErrors.any(
+        (error) => error['blocking'] == true && error['stale'] != true,
+      );
+      if (blocking || stopwatch.elapsedMilliseconds >= timeoutMs) {
+        return (
+          met: false,
+          blocked: blocking,
+          waitedMs: stopwatch.elapsedMilliseconds,
+          polls: polls,
+          visibleText: snapshot.visibleText,
+        );
+      }
+      await Future<void>.delayed(Duration(milliseconds: pollMs));
+    }
+  }
+
+  /// Completes an action response, honoring `expect*` params: when present,
+  /// the action's dispatch is followed — in the SAME VM call — by a bounded
+  /// wait for the expected UI state (toast text, spinner gone, handle
+  /// visible, screen reached). This closes the act→verify gap that separate
+  /// wait-for invocations leave open (process startup, connection setup, and
+  /// UI that reverts between commands).
+  Future<developer.ServiceExtensionResponse> _respondWithExpectation(
+    Map<String, String> params,
+    Map<String, Object?> payload,
+  ) async {
+    if (!_hasWaitConditions(params, prefix: 'expect')) return _ok(payload);
+    final conditions = _describeWaitConditions(params, prefix: 'expect');
+    final outcome = await _awaitConditions(
+      params,
+      prefix: 'expect',
+      timeoutParam: 'expectTimeoutMs',
+    );
+    final expectation = {
+      'met': outcome.met,
+      'waitedMs': outcome.waitedMs,
+      'polls': outcome.polls,
+      'conditions': conditions,
+    };
+    if (outcome.met) {
+      return _ok({...payload, 'expectation': expectation});
+    }
+    return _fail(
+      outcome.blocked ? 'blocking_error_during_wait' : 'expectation_not_met',
+      'Action dispatched, but the expectation was not met within '
+      '${outcome.waitedMs}ms: '
+      '${conditions.entries.map((e) => '${e.key}=`${e.value}`').join(', ')}.',
+      extra: {
+        ...payload,
+        'expectation': expectation,
+        'visibleText': outcome.visibleText,
+      },
+    );
+  }
+
+  /// Whether any wait/expect condition is present in [params].
+  /// [prefix] selects the param namespace: '' for wait-for (`text`, `gone`,
+  /// …) or 'expect' for action expectations (`expectText`, `expectGone`, …).
+  bool _hasWaitConditions(Map<String, String> params, {String prefix = ''}) {
+    return _conditionNames.any(
+      (name) => (params[_conditionParam(prefix, name)] ?? '').isNotEmpty,
+    );
+  }
+
+  static const List<String> _conditionNames = [
+    'text',
+    'gone',
+    'target',
+    'selected',
+    'screen',
+    'field',
+  ];
+
+  String _conditionParam(String prefix, String name) {
+    if (prefix.isEmpty) return name;
+    return '$prefix${name[0].toUpperCase()}${name.substring(1)}';
+  }
+
+  /// Names and values of the conditions present in [params], for echoing in
+  /// responses.
+  Map<String, Object?> _describeWaitConditions(
+    Map<String, String> params, {
+    String prefix = '',
+  }) {
+    return {
+      for (final name in _conditionNames)
+        if ((params[_conditionParam(prefix, name)] ?? '').isNotEmpty)
+          name: params[_conditionParam(prefix, name)],
+    };
+  }
+
+  /// Evaluates every present condition against [snapshot]; all must hold.
+  ///
+  /// - `text`: case-insensitive substring of some visible text
+  /// - `gone`: no visible text contains it
+  /// - `target`: a node matching the handle exists and is at least partly
+  ///   visible
+  /// - `selected`: a node matching the handle exists with `selected == true`
+  /// - `screen`: snapshot screen name equals it
+  /// - `field`: `<handle>=<value>` — the field's current value equals value
   bool _waitForConditionsMet({
     required ScoutSnapshot snapshot,
-    String? text,
-    String? gone,
+    required Map<String, String> params,
+    String prefix = '',
   }) {
+    String? param(String name) {
+      final value = params[_conditionParam(prefix, name)];
+      return value == null || value.isEmpty ? null : value;
+    }
+
     bool visible(String needle) {
       final lower = needle.toLowerCase();
       return snapshot.visibleText.any(
@@ -758,9 +918,33 @@ extension _RuntimeActions on FlutterScoutRuntime {
       );
     }
 
-    final appeared = text == null || text.isEmpty || visible(text);
-    final cleared = gone == null || gone.isEmpty || !visible(gone);
-    return appeared && cleared;
+    final text = param('text');
+    if (text != null && !visible(text)) return false;
+    final gone = param('gone');
+    if (gone != null && visible(gone)) return false;
+    final target = param('target');
+    if (target != null) {
+      final node = snapshot.findNode(target);
+      if (node == null || node.visibleFraction <= 0) return false;
+    }
+    final selected = param('selected');
+    if (selected != null) {
+      final node = snapshot.findNode(selected);
+      if (node == null || node.selected != true) return false;
+    }
+    final screen = param('screen');
+    if (screen != null && snapshot.screen != screen) return false;
+    final field = param('field');
+    if (field != null) {
+      final separator = field.indexOf('=');
+      if (separator <= 0) return false;
+      final node = snapshot.findField(field.substring(0, separator));
+      if (node == null ||
+          (node.value ?? '') != field.substring(separator + 1)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /// Drive the rendering pipeline to flush a deferred frame when the engine

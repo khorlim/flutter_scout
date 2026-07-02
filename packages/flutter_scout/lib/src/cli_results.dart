@@ -266,7 +266,20 @@ extension _CliResults on FlutterScoutCli {
         'Run flutter-scout attach --debug-url <url> first.',
       );
     }
-    final service = await _connect(uri);
+    // In batch mode one WebSocket serves every step; per-call connect/dispose
+    // is pure overhead (and a timing gap the UI can drift through).
+    final reuse = _reuseVmConnection;
+    final VmService service;
+    if (reuse && _cachedVmService != null && _cachedVmUri == uri) {
+      service = _cachedVmService!;
+    } else {
+      service = await _connect(uri);
+      if (reuse) {
+        await _disposeCachedVmService();
+        _cachedVmService = service;
+        _cachedVmUri = uri;
+      }
+    }
     try {
       final isolateId = await _findMainIsolate(service);
       final Response response;
@@ -300,8 +313,13 @@ extension _CliResults on FlutterScoutCli {
         return result;
       }
       return Map<String, dynamic>.from(json);
+    } catch (_) {
+      // A failed call over a cached connection may mean the socket is dead;
+      // drop it so the next step reconnects fresh.
+      if (reuse) await _disposeCachedVmService();
+      rethrow;
     } finally {
-      await service.dispose();
+      if (!reuse) await service.dispose();
     }
   }
 

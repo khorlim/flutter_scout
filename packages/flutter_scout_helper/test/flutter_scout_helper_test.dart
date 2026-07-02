@@ -732,12 +732,15 @@ void main() {
     await tester.pump();
 
     final runtime = FlutterScoutHelper.debugRuntime;
-    expect(runtime.debugWaitForConditionsMet(text: 'saved success'), isTrue);
-    expect(runtime.debugWaitForConditionsMet(text: 'Deleted'), isFalse);
-    expect(runtime.debugWaitForConditionsMet(gone: 'Loading'), isFalse);
-    expect(runtime.debugWaitForConditionsMet(gone: 'Spinner'), isTrue);
     expect(
-      runtime.debugWaitForConditionsMet(text: 'Saved', gone: 'Loading'),
+      runtime.debugWaitForConditionsMet({'text': 'saved success'}),
+      isTrue,
+    );
+    expect(runtime.debugWaitForConditionsMet({'text': 'Deleted'}), isFalse);
+    expect(runtime.debugWaitForConditionsMet({'gone': 'Loading'}), isFalse);
+    expect(runtime.debugWaitForConditionsMet({'gone': 'Spinner'}), isTrue);
+    expect(
+      runtime.debugWaitForConditionsMet({'text': 'Saved', 'gone': 'Loading'}),
       isFalse,
     );
 
@@ -749,9 +752,181 @@ void main() {
     );
     await tester.pump();
     expect(
-      runtime.debugWaitForConditionsMet(text: 'Saved', gone: 'Loading'),
+      runtime.debugWaitForConditionsMet({'text': 'Saved', 'gone': 'Loading'}),
       isTrue,
     );
+  });
+
+  testWidgets('wait-for conditions: target, selected, screen, field', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              ElevatedButton(onPressed: () {}, child: const Text('Go')),
+              Switch(value: true, onChanged: (_) {}),
+              const TextField(decoration: InputDecoration(labelText: 'Name')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final runtime = FlutterScoutHelper.debugRuntime;
+
+    expect(runtime.debugWaitForConditionsMet({'target': 'btn.go'}), isTrue);
+    expect(runtime.debugWaitForConditionsMet({'target': 'btn.nope'}), isFalse);
+    expect(
+      runtime.debugWaitForConditionsMet({'selected': 'btn.switch'}),
+      isTrue,
+    );
+    expect(runtime.debugWaitForConditionsMet({'selected': 'btn.go'}), isFalse);
+    final screen = runtime.debugSnapshot().screen;
+    expect(runtime.debugWaitForConditionsMet({'screen': screen}), isTrue);
+    expect(
+      runtime.debugWaitForConditionsMet({'screen': 'OtherScreen'}),
+      isFalse,
+    );
+    expect(runtime.debugWaitForConditionsMet({'field': 'field.name='}), isTrue);
+    expect(
+      runtime.debugWaitForConditionsMet({'field': 'field.name=abc'}),
+      isFalse,
+    );
+  });
+
+  testWidgets('action expectations gate in the same call', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: Center(child: Text('Ready'))),
+      ),
+    );
+    await tester.pump();
+    final runtime = FlutterScoutHelper.debugRuntime;
+
+    final met = await tester.runAsync(
+      () => runtime.debugActionExpectation({'expectText': 'Ready'}),
+    );
+    expect(met!['ok'], isTrue);
+    final expectation = met['expectation']! as Map<String, Object?>;
+    expect(expectation['met'], isTrue);
+    expect(
+      (expectation['conditions']! as Map<String, Object?>)['text'],
+      'Ready',
+    );
+
+    final unmet = await tester.runAsync(
+      () => runtime.debugActionExpectation({
+        'expectText': 'Never Appears',
+        'expectTimeoutMs': '250',
+      }),
+    );
+    expect(unmet!['ok'], isFalse);
+    expect(
+      (unmet['error']! as Map<String, Object?>)['code'],
+      'expectation_not_met',
+    );
+    expect((unmet['expectation']! as Map<String, Object?>)['met'], isFalse);
+    // The action outcome itself is preserved alongside the failed expectation.
+    expect(unmet['result'], 'changed');
+
+    // Without expect params the payload passes through untouched.
+    final plain = await tester.runAsync(
+      () => runtime.debugActionExpectation({}),
+    );
+    expect(plain!['ok'], isTrue);
+    expect(plain.containsKey('expectation'), isFalse);
+  });
+
+  testWidgets('viewSignature distinguishes views on the same route', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+
+    Widget view(String title, List<String> items) => MaterialApp(
+      home: Scaffold(
+        body: Column(
+          children: [
+            Text(title, style: const TextStyle(fontSize: 32)),
+            for (final item in items) Text(item),
+          ],
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(view('Operation', ['Member', 'Orders']));
+    await tester.pump();
+    final operation = runtime.debugSnapshot();
+    // Stable across re-snapshots of the same view.
+    expect(runtime.debugSnapshot().viewSignature, operation.viewSignature);
+    expect(runtime.debugSnapshot().visibleTextHash, operation.visibleTextHash);
+    // The big title leads the signature (prominence by painted area).
+    expect(operation.viewSignature, startsWith('Operation'));
+
+    await tester.pumpWidget(view('Admin', ['Menu', 'Setting']));
+    await tester.pump();
+    final admin = runtime.debugSnapshot();
+    expect(admin.viewSignature, isNot(operation.viewSignature));
+    expect(admin.visibleTextHash, isNot(operation.visibleTextHash));
+    expect(admin.summaryJson()['viewSignature'], admin.viewSignature);
+  });
+
+  testWidgets('tap-text suggestions surface near matches', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              Text('Save Supplier'),
+              Text('Delete Supplier'),
+              Text('Checkout'),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final suggestions = runtime.debugTextSuggestions('save supplier now');
+    expect(suggestions.first, 'Save Supplier');
+    expect(runtime.debugTextSuggestions('zzz-no-match'), isEmpty);
+  });
+
+  testWidgets('altIds keep alternate handles resolving', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CupertinoButton(
+            onPressed: () {},
+            // Primary label comes from the (possibly async-loaded, volatile)
+            // accessibility label; the icon-derived handle must remain an
+            // alternate so yesterday's id still resolves.
+            child: Semantics(
+              label: 'khor lim',
+              child: const Icon(Icons.settings),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    final node = snapshot.interactables.firstWhere(
+      (node) => node.id == 'btn.khor_lim',
+    );
+    expect(node.altIds, contains('btn.settings'));
+    // Both the volatile primary and the stable alternate resolve the node.
+    expect(snapshot.findNode('btn.khor_lim')?.id, node.id);
+    expect(snapshot.findNode('btn.settings')?.id, node.id);
+    // Kind-prefix-agnostic matching works for alternates too.
+    expect(snapshot.findNode('settings')?.id, node.id);
   });
 
   testWidgets('set-of-marks capture composites numbered marks onto the PNG', (

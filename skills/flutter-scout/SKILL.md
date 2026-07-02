@@ -89,6 +89,12 @@ Prefer `inspect --brief` for orientation: it returns the screen name, visible/hi
 
 Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it.
 
+Interactables can also carry `altIds` — alternate handles from the other label sources (icon glyph, accessibility label, contained text). When a primary label drifts between snapshots (an async-loaded username appearing after first paint), any altId still resolves the same node, so recorded handles and replays keep working.
+
+Snapshots include `viewSignature` (most prominent visible texts) and `visibleTextHash`: two states on the SAME route — an Operation/Admin flip, a swapped tab body — get different signatures even though `screen` is identical, and action deltas report `viewChanged` when the signature moves.
+
+If `tap-text` fails with `text_not_found`, the error includes `didYouMean` near-matches — try one of those before re-inspecting.
+
 If one widget on the screen misbehaves, inspect reports `degradedNodes` with the count of skipped elements instead of failing outright — treat a non-zero value as "eyes are partial, not blind".
 
 For a one-image overview, use a set-of-marks screenshot — numbered marks are drawn over every visible interactable and the JSON includes the `marks` legend mapping each number to its handle:
@@ -183,15 +189,41 @@ When an action reports `activated_no_observed_change`, Scout dispatched the gest
 
 If action output includes `lateChangeObserved:true`, trust the returned `afterSummary`; Scout waited past the first stable check and observed a delayed route, modal, or overlay change.
 
-For async outcomes (a save that shows a toast, a spinner that clears, a navigation that lands late), block on `wait-for` instead of re-inspecting in a loop:
+**Prefer act+gate in one command.** Every action (`tap`, `tap-text`, `input`, `fill`) accepts `--expect-text/--expect-gone/--expect-target/--expect-selected/--expect-screen/--expect-field` (+ `--expect-timeout`): the action dispatches and then waits — in the same VM call — for the expected UI state. This removes the inter-command gap where timing-sensitive UI (auto-reverting views, short toasts) drifts away:
+
+```bash
+flutter-scout tap btn.save --expect-text "Saved"
+flutter-scout tap-text "Setting" --expect-text "Branding"
+flutter-scout input --target field.name "QA" --expect-field field.name=QA
+```
+
+A met expectation adds `expectation.met:true` with `waitedMs`; an unmet one fails with `expectation_not_met` (the action result and final `visibleText` are included, so you know whether the tap itself worked).
+
+For standalone waits, `wait-for` supports the same condition set:
 
 ```bash
 flutter-scout wait-for --text "Saved" --timeout 8000
-flutter-scout wait-for --gone "Loading" --timeout 8000
-flutter-scout wait-for --text "Saved" --gone "Loading"
+flutter-scout wait-for --gone "Loading"
+flutter-scout wait-for --target btn.menu
+flutter-scout wait-for --selected tap.t_c
+flutter-scout wait-for --screen SettingScreen --field field.name=QA
 ```
 
-`wait-for` matches visible text case-insensitively, returns `result:"met"` with `waitedMs`, fails with `wait_for_timeout` (including the final `visibleText`), and exits early with `blocking_error_during_wait` when a fresh blocking error makes the awaited change pointless.
+Text matching is case-insensitive; success returns `result:"met"` with `waitedMs`, timeout fails with `wait_for_timeout` (including final `visibleText`), and a fresh blocking error exits early with `blocking_error_during_wait`.
+
+**Chain whole flows with `batch`** — one process, one VM connection, no startup overhead or timing gaps between steps; stops at the first failed step unless `--keep-going`:
+
+```bash
+flutter-scout batch 'tap btn.admin --expect-text Setting; tap-text Setting --expect-text Branding; tap-text "T&C"; tap btn.save --expect-text Saved'
+flutter-scout batch --file /tmp/flow.scout   # one command per line, # comments
+```
+
+**Address sessions by name from anywhere** — `launch`/`ensure --name <label>` registers the session globally; any command then takes `--app <label>` without cd'ing to the project, and `flutter-scout apps` lists registered sessions:
+
+```bash
+flutter-scout --app test-flutter-scout inspect --brief
+flutter-scout --app test-flutter-scout batch 'tap btn.save --expect-text Saved'
+```
 
 Scout's own overlay chrome (the annotation FAB, instance badge, pins) is invisible to agent gestures and excluded from inspect: a tap aimed at an app control under the FAB lands on the app control, and Scout chrome never surfaces as tappable handles.
 
@@ -214,7 +246,9 @@ flutter-scout screenshot -o /tmp/current_screen.png
 flutter-scout screenshot --annotated -o /tmp/marked.png
 ```
 
-`crop --rect x,y,w,h` captures an arbitrary logical region without needing a handle — useful for corners and composite areas.
+`crop --rect x,y,w,h` captures an arbitrary logical region without needing a handle — useful for corners and composite areas. `crop --annotated` draws numbered marks over interactables inside the region and prints the legend.
+
+For long or multi-line text, `input --target <field> --file /path/to/text.txt` reads the value from a file — no shell-quoting battles.
 
 Prefer `bounds` and crops over full screenshots when inspecting one control or dialog. `screenshot` and `crop` render in-app by default (works on any platform, including physical devices), and report `"backend": "in_app_capture"`. When the captured region contains a platform view (map, webview, native video) that would render blank, Scout automatically falls back to a native capture. Pass `--native` to force the native backend (iOS Simulator `simctl` / macOS app-window `screencapture`); native crops remain iOS Simulator-only and macOS attach returns `crop_unsupported_target`.
 
@@ -252,6 +286,13 @@ flutter-scout annotations clear --resolved
 flutter-scout wait stable
 flutter-scout wait-for --text "Saved" --timeout 8000
 flutter-scout wait-for --gone "Loading"
+flutter-scout wait-for --target btn.menu --selected tap.t_c
+flutter-scout tap btn.save --expect-text "Saved"
+flutter-scout tap-text "Setting" --expect-text "Branding"
+flutter-scout input --target field.tnc --file /tmp/tnc.txt --expect-text "rev. 5"
+flutter-scout batch 'tap btn.a --expect-text B; tap-text C --expect-screen DScreen'
+flutter-scout apps
+flutter-scout --app my-session inspect --brief
 flutter-scout inspect --brief
 flutter-scout inspect --sections textTargets,scrollables
 flutter-scout screenshot --annotated -o /tmp/marked.png
@@ -294,7 +335,8 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Prefer `ensure` over repeated `launch`; repeated full launch causes slow native rebuilds.
 - Start with `inspect --brief`; use full `inspect` or `--sections` only when the brief payload is not enough. Avoid blind screenshots — but when you do need a visual map, prefer `screenshot --annotated` (numbered marks + handle legend) over a plain screenshot.
 - Treat `result:"already_selected"` as success-no-op (the tab/toggle was already in that state); never retry it.
-- Use `wait-for --text/--gone` for async outcomes (toasts, spinners, delayed navigation) instead of re-running inspect in a loop.
+- Prefer `--expect-*` flags on actions over separate wait-for calls: act + gate in one VM call, no inter-command gap for timing-sensitive UI to drift through. Use standalone `wait-for` (text/gone/target/selected/screen/field) when no action precedes the wait.
+- Chain multi-step flows with `batch` (one process, one connection) instead of separate CLI invocations; use `--app <name>` to address a named session from any directory.
 - Treat non-zero `degradedNodes` as partial eyes: the listed nodes are trustworthy, but a few elements could not be read.
 - After Dart-only edits, run `reload` or `restart` before replaying flows.
 - Prefer `fill` for real text fields, but do not use it for custom pickers, keypads, steppers, calendars, or segmented controls.

@@ -75,9 +75,17 @@ extension _CliCapture on FlutterScoutCli {
       )
       ..addOption('output', abbr: 'o')
       ..addOption('padding', defaultsTo: '12')
+      ..addFlag(
+        'annotated',
+        defaultsTo: false,
+        help:
+            'Draw numbered marks over interactables inside the region and '
+            'print the number -> handle legend.',
+      )
       ..addFlag('native', defaultsTo: false);
     final parsed = parser.parse(args);
     final native = parsed.flag('native');
+    final annotated = parsed.flag('annotated');
     final rectOption = parsed.option('rect');
     final target =
         parsed.option('target') ??
@@ -142,6 +150,7 @@ extension _CliCapture on FlutterScoutCli {
         mode: 'crop',
         rect: rectNums,
         padding: padding,
+        annotate: annotated,
       );
       if (capture?.bytes != null) {
         File(output).writeAsBytesSync(capture!.bytes!);
@@ -152,10 +161,18 @@ extension _CliCapture on FlutterScoutCli {
             'path': output,
             'rect': rectNums,
             'backend': 'in_app_capture',
+            if (annotated) 'marks': capture.marks ?? const <Object?>[],
           }),
         );
         return 0;
       }
+    }
+    if (annotated) {
+      throw const ScoutCliException(
+        'annotated_unsupported_native',
+        'Set-of-marks crops require the in-app capture backend; it was '
+            'unavailable for this region (platform view or capture failure).',
+      );
     }
 
     // Native fallback (forced via --native, or when in-app capture reports a

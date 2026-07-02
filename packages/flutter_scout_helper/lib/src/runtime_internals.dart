@@ -229,6 +229,9 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     final changedGeometry = _changedGeometryIds(before, after);
     return {
       'screenChanged': before.screen != after.screen,
+      // View swaps on the SAME route (tab body, flip dashboard) don't move
+      // `screen`; the signature comparison catches them.
+      'viewChanged': before.viewSignature != after.viewSignature,
       'newText': afterText.difference(beforeText).toList(growable: false),
       'removedText': beforeText.difference(afterText).toList(growable: false),
       'changedText': [

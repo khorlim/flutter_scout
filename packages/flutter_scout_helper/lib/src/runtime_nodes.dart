@@ -162,6 +162,22 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       widget.key,
       element.widget.runtimeType.toString(),
     );
+    // Alternate handles from the other label sources, so the node stays
+    // addressable when its primary label source flickers (e.g. an
+    // async-loaded Semantics username appearing after first paint).
+    final altIds = <String>{};
+    if (kind == 'btn' || kind == 'tap') {
+      for (final alternate in [
+        _iconLabelBelow(element),
+        _semanticsLabelBelow(element),
+        _textBelow(element),
+      ]) {
+        final trimmed = alternate?.trim();
+        if (trimmed == null || trimmed.isEmpty || !_hasWord(trimmed)) continue;
+        final altId = '$kind.${_slug(trimmed)}';
+        if (altId != baseId) altIds.add(altId);
+      }
+    }
     final visibleRect = _visibleRectFor(rect);
     final suggestedTapPoint = _visibleCenter(rect);
     return ScoutNode(
@@ -188,6 +204,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       enabled: _enabledFor(widget),
       confidence: label == null ? 0.65 : 0.94,
       selected: kind == 'text' ? null : _selectedStateFor(element, widget),
+      altIds: altIds.toList(growable: false),
     );
   }
 

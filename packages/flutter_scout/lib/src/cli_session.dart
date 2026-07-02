@@ -26,6 +26,12 @@ extension _CliSession on FlutterScoutCli {
     if (!projectDir.existsSync()) {
       throw ScoutCliException('project_missing', 'Project not found: $project');
     }
+    final instanceName = parsed.option('name');
+    if (instanceName != null && instanceName.isNotEmpty) {
+      // Session files live in the cwd; register it so `--app <name>` can
+      // address this session from anywhere.
+      _registerScoutSession(instanceName, Directory.current.path);
+    }
     _writeProgress('resolve_device', {'requestedDevice': device});
     final resolvedDevice = await _resolveFlutterDevice(device);
     if (resolvedDevice == null) {
@@ -257,6 +263,10 @@ extension _CliSession on FlutterScoutCli {
       );
     }
 
+    final instanceName = parsed.option('name');
+    if (instanceName != null && instanceName.isNotEmpty) {
+      _registerScoutSession(instanceName, Directory.current.path);
+    }
     progress('discover_vm_service', {'device': ?device});
     // Every step inside discovery is individually bounded, but a hard phase
     // ceiling guarantees ensure can never sit silent for minutes — fail with
@@ -359,6 +369,26 @@ extension _CliSession on FlutterScoutCli {
 
   Future<int> _status() async {
     stdout.writeln(jsonEncode(await _statusPayload()));
+    return 0;
+  }
+
+  /// Lists sessions registered via launch/ensure `--name`, addressable with
+  /// the global `--app <name>` option.
+  Future<int> _apps() async {
+    final registry = _readScoutRegistry();
+    stdout.writeln(
+      jsonEncode({
+        'ok': true,
+        'sessions': [
+          for (final entry in registry.entries)
+            {
+              'name': entry.key,
+              'directory': entry.value,
+              'exists': Directory(entry.value).existsSync(),
+            },
+        ],
+      }),
+    );
     return 0;
   }
 

@@ -3,6 +3,74 @@ part of 'flutter_scout_cli.dart';
 // part: interaction commands: bounds-adjacent tap/input/tap-text/long-press/fill/wait/reload/restart/scroll/swipe/scroll-to/back/deeplink/logs.
 
 extension _CliActions on FlutterScoutCli {
+  /// Registers the shared `--expect-*` options: act + gate in ONE VM call,
+  /// closing the act->verify gap that separate wait-for invocations leave
+  /// open (process startup, connection setup, UI that reverts between
+  /// commands).
+  static void _addExpectOptions(ArgParser parser) {
+    parser
+      ..addOption(
+        'expect-text',
+        help: 'After the action, wait until this text is visible.',
+      )
+      ..addOption(
+        'expect-gone',
+        help: 'After the action, wait until this text is gone.',
+      )
+      ..addOption(
+        'expect-target',
+        help: 'After the action, wait until this handle is visible.',
+      )
+      ..addOption(
+        'expect-selected',
+        help: 'After the action, wait until this handle reports selected.',
+      )
+      ..addOption(
+        'expect-screen',
+        help: 'After the action, wait until the screen name equals this.',
+      )
+      ..addOption(
+        'expect-field',
+        help: 'After the action, wait until <handle>=<value> holds.',
+      )
+      ..addOption(
+        'expect-timeout',
+        defaultsTo: '5000',
+        help: 'Expectation timeout in ms.',
+      );
+  }
+
+  Map<String, String> _expectParams(ArgResults parsed) {
+    String? opt(String name) {
+      final value = parsed.option(name);
+      return value == null || value.isEmpty ? null : value;
+    }
+
+    final params = <String, String>{
+      if (opt('expect-text') != null) 'expectText': opt('expect-text')!,
+      if (opt('expect-gone') != null) 'expectGone': opt('expect-gone')!,
+      if (opt('expect-target') != null) 'expectTarget': opt('expect-target')!,
+      if (opt('expect-selected') != null)
+        'expectSelected': opt('expect-selected')!,
+      if (opt('expect-screen') != null) 'expectScreen': opt('expect-screen')!,
+      if (opt('expect-field') != null) 'expectField': opt('expect-field')!,
+    };
+    if (params.isNotEmpty) {
+      params['expectTimeoutMs'] = opt('expect-timeout') ?? '5000';
+    }
+    return params;
+  }
+
+  /// Client-side VM-call timeout with headroom above action wait plus any
+  /// expectation window.
+  Duration _actionCallTimeout(ArgResults parsed, Map<String, String> params) {
+    final waitMs = int.tryParse(params['waitMs'] ?? '') ?? 1500;
+    final expectMs = params.containsKey('expectTimeoutMs')
+        ? int.tryParse(params['expectTimeoutMs'] ?? '') ?? 5000
+        : 0;
+    return Duration(milliseconds: waitMs + expectMs + 15000);
+  }
+
   Future<int> _inspect(List<String> args) async {
     final parser = ArgParser()
       ..addFlag(
@@ -34,6 +102,18 @@ extension _CliActions on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('text', help: 'Wait until this text is visible.')
       ..addOption('gone', help: 'Wait until this text is no longer visible.')
+      ..addOption('target', help: 'Wait until this handle is visible.')
+      ..addOption(
+        'selected',
+        help:
+            'Wait until this handle reports selected (active tab, on '
+            'toggle).',
+      )
+      ..addOption('screen', help: 'Wait until the screen name equals this.')
+      ..addOption(
+        'field',
+        help: 'Wait until <handle>=<value> holds for a text field.',
+      )
       ..addOption('timeout', defaultsTo: '5000', help: 'Timeout in ms.')
       ..addOption('poll', defaultsTo: '150', help: 'Poll interval in ms.');
     final parsed = parser.parse(args);
@@ -41,20 +121,32 @@ extension _CliActions on FlutterScoutCli {
     if ((text == null || text.isEmpty) && parsed.rest.isNotEmpty) {
       text = parsed.rest.join(' ');
     }
-    final gone = parsed.option('gone');
-    if ((text == null || text.isEmpty) && (gone == null || gone.isEmpty)) {
+    String? opt(String name) {
+      final value = parsed.option(name);
+      return value == null || value.isEmpty ? null : value;
+    }
+
+    final conditions = <String, String>{
+      if (text != null && text.isNotEmpty) 'text': text,
+      if (opt('gone') != null) 'gone': opt('gone')!,
+      if (opt('target') != null) 'target': opt('target')!,
+      if (opt('selected') != null) 'selected': opt('selected')!,
+      if (opt('screen') != null) 'screen': opt('screen')!,
+      if (opt('field') != null) 'field': opt('field')!,
+    };
+    if (conditions.isEmpty) {
       throw const ScoutCliException(
         'usage',
         'Usage: flutter-scout wait-for [--text "Saved"] [--gone "Loading"] '
-            '[--timeout 5000] [--poll 150]',
+            '[--target btn.save] [--selected tap.t_c] [--screen X] '
+            '[--field field.name=value] [--timeout 5000] [--poll 150]',
       );
     }
     final timeoutMs = int.tryParse(parsed.option('timeout') ?? '') ?? 5000;
     return _callAndPrint(
       'ext.flutter_scout.waitFor',
       params: {
-        if (text != null && text.isNotEmpty) 'text': text,
-        if (gone != null && gone.isNotEmpty) 'gone': gone,
+        ...conditions,
         'timeoutMs': '$timeoutMs',
         'pollMs': parsed.option('poll') ?? '150',
       },
@@ -70,6 +162,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('y')
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('verbose', defaultsTo: false);
+    _addExpectOptions(parser);
     final parsed = parser.parse(args);
     final target = parsed.rest.isEmpty ? null : parsed.rest.first;
     final x = parsed.option('x');
@@ -102,6 +195,7 @@ extension _CliActions on FlutterScoutCli {
     }
     final params = <String, String>{
       'waitMs': parsed.option('wait-ms') ?? '1500',
+      ..._expectParams(parsed),
     };
     if (resolvedTarget != null && resolvedTarget.isNotEmpty) {
       params['target'] = resolvedTarget;
@@ -117,28 +211,52 @@ extension _CliActions on FlutterScoutCli {
       params: params,
       record: {'cmd': 'tap', ...params},
       compact: !parsed.flag('verbose'),
+      callTimeout: _actionCallTimeout(parsed, params),
     );
   }
 
   Future<int> _input(List<String> args) async {
     final parser = ArgParser()
       ..addOption('target')
+      ..addOption(
+        'file',
+        help:
+            'Read the value from this file instead of the command line — '
+            'no shell quoting battles for long or multi-line text.',
+      )
       ..addFlag('verbose', defaultsTo: false);
+    _addExpectOptions(parser);
     final parsed = parser.parse(args);
-    final valueArgs = parsed.rest;
-    if (valueArgs.isEmpty) {
-      throw const ScoutCliException(
-        'usage',
-        'Usage: flutter-scout input [--target <field>] <value>',
-      );
+    final filePath = parsed.option('file');
+    final String value;
+    if (filePath != null && filePath.isNotEmpty) {
+      final file = File(filePath);
+      if (!file.existsSync()) {
+        throw ScoutCliException('file_not_found', 'No file at `$filePath`.');
+      }
+      value = file.readAsStringSync();
+    } else {
+      if (parsed.rest.isEmpty) {
+        throw const ScoutCliException(
+          'usage',
+          'Usage: flutter-scout input [--target <field>] <value> or '
+              'flutter-scout input --target <field> --file <path>',
+        );
+      }
+      value = parsed.rest.join(' ');
     }
-    final value = valueArgs.join(' ');
     final target = parsed.option('target') ?? 'focused';
+    final params = <String, String>{
+      'target': target,
+      'value': value,
+      ..._expectParams(parsed),
+    };
     return _callAndPrint(
       'ext.flutter_scout.input',
-      params: {'target': target, 'value': value},
+      params: params,
       record: {'cmd': 'input', 'target': target, 'value': value},
       compact: !parsed.flag('verbose'),
+      callTimeout: _actionCallTimeout(parsed, params),
     );
   }
 
@@ -147,6 +265,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('allow-mismatch', defaultsTo: false, negatable: false)
       ..addFlag('verbose', defaultsTo: false);
+    _addExpectOptions(parser);
     final parsed = parser.parse(args);
     if (parsed.rest.isEmpty) {
       throw const ScoutCliException(
@@ -159,8 +278,13 @@ extension _CliActions on FlutterScoutCli {
       'text': text,
       'waitMs': parsed.option('wait-ms') ?? '1500',
       if (parsed.flag('allow-mismatch')) 'allowMismatch': 'true',
+      ..._expectParams(parsed),
     };
-    var result = await _call('ext.flutter_scout.tapText', params);
+    var result = await _call(
+      'ext.flutter_scout.tapText',
+      params,
+      _actionCallTimeout(parsed, params),
+    );
     result = await _tapTextFallbackIfNeeded(result, params);
     result = _withProtocolDiagnostics('ext.flutter_scout.tapText', result);
     stdout.writeln(
@@ -213,6 +337,7 @@ extension _CliActions on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('json')
       ..addFlag('verbose', defaultsTo: false);
+    _addExpectOptions(parser);
     final parsed = parser.parse(args);
     final raw = parsed.option('json');
     if (raw == null || raw.isEmpty) {
@@ -222,11 +347,13 @@ extension _CliActions on FlutterScoutCli {
       );
     }
     jsonDecode(raw);
+    final params = <String, String>{'values': raw, ..._expectParams(parsed)};
     return _callAndPrint(
       'ext.flutter_scout.fill',
-      params: {'values': raw},
+      params: params,
       record: {'cmd': 'fill', 'values': jsonDecode(raw)},
       compact: !parsed.flag('verbose'),
+      callTimeout: _actionCallTimeout(parsed, params),
     );
   }
 

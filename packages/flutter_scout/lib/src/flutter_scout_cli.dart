@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:vm_service/vm_service.dart';
 import 'package:vm_service/vm_service_io.dart';
 
+part 'cli_batch.dart';
 part 'cli_models.dart';
 part 'cli_session.dart';
 part 'cli_annotations.dart';
@@ -18,12 +19,16 @@ part 'cli_evidence.dart';
 part 'cli_results.dart';
 
 class FlutterScoutCli {
+  /// Test-only override for the session registry path, so tests never touch
+  /// the real `~/.flutter_scout/registry.json`.
+  static String? debugRegistryPathOverride;
+
   /// Helper protocol version this CLI is built against. Keep in sync with
   /// `scoutHelperProtocolVersion` in flutter_scout_helper — the helper echoes
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 2;
+  static const int expectedHelperProtocolVersion = 3;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -31,14 +36,169 @@ class FlutterScoutCli {
     Map<String, dynamic> result,
   ) => _withProtocolDiagnostics(method, result);
 
+  // Batch-mode connection cache: one WebSocket serves every step of a batch
+  // instead of connect/dispose per command. See cli_batch.dart.
+  bool _reuseVmConnection = false;
+  VmService? _cachedVmService;
+  String? _cachedVmUri;
+
+  /// Splits a batch script into commands on `;` and newlines, honoring
+  /// single/double quotes so quoted arguments can contain separators.
+  static List<String> splitBatchScript(String script) {
+    final commands = <String>[];
+    final current = StringBuffer();
+    var inSingle = false;
+    var inDouble = false;
+    for (var i = 0; i < script.length; i++) {
+      final char = script[i];
+      if (inSingle) {
+        current.write(char);
+        if (char == "'") inSingle = false;
+        continue;
+      }
+      if (inDouble) {
+        current.write(char);
+        if (char == '"') inDouble = false;
+        continue;
+      }
+      if (char == "'") {
+        inSingle = true;
+        current.write(char);
+        continue;
+      }
+      if (char == '"') {
+        inDouble = true;
+        current.write(char);
+        continue;
+      }
+      if (char == ';' || char == '\n') {
+        final command = current.toString().trim();
+        if (command.isNotEmpty && !command.startsWith('#')) {
+          commands.add(command);
+        }
+        current.clear();
+        continue;
+      }
+      current.write(char);
+    }
+    final tail = current.toString().trim();
+    if (tail.isNotEmpty && !tail.startsWith('#')) commands.add(tail);
+    return commands;
+  }
+
+  /// Shell-like argv splitter for one batch command: whitespace separates,
+  /// single quotes are literal, double quotes allow \" and \\ escapes.
+  static List<String> splitCommandLine(String line) {
+    final args = <String>[];
+    final current = StringBuffer();
+    var inSingle = false;
+    var inDouble = false;
+    var hasToken = false;
+    for (var i = 0; i < line.length; i++) {
+      final char = line[i];
+      if (inSingle) {
+        if (char == "'") {
+          inSingle = false;
+        } else {
+          current.write(char);
+        }
+        continue;
+      }
+      if (inDouble) {
+        if (char == '"') {
+          inDouble = false;
+        } else if (char == r'\' &&
+            i + 1 < line.length &&
+            (line[i + 1] == '"' || line[i + 1] == r'\')) {
+          current.write(line[++i]);
+        } else {
+          current.write(char);
+        }
+        continue;
+      }
+      if (char == "'") {
+        inSingle = true;
+        hasToken = true;
+        continue;
+      }
+      if (char == '"') {
+        inDouble = true;
+        hasToken = true;
+        continue;
+      }
+      if (char == r'\' && i + 1 < line.length) {
+        current.write(line[++i]);
+        hasToken = true;
+        continue;
+      }
+      if (char == ' ' || char == '\t') {
+        if (hasToken || current.isNotEmpty) {
+          args.add(current.toString());
+          current.clear();
+          hasToken = false;
+        }
+        continue;
+      }
+      current.write(char);
+      hasToken = true;
+    }
+    if (hasToken || current.isNotEmpty) args.add(current.toString());
+    return args;
+  }
+
   Future<int> run(List<String> args) async {
     if (args.isEmpty || args.first == '--help' || args.first == '-h') {
       _printUsage();
       return 0;
     }
 
-    final command = args.first;
-    final rest = args.skip(1).toList(growable: false);
+    // Global `--app <name>`: run this command against the named session
+    // (registered by launch/ensure --name) from anywhere — no cd dance.
+    var effectiveArgs = args;
+    String? appName;
+    for (var i = 0; i < effectiveArgs.length; i++) {
+      final arg = effectiveArgs[i];
+      if (arg == '--app' && i + 1 < effectiveArgs.length) {
+        appName = effectiveArgs[i + 1];
+        effectiveArgs = [
+          ...effectiveArgs.take(i),
+          ...effectiveArgs.skip(i + 2),
+        ];
+        break;
+      }
+      if (arg.startsWith('--app=')) {
+        appName = arg.substring('--app='.length);
+        effectiveArgs = [
+          ...effectiveArgs.take(i),
+          ...effectiveArgs.skip(i + 1),
+        ];
+        break;
+      }
+    }
+    if (appName != null && appName.isNotEmpty) {
+      final registry = _readScoutRegistry();
+      final directory = registry[appName];
+      if (directory == null || !Directory(directory).existsSync()) {
+        stderr.writeln(
+          jsonEncode({
+            'ok': false,
+            'error': {
+              'code': 'session_not_registered',
+              'message':
+                  'No registered session named `$appName`'
+                  '${directory != null ? ' (directory `$directory` is gone)' : ''}. '
+                  'Sessions register on launch/ensure --name.',
+            },
+            'knownSessions': registry.keys.toList(growable: false),
+          }),
+        );
+        return 1;
+      }
+      Directory.current = directory;
+    }
+
+    final command = effectiveArgs.first;
+    final rest = effectiveArgs.skip(1).toList(growable: false);
     try {
       return await switch (command) {
         'launch' => _launch(rest),
@@ -62,6 +222,8 @@ class FlutterScoutCli {
         'back' => _back(rest),
         'wait' => _wait(rest),
         'wait-for' => _waitFor(rest),
+        'batch' => _batch(rest),
+        'apps' => _apps(),
         'reload' => _reload(rest),
         'restart' => _restart(rest),
         'deeplink' => _deeplink(rest),
@@ -1340,6 +1502,46 @@ Usage:
 /// macOS/desktop app be told apart on screen. Must match the key the helper
 /// reads with `String.fromEnvironment`.
 const String kScoutInstanceDefine = 'FLUTTER_SCOUT_INSTANCE';
+
+/// Global session registry: `--name <label>` at launch/ensure records
+/// label -> session directory here, and the global `--app <label>` option
+/// runs any command against that session from anywhere — no cd required.
+File get _scoutRegistryFile => File(
+  FlutterScoutCli.debugRegistryPathOverride ??
+      p.join(
+        Platform.environment['HOME'] ?? Directory.current.path,
+        '.flutter_scout',
+        'registry.json',
+      ),
+);
+
+Map<String, String> _readScoutRegistry() {
+  try {
+    final file = _scoutRegistryFile;
+    if (!file.existsSync()) return {};
+    final decoded = jsonDecode(file.readAsStringSync());
+    if (decoded is! Map) return {};
+    return {
+      for (final entry in decoded.entries)
+        if (entry.value is String) entry.key.toString(): entry.value as String,
+    };
+  } catch (_) {
+    return {};
+  }
+}
+
+void _registerScoutSession(String name, String directory) {
+  try {
+    final registry = _readScoutRegistry();
+    registry[name] = directory;
+    _scoutRegistryFile.parent.createSync(recursive: true);
+    _scoutRegistryFile.writeAsStringSync(
+      const JsonEncoder.withIndent('  ').convert(registry),
+    );
+  } catch (_) {
+    // Registration is best-effort; the session still works from its own cwd.
+  }
+}
 
 Directory get _sessionDir =>
     Directory(p.join(Directory.current.path, '.flutter_scout'));

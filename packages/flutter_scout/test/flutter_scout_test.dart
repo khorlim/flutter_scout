@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
+
+import 'package:path/path.dart' as p;
 
 import 'package:flutter_scout/flutter_scout.dart';
 import 'package:test/test.dart';
@@ -331,6 +334,79 @@ void main() {
     },
     timeout: const Timeout(Duration(seconds: 45)),
   );
+
+  group('batch script parsing', () {
+    test('splitBatchScript splits on ; and newlines outside quotes', () {
+      expect(
+        FlutterScoutCli.splitBatchScript(
+          "tap btn.save; wait-for --text 'Saved; done'\ninspect --brief",
+        ),
+        ['tap btn.save', "wait-for --text 'Saved; done'", 'inspect --brief'],
+      );
+      expect(FlutterScoutCli.splitBatchScript('# comment\ntap a;;\n  \n'), [
+        'tap a',
+      ]);
+    });
+
+    test('splitCommandLine honors quotes and escapes', () {
+      expect(
+        FlutterScoutCli.splitCommandLine(
+          'input --target field.tnc "Terms & Conditions" extra',
+        ),
+        ['input', '--target', 'field.tnc', 'Terms & Conditions', 'extra'],
+      );
+      expect(FlutterScoutCli.splitCommandLine("tap-text 'T&C'"), [
+        'tap-text',
+        'T&C',
+      ]);
+      expect(FlutterScoutCli.splitCommandLine('wait-for --text "Saved; ok"'), [
+        'wait-for',
+        '--text',
+        'Saved; ok',
+      ]);
+      expect(FlutterScoutCli.splitCommandLine('   '), isEmpty);
+    });
+
+    test('batch refuses nesting and empty scripts', () async {
+      await _withTempCwd(() async {
+        final cli = FlutterScoutCli();
+        expect(await cli.run(['batch', 'batch inspect']), 1);
+        expect(await cli.run(['batch', '   ']), 1);
+      });
+    });
+  });
+
+  group('session registry', () {
+    test('--app resolves a registered session directory', () async {
+      final temp = await Directory.systemTemp.createTemp('scout_registry_');
+      addTearDown(() => temp.delete(recursive: true));
+      FlutterScoutCli.debugRegistryPathOverride = p.join(
+        temp.path,
+        'registry.json',
+      );
+      addTearDown(() => FlutterScoutCli.debugRegistryPathOverride = null);
+
+      final sessionDir = Directory(p.join(temp.path, 'proj'))
+        ..createSync(recursive: true);
+      File(
+        FlutterScoutCli.debugRegistryPathOverride!,
+      ).writeAsStringSync(jsonEncode({'my-app': sessionDir.path}));
+
+      final previous = Directory.current;
+      addTearDown(() => Directory.current = previous);
+      // status against the registered (empty) session: runs from that dir
+      // and reports not-running rather than session_not_registered.
+      final cli = FlutterScoutCli();
+      expect(await cli.run(['--app', 'my-app', 'status']), 0);
+      expect(
+        Directory.current.resolveSymbolicLinksSync(),
+        sessionDir.resolveSymbolicLinksSync(),
+      );
+
+      // Unknown name fails with the registered names listed.
+      expect(await cli.run(['--app', 'nope', 'status']), 1);
+    });
+  });
 
   group('helper protocol diagnostics', () {
     test('modern helper version passes clean, even for brief payloads', () {

@@ -74,6 +74,46 @@ class ScoutSnapshot {
     );
   }
 
+  /// Short identity for the CURRENT VIEW, independent of route names: the
+  /// most prominent visible texts by painted area. Two states on the same
+  /// route (an Operation/Admin flip, a swapped tab body) get different
+  /// signatures, so agents can assert "the view changed" without diffing
+  /// full text lists — `screen` alone often cannot tell them apart.
+  String get viewSignature {
+    final prominent =
+        [
+          for (final node in textTargets)
+            if (node.visibleFraction > 0 &&
+                node.rect != null &&
+                (node.label ?? '').trim().isNotEmpty)
+              node,
+        ]..sort((a, b) {
+          final area = (b.rect!.width * b.rect!.height).compareTo(
+            a.rect!.width * a.rect!.height,
+          );
+          if (area != 0) return area;
+          return a.label!.compareTo(b.label!);
+        });
+    return prominent.take(5).map((node) => node.label!.trim()).join(' | ');
+  }
+
+  /// Stable FNV-1a hash of the sorted visible-text set: equal hashes mean
+  /// the same texts are on screen, a cheap same-view/different-view check.
+  String get visibleTextHash {
+    final sorted = [...visibleText]..sort();
+    var hash = 0x811c9dc5;
+    void mix(int unit) {
+      hash ^= unit;
+      hash = (hash * 0x01000193) & 0xFFFFFFFF;
+    }
+
+    for (final value in sorted) {
+      value.codeUnits.forEach(mix);
+      mix(0x1F);
+    }
+    return hash.toRadixString(16).padLeft(8, '0');
+  }
+
   ScoutNode? findNode(String target) {
     for (final node in [...interactables, ...fields, ...textTargets]) {
       if (node.matches(target)) return node;
@@ -92,6 +132,8 @@ class ScoutSnapshot {
     return {
       'screen': screen,
       'routeGuess': routeGuess,
+      'viewSignature': viewSignature,
+      'visibleTextHash': visibleTextHash,
       'idle': idle,
       'devicePixelRatio': devicePixelRatio,
       'logicalSize': [logicalSize.width, logicalSize.height],
@@ -158,6 +200,7 @@ class ScoutNode {
     required this.enabled,
     required this.confidence,
     this.selected,
+    this.altIds = const [],
   });
 
   final String id;
@@ -182,6 +225,13 @@ class ScoutNode {
   /// determinable from the widget or its semantics; null when unknown. Lets
   /// agents tell "tap did nothing" from "already on that tab".
   final bool? selected;
+
+  /// Alternate handles derived from other label sources (icon glyph name,
+  /// accessibility label, contained text). The primary id can drift between
+  /// snapshots when a volatile source (async-loaded semantics) appears or
+  /// disappears; altIds keep yesterday's handle resolving today, which
+  /// protects replays and cross-snapshot references.
+  final List<String> altIds;
 
   ScoutNode copyWith({
     String? id,
@@ -213,6 +263,7 @@ class ScoutNode {
       enabled: enabled,
       confidence: confidence ?? this.confidence,
       selected: selected,
+      altIds: altIds,
     );
   }
 
@@ -221,7 +272,8 @@ class ScoutNode {
     if (id == normalized ||
         fallbackId == normalized ||
         key == normalized ||
-        label == normalized) {
+        label == normalized ||
+        altIds.contains(normalized)) {
       return true;
     }
     final slug = _scoutSlug(normalized);
@@ -233,7 +285,10 @@ class ScoutNode {
         normalized == 'key.${label!.trim()}') {
       return true;
     }
-    return id.endsWith('.$slug') || id.endsWith('.$kindlessSlug');
+    if (id.endsWith('.$slug') || id.endsWith('.$kindlessSlug')) return true;
+    return altIds.any(
+      (alt) => alt.endsWith('.$slug') || alt.endsWith('.$kindlessSlug'),
+    );
   }
 
   Map<String, Object?> toJson() {
@@ -270,6 +325,7 @@ class ScoutNode {
       'enabled': enabled,
       'confidence': confidence,
       if (selected != null) 'selected': selected,
+      if (altIds.isNotEmpty) 'altIds': altIds,
     };
   }
 }

@@ -443,12 +443,16 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       List<Map<String, Object?>>? legend;
       if (params['annotate'] == 'true') {
         final snapshot = _snapshot();
+        // For crops, only mark nodes that intersect the captured region, so
+        // the legend matches what the image shows.
+        final markRegion = rect?.inflate(padding);
         marks = [];
         legend = [];
         var n = 0;
         for (final node in [...snapshot.interactables, ...snapshot.fields]) {
           final visible = node.visibleRect;
           if (visible == null) continue;
+          if (markRegion != null && !markRegion.overlaps(visible)) continue;
           n += 1;
           marks.add((n: n, rect: visible));
           legend.add({
