@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 
+import 'icon_names.g.dart';
+
 part 'scout_design.dart';
 part 'annotation_overlay.dart';
 part 'models.dart';
@@ -18,6 +20,14 @@ part 'runtime_actions.dart';
 part 'runtime_snapshot.dart';
 part 'runtime_nodes.dart';
 part 'runtime_internals.dart';
+
+/// Protocol version reported in every helper response, so the CLI can tell
+/// when the RUNNING helper is older than the one it expects — the classic
+/// git-dependency trap where editing pub-cache source and hot reloading
+/// silently keeps executing old code. Bump when the CLI starts depending on
+/// new helper behavior; keep in sync with the CLI's
+/// `_expectedHelperProtocolVersion`.
+const int scoutHelperProtocolVersion = 2;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -68,10 +78,31 @@ class FlutterScoutRuntime {
   // instead of us falling back to a per-target self hit test that can't see
   // Stack siblings painted on top.
   bool _collectingAnnotationTargets = false;
+  // Depth of synthetic (agent-dispatched) gestures currently in flight. While
+  // positive, ALL Scout chrome (annotation FAB, instance badge, absorber,
+  // pins) is hit-test-transparent, so an agent tap lands on the app control
+  // beneath instead of silently activating Scout's own UI. Human taps are
+  // unaffected. A counter, not a bool, so overlapping dispatches compose.
+  int _syntheticGestureDepth = 0;
+
+  /// Whether Scout's overlay chrome should be invisible to hit testing right
+  /// now — during annotation-target collection and agent gesture dispatch.
+  bool get _scoutChromeHitTransparent =>
+      _collectingAnnotationTargets || _syntheticGestureDepth > 0;
   OverlayEntry? _annotationOverlayEntry;
+  // The OverlayState the entry was inserted into. State.mounted is the
+  // reliable liveness signal — OverlayEntry.mounted can stay stale when the
+  // host Overlay is disposed without removing its entries.
+  OverlayState? _annotationOverlayHost;
   bool _annotationOverlayInstallScheduled = false;
   FlutterExceptionHandler? _previousFlutterError;
   ui.ErrorCallback? _previousPlatformError;
+
+  /// Test-only fault injector, invoked for every element the snapshot walk
+  /// visits. Lets tests prove that a throwing element degrades only itself
+  /// (see [ScoutSnapshot.degradedNodes]) instead of failing the whole inspect.
+  @visibleForTesting
+  void Function(Element element)? debugSnapshotNodeProbe;
 
   void install() {
     _installErrorHooks();
@@ -88,6 +119,7 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.swipe', _handleSwipe);
     _registerExtension('ext.flutter_scout.back', _handleBack);
     _registerExtension('ext.flutter_scout.waitStable', _handleWaitStable);
+    _registerExtension('ext.flutter_scout.waitFor', _handleWaitFor);
     _broadcastVmUri();
     _scheduleAnnotationOverlayInstall();
   }
@@ -108,8 +140,13 @@ class FlutterScoutRuntime {
   Future<Uint8List?> debugCaptureRegion({
     Rect? rect,
     double padding = 12,
+    List<({int n, Rect rect})>? marks,
   }) async {
-    final result = await _captureRegion(rect: rect, padding: padding);
+    final result = await _captureRegion(
+      rect: rect,
+      padding: padding,
+      marks: marks,
+    );
     return result.bytes;
   }
 
@@ -134,6 +171,16 @@ class FlutterScoutRuntime {
 
   @visibleForTesting
   ScoutSnapshot debugSnapshot() => _snapshot();
+
+  /// Test-only: dispatch a synthetic tap exactly as agent actions do,
+  /// including the chrome-transparency window.
+  @visibleForTesting
+  Future<void> debugDispatchTap(Offset point) => _dispatchTap(point);
+
+  /// Test-only view of wait-for condition evaluation against a snapshot.
+  @visibleForTesting
+  bool debugWaitForConditionsMet({String? text, String? gone}) =>
+      _waitForConditionsMet(snapshot: _snapshot(), text: text, gone: gone);
 
   void _installErrorHooks() {
     _previousFlutterError = FlutterError.onError;
@@ -247,14 +294,113 @@ class FlutterScoutRuntime {
   ) async {
     try {
       await _waitForFrame();
-      final liveAnnotationTargets = _annotationTargets();
-      return _ok({
-        ..._snapshot().toJson(),
-        'annotationMode': _annotationMode,
-        'annotations': _annotationJsonList(liveTargets: liveAnnotationTargets),
-      });
+      final brief = params['brief'] == 'true';
+      final sections = (params['sections'] ?? '')
+          .split(',')
+          .map((section) => section.trim())
+          .where((section) => section.isNotEmpty)
+          .toSet();
+      return _ok(_inspectPayload(brief: brief, sections: sections));
     } catch (error) {
       return _fail('inspect_failed', error.toString());
     }
   }
+
+  /// Builds the inspect response. A full inspect can exceed 40KB — most of it
+  /// textTargets and visualTree an agent rarely needs — so [brief] returns a
+  /// compact orientation payload and [sections] opts into named full sections
+  /// (text, interactables, fields, textTargets, scrollables, overlays,
+  /// visualTree, controlGroups, annotations). Both empty → full payload.
+  Map<String, Object?> _inspectPayload({
+    required bool brief,
+    required Set<String> sections,
+  }) {
+    if (!brief && sections.isEmpty) {
+      final liveAnnotationTargets = _annotationTargets();
+      return {
+        ..._snapshot().toJson(),
+        'annotationMode': _annotationMode,
+        'annotations': _annotationJsonList(liveTargets: liveAnnotationTargets),
+      };
+    }
+    final snapshot = _snapshot();
+    final payload = <String, Object?>{
+      'screen': snapshot.screen,
+      'routeGuess': snapshot.routeGuess,
+      'idle': snapshot.idle,
+      'devicePixelRatio': snapshot.devicePixelRatio,
+      'logicalSize': [snapshot.logicalSize.width, snapshot.logicalSize.height],
+      if (snapshot.degradedNodes > 0) 'degradedNodes': snapshot.degradedNodes,
+      'recentErrors': snapshot.recentErrors,
+      'annotationMode': _annotationMode,
+    };
+    if (brief) {
+      payload.addAll({
+        'visibleText': snapshot.visibleText,
+        'hitTestableText': snapshot.hitTestableText,
+        'offscreenText': snapshot.offscreenText,
+        'interactables': [
+          for (final node in snapshot.interactables) _compactNodeJson(node),
+        ],
+        'fieldValues': {
+          for (final field in snapshot.fields) field.id: field.value,
+        },
+      });
+    }
+    for (final section in sections) {
+      payload.addAll(switch (section) {
+        'text' => {
+          'visibleText': snapshot.visibleText,
+          'hitTestableText': snapshot.hitTestableText,
+          'offscreenText': snapshot.offscreenText,
+        },
+        'interactables' => {
+          'interactables': [
+            for (final node in snapshot.interactables) node.toJson(),
+          ],
+        },
+        'fields' => {
+          'fields': [for (final node in snapshot.fields) node.toJson()],
+          'fieldValues': {
+            for (final field in snapshot.fields) field.id: field.value,
+          },
+        },
+        'textTargets' => {
+          'textTargets': [
+            for (final node in snapshot.textTargets) node.toJson(),
+          ],
+        },
+        'scrollables' => {'scrollables': snapshot.scrollables},
+        'overlays' => {'overlays': snapshot.overlays},
+        'visualTree' => {'visualTree': snapshot.visualTree},
+        'controlGroups' => {'controlGroups': snapshot.controlGroups},
+        'annotations' => {
+          'annotations': _annotationJsonList(liveTargets: _annotationTargets()),
+        },
+        _ => {'unknownSections': '$section (ignored)'},
+      });
+    }
+    return payload;
+  }
+
+  /// Orientation-sized node summary for brief inspect: enough to pick a
+  /// handle and know its state, nothing else.
+  Map<String, Object?> _compactNodeJson(ScoutNode node) {
+    return {
+      'id': node.id,
+      'kind': node.kind,
+      if (node.label != null) 'label': node.label,
+      if (node.selected != null) 'selected': node.selected,
+      if (!node.enabled) 'enabled': false,
+      if (!node.hitTestable) 'hitTestable': false,
+      if (node.visibleFraction == 0) 'offscreen': true,
+    };
+  }
+
+  /// Test-only view of the inspect payload assembly.
+  @visibleForTesting
+  Map<String, Object?> debugInspectPayload({
+    bool brief = false,
+    Set<String> sections = const {},
+  }) => _inspectPayload(brief: brief, sections: sections);
 }

@@ -3,6 +3,67 @@ part of 'flutter_scout_cli.dart';
 // part: interaction commands: bounds-adjacent tap/input/tap-text/long-press/fill/wait/reload/restart/scroll/swipe/scroll-to/back/deeplink/logs.
 
 extension _CliActions on FlutterScoutCli {
+  Future<int> _inspect(List<String> args) async {
+    final parser = ArgParser()
+      ..addFlag(
+        'brief',
+        defaultsTo: false,
+        help:
+            'Compact orientation payload: screen, text, compact interactables, '
+            'field values, errors.',
+      )
+      ..addOption(
+        'sections',
+        help:
+            'Comma-separated full sections to include: text, interactables, '
+            'fields, textTargets, scrollables, overlays, visualTree, '
+            'controlGroups, annotations.',
+      );
+    final parsed = parser.parse(args);
+    final sections = parsed.option('sections');
+    return _callAndPrint(
+      'ext.flutter_scout.inspect',
+      params: {
+        if (parsed.flag('brief')) 'brief': 'true',
+        if (sections != null && sections.isNotEmpty) 'sections': sections,
+      },
+    );
+  }
+
+  Future<int> _waitFor(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('text', help: 'Wait until this text is visible.')
+      ..addOption('gone', help: 'Wait until this text is no longer visible.')
+      ..addOption('timeout', defaultsTo: '5000', help: 'Timeout in ms.')
+      ..addOption('poll', defaultsTo: '150', help: 'Poll interval in ms.');
+    final parsed = parser.parse(args);
+    var text = parsed.option('text');
+    if ((text == null || text.isEmpty) && parsed.rest.isNotEmpty) {
+      text = parsed.rest.join(' ');
+    }
+    final gone = parsed.option('gone');
+    if ((text == null || text.isEmpty) && (gone == null || gone.isEmpty)) {
+      throw const ScoutCliException(
+        'usage',
+        'Usage: flutter-scout wait-for [--text "Saved"] [--gone "Loading"] '
+            '[--timeout 5000] [--poll 150]',
+      );
+    }
+    final timeoutMs = int.tryParse(parsed.option('timeout') ?? '') ?? 5000;
+    return _callAndPrint(
+      'ext.flutter_scout.waitFor',
+      params: {
+        if (text != null && text.isNotEmpty) 'text': text,
+        if (gone != null && gone.isNotEmpty) 'gone': gone,
+        'timeoutMs': '$timeoutMs',
+        'pollMs': parsed.option('poll') ?? '150',
+      },
+      // The helper needs the full wait window; keep client-side headroom
+      // above it so long waits aren't cut off by the default VM-call timeout.
+      callTimeout: Duration(milliseconds: timeoutMs + 10000),
+    );
+  }
+
   Future<int> _tap(List<String> args) async {
     final parser = ArgParser()
       ..addOption('x')

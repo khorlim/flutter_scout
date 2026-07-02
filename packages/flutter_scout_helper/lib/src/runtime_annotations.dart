@@ -232,6 +232,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     Rect? rect,
     double padding = 12,
     double? pixelRatio,
+    List<({int n, Rect rect})>? marks,
   }) async {
     final renderView = _primaryRenderView();
     if (renderView == null) {
@@ -294,6 +295,11 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       );
     }
     try {
+      if (marks != null && marks.isNotEmpty) {
+        final composited = await _drawCaptureMarks(image, bounds, dpr, marks);
+        image.dispose();
+        image = composited;
+      }
       final width = image.width;
       final height = image.height;
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
@@ -316,6 +322,62 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
         bounds: bounds,
       );
     }
+  }
+
+  /// Set-of-marks compositing: draws each mark's outline plus a numbered
+  /// badge onto the captured raster, so one image tells an agent what is
+  /// tappable and which handle each region maps to (via the returned legend).
+  Future<ui.Image> _drawCaptureMarks(
+    ui.Image base,
+    Rect bounds,
+    double dpr,
+    List<({int n, Rect rect})> marks,
+  ) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    canvas.drawImage(base, Offset.zero, Paint());
+    const markColor = Color(0xFFE5484D);
+    final outline = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5 * dpr
+      ..color = markColor;
+    final badgeFill = Paint()..color = markColor;
+    for (final mark in marks) {
+      // Logical, screen-relative -> physical, capture-relative.
+      final rect = Rect.fromLTWH(
+        (mark.rect.left - bounds.left) * dpr,
+        (mark.rect.top - bounds.top) * dpr,
+        mark.rect.width * dpr,
+        mark.rect.height * dpr,
+      );
+      canvas.drawRect(rect, outline);
+      final text = TextPainter(
+        text: TextSpan(
+          text: '${mark.n}',
+          style: TextStyle(
+            color: const Color(0xFFFFFFFF),
+            fontSize: 10 * dpr,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final badge = Rect.fromLTWH(
+        rect.left,
+        rect.top,
+        text.width + 6 * dpr,
+        text.height + 2 * dpr,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(badge, Radius.circular(2 * dpr)),
+        badgeFill,
+      );
+      text.paint(canvas, badge.topLeft + Offset(3 * dpr, 1 * dpr));
+    }
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(base.width, base.height);
+    picture.dispose();
+    return image;
   }
 
   bool _regionHasPlatformView(RenderObject root, Rect bounds) {
@@ -375,10 +437,34 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       final padding =
           double.tryParse(params['padding'] ?? '') ?? (mode == 'crop' ? 12 : 0);
       final pixelRatio = double.tryParse(params['pixelRatio'] ?? '');
+      // Set-of-marks mode: number every visible interactable/field on the
+      // image and return the number -> handle legend alongside the bytes.
+      List<({int n, Rect rect})>? marks;
+      List<Map<String, Object?>>? legend;
+      if (params['annotate'] == 'true') {
+        final snapshot = _snapshot();
+        marks = [];
+        legend = [];
+        var n = 0;
+        for (final node in [...snapshot.interactables, ...snapshot.fields]) {
+          final visible = node.visibleRect;
+          if (visible == null) continue;
+          n += 1;
+          marks.add((n: n, rect: visible));
+          legend.add({
+            'n': n,
+            'id': node.id,
+            'kind': node.kind,
+            if (node.label != null) 'label': node.label,
+            if (node.selected != null) 'selected': node.selected,
+          });
+        }
+      }
       final result = await _captureRegion(
         rect: rect,
         padding: padding,
         pixelRatio: pixelRatio,
+        marks: marks,
       );
       final boundsJson = result.bounds == null
           ? null
@@ -407,6 +493,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
         'mode': mode,
         'needsNative': result.needsNative,
         'bytes': base64Encode(result.bytes!),
+        'marks': ?legend,
         'width': result.width,
         'height': result.height,
         'pixelRatio': result.pixelRatio,
@@ -595,13 +682,25 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   }
 
   void _scheduleAnnotationOverlayInstall() {
-    if (!kDebugMode || _annotationOverlayEntry != null) return;
+    if (!kDebugMode) return;
+    if (_annotationOverlayEntry != null) {
+      if (_annotationOverlayHost?.mounted ?? false) return;
+      // The Overlay that hosted the entry is gone (the app replaced its root
+      // tree, or a test pumped a new one). Drop the stale reference so the
+      // chrome reinstalls into the current tree; removing/disposing an entry
+      // whose host state is already disposed is not safe, so just let it go.
+      _annotationOverlayEntry = null;
+      _annotationOverlayHost = null;
+    }
     if (_annotationOverlayInstallScheduled) return;
     _annotationOverlayInstallScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _annotationOverlayInstallScheduled = false;
       _installAnnotationOverlayIfPossible();
     });
+    // A post-frame callback alone never fires if the app is idle (no frames
+    // scheduled) — common right after attach or in tests. Ask for one.
+    WidgetsBinding.instance.scheduleFrame();
   }
 
   void _installAnnotationOverlayIfPossible() {
@@ -619,6 +718,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     _annotationOverlayEntry = OverlayEntry(
       builder: (context) => _FlutterScoutAnnotationOverlay(runtime: this),
     );
+    _annotationOverlayHost = overlay;
     overlay.insert(_annotationOverlayEntry!);
   }
 

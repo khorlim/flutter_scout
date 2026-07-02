@@ -187,6 +187,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
           : _hitTestable(suggestedTapPoint),
       enabled: _enabledFor(widget),
       confidence: label == null ? 0.65 : 0.94,
+      selected: kind == 'text' ? null : _selectedStateFor(element, widget),
     );
   }
 
@@ -206,6 +207,18 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         widget is IconButton ||
         widget is FloatingActionButton ||
         widget is CupertinoButton) {
+      return 'btn';
+    }
+    // Toggle/selection controls are tappable state-carrying interactables;
+    // without a kind they would be invisible to agents (only their inner
+    // gesture plumbing would surface, unlabeled and stateless).
+    if (widget is Switch ||
+        widget is CupertinoSwitch ||
+        widget is Checkbox ||
+        widget is ChoiceChip ||
+        widget is FilterChip ||
+        widget is InputChip ||
+        widget is ActionChip) {
       return 'btn';
     }
     if (widget is GestureDetector ||
@@ -266,6 +279,12 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
   String? _labelFor(Element element, Widget widget) {
     if (widget is Tooltip) return widget.message;
+    if (widget is Semantics) {
+      final semanticsLabel = widget.properties.label;
+      if (semanticsLabel != null && semanticsLabel.trim().isNotEmpty) {
+        return semanticsLabel.trim();
+      }
+    }
     if (widget is FloatingActionButton && widget.tooltip != null) {
       return widget.tooltip;
     }
@@ -283,21 +302,106 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (tooltip != null && tooltip.isNotEmpty) return tooltip;
     final own = _ownText(widget);
     if (own != null && own.trim().isNotEmpty) {
-      final iconText = _iconLabelForText(own);
+      final iconText = _iconLabelForText(
+        own,
+        fontFamily: _textFontFamily(widget),
+      );
       if (iconText != null) return iconText;
       if (_hasWord(own)) return own.trim();
     }
     final text = _textBelow(element);
-    if (text != null && text.isNotEmpty) {
-      final iconText = _iconLabelForText(text);
-      if (iconText != null) return iconText;
-      if (_hasWord(text)) return text.trim();
+    if (text != null &&
+        text.isNotEmpty &&
+        _hasWord(text) &&
+        _iconLabelForText(text) == null) {
+      return text.trim();
     }
-    // Icon-only controls (e.g. a bell button) yield only a font glyph as text,
-    // which is not a usable label; fall back to the icon's name so the control
-    // is still selectable.
+    // Icon-only control from here on. An explicit accessibility label is a
+    // deliberate name and wins over glyph naming.
+    final semantics = _semanticsLabelBelow(element);
+    if (semantics != null && semantics.isNotEmpty) return semantics;
+    // An Icon/glyph widget below knows its font family (resolving cross-font
+    // codepoint collisions), so prefer it over interpreting bare glyph text.
     final icon = _iconLabelBelow(element);
     if (icon != null && icon.isNotEmpty) return icon;
+    return null;
+  }
+
+  String? _textFontFamily(Widget widget) {
+    if (widget is Text) return widget.style?.fontFamily;
+    if (widget is RichText) return widget.text.style?.fontFamily;
+    return null;
+  }
+
+  String? _semanticsLabelBelow(Element element) {
+    return _labelInSubtree(element, (Element child) {
+      final widget = child.widget;
+      if (widget is Semantics) return widget.properties.label;
+      return null;
+    });
+  }
+
+  /// Budgeted whole-subtree search for a label. Depth caps are the wrong
+  /// bound here — a button's content routinely sits 10-20 wrapper elements
+  /// down (CupertinoButton alone contributes ~19). The correct boundary is
+  /// semantic: never descend into a nested interactive control, because its
+  /// content names that control, not the ancestor being labeled.
+  String? _labelInSubtree(
+    Element element,
+    String? Function(Element element) probe,
+  ) {
+    final value = _probeSubtree(element, probe);
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  /// Shared subtree walk behind [_labelInSubtree] and selection-state mining:
+  /// first non-null probe result wins, nested interactive controls are not
+  /// descended into (their content describes them, not the ancestor), and an
+  /// element budget bounds the cost.
+  T? _probeSubtree<T>(Element element, T? Function(Element element) probe) {
+    T? result;
+    var budget = 400;
+    void visit(Element child) {
+      if (result != null || budget <= 0) return;
+      budget -= 1;
+      final value = probe(child);
+      if (value != null) {
+        result = value;
+        return;
+      }
+      final kind = _kindFor(child.widget, child);
+      if (kind == 'btn' || kind == 'tap' || kind == 'field') return;
+      child.visitChildElements(visit);
+    }
+
+    element.visitChildElements(visit);
+    return result;
+  }
+
+  /// Selection/toggle state for a node, from the widget itself or (for
+  /// containers like tabs and segments) a state-bearing descendant.
+  bool? _selectedStateFor(Element element, Widget widget) {
+    final own = _widgetSelectedState(widget);
+    if (own != null) return own;
+    return _probeSubtree(
+      element,
+      (child) => _widgetSelectedState(child.widget),
+    );
+  }
+
+  bool? _widgetSelectedState(Widget widget) {
+    if (widget is Switch) return widget.value;
+    if (widget is CupertinoSwitch) return widget.value;
+    if (widget is Checkbox) return widget.value;
+    if (widget is ChoiceChip) return widget.selected;
+    if (widget is FilterChip) return widget.selected;
+    if (widget is InputChip) return widget.selected;
+    if (widget is ListTile) return widget.selected ? true : null;
+    if (widget is Semantics) {
+      final properties = widget.properties;
+      return properties.selected ?? properties.toggled ?? properties.checked;
+    }
     return null;
   }
 
@@ -311,37 +415,77 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return null;
   }
 
-  String? _iconLabelBelow(Element element, {int depth = 0}) {
-    if (depth > 4) return null;
-    final widget = element.widget;
-    final icon = _iconLabelForWidget(widget);
-    if (icon != null) return icon;
-    String? result;
-    element.visitChildElements((Element child) {
-      result ??= _iconLabelBelow(child, depth: depth + 1);
-    });
-    return result;
+  String? _iconLabelBelow(Element element) {
+    return _labelInSubtree(
+      element,
+      (Element child) => _iconLabelForWidget(child.widget),
+    );
   }
 
   String? _iconLabelForWidget(Widget widget) {
     if (widget is Icon) {
+      final semantic = widget.semanticLabel;
+      if (semantic != null && semantic.trim().isNotEmpty) {
+        return semantic.trim();
+      }
       return _iconLabelForData(widget.icon);
+    }
+    if (widget is Image) {
+      final semantic = widget.semanticLabel;
+      if (semantic != null && semantic.trim().isNotEmpty) {
+        return semantic.trim();
+      }
+    }
+    // A bare single-glyph Text/RichText (an icon font used without an Icon
+    // widget) still carries its font family in its style.
+    final own = _ownText(widget);
+    if (own != null && own.trim().runes.length == 1) {
+      return _iconLabelForText(own, fontFamily: _textFontFamily(widget));
     }
     return null;
   }
 
-  String? _iconLabelForText(String value) {
+  String? _iconLabelForText(String value, {String? fontFamily}) {
     final trimmed = value.trim();
     if (trimmed.runes.length != 1) return null;
-    return _iconLabelForCodePoint(trimmed.runes.single);
+    final codePoint = trimmed.runes.single;
+    final named =
+        _iconLabelForCodePoint(codePoint) ??
+        _iconNameFromTables(codePoint, fontFamily: fontFamily);
+    if (named != null) return named;
+    // Only a private-use-area rune is an icon glyph; a plain character ("5",
+    // "A") must keep its literal text label, not become icon_35.
+    if (_isIconGlyphCodePoint(codePoint)) {
+      return 'icon_${codePoint.toRadixString(16)}';
+    }
+    return null;
   }
 
   String? _iconLabelForData(IconData? icon) {
     if (icon == null) return null;
     return _iconLabelForCodePoint(icon.codePoint) ??
+        _iconNameFromTables(icon.codePoint, fontFamily: icon.fontFamily) ??
         'icon_${icon.codePoint.toRadixString(16)}';
   }
 
+  /// Glyph name from the SDK-generated lookup tables. [fontFamily] (when the
+  /// caller has an [IconData]) resolves cross-font codepoint collisions.
+  String? _iconNameFromTables(int codePoint, {String? fontFamily}) {
+    // A package-scoped font renders as 'packages/cupertino_icons/CupertinoIcons'.
+    if (fontFamily != null && fontFamily.contains('CupertinoIcons')) {
+      return kCupertinoIconNames[codePoint] ?? kMaterialIconNames[codePoint];
+    }
+    return kMaterialIconNames[codePoint] ?? kCupertinoIconNames[codePoint];
+  }
+
+  bool _isIconGlyphCodePoint(int codePoint) {
+    // BMP private use area + supplementary private use planes, where icon
+    // fonts place their glyphs.
+    return (codePoint >= 0xe000 && codePoint <= 0xf8ff) || codePoint >= 0xf0000;
+  }
+
+  /// Semantic action names for common glyphs, ahead of the raw SDK names, so
+  /// agents can guess intent handles (btn.save, btn.back) across icon choices.
   String? _iconLabelForCodePoint(int codePoint) {
     bool same(IconData icon) => codePoint == icon.codePoint;
 

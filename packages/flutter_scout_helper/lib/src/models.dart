@@ -22,6 +22,7 @@ class ScoutSnapshot {
     required this.controlGroups,
     required this.suggestedActions,
     required this.recentErrors,
+    this.degradedNodes = 0,
   });
 
   final String screen;
@@ -41,6 +42,10 @@ class ScoutSnapshot {
   final List<Map<String, Object?>> controlGroups;
   final List<Map<String, Object?>> suggestedActions;
   final List<Map<String, Object?>> recentErrors;
+
+  /// Elements the snapshot walk skipped because collecting them threw. One
+  /// misbehaving widget must degrade only itself, never the whole inspect.
+  final int degradedNodes;
 
   ScoutSnapshot copyWith({
     Map<String, Object?>? visualTree,
@@ -65,6 +70,7 @@ class ScoutSnapshot {
       controlGroups: controlGroups ?? this.controlGroups,
       suggestedActions: suggestedActions ?? this.suggestedActions,
       recentErrors: recentErrors,
+      degradedNodes: degradedNodes,
     );
   }
 
@@ -95,6 +101,7 @@ class ScoutSnapshot {
       if (visualTree != null) 'visualTree': visualTree,
       if (controlGroups.isNotEmpty) 'controlGroups': controlGroups,
       if (suggestedActions.isNotEmpty) 'suggestedActions': suggestedActions,
+      if (degradedNodes > 0) 'degradedNodes': degradedNodes,
       'fieldValues': {for (final field in fields) field.id: field.value},
       'fieldsById': {
         for (final field in fields)
@@ -150,6 +157,7 @@ class ScoutNode {
     required this.hitTestable,
     required this.enabled,
     required this.confidence,
+    this.selected,
   });
 
   final String id;
@@ -169,6 +177,11 @@ class ScoutNode {
   final bool hitTestable;
   final bool enabled;
   final double confidence;
+
+  /// Selection/toggle state (tab selected, switch on, checkbox checked) when
+  /// determinable from the widget or its semantics; null when unknown. Lets
+  /// agents tell "tap did nothing" from "already on that tab".
+  final bool? selected;
 
   ScoutNode copyWith({
     String? id,
@@ -199,6 +212,7 @@ class ScoutNode {
       hitTestable: hitTestable,
       enabled: enabled,
       confidence: confidence ?? this.confidence,
+      selected: selected,
     );
   }
 
@@ -255,6 +269,7 @@ class ScoutNode {
       'hitTestable': hitTestable,
       'enabled': enabled,
       'confidence': confidence,
+      if (selected != null) 'selected': selected,
     };
   }
 }

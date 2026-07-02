@@ -80,10 +80,22 @@ Use `status` when session ownership is unclear. It reports `session.mode` and `h
 3. Inspect before acting:
 
 ```bash
+flutter-scout inspect --brief
 flutter-scout inspect
+flutter-scout inspect --sections textTargets,scrollables
 ```
 
-Use `visibleText`, `hitTestableText`, `offscreenText`, `interactables`, `fields`, `textTargets`, `fieldValues`, `fieldsById`, `scrollables`, `overlays`, `keyboard`, and `recentErrors` to orient yourself. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
+Prefer `inspect --brief` for orientation: it returns the screen name, visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, and errors at a fraction of the full payload size. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,annotations` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
+
+Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it.
+
+If one widget on the screen misbehaves, inspect reports `degradedNodes` with the count of skipped elements instead of failing outright — treat a non-zero value as "eyes are partial, not blind".
+
+For a one-image overview, use a set-of-marks screenshot — numbered marks are drawn over every visible interactable and the JSON includes the `marks` legend mapping each number to its handle:
+
+```bash
+flutter-scout screenshot --annotated -o /tmp/marked.png
+```
 
 If the user manually annotated the running app, read the annotations before editing:
 
@@ -167,9 +179,21 @@ After every action, read `result`, `delta`, `fieldValues`, and `recentErrors`. D
 
 Action output is compact by default. Add `--verbose` only when full before/after summaries are needed.
 
-When an action reports `activated_no_observed_change`, Scout dispatched the gesture but did not observe a synchronous Flutter tree, field, text, or geometry change before the wait timeout. Check `activation`, `warnings`, `recentErrors`, overlays, and logs before retrying.
+When an action reports `activated_no_observed_change`, Scout dispatched the gesture but did not observe a synchronous Flutter tree, field, text, or geometry change before the wait timeout. Check `activation`, `warnings`, `recentErrors`, overlays, and logs before retrying. A tap on an already-selected tab/toggle instead reports `result:"already_selected"` — that is expected behavior, not a failure; do not retry it.
 
 If action output includes `lateChangeObserved:true`, trust the returned `afterSummary`; Scout waited past the first stable check and observed a delayed route, modal, or overlay change.
+
+For async outcomes (a save that shows a toast, a spinner that clears, a navigation that lands late), block on `wait-for` instead of re-inspecting in a loop:
+
+```bash
+flutter-scout wait-for --text "Saved" --timeout 8000
+flutter-scout wait-for --gone "Loading" --timeout 8000
+flutter-scout wait-for --text "Saved" --gone "Loading"
+```
+
+`wait-for` matches visible text case-insensitively, returns `result:"met"` with `waitedMs`, fails with `wait_for_timeout` (including the final `visibleText`), and exits early with `blocking_error_during_wait` when a fresh blocking error makes the awaited change pointless.
+
+Scout's own overlay chrome (the annotation FAB, instance badge, pins) is invisible to agent gestures and excluded from inspect: a tap aimed at an app control under the FAB lands on the app control, and Scout chrome never surfaces as tappable handles.
 
 5. After Dart-only code edits, hot update instead of relaunching:
 
@@ -185,8 +209,12 @@ Prefer `reload` first because it preserves app state. Use `restart` when reload 
 ```bash
 flutter-scout bounds btn.save_supplier
 flutter-scout crop btn.save_supplier -o /tmp/save_button.png
+flutter-scout crop --rect 900,0,200,90 -o /tmp/top_right.png
 flutter-scout screenshot -o /tmp/current_screen.png
+flutter-scout screenshot --annotated -o /tmp/marked.png
 ```
+
+`crop --rect x,y,w,h` captures an arbitrary logical region without needing a handle — useful for corners and composite areas.
 
 Prefer `bounds` and crops over full screenshots when inspecting one control or dialog. `screenshot` and `crop` render in-app by default (works on any platform, including physical devices), and report `"backend": "in_app_capture"`. When the captured region contains a platform view (map, webview, native video) that would render blank, Scout automatically falls back to a native capture. Pass `--native` to force the native backend (iOS Simulator `simctl` / macOS app-window `screencapture`); native crops remain iOS Simulator-only and macOS attach returns `crop_unsupported_target`.
 
@@ -194,7 +222,7 @@ Prefer `bounds` and crops over full screenshots when inspecting one control or d
 
 When a submit reveals validation, read `delta.newValidationMessages` and `delta.validationCandidates`; they identify the field id, label, and validation message that appeared.
 
-If `inspect` or `tap-text` reports `helperProtocol.status:"stale_or_old_helper"`, the attached app is still running an older helper extension. Try `flutter-scout reload`; if helper behavior does not change, hot restart from the owning Flutter terminal/IDE or relaunch the app.
+If a response reports `helperProtocol.status:"older_than_cli"` (or `"stale_or_old_helper"` from very old helpers), the attached app compiled an older flutter_scout_helper than this CLI expects. Hot reload cannot refresh a git/pub-cache dependency — bump the dependency (or patch the resolved pub-cache checkout) and fully relaunch with `stop --clear-session` + `launch`.
 
 7. Replay after a fix:
 
@@ -222,6 +250,12 @@ flutter-scout annotations resolve ann_001 --note "Fixed"
 flutter-scout annotations dismiss ann_002
 flutter-scout annotations clear --resolved
 flutter-scout wait stable
+flutter-scout wait-for --text "Saved" --timeout 8000
+flutter-scout wait-for --gone "Loading"
+flutter-scout inspect --brief
+flutter-scout inspect --sections textTargets,scrollables
+flutter-scout screenshot --annotated -o /tmp/marked.png
+flutter-scout crop --rect 900,0,200,90 -o /tmp/region.png
 flutter-scout reload
 flutter-scout restart
 flutter-scout input --target field.search "query"
@@ -258,7 +292,10 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Treat Flutter Scout as eyes and hands, not a QA judge.
 - Prefer `attach` to preserve human-in-the-loop state.
 - Prefer `ensure` over repeated `launch`; repeated full launch causes slow native rebuilds.
-- Start with `inspect`; avoid blind screenshots.
+- Start with `inspect --brief`; use full `inspect` or `--sections` only when the brief payload is not enough. Avoid blind screenshots — but when you do need a visual map, prefer `screenshot --annotated` (numbered marks + handle legend) over a plain screenshot.
+- Treat `result:"already_selected"` as success-no-op (the tab/toggle was already in that state); never retry it.
+- Use `wait-for --text/--gone` for async outcomes (toasts, spinners, delayed navigation) instead of re-running inspect in a loop.
+- Treat non-zero `degradedNodes` as partial eyes: the listed nodes are trustworthy, but a few elements could not be read.
 - After Dart-only edits, run `reload` or `restart` before replaying flows.
 - Prefer `fill` for real text fields, but do not use it for custom pickers, keypads, steppers, calendars, or segmented controls.
 - For custom controls, read `visualTree`, `controlGroups`, and `suggestedActions`, then use explicit `tap`/`tap-text`/scroll commands.

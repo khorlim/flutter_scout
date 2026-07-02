@@ -7,9 +7,17 @@ extension _CliCapture on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('output', abbr: 'o')
       ..addOption('target')
+      ..addFlag(
+        'annotated',
+        defaultsTo: false,
+        help:
+            'Set-of-marks capture: draw numbered marks over every visible '
+            'interactable and print the number -> handle legend.',
+      )
       ..addFlag('native', defaultsTo: false);
     final parsed = parser.parse(args);
     final native = parsed.flag('native');
+    final annotated = parsed.flag('annotated');
     final target = parsed.option('target');
     if (target != null && target.isNotEmpty) {
       return _crop([
@@ -32,14 +40,26 @@ extension _CliCapture on FlutterScoutCli {
         );
     Directory(p.dirname(output)).createSync(recursive: true);
     if (!native) {
-      final capture = await _inAppCapture(mode: 'screen');
+      final capture = await _inAppCapture(mode: 'screen', annotate: annotated);
       if (capture?.bytes != null) {
         File(output).writeAsBytesSync(capture!.bytes!);
         stdout.writeln(
-          jsonEncode({'ok': true, 'path': output, 'backend': 'in_app_capture'}),
+          jsonEncode({
+            'ok': true,
+            'path': output,
+            'backend': 'in_app_capture',
+            if (annotated) 'marks': capture.marks ?? const <Object?>[],
+          }),
         );
         return 0;
       }
+    }
+    if (annotated) {
+      throw const ScoutCliException(
+        'annotated_unsupported_native',
+        'Set-of-marks screenshots require the in-app capture backend; it was '
+            'unavailable for this session (platform view or capture failure).',
+      );
     }
     final capture = await _captureScreenshot(output);
     stdout.writeln(jsonEncode({'ok': true, 'path': output, ...capture}));
@@ -49,37 +69,63 @@ extension _CliCapture on FlutterScoutCli {
   Future<int> _crop(List<String> args) async {
     final parser = ArgParser()
       ..addOption('target')
+      ..addOption(
+        'rect',
+        help: 'Explicit logical rect `x,y,w,h` instead of a target handle.',
+      )
       ..addOption('output', abbr: 'o')
       ..addOption('padding', defaultsTo: '12')
       ..addFlag('native', defaultsTo: false);
     final parsed = parser.parse(args);
     final native = parsed.flag('native');
+    final rectOption = parsed.option('rect');
     final target =
         parsed.option('target') ??
         (parsed.rest.isEmpty ? null : parsed.rest.first);
-    if (target == null || target.isEmpty) {
+    if ((target == null || target.isEmpty) &&
+        (rectOption == null || rectOption.isEmpty)) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout crop <target> [-o <path>] [--native]',
+        'Usage: flutter-scout crop <target> [-o <path>] [--native] or '
+            'flutter-scout crop --rect x,y,w,h [-o <path>]',
       );
     }
 
-    final inspect = await _call('ext.flutter_scout.inspect');
-    final node = _findNodeInInspect(inspect, target);
-    if (node == null) {
-      throw ScoutCliException(
-        'target_not_found',
-        'No inspect target matched `$target`.',
-      );
+    Map<String, dynamic>? inspect;
+    final List<num> rectNums;
+    final String cropLabel;
+    if (rectOption != null && rectOption.isNotEmpty) {
+      final parts = rectOption
+          .split(',')
+          .map((part) => num.tryParse(part.trim()))
+          .toList(growable: false);
+      if (parts.length != 4 || parts.any((part) => part == null)) {
+        throw const ScoutCliException(
+          'usage',
+          'Invalid --rect; expected four numbers: x,y,w,h (logical pixels).',
+        );
+      }
+      rectNums = parts.cast<num>();
+      cropLabel = 'rect_${rectNums[0]}_${rectNums[1]}';
+    } else {
+      inspect = await _call('ext.flutter_scout.inspect');
+      final node = _findNodeInInspect(inspect, target!);
+      if (node == null) {
+        throw ScoutCliException(
+          'target_not_found',
+          'No inspect target matched `$target`.',
+        );
+      }
+      final rect = node['rect'];
+      if (rect is! List || rect.length < 4) {
+        throw ScoutCliException(
+          'target_has_no_rect',
+          'Target `$target` has no usable rect.',
+        );
+      }
+      rectNums = rect.cast<num>();
+      cropLabel = target;
     }
-    final rect = node['rect'];
-    if (rect is! List || rect.length < 4) {
-      throw ScoutCliException(
-        'target_has_no_rect',
-        'Target `$target` has no usable rect.',
-      );
-    }
-    final rectNums = rect.cast<num>();
     _ensureSessionDir();
     final padding = int.tryParse(parsed.option('padding') ?? '') ?? 12;
     final output =
@@ -87,7 +133,7 @@ extension _CliCapture on FlutterScoutCli {
         p.join(
           _sessionDir.path,
           'crops',
-          '${_safeFileName(target)}_${DateTime.now().millisecondsSinceEpoch}.png',
+          '${_safeFileName(cropLabel)}_${DateTime.now().millisecondsSinceEpoch}.png',
         );
     Directory(p.dirname(output)).createSync(recursive: true);
 
@@ -102,9 +148,9 @@ extension _CliCapture on FlutterScoutCli {
         stdout.writeln(
           jsonEncode({
             'ok': true,
-            'target': target,
+            'target': target ?? 'rect:$rectOption',
             'path': output,
-            'rect': rect,
+            'rect': rectNums,
             'backend': 'in_app_capture',
           }),
         );
@@ -133,6 +179,9 @@ extension _CliCapture on FlutterScoutCli {
         'Could not decode simulator screenshot.',
       );
     }
+    // --rect skips the target-resolution inspect; fetch a brief one here just
+    // for the device pixel ratio.
+    inspect ??= await _call('ext.flutter_scout.inspect', {'brief': 'true'});
     final dpr =
         (inspect['devicePixelRatio'] as num?)?.toDouble() ??
         _inferDevicePixelRatio(inspect, source);
@@ -141,10 +190,10 @@ extension _CliCapture on FlutterScoutCli {
     stdout.writeln(
       jsonEncode({
         'ok': true,
-        'target': target,
+        'target': target ?? 'rect:$rectOption',
         'path': output,
         'source': shotPath,
-        'rect': rect,
+        'rect': rectNums,
         'pixelRect': crop.pixelRect,
         'backend': 'native',
       }),
@@ -188,11 +237,13 @@ extension _CliCapture on FlutterScoutCli {
   /// Asks the in-app helper to rasterise the screen (or a crop rect). Returns
   /// null when the capture extension is unavailable so callers fall back to a
   /// native screenshot.
-  Future<({Uint8List? bytes, bool needsNative})?> _inAppCapture({
+  Future<({Uint8List? bytes, bool needsNative, List<Object?>? marks})?>
+  _inAppCapture({
     required String mode,
     List<num>? rect,
     int? padding,
     String native = 'auto',
+    bool annotate = false,
   }) async {
     try {
       final params = <String, String>{'mode': mode, 'native': native};
@@ -202,14 +253,22 @@ extension _CliCapture on FlutterScoutCli {
       if (padding != null) {
         params['padding'] = padding.toString();
       }
+      if (annotate) {
+        params['annotate'] = 'true';
+      }
       final res = await _call('ext.flutter_scout.capture', params);
       if (res['ok'] == false) return null;
       final needsNative = res['needsNative'] == true;
+      final marks = res['marks'] is List ? res['marks'] as List<Object?> : null;
       final bytes = res['bytes'];
       if (bytes is String && bytes.isNotEmpty) {
-        return (bytes: base64Decode(bytes), needsNative: needsNative);
+        return (
+          bytes: base64Decode(bytes),
+          needsNative: needsNative,
+          marks: marks,
+        );
       }
-      if (needsNative) return (bytes: null, needsNative: true);
+      if (needsNative) return (bytes: null, needsNative: true, marks: marks);
       return null;
     } catch (_) {
       return null;

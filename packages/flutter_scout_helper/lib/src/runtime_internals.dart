@@ -22,103 +22,113 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     final binding = GestureBinding.instance;
     final pointer = _nextSyntheticPointer++;
     final viewId = _primaryViewId;
-    binding.handlePointerEvent(
-      PointerAddedEvent(
-        pointer: pointer,
-        device: pointer,
-        position: point,
-        kind: PointerDeviceKind.touch,
-        viewId: viewId,
-      ),
-    );
-    binding.handlePointerEvent(
-      PointerDownEvent(
-        pointer: pointer,
-        device: pointer,
-        position: point,
-        kind: PointerDeviceKind.touch,
-        buttons: kPrimaryButton,
-        viewId: viewId,
-      ),
-    );
-    await Future<void>.delayed(hold);
-    binding.handlePointerEvent(
-      PointerUpEvent(
-        pointer: pointer,
-        device: pointer,
-        position: point,
-        kind: PointerDeviceKind.touch,
-        viewId: viewId,
-      ),
-    );
-    binding.handlePointerEvent(
-      PointerRemovedEvent(
-        pointer: pointer,
-        device: pointer,
-        position: point,
-        kind: PointerDeviceKind.touch,
-        viewId: viewId,
-      ),
-    );
+    _syntheticGestureDepth += 1;
+    try {
+      binding.handlePointerEvent(
+        PointerAddedEvent(
+          pointer: pointer,
+          device: pointer,
+          position: point,
+          kind: PointerDeviceKind.touch,
+          viewId: viewId,
+        ),
+      );
+      binding.handlePointerEvent(
+        PointerDownEvent(
+          pointer: pointer,
+          device: pointer,
+          position: point,
+          kind: PointerDeviceKind.touch,
+          buttons: kPrimaryButton,
+          viewId: viewId,
+        ),
+      );
+      await Future<void>.delayed(hold);
+      binding.handlePointerEvent(
+        PointerUpEvent(
+          pointer: pointer,
+          device: pointer,
+          position: point,
+          kind: PointerDeviceKind.touch,
+          viewId: viewId,
+        ),
+      );
+      binding.handlePointerEvent(
+        PointerRemovedEvent(
+          pointer: pointer,
+          device: pointer,
+          position: point,
+          kind: PointerDeviceKind.touch,
+          viewId: viewId,
+        ),
+      );
+    } finally {
+      _syntheticGestureDepth -= 1;
+    }
   }
 
   Future<void> _dispatchDrag(Offset start, Offset delta) async {
     final binding = GestureBinding.instance;
     final pointer = _nextSyntheticPointer++;
     final viewId = _primaryViewId;
-    binding.handlePointerEvent(
-      PointerAddedEvent(
-        pointer: pointer,
-        device: pointer,
-        position: start,
-        kind: PointerDeviceKind.touch,
-        viewId: viewId,
-      ),
-    );
-    binding.handlePointerEvent(
-      PointerDownEvent(
-        pointer: pointer,
-        device: pointer,
-        position: start,
-        kind: PointerDeviceKind.touch,
-        buttons: kPrimaryButton,
-        viewId: viewId,
-      ),
-    );
-    const steps = 8;
-    for (var i = 1; i <= steps; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 16));
+    _syntheticGestureDepth += 1;
+    try {
       binding.handlePointerEvent(
-        PointerMoveEvent(
+        PointerAddedEvent(
           pointer: pointer,
           device: pointer,
-          position: start + delta * (i / steps),
-          delta: delta / steps.toDouble(),
+          position: start,
+          kind: PointerDeviceKind.touch,
+          viewId: viewId,
+        ),
+      );
+      binding.handlePointerEvent(
+        PointerDownEvent(
+          pointer: pointer,
+          device: pointer,
+          position: start,
           kind: PointerDeviceKind.touch,
           buttons: kPrimaryButton,
           viewId: viewId,
         ),
       );
+      const steps = 8;
+      for (var i = 1; i <= steps; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+        binding.handlePointerEvent(
+          PointerMoveEvent(
+            pointer: pointer,
+            device: pointer,
+            position: start + delta * (i / steps),
+            delta: delta / steps.toDouble(),
+            kind: PointerDeviceKind.touch,
+            buttons: kPrimaryButton,
+            viewId: viewId,
+          ),
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+      binding.handlePointerEvent(
+        PointerUpEvent(
+          pointer: pointer,
+          device: pointer,
+          position: start + delta,
+          kind: PointerDeviceKind.touch,
+          viewId: viewId,
+        ),
+      );
+      binding.handlePointerEvent(
+        PointerRemovedEvent(
+          pointer: pointer,
+          device: pointer,
+          position: start + delta,
+          kind: PointerDeviceKind.touch,
+          viewId: viewId,
+        ),
+      );
+    } finally {
+      _syntheticGestureDepth -= 1;
     }
-    await Future<void>.delayed(const Duration(milliseconds: 16));
-    binding.handlePointerEvent(
-      PointerUpEvent(
-        pointer: pointer,
-        device: pointer,
-        position: start + delta,
-        kind: PointerDeviceKind.touch,
-        viewId: viewId,
-      ),
-    );
-    binding.handlePointerEvent(
-      PointerRemovedEvent(
-        pointer: pointer,
-        device: pointer,
-        position: start + delta,
-        kind: PointerDeviceKind.touch,
-        viewId: viewId,
-      ),
-    );
   }
 
   int get _primaryViewId {
@@ -292,7 +302,11 @@ extension _RuntimeInternals on FlutterScoutRuntime {
 
   developer.ServiceExtensionResponse _ok(Map<String, Object?> value) {
     return developer.ServiceExtensionResponse.result(
-      jsonEncode({'ok': true, ...value}),
+      jsonEncode({
+        'ok': true,
+        'helperProtocolVersion': scoutHelperProtocolVersion,
+        ...value,
+      }),
     );
   }
 

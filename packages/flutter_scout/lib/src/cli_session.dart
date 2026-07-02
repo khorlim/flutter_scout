@@ -247,12 +247,42 @@ extension _CliSession on FlutterScoutCli {
       ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final device = parsed.option('device');
-    final discovered = await _discoverAttachVmUri(
-      explicit: parsed.option('debug-url'),
-      device: device,
-    );
+    void progress(String stage, [Map<String, Object?> extra = const {}]) {
+      stdout.writeln(
+        jsonEncode({
+          'progress': stage,
+          'timestamp': DateTime.now().toIso8601String(),
+          ...extra,
+        }),
+      );
+    }
+
+    progress('discover_vm_service', {'device': ?device});
+    // Every step inside discovery is individually bounded, but a hard phase
+    // ceiling guarantees ensure can never sit silent for minutes — fail with
+    // a structured error instead.
+    final discovered =
+        await _discoverAttachVmUri(
+          explicit: parsed.option('debug-url'),
+          device: device,
+        ).timeout(
+          const Duration(seconds: 60),
+          onTimeout: () => throw const ScoutCliException(
+            'ensure_discovery_timeout',
+            'VM-service discovery did not complete within 60s. Run '
+                'flutter-scout stop --clear-session, then retry; if it '
+                'persists, launch directly with flutter-scout launch.',
+          ),
+        );
     if (discovered.uri != null && discovered.uri!.isNotEmpty) {
+      progress('reuse_check', {'vmServiceUri': discovered.uri});
       final ready = await _waitScoutReady(discovered.uri!);
+      if (!ready.ready) {
+        progress('reuse_not_ready', {
+          'reason': ?ready.reason,
+          'detail': ?ready.detail,
+        });
+      }
       if (ready.ready) {
         _ensureSessionDir();
         File(_vmUriFile).writeAsStringSync(discovered.uri!);
@@ -287,8 +317,11 @@ extension _CliSession on FlutterScoutCli {
         );
         return 0;
       }
+    } else {
+      progress('no_reusable_session', {'reason': ?discovered.reason});
     }
 
+    progress('fallback_launch', {'device': ?device});
     final launchArgs = <String>[
       if (device != null && device.isNotEmpty) ...['--device', device],
       '--project',

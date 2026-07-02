@@ -8,10 +8,11 @@ extension _CliResults on FlutterScoutCli {
     Map<String, String> params = const {},
     Map<String, Object?>? record,
     bool compact = false,
+    Duration? callTimeout,
   }) async {
     final result = _withProtocolDiagnostics(
       method,
-      await _call(method, params),
+      await _call(method, params, callTimeout),
     );
     final output = compact ? _compactActionResult(result) : result;
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
@@ -104,6 +105,34 @@ extension _CliResults on FlutterScoutCli {
   ) {
     if (result['ok'] != true) return result;
     final warnings = <Object?>[..._objectList(result['warnings'])];
+    final version = result['helperProtocolVersion'];
+    if (version is int) {
+      // Modern helper: staleness is decided by the explicit version, not by
+      // guessing from missing fields (which brief/sectioned payloads omit on
+      // purpose).
+      if (version < FlutterScoutCli.expectedHelperProtocolVersion) {
+        warnings.add(
+          'Running flutter_scout_helper protocol v$version is older than this '
+          'CLI expects (v${FlutterScoutCli.expectedHelperProtocolVersion}). '
+          'Hot reload cannot refresh a git/pub-cache dependency: bump the '
+          'dependency (or edit the resolved pub-cache checkout) and fully '
+          'relaunch the app.',
+        );
+        result['helperProtocol'] = {
+          'status': 'older_than_cli',
+          'helperProtocolVersion': version,
+          'cliExpects': FlutterScoutCli.expectedHelperProtocolVersion,
+          'nextBestActions': [
+            'flutter-scout stop --clear-session',
+            'flutter-scout launch --device <device> --project <path>',
+          ],
+        };
+      }
+      if (warnings.isNotEmpty) {
+        result['warnings'] = warnings;
+      }
+      return result;
+    }
     final missing = <String>[];
     if (method == 'ext.flutter_scout.inspect' &&
         !result.containsKey('textTargets')) {
@@ -228,6 +257,7 @@ extension _CliResults on FlutterScoutCli {
   Future<Map<String, dynamic>> _call(
     String method, [
     Map<String, String> params = const {},
+    Duration? callTimeout,
   ]) async {
     final uri = _readVmUri();
     if (uri == null || uri.isEmpty) {
@@ -243,7 +273,7 @@ extension _CliResults on FlutterScoutCli {
       try {
         response = await service
             .callServiceExtension(method, isolateId: isolateId, args: params)
-            .timeout(const Duration(seconds: 20));
+            .timeout(callTimeout ?? const Duration(seconds: 20));
       } on RPCError catch (error) {
         if (_looksLikeMissingScoutExtension(error)) {
           throw const ScoutCliException(

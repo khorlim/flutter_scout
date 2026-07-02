@@ -370,13 +370,17 @@ class _FlutterScoutAnnotationOverlayState
         } else if (_visibleTargets.isNotEmpty) {
           _scheduleTargetRefresh(revision);
         }
-        return Stack(
-          children: [
-            const _ScoutInstanceBadge(),
-            if (enabled)
-              Positioned.fill(
-                child: _ScoutHitTestGate(
-                  runtime: widget.runtime,
+        // The gate wraps the WHOLE overlay (absorber, pins, panels, badge,
+        // toggle FAB): every piece of Scout chrome must be transparent to
+        // synthetic agent gestures, or an agent tap aimed at an app control
+        // underneath silently activates Scout's own UI instead.
+        return _ScoutHitTestGate(
+          runtime: widget.runtime,
+          child: Stack(
+            children: [
+              const _ScoutInstanceBadge(),
+              if (enabled)
+                Positioned.fill(
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTapUp: (details) => _handleTap(details.localPosition),
@@ -390,61 +394,61 @@ class _FlutterScoutAnnotationOverlayState
                     ),
                   ),
                 ),
-              ),
-            if (enabled) ..._buildPins(),
-            if (enabled && _selectedTarget != null)
-              _AnnotationCommentPanel(
-                target: _selectedTarget!,
-                candidateIndex: _candidateIndex,
-                candidateCount: _currentCandidates.length,
-                controller: _commentController,
-                onCancel: () {
-                  setState(() {
-                    _selectedTarget = null;
-                    _currentCandidates = const [];
-                    _commentController.clear();
-                  });
-                },
-                onSave: _saveComment,
-              ),
-            if (enabled && _selectedPin != null)
-              _AnnotationPinPopup(
-                anchor: _selectedPin!.at,
-                comment: _selectedPin!.comment,
-                onDelete: _deleteSelectedPin,
-                onClose: () => setState(() => _selectedPin = null),
-              ),
-            if (enabled &&
-                _selectedTarget == null &&
-                _selectedPin == null &&
-                widget.runtime._activeAnnotationCount > 0)
+              if (enabled) ..._buildPins(),
+              if (enabled && _selectedTarget != null)
+                _AnnotationCommentPanel(
+                  target: _selectedTarget!,
+                  candidateIndex: _candidateIndex,
+                  candidateCount: _currentCandidates.length,
+                  controller: _commentController,
+                  onCancel: () {
+                    setState(() {
+                      _selectedTarget = null;
+                      _currentCandidates = const [];
+                      _commentController.clear();
+                    });
+                  },
+                  onSave: _saveComment,
+                ),
+              if (enabled && _selectedPin != null)
+                _AnnotationPinPopup(
+                  anchor: _selectedPin!.at,
+                  comment: _selectedPin!.comment,
+                  onDelete: _deleteSelectedPin,
+                  onClose: () => setState(() => _selectedPin = null),
+                ),
+              if (enabled &&
+                  _selectedTarget == null &&
+                  _selectedPin == null &&
+                  widget.runtime._activeAnnotationCount > 0)
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  bottom: MediaQuery.paddingOf(context).bottom + 12,
+                  child: Align(
+                    alignment: Alignment.bottomCenter,
+                    child: _AnnotationHandoffButton(
+                      sent: _handoffSent,
+                      count: widget.runtime._activeAnnotationCount,
+                      onPressed: _sendToAgent,
+                    ),
+                  ),
+                ),
               Positioned(
-                left: 12,
-                right: 12,
-                bottom: MediaQuery.paddingOf(context).bottom + 12,
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: _AnnotationHandoffButton(
-                    sent: _handoffSent,
+                left: toggleButtonOffset.dx,
+                top: toggleButtonOffset.dy,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onPanUpdate: (details) => _moveToggleButton(details, context),
+                  child: _AnnotationToggleButton(
+                    enabled: enabled,
                     count: widget.runtime._activeAnnotationCount,
-                    onPressed: _sendToAgent,
+                    onPressed: _toggleAnnotationMode,
                   ),
                 ),
               ),
-            Positioned(
-              left: toggleButtonOffset.dx,
-              top: toggleButtonOffset.dy,
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onPanUpdate: (details) => _moveToggleButton(details, context),
-                child: _AnnotationToggleButton(
-                  enabled: enabled,
-                  count: widget.runtime._activeAnnotationCount,
-                  onPressed: _toggleAnnotationMode,
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         );
       },
     );
@@ -1101,7 +1105,7 @@ class _RenderScoutHitTestGate extends RenderProxyBox {
 
   @override
   bool hitTest(BoxHitTestResult result, {required Offset position}) {
-    if (runtime._collectingAnnotationTargets) return false;
+    if (runtime._scoutChromeHitTransparent) return false;
     return super.hitTest(result, position: position);
   }
 }

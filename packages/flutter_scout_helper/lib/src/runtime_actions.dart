@@ -48,7 +48,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       return _ok({
         'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
         'stable': stable,
-        'result': changed ? 'changed' : 'activated_no_observed_change',
+        'result': _tapResult(changed: changed, node: node),
         if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
         if (actionSnapshot.waitTimedOut) 'waitTimedOut': true,
         'target': node?.toJson(),
@@ -57,9 +57,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
           'observedChange': changed,
           'note': changed
               ? null
-              : 'Tap was dispatched, but no synchronous Flutter tree, field, text, or geometry change was observed before the wait timeout.',
+              : (node?.selected == true
+                    ? 'Target was already selected before the tap; no change is expected.'
+                    : 'Tap was dispatched, but no synchronous Flutter tree, field, text, or geometry change was observed before the wait timeout.'),
         },
-        if (!changed)
+        if (!changed && node?.selected != true)
           'warnings': const [
             'Tap dispatched without an observed synchronous UI change; check recentErrors, overlays, logs, or increase --wait-ms if the action is async.',
           ],
@@ -121,7 +123,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       return _ok({
         'action': 'tap-text $text',
         'stable': stable,
-        'result': changed ? 'changed' : 'activated_no_observed_change',
+        'result': _tapResult(changed: changed, node: targetNode),
         if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
         if (actionSnapshot.waitTimedOut) 'waitTimedOut': true,
         'target': targetNode.toJson(),
@@ -131,7 +133,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
           'observedChange': changed,
           'strategy': _tapTextStrategy(match),
         },
-        if (!changed)
+        if (!changed && targetNode.selected != true)
           'warnings': const [
             'tap-text activated the nearest actionable target, but no synchronous UI change was observed before the wait timeout.',
           ],
@@ -143,6 +145,15 @@ extension _RuntimeActions on FlutterScoutRuntime {
     } catch (error) {
       return _fail('tap_text_failed', error.toString());
     }
+  }
+
+  /// A no-change tap on an already-selected target (active tab, checked
+  /// toggle) is expected behavior, not a failed activation — report it as
+  /// `already_selected` so agents don't retry or escalate.
+  String _tapResult({required bool changed, required ScoutNode? node}) {
+    if (changed) return 'changed';
+    if (node?.selected == true) return 'already_selected';
+    return 'activated_no_observed_change';
   }
 
   Offset? _tapPointForTextMatch(_TextTargetMatch match) {
@@ -657,6 +668,98 @@ extension _RuntimeActions on FlutterScoutRuntime {
       'snapshot': _snapshot().summaryJson(),
       'recentErrors': _recentErrors(),
     });
+  }
+
+  /// Waits until visible text appears ([text]) and/or disappears ([gone]) —
+  /// the missing primitive for async outcomes: "Saved Successfully" toasts,
+  /// "Loading" spinners clearing, navigation banners. Polls snapshots; exits
+  /// early on a fresh blocking error (waiting longer is pointless).
+  Future<developer.ServiceExtensionResponse> _handleWaitFor(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final text = params['text'];
+      final gone = params['gone'];
+      if ((text == null || text.isEmpty) && (gone == null || gone.isEmpty)) {
+        return _fail(
+          'usage',
+          'Provide `text` (wait until visible) and/or `gone` (wait until absent).',
+        );
+      }
+      final timeoutMs = int.tryParse(params['timeoutMs'] ?? '') ?? 5000;
+      final pollMs = (int.tryParse(params['pollMs'] ?? '') ?? 150).clamp(
+        16,
+        2000,
+      );
+      final stopwatch = Stopwatch()..start();
+      var polls = 0;
+      while (true) {
+        polls += 1;
+        _pumpPendingFrame();
+        final snapshot = _snapshot();
+        if (_waitForConditionsMet(snapshot: snapshot, text: text, gone: gone)) {
+          return _ok({
+            'action': 'wait-for',
+            'result': 'met',
+            'waitedMs': stopwatch.elapsedMilliseconds,
+            'polls': polls,
+            if (text != null && text.isNotEmpty) 'text': text,
+            if (gone != null && gone.isNotEmpty) 'gone': gone,
+            'recentErrors': _recentErrors(),
+          });
+        }
+        final blocking = snapshot.recentErrors.any(
+          (error) => error['blocking'] == true && error['stale'] != true,
+        );
+        if (blocking) {
+          return _fail(
+            'blocking_error_during_wait',
+            'A fresh blocking error surfaced while waiting; the awaited UI change is unlikely to arrive.',
+            extra: {
+              'result': 'blocked',
+              'waitedMs': stopwatch.elapsedMilliseconds,
+              'polls': polls,
+            },
+          );
+        }
+        if (stopwatch.elapsedMilliseconds >= timeoutMs) {
+          return _fail(
+            'wait_for_timeout',
+            'Condition not met within ${timeoutMs}ms'
+                '${text != null && text.isNotEmpty ? '; `$text` never became visible' : ''}'
+                '${gone != null && gone.isNotEmpty ? '; `$gone` is still visible' : ''}.',
+            extra: {
+              'result': 'timeout',
+              'waitedMs': stopwatch.elapsedMilliseconds,
+              'polls': polls,
+              'visibleText': snapshot.visibleText,
+            },
+          );
+        }
+        await Future<void>.delayed(Duration(milliseconds: pollMs));
+      }
+    } catch (error) {
+      return _fail('wait_for_failed', error.toString());
+    }
+  }
+
+  /// Case-insensitive substring match over the currently visible text.
+  bool _waitForConditionsMet({
+    required ScoutSnapshot snapshot,
+    String? text,
+    String? gone,
+  }) {
+    bool visible(String needle) {
+      final lower = needle.toLowerCase();
+      return snapshot.visibleText.any(
+        (value) => value.toLowerCase().contains(lower),
+      );
+    }
+
+    final appeared = text == null || text.isEmpty || visible(text);
+    final cleared = gone == null || gone.isEmpty || !visible(gone);
+    return appeared && cleared;
   }
 
   /// Drive the rendering pipeline to flush a deferred frame when the engine

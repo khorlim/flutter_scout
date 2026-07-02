@@ -18,6 +18,19 @@ part 'cli_evidence.dart';
 part 'cli_results.dart';
 
 class FlutterScoutCli {
+  /// Helper protocol version this CLI is built against. Keep in sync with
+  /// `scoutHelperProtocolVersion` in flutter_scout_helper — the helper echoes
+  /// its version in every response, and a lower value means the running app
+  /// compiled an older helper (typically the git/pub-cache dependency trap
+  /// where hot reload silently keeps old code).
+  static const int expectedHelperProtocolVersion = 2;
+
+  /// Test-only view of response protocol diagnostics.
+  Map<String, dynamic> debugProtocolDiagnostics(
+    String method,
+    Map<String, dynamic> result,
+  ) => _withProtocolDiagnostics(method, result);
+
   Future<int> run(List<String> args) async {
     if (args.isEmpty || args.first == '--help' || args.first == '-h') {
       _printUsage();
@@ -35,7 +48,7 @@ class FlutterScoutCli {
         'doctor' => _doctor(rest),
         'stop' => _stop(rest),
         'cleanup' => _stop(rest),
-        'inspect' => _callAndPrint('ext.flutter_scout.inspect'),
+        'inspect' => _inspect(rest),
         'annotations' => _annotations(rest),
         'bounds' => _bounds(rest),
         'tap' => _tap(rest),
@@ -48,6 +61,7 @@ class FlutterScoutCli {
         'swipe' => _swipe(rest),
         'back' => _back(rest),
         'wait' => _wait(rest),
+        'wait-for' => _waitFor(rest),
         'reload' => _reload(rest),
         'restart' => _restart(rest),
         'deeplink' => _deeplink(rest),

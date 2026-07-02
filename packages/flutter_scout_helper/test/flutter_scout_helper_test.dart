@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -463,5 +466,321 @@ void main() {
     final runtime = FlutterScoutHelper.debugRuntime;
     final snapshot = runtime.debugSnapshot();
     expect(snapshot.visibleText, contains('finite sibling'));
+  });
+
+  testWidgets('a throwing element degrades itself, not the whole snapshot', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    runtime.debugSnapshotNodeProbe = (element) {
+      if (element.widget is FlutterLogo) {
+        throw StateError('injected per-node fault');
+      }
+    };
+    addTearDown(() => runtime.debugSnapshotNodeProbe = null);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: Column(children: [Text('healthy sibling'), FlutterLogo()]),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = runtime.debugSnapshot();
+    expect(snapshot.visibleText, contains('healthy sibling'));
+    expect(snapshot.degradedNodes, greaterThan(0));
+    expect(snapshot.summaryJson()['degradedNodes'], snapshot.degradedNodes);
+
+    // A healthy tree reports no degradation (and omits the key entirely).
+    runtime.debugSnapshotNodeProbe = null;
+    final healthy = runtime.debugSnapshot();
+    expect(healthy.degradedNodes, 0);
+    expect(healthy.summaryJson().containsKey('degradedNodes'), isFalse);
+  });
+
+  testWidgets('icon-only buttons get names from SDK tables and semantics', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              // Unlabeled CupertinoButton wrapping a Material icon that is NOT
+              // in the curated semantic map — must resolve via the generated
+              // SDK table instead of surfacing btn.cupertinobutton.
+              CupertinoButton(
+                onPressed: () {},
+                child: const Icon(Icons.settings),
+              ),
+              // Cupertino glyph, also only in the generated table.
+              CupertinoButton(
+                onPressed: () {},
+                child: const Icon(CupertinoIcons.person_badge_plus),
+              ),
+              // Accessibility label wins for icon-only controls.
+              CupertinoButton(
+                onPressed: () {},
+                child: Semantics(
+                  label: 'Admin area',
+                  child: const Icon(Icons.abc),
+                ),
+              ),
+              // Single-character plain text keeps its literal label.
+              TextButton(onPressed: () {}, child: const Text('5')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    final ids = snapshot.interactables.map((node) => node.id).toList();
+    expect(ids, contains('btn.settings'));
+    expect(ids, contains('btn.person_badge_plus'));
+    expect(ids, contains('btn.admin_area'));
+    expect(ids.where((id) => id.startsWith('btn.cupertinobutton')), isEmpty);
+    // Single-character plain text keeps its literal label — no icon_35 noise.
+    expect(snapshot.textTargets.map((node) => node.id), contains('text.5'));
+  });
+
+  testWidgets('interactables surface selection/toggle state', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              // Custom segment control: selection expressed via Semantics,
+              // like a tab bar built from GestureDetectors.
+              GestureDetector(
+                onTap: () {},
+                child: Semantics(
+                  selected: true,
+                  child: const SizedBox(
+                    width: 80,
+                    height: 30,
+                    child: Text('T&C'),
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: () {},
+                child: Semantics(
+                  selected: false,
+                  child: const SizedBox(
+                    width: 80,
+                    height: 30,
+                    child: Text('Outlet'),
+                  ),
+                ),
+              ),
+              Switch(value: true, onChanged: (_) {}),
+              ChoiceChip(
+                label: const Text('Filter'),
+                selected: false,
+                onSelected: (_) {},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    bool? selectedOf(String id) =>
+        snapshot.interactables.firstWhere((node) => node.id == id).selected;
+    expect(selectedOf('tap.t_c'), isTrue);
+    expect(selectedOf('tap.outlet'), isFalse);
+    final switchNode = snapshot.interactables.firstWhere(
+      (node) => node.widgetType == 'Switch',
+    );
+    expect(switchNode.selected, isTrue);
+    final chipNode = snapshot.interactables.firstWhere(
+      (node) => node.widgetType == 'ChoiceChip',
+      orElse: () => snapshot.interactables.firstWhere(
+        (node) => (node.label ?? '') == 'Filter',
+      ),
+    );
+    expect(chipNode.selected, isFalse);
+    // Serialized only when known.
+    expect(switchNode.toJson()['selected'], isTrue);
+  });
+
+  testWidgets('Scout chrome is excluded from inspect output', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: Center(child: Text('app text'))),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    // The annotation toggle FAB used to leak in as an app interactable
+    // (tap.add_location_alt) that agents would try to press.
+    expect(
+      snapshot.interactables.map((node) => node.id),
+      isNot(contains('tap.add_location_alt')),
+    );
+    expect(snapshot.visibleText, contains('app text'));
+  });
+
+  testWidgets('synthetic agent taps pass through Scout chrome', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    var taps = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: ElevatedButton(
+              onPressed: () => taps++,
+              child: const Text('Hit me'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    runtime.debugSetAnnotationMode(true);
+    // Overlay chrome installs via a post-frame callback, then the entry
+    // itself builds on the following frame.
+    await tester.pump();
+    await tester.pump();
+    addTearDown(() => runtime.debugSetAnnotationMode(false));
+
+    final center = tester.getCenter(find.text('Hit me'));
+    // A real user tap is absorbed by the annotation scrim (chrome works for
+    // humans as before).
+    await tester.tapAt(center);
+    await tester.pump();
+    expect(taps, 0);
+
+    // An agent-dispatched tap treats Scout chrome as transparent and lands
+    // on the app control beneath.
+    await tester.runAsync(() => runtime.debugDispatchTap(center));
+    await tester.pump();
+    expect(taps, 1);
+  });
+
+  testWidgets('brief inspect payload is compact; sections opt back in', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              ElevatedButton(onPressed: () {}, child: const Text('Save')),
+              const TextField(decoration: InputDecoration(labelText: 'Name')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final brief = runtime.debugInspectPayload(brief: true);
+    expect(brief['screen'], isNotNull);
+    expect(brief['visibleText'], contains('Save'));
+    expect(brief.containsKey('textTargets'), isFalse);
+    expect(brief.containsKey('visualTree'), isFalse);
+    expect(brief.containsKey('scrollables'), isFalse);
+    final interactables = brief['interactables']! as List<Object?>;
+    final save = interactables.cast<Map<String, Object?>>().firstWhere(
+      (node) => node['id'] == 'btn.save',
+    );
+    // Compact node: no rects, no confidence plumbing.
+    expect(save.containsKey('rect'), isFalse);
+    expect(save.containsKey('confidence'), isFalse);
+    expect(brief['fieldValues'], isA<Map<String, Object?>>());
+
+    // Sections opt back into full data.
+    final sectioned = runtime.debugInspectPayload(
+      sections: {'textTargets', 'scrollables'},
+    );
+    expect(sectioned['textTargets'], isA<List<Object?>>());
+    expect(sectioned['scrollables'], isA<List<Object?>>());
+    expect(sectioned.containsKey('interactables'), isFalse);
+
+    // Brief payload is materially smaller than the full one.
+    final fullLength = jsonEncode(runtime.debugInspectPayload()).length;
+    final briefLength = jsonEncode(brief).length;
+    expect(briefLength, lessThan(fullLength ~/ 2));
+  });
+
+  testWidgets('wait-for conditions match visible text case-insensitively', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: Column(children: [Text('Saved Successfully'), Text('Loading')]),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final runtime = FlutterScoutHelper.debugRuntime;
+    expect(runtime.debugWaitForConditionsMet(text: 'saved success'), isTrue);
+    expect(runtime.debugWaitForConditionsMet(text: 'Deleted'), isFalse);
+    expect(runtime.debugWaitForConditionsMet(gone: 'Loading'), isFalse);
+    expect(runtime.debugWaitForConditionsMet(gone: 'Spinner'), isTrue);
+    expect(
+      runtime.debugWaitForConditionsMet(text: 'Saved', gone: 'Loading'),
+      isFalse,
+    );
+
+    // Spinner clears -> gone condition flips.
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: Column(children: [Text('Saved Successfully')])),
+      ),
+    );
+    await tester.pump();
+    expect(
+      runtime.debugWaitForConditionsMet(text: 'Saved', gone: 'Loading'),
+      isTrue,
+    );
+  });
+
+  testWidgets('set-of-marks capture composites numbered marks onto the PNG', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: ElevatedButton(onPressed: () {}, child: const Text('Go')),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final node = runtime.debugSnapshot().interactables.firstWhere(
+      (node) => node.id == 'btn.go',
+    );
+    final plain = await tester.runAsync(() => runtime.debugCaptureRegion());
+    final marked = await tester.runAsync(
+      () =>
+          runtime.debugCaptureRegion(marks: [(n: 1, rect: node.visibleRect!)]),
+    );
+    expect(marked, isNotNull);
+    // Valid PNG with the mark overlay baked in (different bytes than plain).
+    expect(marked!.sublist(0, 4), equals(<int>[0x89, 0x50, 0x4E, 0x47]));
+    expect(marked, isNot(equals(plain)));
   });
 }

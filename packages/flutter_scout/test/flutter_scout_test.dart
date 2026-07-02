@@ -331,6 +331,44 @@ void main() {
     },
     timeout: const Timeout(Duration(seconds: 45)),
   );
+
+  group('helper protocol diagnostics', () {
+    test('modern helper version passes clean, even for brief payloads', () {
+      final cli = FlutterScoutCli();
+      final result = cli.debugProtocolDiagnostics('ext.flutter_scout.inspect', {
+        'ok': true,
+        'helperProtocolVersion': FlutterScoutCli.expectedHelperProtocolVersion,
+        'screen': 'HomeScreen',
+        // Brief payload intentionally has no textTargets: must NOT be treated
+        // as an old helper.
+      });
+      expect(result.containsKey('helperProtocol'), isFalse);
+      expect(result.containsKey('warnings'), isFalse);
+    });
+
+    test('older helper version is flagged with relaunch guidance', () {
+      final cli = FlutterScoutCli();
+      final result = cli.debugProtocolDiagnostics('ext.flutter_scout.inspect', {
+        'ok': true,
+        'helperProtocolVersion': 1,
+        'screen': 'HomeScreen',
+      });
+      final protocol = result['helperProtocol'] as Map<String, dynamic>;
+      expect(protocol['status'], 'older_than_cli');
+      expect(protocol['helperProtocolVersion'], 1);
+      expect(result['warnings'], isNotEmpty);
+    });
+
+    test('version-less helper falls back to field heuristics', () {
+      final cli = FlutterScoutCli();
+      final result = cli.debugProtocolDiagnostics('ext.flutter_scout.inspect', {
+        'ok': true,
+        'screen': 'HomeScreen',
+      });
+      final protocol = result['helperProtocol'] as Map<String, dynamic>;
+      expect(protocol['status'], 'stale_or_old_helper');
+    });
+  });
 }
 
 Future<void> _withTempCwd(Future<void> Function() body) async {

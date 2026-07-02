@@ -12,61 +12,80 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final hitTestableText = <String>{};
     final offscreenText = <String>{};
     var screen = 'RootWidget';
+    var degradedNodes = 0;
     final logicalSize = _logicalSize();
     if (root != null) {
-      _walk(root, (Element element) {
-        if (_isHiddenByAncestor(element)) return;
-        final widgetType = element.widget.runtimeType.toString();
-        if (screen == 'RootWidget' && widgetType.endsWith('Screen')) {
-          screen = widgetType;
-        }
-        final node = _nodeFromElement(element);
-        if (node != null) {
-          nodes.add(node);
-        }
-        if (element.widget is Scrollable) {
-          final rect = _rectFor(element);
-          if (rect != null) {
-            final visibleRect = _visibleRectFor(rect);
-            scrollables.add({
-              'widgetType': element.widget.runtimeType.toString(),
-              'rect': [rect.left, rect.top, rect.width, rect.height],
-              'visibleRect': visibleRect == null
-                  ? null
-                  : [
-                      visibleRect.left,
-                      visibleRect.top,
-                      visibleRect.width,
-                      visibleRect.height,
-                    ],
-              'visibleFraction': _visibleFraction(rect, visibleRect),
-            });
+      // _walkVisible prunes hidden subtrees AND Scout's own overlay chrome:
+      // the annotation FAB/badge must never surface as app interactables
+      // (tap.add_location_alt) that an agent might try to press.
+      _walkVisible(root, (Element element) {
+        // Per-element fault isolation: reading one misbehaving widget (a
+        // throwing property getter, corrupt render state, …) must skip that
+        // element only — never blind the agent to the entire screen.
+        try {
+          debugSnapshotNodeProbe?.call(element);
+          final widgetType = element.widget.runtimeType.toString();
+          if (screen == 'RootWidget' && widgetType.endsWith('Screen')) {
+            screen = widgetType;
           }
-        }
-        final overlay = _overlayFor(element);
-        if (overlay != null) {
-          overlays.add(overlay);
-        }
-        final text = _ownText(element.widget);
-        if (text != null && _isUsefulVisibleText(text)) {
-          final rect = _rectFor(element);
-          final trimmed = text.trim();
-          if (rect == null || _visibleRectFor(rect) == null) {
-            offscreenText.add(trimmed);
-          } else {
-            visibleText.add(trimmed);
-            final point = _visibleCenter(rect);
-            if (point != null && _hitTestable(point)) {
-              hitTestableText.add(trimmed);
+          final node = _nodeFromElement(element);
+          if (node != null) {
+            nodes.add(node);
+          }
+          if (element.widget is Scrollable) {
+            final rect = _rectFor(element);
+            if (rect != null) {
+              final visibleRect = _visibleRectFor(rect);
+              scrollables.add({
+                'widgetType': element.widget.runtimeType.toString(),
+                'rect': [rect.left, rect.top, rect.width, rect.height],
+                'visibleRect': visibleRect == null
+                    ? null
+                    : [
+                        visibleRect.left,
+                        visibleRect.top,
+                        visibleRect.width,
+                        visibleRect.height,
+                      ],
+                'visibleFraction': _visibleFraction(rect, visibleRect),
+              });
             }
           }
+          final overlay = _overlayFor(element);
+          if (overlay != null) {
+            overlays.add(overlay);
+          }
+          final text = _ownText(element.widget);
+          if (text != null && _isUsefulVisibleText(text)) {
+            final rect = _rectFor(element);
+            final trimmed = text.trim();
+            if (rect == null || _visibleRectFor(rect) == null) {
+              offscreenText.add(trimmed);
+            } else {
+              visibleText.add(trimmed);
+              final point = _visibleCenter(rect);
+              if (point != null && _hitTestable(point)) {
+                hitTestableText.add(trimmed);
+              }
+            }
+          }
+        } catch (_) {
+          degradedNodes += 1;
         }
       });
     }
 
-    final compactNodes = _disambiguateIds(
-      _inferActionableLabels(_compactNodes(nodes)),
-    );
+    List<ScoutNode> compactNodes;
+    try {
+      compactNodes = _disambiguateIds(
+        _inferActionableLabels(_compactNodes(nodes)),
+      );
+    } catch (_) {
+      // Post-processing failed as a batch; fall back to the raw nodes so the
+      // agent keeps (noisier) eyes instead of none.
+      degradedNodes += 1;
+      compactNodes = nodes;
+    }
     final interactables = compactNodes
         .where((node) => node.kind != 'text' && node.kind != 'field')
         .toList(growable: false);
@@ -100,6 +119,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       controlGroups: const [],
       suggestedActions: const [],
       recentErrors: _recentErrors(),
+      degradedNodes: degradedNodes,
     );
     final controlGroups = _buildControlGroups(snapshot);
     return snapshot.copyWith(
@@ -136,6 +156,82 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         <({RenderObject render, ScoutAnnotationTarget target})>[];
     final rendersWithVisibleLeaf = <RenderObject>{};
     _walkVisible(root, (Element element) {
+      try {
+        _collectAnnotationTarget(
+          element: element,
+          modalElement: modalElement,
+          screen: screen,
+          route: route,
+          targets: targets,
+          containerCandidates: containerCandidates,
+          rendersWithVisibleLeaf: rendersWithVisibleLeaf,
+        );
+      } catch (_) {
+        // One misbehaving widget must not abort annotation-target collection.
+      }
+    });
+
+    for (final candidate in containerCandidates) {
+      // A container is kept when it holds a visible leaf descendant — i.e. some
+      // of its own content is on screen (a covered container has none).
+      if (rendersWithVisibleLeaf.contains(candidate.render)) {
+        targets.add(candidate.target);
+      }
+    }
+
+    final enriched = _inferAnnotationTargetLabels(
+      targets,
+    ).where(_keepAnnotationTarget).toList(growable: false);
+
+    final deduped = <String, ScoutAnnotationTarget>{};
+    for (final target in _removeOversizedModalTargets(
+      enriched,
+      modalActive: modalElement != null,
+    )) {
+      final rect = target.rect;
+      final rectKey = [
+        rect.left.round(),
+        rect.top.round(),
+        rect.width.round(),
+        rect.height.round(),
+      ].join(':');
+      // Collapse co-located container layers that share a rect and label into
+      // one box (e.g. a tappable tile and the surface it paints, or a button's
+      // InkWell and its GestureDetector), keyed by label not stableId; plain
+      // targets keep their stableId key.
+      final key = _isContainerKind(target.kind)
+          ? 'c:${(target.label ?? '').toLowerCase().trim()}:$rectKey'
+          : '${target.stableId}:$rectKey';
+      final existing = deduped[key];
+      if (existing == null ||
+          _annotationTargetRank(target) > _annotationTargetRank(existing) ||
+          (_annotationTargetRank(target) == _annotationTargetRank(existing) &&
+              target.depth > existing.depth)) {
+        deduped[key] = target;
+      }
+    }
+    final result = _collapseNestedContainers(deduped.values.toList())
+      ..sort((a, b) {
+        final top = a.rect.top.compareTo(b.rect.top);
+        if (top != 0) return top;
+        final left = a.rect.left.compareTo(b.rect.left);
+        if (left != 0) return left;
+        return a.rect.width.compareTo(b.rect.width);
+      });
+    return result;
+  }
+
+  void _collectAnnotationTarget({
+    required Element element,
+    required Element? modalElement,
+    required String screen,
+    required String? route,
+    required List<ScoutAnnotationTarget> targets,
+    required List<({RenderObject render, ScoutAnnotationTarget target})>
+    containerCandidates,
+    required Set<RenderObject> rendersWithVisibleLeaf,
+  }) {
+    {
       if (!_isInsideActiveAnnotationModal(element, modalElement)) return;
       final widget = element.widget;
       final widgetType = widget.runtimeType.toString();
@@ -237,56 +333,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           rendersWithVisibleLeaf.add(node);
         }
       }
-    });
-
-    for (final candidate in containerCandidates) {
-      // A container is kept when it holds a visible leaf descendant — i.e. some
-      // of its own content is on screen (a covered container has none).
-      if (rendersWithVisibleLeaf.contains(candidate.render)) {
-        targets.add(candidate.target);
-      }
     }
-
-    final enriched = _inferAnnotationTargetLabels(
-      targets,
-    ).where(_keepAnnotationTarget).toList(growable: false);
-
-    final deduped = <String, ScoutAnnotationTarget>{};
-    for (final target in _removeOversizedModalTargets(
-      enriched,
-      modalActive: modalElement != null,
-    )) {
-      final rect = target.rect;
-      final rectKey = [
-        rect.left.round(),
-        rect.top.round(),
-        rect.width.round(),
-        rect.height.round(),
-      ].join(':');
-      // Collapse co-located container layers that share a rect and label into
-      // one box (e.g. a tappable tile and the surface it paints, or a button's
-      // InkWell and its GestureDetector), keyed by label not stableId; plain
-      // targets keep their stableId key.
-      final key = _isContainerKind(target.kind)
-          ? 'c:${(target.label ?? '').toLowerCase().trim()}:$rectKey'
-          : '${target.stableId}:$rectKey';
-      final existing = deduped[key];
-      if (existing == null ||
-          _annotationTargetRank(target) > _annotationTargetRank(existing) ||
-          (_annotationTargetRank(target) == _annotationTargetRank(existing) &&
-              target.depth > existing.depth)) {
-        deduped[key] = target;
-      }
-    }
-    final result = _collapseNestedContainers(deduped.values.toList())
-      ..sort((a, b) {
-        final top = a.rect.top.compareTo(b.rect.top);
-        if (top != 0) return top;
-        final left = a.rect.left.compareTo(b.rect.left);
-        if (left != 0) return left;
-        return a.rect.width.compareTo(b.rect.width);
-      });
-    return result;
   }
 
   // A chain of wrapper widgets (GestureDetector > LabelWidget > Padding …) can
