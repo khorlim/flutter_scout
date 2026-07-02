@@ -205,7 +205,93 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       confidence: label == null ? 0.65 : 0.94,
       selected: kind == 'text' ? null : _selectedStateFor(element, widget),
       altIds: altIds.toList(growable: false),
+      textColor: kind == 'btn' || kind == 'tap'
+          ? _effectiveTextColor(element)
+          : null,
     );
+  }
+
+  /// Effective ARGB color of the first text descendant, resolving inherited
+  /// colors via the nearest DefaultTextStyle (getInheritedWidgetOfExactType —
+  /// no dependency is registered, safe outside build).
+  int? _effectiveTextColor(Element element) {
+    return _probeSubtree(element, (Element child) {
+      final widget = child.widget;
+      TextStyle? style;
+      if (widget is Text) {
+        style = widget.style;
+      } else if (widget is RichText) {
+        style = widget.text.style;
+      } else {
+        return null;
+      }
+      final color =
+          style?.color ??
+          child.getInheritedWidgetOfExactType<DefaultTextStyle>()?.style.color;
+      return color?.toARGB32();
+    });
+  }
+
+  /// Heuristic selection for CUSTOM segments/chips that expose no Semantics:
+  /// in a horizontal run of >=3 adjacent same-kind tappables, when exactly
+  /// one label color differs from an otherwise uniform rest, that outlier is
+  /// the active segment. Applies only where nothing better is known
+  /// (selected == null), so real widget/semantics state always wins.
+  List<ScoutNode> _inferSegmentSelection(List<ScoutNode> nodes) {
+    final candidates = <int>[
+      for (var i = 0; i < nodes.length; i++)
+        if ((nodes[i].kind == 'btn' || nodes[i].kind == 'tap') &&
+            nodes[i].selected == null &&
+            nodes[i].rect != null &&
+            nodes[i].textColor != null)
+          i,
+    ];
+    if (candidates.length < 3) return nodes;
+    final result = [...nodes];
+    final used = <int>{};
+    for (final seed in candidates) {
+      if (used.contains(seed)) continue;
+      final group = <int>[
+        for (final other in candidates)
+          if (!used.contains(other) &&
+              nodes[other].kind == nodes[seed].kind &&
+              (nodes[other].rect!.top - nodes[seed].rect!.top).abs() <= 6 &&
+              (nodes[other].rect!.height - nodes[seed].rect!.height).abs() <= 6)
+            other,
+      ];
+      group.forEach(used.add);
+      if (group.length < 3) continue;
+      group.sort((a, b) => nodes[a].rect!.left.compareTo(nodes[b].rect!.left));
+      // Segments sit shoulder to shoulder; a spread-out row (toolbar corners)
+      // must not be treated as one control.
+      var adjacent = true;
+      for (var i = 1; i < group.length; i++) {
+        final previous = nodes[group[i - 1]].rect!;
+        final current = nodes[group[i]].rect!;
+        final gap = current.left - previous.right;
+        if (gap < -8 || gap > previous.height * 2) {
+          adjacent = false;
+          break;
+        }
+      }
+      if (!adjacent) continue;
+      final counts = <int, int>{};
+      for (final index in group) {
+        counts.update(nodes[index].textColor!, (n) => n + 1, ifAbsent: () => 1);
+      }
+      if (counts.length != 2) continue;
+      final outliers = [
+        for (final entry in counts.entries)
+          if (entry.value == 1) entry.key,
+      ];
+      if (outliers.length != 1) continue;
+      for (final index in group) {
+        result[index] = nodes[index].withSelected(
+          nodes[index].textColor == outliers.single,
+        );
+      }
+    }
+    return result;
   }
 
   String? _kindFor(Widget widget, Element element) {
@@ -654,11 +740,17 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return rect;
   }
 
-  Offset? _pointForTarget(String? target, Map<String, String> params) {
+  Offset? _pointForTarget(
+    String? target,
+    Map<String, String> params, {
+    ScoutSnapshot? snapshot,
+  }) {
     final explicitPoint = _pointFromParams(params);
     if (explicitPoint != null) return explicitPoint;
     if (target == null || target.isEmpty) return null;
-    final node = _snapshot().findNode(target);
+    // Reuse the caller's snapshot when it has one — building a fresh one just
+    // to resolve a handle doubles the per-action tree-walk cost.
+    final node = (snapshot ?? _snapshot()).findNode(target);
     return node?.suggestedTapPoint;
   }
 

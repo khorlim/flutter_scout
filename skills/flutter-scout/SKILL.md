@@ -87,7 +87,7 @@ flutter-scout inspect --sections textTargets,scrollables
 
 Prefer `inspect --brief` for orientation: it returns the screen name, visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, and errors at a fraction of the full payload size. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,annotations` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
 
-Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it.
+Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it. For CUSTOM segments/chips with no semantics, Scout infers selection heuristically: in a run of 3+ adjacent same-kind tappables where exactly one label color differs, that outlier is marked selected — treat inferred values as strong hints, not ground truth.
 
 Interactables can also carry `altIds` — alternate handles from the other label sources (icon glyph, accessibility label, contained text). When a primary label drifts between snapshots (an async-loaded username appearing after first paint), any altId still resolves the same node, so recorded handles and replays keep working.
 
@@ -207,9 +207,21 @@ flutter-scout wait-for --gone "Loading"
 flutter-scout wait-for --target btn.menu
 flutter-scout wait-for --selected tap.t_c
 flutter-scout wait-for --screen SettingScreen --field field.name=QA
+flutter-scout wait-for --view "Admin"       # viewSignature contains (same-route view swaps)
 ```
 
 Text matching is case-insensitive; success returns `result:"met"` with `waitedMs`, timeout fails with `wait_for_timeout` (including final `visibleText`), and a fresh blocking error exits early with `blocking_error_during_wait`.
+
+For exploratory loops (inspect, think, act, think), run the **`serve` daemon** instead of separate CLI invocations — one persistent VM connection, each step a ~ms HTTP call instead of a fresh process:
+
+```bash
+flutter-scout --app my-app serve --port-file /tmp/scout.port &
+curl "localhost:$(cat /tmp/scout.port)/run?cmd=inspect%20--brief"
+curl "localhost:$(cat /tmp/scout.port)/run" --data 'tap btn.save --expect-text Saved'
+curl "localhost:$(cat /tmp/scout.port)/stop"
+```
+
+Each `/run` response carries `exitCode` and the command's JSON `output`.
 
 **Chain whole flows with `batch`** — one process, one VM connection, no startup overhead or timing gaps between steps; stops at the first failed step unless `--keep-going`:
 
@@ -217,6 +229,8 @@ Text matching is case-insensitive; success returns `result:"met"` with `waitedMs
 flutter-scout batch 'tap btn.admin --expect-text Setting; tap-text Setting --expect-text Branding; tap-text "T&C"; tap btn.save --expect-text Saved'
 flutter-scout batch --file /tmp/flow.scout   # one command per line, # comments
 ```
+
+The batch summary reports `failed` (step index, cmd, exitCode), per-step `stepTimingsMs`, and `totalMs` — read it to pinpoint what broke without re-running. After a successful interactive session, `flutter-scout export-batch -o flow.scout` converts the recorded actions (including any `--expect-*` gates you used) into a replayable batch script — the modern replacement for `replay`.
 
 **Address sessions by name from anywhere** — `launch`/`ensure --name <label>` registers the session globally; any command then takes `--app <label>` without cd'ing to the project, and `flutter-scout apps` lists registered sessions:
 

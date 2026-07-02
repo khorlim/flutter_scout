@@ -406,6 +406,130 @@ void main() {
       // Unknown name fails with the registered names listed.
       expect(await cli.run(['--app', 'nope', 'status']), 1);
     });
+
+    test(
+      'stop --clear-session prunes registry entries for the session',
+      () async {
+        final temp = await Directory.systemTemp.createTemp('scout_prune_');
+        addTearDown(() => temp.delete(recursive: true));
+        FlutterScoutCli.debugRegistryPathOverride = p.join(
+          temp.path,
+          'registry.json',
+        );
+        addTearDown(() => FlutterScoutCli.debugRegistryPathOverride = null);
+        final sessionDir = Directory(p.join(temp.path, 'proj'))
+          ..createSync(recursive: true);
+        final otherDir = Directory(p.join(temp.path, 'other'))
+          ..createSync(recursive: true);
+        File(FlutterScoutCli.debugRegistryPathOverride!).writeAsStringSync(
+          jsonEncode({'gone': sessionDir.path, 'kept': otherDir.path}),
+        );
+
+        final previous = Directory.current;
+        addTearDown(() => Directory.current = previous);
+        Directory.current = sessionDir;
+        expect(await FlutterScoutCli().run(['stop', '--clear-session']), 0);
+        final registry =
+            jsonDecode(
+                  File(
+                    FlutterScoutCli.debugRegistryPathOverride!,
+                  ).readAsStringSync(),
+                )
+                as Map<String, dynamic>;
+        expect(registry.containsKey('gone'), isFalse);
+        expect(registry['kept'], otherDir.path);
+      },
+    );
+  });
+
+  group('export-batch', () {
+    test('reconstructs recorded actions as a runnable script', () async {
+      await _withTempCwd(() async {
+        final sessionDir = Directory('.flutter_scout')..createSync();
+        File(p.join(sessionDir.path, 'session.json')).writeAsStringSync(
+          jsonEncode([
+            {'cmd': 'tap', 'target': 'btn.save', 'waitMs': '1500'},
+            {
+              'cmd': 'tap-text',
+              'text': 'T&C',
+              'waitMs': '800',
+              'expectText': 'Saved',
+              'expectTimeoutMs': '5000',
+            },
+            {'cmd': 'input', 'target': 'field.name', 'value': 'QA name'},
+            {'cmd': 'scroll', 'direction': 'down', 'distance': '300'},
+            {'cmd': 'bogus-thing', 'x': '1'},
+          ]),
+        );
+        final out = 'flow.scout';
+        expect(await FlutterScoutCli().run(['export-batch', '-o', out]), 0);
+        final script = File(out).readAsStringSync();
+        final lines = script.trim().split('\n');
+        expect(lines, [
+          'tap btn.save',
+          "tap-text 'T&C' --wait-ms 800 --expect-text Saved",
+          "input --target field.name 'QA name'",
+          'scroll down --distance 300',
+        ]);
+        // Round-trips through the batch splitter.
+        expect(FlutterScoutCli.splitCommandLine(lines[1]), [
+          'tap-text',
+          'T&C',
+          '--wait-ms',
+          '800',
+          '--expect-text',
+          'Saved',
+        ]);
+      });
+    });
+  });
+
+  group('serve', () {
+    test('daemon runs commands over HTTP and stops on /stop', () async {
+      final temp = await Directory.systemTemp.createTemp('scout_serve_');
+      addTearDown(() => temp.delete(recursive: true));
+      FlutterScoutCli.debugRegistryPathOverride = p.join(
+        temp.path,
+        'registry.json',
+      );
+      addTearDown(() => FlutterScoutCli.debugRegistryPathOverride = null);
+      final portFile = p.join(temp.path, 'port');
+
+      final cli = FlutterScoutCli();
+      final serving = cli.run(['serve', '--port-file', portFile]);
+      // Wait for the daemon to write its bound port.
+      var waited = 0;
+      while (!File(portFile).existsSync() && waited < 100) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        waited++;
+      }
+      final port = int.parse(File(portFile).readAsStringSync());
+      final client = HttpClient();
+      addTearDown(client.close);
+
+      Future<Map<String, dynamic>> get(String pathAndQuery) async {
+        final request = await client.getUrl(
+          Uri.parse('http://127.0.0.1:$port$pathAndQuery'),
+        );
+        final response = await request.close();
+        final body = await utf8.decoder.bind(response).join();
+        return jsonDecode(body) as Map<String, dynamic>;
+      }
+
+      final health = await get('/health');
+      expect(health['ok'], isTrue);
+
+      final apps = await get('/run?cmd=apps');
+      expect(apps['exitCode'], 0);
+      expect(apps['output'], contains('sessions'));
+
+      final bogus = await get('/run?cmd=serve');
+      expect(bogus['exitCode'], 1);
+
+      final stop = await get('/stop');
+      expect(stop['stopping'], isTrue);
+      expect(await serving, 0);
+    });
   });
 
   group('helper protocol diagnostics', () {

@@ -86,6 +86,11 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       degradedNodes += 1;
       compactNodes = nodes;
     }
+    try {
+      compactNodes = _inferSegmentSelection(compactNodes);
+    } catch (_) {
+      // Inference is best-effort; never let it cost the snapshot.
+    }
     final interactables = compactNodes
         .where((node) => node.kind != 'text' && node.kind != 'field')
         .toList(growable: false);

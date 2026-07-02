@@ -30,6 +30,12 @@ extension _CliActions on FlutterScoutCli {
         help: 'After the action, wait until the screen name equals this.',
       )
       ..addOption(
+        'expect-view',
+        help:
+            'After the action, wait until the viewSignature contains this '
+            '(same-route view swaps).',
+      )
+      ..addOption(
         'expect-field',
         help: 'After the action, wait until <handle>=<value> holds.',
       )
@@ -53,6 +59,7 @@ extension _CliActions on FlutterScoutCli {
       if (opt('expect-selected') != null)
         'expectSelected': opt('expect-selected')!,
       if (opt('expect-screen') != null) 'expectScreen': opt('expect-screen')!,
+      if (opt('expect-view') != null) 'expectView': opt('expect-view')!,
       if (opt('expect-field') != null) 'expectField': opt('expect-field')!,
     };
     if (params.isNotEmpty) {
@@ -111,6 +118,12 @@ extension _CliActions on FlutterScoutCli {
       )
       ..addOption('screen', help: 'Wait until the screen name equals this.')
       ..addOption(
+        'view',
+        help:
+            'Wait until the viewSignature contains this (same-route view '
+            'swaps like tab bodies).',
+      )
+      ..addOption(
         'field',
         help: 'Wait until <handle>=<value> holds for a text field.',
       )
@@ -132,6 +145,7 @@ extension _CliActions on FlutterScoutCli {
       if (opt('target') != null) 'target': opt('target')!,
       if (opt('selected') != null) 'selected': opt('selected')!,
       if (opt('screen') != null) 'screen': opt('screen')!,
+      if (opt('view') != null) 'view': opt('view')!,
       if (opt('field') != null) 'field': opt('field')!,
     };
     if (conditions.isEmpty) {
@@ -254,7 +268,7 @@ extension _CliActions on FlutterScoutCli {
     return _callAndPrint(
       'ext.flutter_scout.input',
       params: params,
-      record: {'cmd': 'input', 'target': target, 'value': value},
+      record: {'cmd': 'input', ...params},
       compact: !parsed.flag('verbose'),
       callTimeout: _actionCallTimeout(parsed, params),
     );
@@ -351,7 +365,7 @@ extension _CliActions on FlutterScoutCli {
     return _callAndPrint(
       'ext.flutter_scout.fill',
       params: params,
-      record: {'cmd': 'fill', 'values': jsonDecode(raw)},
+      record: {'cmd': 'fill', ...params},
       compact: !parsed.flag('verbose'),
       callTimeout: _actionCallTimeout(parsed, params),
     );

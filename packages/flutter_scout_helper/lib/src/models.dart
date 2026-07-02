@@ -201,6 +201,7 @@ class ScoutNode {
     required this.confidence,
     this.selected,
     this.altIds = const [],
+    this.textColor,
   });
 
   final String id;
@@ -225,6 +226,11 @@ class ScoutNode {
   /// determinable from the widget or its semantics; null when unknown. Lets
   /// agents tell "tap did nothing" from "already on that tab".
   final bool? selected;
+
+  /// Effective ARGB color of the node's first text descendant, captured for
+  /// segment-selection inference (see _inferSegmentSelection). Internal —
+  /// not serialized.
+  final int? textColor;
 
   /// Alternate handles derived from other label sources (icon glyph name,
   /// accessibility label, contained text). The primary id can drift between
@@ -264,6 +270,34 @@ class ScoutNode {
       confidence: confidence ?? this.confidence,
       selected: selected,
       altIds: altIds,
+      textColor: textColor,
+    );
+  }
+
+  /// Copy with an explicit selection value (inference result). copyWith
+  /// cannot express "set to null vs keep", so this is a dedicated setter-copy.
+  ScoutNode withSelected(bool? value) {
+    return ScoutNode(
+      id: id,
+      baseId: baseId,
+      ordinal: ordinal,
+      fallbackId: fallbackId,
+      kind: kind,
+      label: label,
+      value: this.value,
+      validationMessage: validationMessage,
+      widgetType: widgetType,
+      key: key,
+      rect: rect,
+      visibleRect: visibleRect,
+      visibleFraction: visibleFraction,
+      suggestedTapPoint: suggestedTapPoint,
+      hitTestable: hitTestable,
+      enabled: enabled,
+      confidence: confidence,
+      selected: value,
+      altIds: altIds,
+      textColor: textColor,
     );
   }
 

@@ -795,6 +795,13 @@ void main() {
       runtime.debugWaitForConditionsMet({'field': 'field.name=abc'}),
       isFalse,
     );
+    final signature = runtime.debugSnapshot().viewSignature;
+    final fragment = signature.split(' | ').first;
+    expect(runtime.debugWaitForConditionsMet({'view': fragment}), isTrue);
+    expect(
+      runtime.debugWaitForConditionsMet({'view': 'no-such-view'}),
+      isFalse,
+    );
   });
 
   testWidgets('action expectations gate in the same call', (tester) async {
@@ -873,6 +880,76 @@ void main() {
     expect(admin.viewSignature, isNot(operation.viewSignature));
     expect(admin.visibleTextHash, isNot(operation.visibleTextHash));
     expect(admin.summaryJson()['viewSignature'], admin.viewSignature);
+  });
+
+  testWidgets('segment selection is inferred from the odd text color', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    Widget segment(String label, Color color) => GestureDetector(
+      onTap: () {},
+      child: SizedBox(
+        width: 90,
+        height: 32,
+        child: Center(
+          child: Text(label, style: TextStyle(color: color)),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              // Custom segmented control: active segment has a distinct color.
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  segment('AllX', Colors.grey),
+                  segment('ActiveX', Colors.blue),
+                  segment('InactiveX', Colors.grey),
+                ],
+              ),
+              const SizedBox(height: 60),
+              // Spread-out row of same-kind buttons: adjacency gate must
+              // prevent inference (corner toolbar false positive).
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  segment('LeftX', Colors.grey),
+                  segment('MidX', Colors.blue),
+                  segment('RightX', Colors.grey),
+                ],
+              ),
+              const SizedBox(height: 60),
+              // Uniform colors: nothing to infer.
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  segment('OneY', Colors.grey),
+                  segment('TwoY', Colors.grey),
+                  segment('ThreeY', Colors.grey),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    bool? selectedOf(String id) =>
+        snapshot.interactables.firstWhere((node) => node.id == id).selected;
+    expect(selectedOf('tap.activex'), isTrue);
+    expect(selectedOf('tap.allx'), isFalse);
+    expect(selectedOf('tap.inactivex'), isFalse);
+    // Spread-out row: no inference.
+    expect(selectedOf('tap.midx'), isNull);
+    expect(selectedOf('tap.leftx'), isNull);
+    // Uniform row: no inference.
+    expect(selectedOf('tap.oney'), isNull);
   });
 
   testWidgets('tap-text suggestions surface near matches', (tester) async {

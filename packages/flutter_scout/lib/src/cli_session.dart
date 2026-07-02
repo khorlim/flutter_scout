@@ -548,12 +548,14 @@ extension _CliSession on FlutterScoutCli {
     }
     _deleteFileIfExists(_pidFile);
     _deleteFileIfExists(_vmLogListenerPidFile);
+    var registryPruned = const <String>[];
     if (parsed.flag('clear-session')) {
       _clearVmUriFile();
       _deleteFileIfExists(_deviceFile);
       _deleteFileIfExists(_deviceInfoFile);
       _deleteFileIfExists(_sessionFile);
       _deleteFileIfExists(_sessionMetaFile);
+      registryPruned = _pruneScoutRegistryFor(Directory.current.path);
     }
     stdout.writeln(
       jsonEncode({
@@ -570,6 +572,7 @@ extension _CliSession on FlutterScoutCli {
         'pidFileCleared': true,
         'vmLogListenerPidFileCleared': true,
         if (parsed.flag('clear-session')) 'sessionCleared': true,
+        if (registryPruned.isNotEmpty) 'registryPruned': registryPruned,
       }),
     );
     return 0;

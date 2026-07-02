@@ -16,7 +16,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
       Offset? point;
       ScoutNode? node;
       if (target != null && target.isNotEmpty) {
-        node = _snapshot().findNode(target);
+        // Resolve against the snapshot we just took — a second full tree walk
+        // here doubled the cost of every targeted tap.
+        node = before.findNode(target);
         point = node?.suggestedTapPoint;
       } else if (x != null && y != null) {
         point = Offset(x, y);
@@ -274,7 +276,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final before = _snapshot();
       final target = params['target'];
       final durationMs = int.tryParse(params['durationMs'] ?? '') ?? 600;
-      final point = _pointForTarget(target, params);
+      final point = _pointForTarget(target, params, snapshot: before);
       if (point == null) {
         return _fail(
           'target_not_found',
@@ -871,6 +873,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     'target',
     'selected',
     'screen',
+    'view',
     'field',
   ];
 
@@ -934,6 +937,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
     }
     final screen = param('screen');
     if (screen != null && snapshot.screen != screen) return false;
+    final view = param('view');
+    if (view != null &&
+        !snapshot.viewSignature.toLowerCase().contains(view.toLowerCase())) {
+      return false;
+    }
     final field = param('field');
     if (field != null) {
       final separator = field.indexOf('=');
@@ -1106,7 +1114,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
     required Map<String, String> params,
   }) async {
     final before = _snapshot();
-    final start = _pointForTarget(params['target'], params) ?? _screenCenter();
+    final start =
+        _pointForTarget(params['target'], params, snapshot: before) ??
+        _screenCenter();
     final explicitEnd = _pointFromParams(params, prefix: 'to');
     final delta = explicitEnd == null
         ? _dragDelta(direction, distance, scrollGesture: scrollGesture)

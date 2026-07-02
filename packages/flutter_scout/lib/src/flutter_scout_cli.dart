@@ -10,6 +10,7 @@ import 'package:vm_service/vm_service.dart';
 import 'package:vm_service/vm_service_io.dart';
 
 part 'cli_batch.dart';
+part 'cli_serve.dart';
 part 'cli_models.dart';
 part 'cli_session.dart';
 part 'cli_annotations.dart';
@@ -28,7 +29,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 3;
+  static const int expectedHelperProtocolVersion = 4;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -84,6 +85,19 @@ class FlutterScoutCli {
     final tail = current.toString().trim();
     if (tail.isNotEmpty && !tail.startsWith('#')) commands.add(tail);
     return commands;
+  }
+
+  /// Quotes one argument for a batch script so splitCommandLine reproduces
+  /// it exactly: bare when safe, single-quoted when possible, double-quoted
+  /// with escapes otherwise.
+  static String quoteBatchArg(String value) {
+    if (value.isEmpty) return "''";
+    if (RegExp(r'^[A-Za-z0-9._\-=/:@,+]+$').hasMatch(value)) return value;
+    if (!value.contains("'") && !value.contains('\n') && !value.contains(';')) {
+      return "'$value'";
+    }
+    final escaped = value.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+    return '"$escaped"';
   }
 
   /// Shell-like argv splitter for one batch command: whitespace separates,
@@ -223,6 +237,8 @@ class FlutterScoutCli {
         'wait' => _wait(rest),
         'wait-for' => _waitFor(rest),
         'batch' => _batch(rest),
+        'export-batch' => _exportBatch(rest),
+        'serve' => _serve(rest),
         'apps' => _apps(),
         'reload' => _reload(rest),
         'restart' => _restart(rest),
@@ -1540,6 +1556,37 @@ void _registerScoutSession(String name, String directory) {
     );
   } catch (_) {
     // Registration is best-effort; the session still works from its own cwd.
+  }
+}
+
+/// Drops registry names pointing at [directory] (a cleared session). Returns
+/// the pruned names.
+List<String> _pruneScoutRegistryFor(String directory) {
+  try {
+    // getcwd resolves symlinks (macOS /var -> /private/var) while registry
+    // entries keep the path as given; compare fully-resolved paths.
+    String resolved(String path) {
+      try {
+        return Directory(path).resolveSymbolicLinksSync();
+      } catch (_) {
+        return p.normalize(p.absolute(path));
+      }
+    }
+
+    final target = resolved(directory);
+    final registry = _readScoutRegistry();
+    final pruned = [
+      for (final entry in registry.entries)
+        if (resolved(entry.value) == target) entry.key,
+    ];
+    if (pruned.isEmpty) return const [];
+    pruned.forEach(registry.remove);
+    _scoutRegistryFile.writeAsStringSync(
+      const JsonEncoder.withIndent('  ').convert(registry),
+    );
+    return pruned;
+  } catch (_) {
+    return const [];
   }
 }
 

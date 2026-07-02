@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: CLI package — analyze & test
+        working-directory: packages/flutter_scout
+        run: |
+          dart pub get
+          dart analyze --fatal-infos
+          dart test
+
+      - name: Helper package — analyze & test
+        working-directory: packages/flutter_scout_helper
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - name: Test app — analyze & test
+        working-directory: apps/scout_test_app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - name: Formatting
+        run: dart format --set-exit-if-changed packages/flutter_scout/lib packages/flutter_scout/test packages/flutter_scout_helper/lib packages/flutter_scout_helper/test
