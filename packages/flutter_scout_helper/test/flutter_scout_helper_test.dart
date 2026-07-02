@@ -783,4 +783,45 @@ void main() {
     expect(marked!.sublist(0, 4), equals(<int>[0x89, 0x50, 0x4E, 0x47]));
     expect(marked, isNot(equals(plain)));
   });
+
+  testWidgets(
+    'deferred-frame drain completes a route animation without vsync',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      final navKey = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: navKey,
+          home: const Scaffold(body: Center(child: Text('page one'))),
+        ),
+      );
+      await tester.pump();
+
+      // Background the window: the embedder stops delivering vsync, so the
+      // route transition below would freeze at its first frame forever.
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      addTearDown(() {
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+      });
+      expect(tester.binding.framesEnabled, isFalse);
+
+      navKey.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Center(child: Text('page two'))),
+        ),
+      );
+
+      final runtime = FlutterScoutHelper.debugRuntime;
+      // One clock-frozen pump is NOT enough — the transition needs elapsed
+      // time. The drain fabricates an advancing clock until it settles.
+      await tester.runAsync(() => runtime.debugDrainDeferredFrames());
+
+      final snapshot = runtime.debugSnapshot();
+      expect(snapshot.visibleText, contains('page two'));
+      // Transition fully completed: no tickers left animating.
+      expect(tester.binding.transientCallbackCount, 0);
+    },
+  );
 }

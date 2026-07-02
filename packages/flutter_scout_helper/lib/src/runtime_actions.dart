@@ -697,6 +697,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       while (true) {
         polls += 1;
         _pumpPendingFrame();
+        await _drainDeferredFrames(budget: Duration(milliseconds: pollMs));
         final snapshot = _snapshot();
         if (_waitForConditionsMet(snapshot: snapshot, text: text, gone: gone)) {
           return _ok({
@@ -789,12 +790,53 @@ extension _RuntimeActions on FlutterScoutRuntime {
     binding.handleDrawFrame();
   }
 
+  /// Runs deferred frames WITH AN ADVANCING CLOCK while the embedder delivers
+  /// no vsync (backgrounded/occluded desktop window), so in-flight animations
+  /// — route pushes, flips, tab transitions — progress to completion instead
+  /// of freezing on their first frame. [_pumpPendingFrame] alone cannot do
+  /// this: `handleBeginFrame(null)` reuses the previous raw timestamp, so
+  /// tickers see zero elapsed time no matter how many frames are pumped.
+  ///
+  /// The fabricated clock is anchored to real elapsed time on top of the last
+  /// engine timestamp, so it always lags the engine's own clock — if the
+  /// window regains focus mid-drain, the next real vsync timestamp is still
+  /// monotonically ahead and ticker timelines stay consistent.
+  ///
+  /// Self-terminates when no more frames are scheduled (animations finished),
+  /// when real vsync resumes, or when [budget] runs out (indeterminate
+  /// spinners schedule frames forever; the budget keeps waits bounded).
+  Future<void> _drainDeferredFrames({
+    Duration budget = const Duration(milliseconds: 1500),
+  }) async {
+    final binding = WidgetsBinding.instance;
+    if (binding.framesEnabled) return;
+    final base = binding.currentSystemFrameTimeStamp;
+    final stopwatch = Stopwatch()..start();
+    // `hasScheduledFrame` alone cannot gate this loop: scheduleFrame() is a
+    // no-op while framesEnabled is false, so it stays false on a backgrounded
+    // window even mid-animation. Active tickers (route transitions, flips)
+    // are visible as transient callbacks instead.
+    while (!binding.framesEnabled &&
+        (binding.hasScheduledFrame || binding.transientCallbackCount > 0) &&
+        binding.schedulerPhase == SchedulerPhase.idle &&
+        stopwatch.elapsed < budget) {
+      binding.handleBeginFrame(
+        base + stopwatch.elapsed + const Duration(milliseconds: 1),
+      );
+      binding.handleDrawFrame();
+      await Future<void>.delayed(const Duration(milliseconds: 16));
+    }
+  }
+
   Future<void> _waitForFrame() async {
     await WidgetsBinding.instance.endOfFrame.timeout(
       const Duration(milliseconds: 500),
       onTimeout: () {},
     );
     _pumpPendingFrame();
+    // If an animation is mid-flight on a backgrounded window, let it finish
+    // (bounded) so the snapshot reads settled UI, not a frozen transition.
+    await _drainDeferredFrames(budget: const Duration(milliseconds: 400));
   }
 
   Future<bool> _waitStable({
@@ -814,8 +856,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
       );
       // A backgrounded desktop window receives no vsync, so the awaited frame
       // may never have run. Drive it ourselves so the stability check and the
-      // snapshot that follows reflect post-action state.
+      // snapshot that follows reflect post-action state — including running
+      // any in-flight animation to completion with an advancing clock, or it
+      // would keep `hasScheduledFrame` true forever and never look stable.
       _pumpPendingFrame();
+      await _drainDeferredFrames(budget: frameTimeout);
       if (!WidgetsBinding.instance.hasScheduledFrame) {
         quietFrames++;
         if (quietFrames >= 2) return true;

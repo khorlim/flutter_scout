@@ -182,6 +182,13 @@ class FlutterScoutRuntime {
   bool debugWaitForConditionsMet({String? text, String? gone}) =>
       _waitForConditionsMet(snapshot: _snapshot(), text: text, gone: gone);
 
+  /// Test-only: run deferred frames with an advancing clock, as the
+  /// observation windows do on a backgrounded desktop window.
+  @visibleForTesting
+  Future<void> debugDrainDeferredFrames({
+    Duration budget = const Duration(milliseconds: 1500),
+  }) => _drainDeferredFrames(budget: budget);
+
   void _installErrorHooks() {
     _previousFlutterError = FlutterError.onError;
     FlutterError.onError = (FlutterErrorDetails details) {
