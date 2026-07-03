@@ -46,26 +46,25 @@ flutter-scout <command>
 1. Prefer reusing an existing simulator app:
 
 ```bash
-flutter-scout ensure --device <simulator-id> --project <flutter-app-path>
+flutter-scout ensure --device <simulator-id> --project <flutter-app-path> --name add-member
 flutter-scout attach --device <simulator-id>
 flutter-scout attach --debug-url <vm-service-url>
 ```
 
-`ensure` is the default for agent loops: it reuses a ready Scout VM service when possible and launches only when needed.
+`ensure` is the default for agent loops: it reuses a ready Scout VM service when possible and launches only when needed. Always pass `--name` (see below) — `attach` inherits the session that was named at launch/ensure, so it needs no name of its own.
 
 2. Launch directly only when you intentionally need a new Scout-owned Flutter run:
 
 ```bash
-flutter-scout launch --device <simulator-id> --project <flutter-app-path>
+flutter-scout launch --device <simulator-id> --project <flutter-app-path> --name add-member
 ```
 
-To tell several concurrent sessions apart (for example one debug window per worktree on macOS/desktop), pass `--name <label>`. Scout injects it as a `--dart-define` and the in-app helper paints a small bottom-left badge with that label (debug builds only); tapping the badge collapses it to a dot so it never blocks app UI:
+**Always name the session — never run the app unnamed.** Pass `--name <label>` on every `launch`/`ensure`, deriving the label from what you are working on *right now*: a short kebab-case slug of the feature or task in focus. Working on an add-member flow → `--name add-member`; fixing supplier search → `--name supplier-search`. If no single feature is in focus, fall back to the current git branch name (e.g. `git rev-parse --abbrev-ref HEAD`). Setting it on every run is worth it because the label:
 
-```bash
-flutter-scout launch --device macos --project <flutter-app-path> --name feature-a
-```
+- **registers the session in the global registry**, so any later command can address it with `--app add-member` from any directory without cd'ing into the project (`flutter-scout apps` lists the registered sessions);
+- **paints a small labelled badge** on the debug build (bottom-left, debug only), so concurrent windows/worktrees — one per feature — stay distinguishable at a glance. Tapping the badge collapses it to a dot so it never blocks app UI.
 
-`--name` works on both `launch` and `ensure`.
+`--name` works on both `launch` and `ensure`; Scout injects it as a `--dart-define`.
 
 Launch validates the exact requested device and emits compact progress events. If launch was interrupted or you need to stop a Scout-owned run:
 
@@ -221,7 +220,15 @@ curl "localhost:$(cat /tmp/scout.port)/run" --data 'tap btn.save --expect-text S
 curl "localhost:$(cat /tmp/scout.port)/stop"
 ```
 
-Each `/run` response carries `exitCode` and the command's JSON `output`.
+Each `/run` response carries `exitCode` and the command's JSON `output`. Always `/stop` the daemon when the loop ends — a leaked daemon holds a VM connection open, and a later `stop`/relaunch orphans it. Don't spin up `serve` for a single command or a 2–3 step known sequence; the daemon lifecycle costs more than it saves there.
+
+**Choosing between `serve`, `batch`, and plain commands** — the deciding factor is whether you know the sequence in advance, not how many steps it is. Ask: *"Could I write this whole sequence to a file right now, before running anything?"*
+
+- **No — each step depends on what the previous step showed** (you're discovering the app; your own reasoning is the branch): use **`serve`**. `batch` is a fixed list and cannot branch on results.
+- **Yes, and it's more than ~3 steps** (verification flow, setup, replay): use **`batch`** — simpler than a daemon, and its one-shot summary reports failures and timings.
+- **Yes, and it's 1–3 steps**: just run the commands directly.
+
+So: discovering → `serve`; scripted → `batch`; one-off → a plain command. Once a `serve` exploration is done, `export-batch` freezes it into a `batch` script (the sequence is now known).
 
 **Chain whole flows with `batch`** — one process, one VM connection, no startup overhead or timing gaps between steps; stops at the first failed step unless `--keep-going`:
 
@@ -284,7 +291,8 @@ Replay should be the first check after changing code for a flow you already test
 
 ```bash
 flutter-scout status
-flutter-scout ensure --device <simulator-id> --project <flutter-app-path>
+flutter-scout ensure --device <simulator-id> --project <flutter-app-path> --name add-member
+flutter-scout launch --device <simulator-id> --project <flutter-app-path> --name add-member
 flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
 flutter-scout annotations list
 flutter-scout annotations wait --timeout 600 --poll 1000
@@ -347,10 +355,12 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Treat Flutter Scout as eyes and hands, not a QA judge.
 - Prefer `attach` to preserve human-in-the-loop state.
 - Prefer `ensure` over repeated `launch`; repeated full launch causes slow native rebuilds.
+- Always pass `--name <feature>` when running the app via `launch`/`ensure` — never run unnamed. Use a kebab-case slug of the feature/task currently in focus (e.g. `add-member`), or the current git branch when no single feature is. Then address that session anywhere with `--app <feature>`.
 - Start with `inspect --brief`; use full `inspect` or `--sections` only when the brief payload is not enough. Avoid blind screenshots — but when you do need a visual map, prefer `screenshot --annotated` (numbered marks + handle legend) over a plain screenshot.
 - Treat `result:"already_selected"` as success-no-op (the tab/toggle was already in that state); never retry it.
 - Prefer `--expect-*` flags on actions over separate wait-for calls: act + gate in one VM call, no inter-command gap for timing-sensitive UI to drift through. Use standalone `wait-for` (text/gone/target/selected/screen/field) when no action precedes the wait.
-- Chain multi-step flows with `batch` (one process, one connection) instead of separate CLI invocations; use `--app <name>` to address a named session from any directory.
+- Pick the execution mode by whether the sequence is known in advance: discovering the app step-by-step (each action depends on the last snapshot) → run a `serve` daemon and `/stop` it when done; a known multi-step flow → `batch` (one process, one connection); a one-off → a plain command. `batch` cannot branch on results — that is what `serve` is for.
+- Use `--app <name>` to address a named session from any directory; `export-batch` after a `serve` exploration to freeze it into a replayable `batch` script.
 - Treat non-zero `degradedNodes` as partial eyes: the listed nodes are trustworthy, but a few elements could not be read.
 - After Dart-only edits, run `reload` or `restart` before replaying flows.
 - Prefer `fill` for real text fields, but do not use it for custom pickers, keypads, steppers, calendars, or segmented controls.
