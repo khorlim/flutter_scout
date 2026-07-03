@@ -10,6 +10,60 @@ const String _scoutInstanceLabel = String.fromEnvironment(
   'FLUTTER_SCOUT_INSTANCE',
 );
 
+/// Resolved badge palette for the current session: a distinct hue derived from
+/// the instance label, kept dark enough that the light ink text stays readable.
+class _ScoutSessionPalette {
+  const _ScoutSessionPalette({
+    required this.fill,
+    required this.fillDark,
+    required this.foreground,
+    required this.accent,
+  });
+
+  /// Top-of-gradient fill; [fillDark] is the darker bottom stop.
+  final Color fill;
+  final Color fillDark;
+
+  /// Text/icon colour — light ink; [fill] is kept dark enough that it always
+  /// clears WCAG AA contrast, on every hue.
+  final Color foreground;
+
+  /// Brighter same-hue tint used for the rim border and glow.
+  final Color accent;
+}
+
+/// Each `--name`d session gets its own badge colour so overlapping worktree
+/// runs are told apart at a glance. The hue is a stable hash of the label (same
+/// session → same colour across relaunches, no flicker on hot reload); only the
+/// hue varies. Saturation/lightness are pinned so the fill stays dark enough
+/// that the light ink text clears WCAG AA on every hue.
+final _ScoutSessionPalette _scoutSessionPalette = _deriveScoutSessionPalette(
+  _scoutInstanceLabel,
+);
+
+_ScoutSessionPalette _deriveScoutSessionPalette(String label) {
+  // FNV-1a over code units: deterministic across runs and platforms, unlike
+  // String.hashCode, so a given name always maps to the same hue.
+  var hash = 0x811c9dc5;
+  for (final unit in label.codeUnits) {
+    hash = (hash ^ unit) & 0xffffffff;
+    hash = (hash * 0x01000193) & 0xffffffff;
+  }
+  final hue = (hash % 360).toDouble();
+  // Fill lightness (~0.26) is low enough that light ink text clears WCAG AA
+  // (>=4.5:1) on every hue — verified worst case ~4.9:1 in the yellow band — so
+  // the text colour never needs to flip, keeping the badge visually consistent.
+  final fill = HSLColor.fromAHSL(1, hue, 0.64, 0.26).toColor();
+  final fillDark = HSLColor.fromAHSL(1, hue, 0.66, 0.18).toColor();
+  final accent = HSLColor.fromAHSL(1, hue, 0.90, 0.64).toColor();
+  return _ScoutSessionPalette(
+    fill: fill,
+    fillDark: fillDark,
+    foreground: ScoutColors.ink,
+    accent: accent,
+  );
+}
+
 /// A small HUD badge pinned to the bottom-left that names the running Scout
 /// session. Renders nothing unless a `--name` label was passed, so it stays
 /// invisible for ordinary single-instance runs. Tapping toggles between the
@@ -28,8 +82,8 @@ class _ScoutInstanceBadgeState extends State<_ScoutInstanceBadge> {
   Widget build(BuildContext context) {
     if (_scoutInstanceLabel.isEmpty) return const SizedBox.shrink();
     return Positioned(
-      left: ScoutSpace.m,
-      bottom: MediaQuery.paddingOf(context).bottom + ScoutSpace.m,
+      left: 0,
+      bottom: 0,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () => setState(() => _collapsed = !_collapsed),
@@ -37,17 +91,34 @@ class _ScoutInstanceBadgeState extends State<_ScoutInstanceBadge> {
           duration: ScoutMotion.base,
           curve: ScoutMotion.enter,
           padding: EdgeInsets.symmetric(
-            horizontal: _collapsed ? ScoutSpace.s : ScoutSpace.m,
-            vertical: ScoutSpace.s,
+            horizontal: _collapsed ? ScoutSpace.xs : ScoutSpace.s,
+            vertical: ScoutSpace.xs,
           ),
           decoration: BoxDecoration(
-            color: ScoutColors.glass,
-            borderRadius: BorderRadius.circular(ScoutRadius.pill),
-            border: Border.all(color: ScoutColors.border, width: 1),
+            // Per-session gradient fill so overlapping runs are distinguishable.
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                _scoutSessionPalette.fill,
+                _scoutSessionPalette.fillDark,
+              ],
+            ),
+            // Squared bottom-left so the badge hugs the exact corner of the
+            // app; the other three corners stay rounded like a corner tab.
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(ScoutRadius.panel),
+              topRight: Radius.circular(ScoutRadius.panel),
+              bottomRight: Radius.circular(ScoutRadius.panel),
+            ),
+            border: Border.all(
+              color: _scoutSessionPalette.accent.withValues(alpha: 0.55),
+              width: 1,
+            ),
             boxShadow: [
               BoxShadow(
-                color: ScoutColors.signal.withValues(alpha: 0.22),
-                blurRadius: 18,
+                color: _scoutSessionPalette.accent.withValues(alpha: 0.30),
+                blurRadius: 16,
                 spreadRadius: -6,
               ),
             ],
@@ -55,10 +126,10 @@ class _ScoutInstanceBadgeState extends State<_ScoutInstanceBadge> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.my_location,
-                size: 16,
-                color: ScoutColors.signal,
+                size: 12,
+                color: _scoutSessionPalette.foreground,
               ),
               AnimatedSize(
                 duration: ScoutMotion.base,
@@ -66,10 +137,14 @@ class _ScoutInstanceBadgeState extends State<_ScoutInstanceBadge> {
                 child: _collapsed
                     ? const SizedBox.shrink()
                     : Padding(
-                        padding: const EdgeInsets.only(left: ScoutSpace.s),
+                        padding: const EdgeInsets.only(left: ScoutSpace.xs),
                         child: Text(
                           _scoutInstanceLabel.toUpperCase(),
-                          style: ScoutType.label,
+                          style: ScoutType.label.copyWith(
+                            fontSize: 9,
+                            letterSpacing: 0.6,
+                            color: _scoutSessionPalette.foreground,
+                          ),
                         ),
                       ),
               ),
