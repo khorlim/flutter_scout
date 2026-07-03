@@ -27,7 +27,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 5;
+const int scoutHelperProtocolVersion = 6;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -120,6 +120,7 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.back', _handleBack);
     _registerExtension('ext.flutter_scout.waitStable', _handleWaitStable);
     _registerExtension('ext.flutter_scout.waitFor', _handleWaitFor);
+    _registerExtension('ext.flutter_scout.dismiss', _handleDismiss);
     _broadcastVmUri();
     _scheduleAnnotationOverlayInstall();
   }
@@ -190,6 +191,16 @@ class FlutterScoutRuntime {
   Future<void> debugDrainDeferredFrames({
     Duration budget = const Duration(milliseconds: 1500),
   }) => _drainDeferredFrames(budget: budget);
+
+  /// Test-only: the tap-text match id for [text], optionally loose.
+  @visibleForTesting
+  String? debugTapTextMatchId(String text, {bool loose = false}) =>
+      _findVisibleTextMatch(text, loose: loose)?.text.id;
+
+  /// Test-only: the close control that `dismiss` would tap when no route
+  /// pops.
+  @visibleForTesting
+  String? debugCloseControlId() => _findCloseControl(_snapshot())?.id;
 
   /// Test-only view of the tap-text near-match suggestions.
   @visibleForTesting

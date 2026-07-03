@@ -161,7 +161,11 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     final widget = element.widget;
     if (widget is Offstage) return widget.offstage;
     if (widget is Visibility) return !widget.visible && !widget.maintainSize;
-    if (widget is TickerMode) return !widget.enabled;
+    // NOTE: TickerMode(enabled:false) is deliberately NOT treated as hidden.
+    // It only pauses animation tickers; the subtree stays fully painted and
+    // hit-testable. Backgrounded desktop windows and inactive TabBarView pages
+    // disable TickerMode, and pruning here blinded Scout to visible, tappable
+    // content (e.g. a whole dashboard grid) that a coordinate tap still hit.
     if (widget is IgnorePointer) return widget.ignoring;
     return false;
   }

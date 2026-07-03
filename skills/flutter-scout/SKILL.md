@@ -92,7 +92,11 @@ Interactables can also carry `altIds` — alternate handles from the other label
 
 Snapshots include `viewSignature` (most prominent visible texts) and `visibleTextHash`: two states on the SAME route — an Operation/Admin flip, a swapped tab body — get different signatures even though `screen` is identical, and action deltas report `viewChanged` when the signature moves.
 
-If `tap-text` fails with `text_not_found`, the error includes `didYouMean` near-matches — try one of those before re-inspecting.
+If `tap-text` fails with `text_not_found`, the error includes `didYouMean` near-matches — try one of those before re-inspecting. For labels the UI truncates with an ellipsis, pass `tap-text --contains "<full label>"` to match a shortened prefix.
+
+`inspect` output includes `recentLogErrors` when the app has logged error-level lines (via `dart:developer.log`/`print`/`debugPrint`) that the crash handlers never see — so swallowed failures (a denied permission, a failed API call) surface without a separate `logs` call. For a one-shot readout run `flutter-scout health`: it returns `{screen, viewSignature, degradedNodes, interactableCount, blockingErrors, recentLogErrors, healthy}` — ideal between navigation steps in a QA sweep.
+
+To close a screen without guessing between a system back and an in-app close button, use `flutter-scout dismiss`: it pops the top route (handles `showDialog`/`showModalBottomSheet`/pushed screens) and, if nothing pops, taps a close-like control (xmark/close/cancel) for custom overlay modals. It reports `strategy` (`popped_route` / `tapped_close` / `none`).
 
 If one widget on the screen misbehaves, inspect reports `degradedNodes` with the count of skipped elements instead of failing outright — treat a non-zero value as "eyes are partial, not blind".
 
@@ -103,7 +107,7 @@ flutter-scout screenshot --annotated -o /tmp/marked.png
 flutter-scout screenshot --annotated --annotate-filter buttons -o /tmp/buttons.png
 ```
 
-A small keyed handle (an avatar or icon inside a whole tappable row/card) can be a no-op on its own; when so, its brief entry carries `enclosingTarget` — the larger tappable it sits inside — as a reliable fallback. Duplicate handles (`btn.edit`, `btn.edit_2`, …) each carry a compact `at` position hint (grid cell + top-left pixels) so you can pick "the one in row 2" without full geometry. `screen` names the topmost modal surface (`Dialog`, `BottomSheet`, or the content widget) instead of a useless `RootWidget` when no `*Screen`/`*Page` widget exists.
+A small keyed handle (an avatar or icon inside a whole tappable row/card) can be a no-op on its own; when so, its brief entry carries `enclosingTarget` — the larger tappable it sits inside — as a reliable fallback. Duplicate handles (`btn.edit`, `btn.edit_2`, …) each carry a compact `at` position hint (grid cell + top-left pixels) so you can pick "the one in row 2" without full geometry. `screen` names the topmost modal surface (`Dialog`, `BottomSheet`, or the content widget) instead of a useless `RootWidget` when no `*Screen`/`*Page` widget exists — including custom modals detected via their `ModalBarrier` scrim, which also appears in `overlays` as `kind:"modalBarrier"`. Content that is visible and tappable is always inspectable even when its `TickerMode` is paused (backgrounded windows, inactive tab pages) — Scout no longer treats a disabled `TickerMode` as hidden.
 
 If the user manually annotated the running app, read the annotations before editing:
 

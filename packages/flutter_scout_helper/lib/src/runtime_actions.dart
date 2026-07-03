@@ -87,7 +87,10 @@ extension _RuntimeActions on FlutterScoutRuntime {
       if (text == null || text.trim().isEmpty) {
         return _fail('missing_text', 'Expected text to tap.');
       }
-      final match = _findVisibleTextMatch(text);
+      final match = _findVisibleTextMatch(
+        text,
+        loose: params['contains'] == 'true',
+      );
       if (match == null) {
         final suggestions = _textSuggestions(before.visibleText, text);
         return _fail(
@@ -683,6 +686,92 @@ extension _RuntimeActions on FlutterScoutRuntime {
     } catch (error) {
       return _fail('back_failed', error.toString());
     }
+  }
+
+  /// Closes the top modal/screen without the caller guessing between a system
+  /// `back` and an in-app close button. Pops the top route first (handles
+  /// showDialog/showModalBottomSheet/pushed screens); if nothing pops (a
+  /// custom OverlayEntry modal), taps a close-like control (xmark/close/
+  /// cancel/back). Reports which strategy worked.
+  Future<developer.ServiceExtensionResponse> _handleDismiss(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final before = _snapshot();
+      final rootContext = WidgetsBinding.instance.rootElement;
+      if (rootContext == null) {
+        return _fail('no_root', 'No root element is attached.');
+      }
+      final navigator = _findActiveNavigator(rootContext);
+      final popped = await navigator?.maybePop() ?? false;
+      String strategy = popped ? 'popped_route' : 'none';
+      String? tappedId;
+      if (!popped) {
+        // No route popped — look for a close-like control on the current
+        // screen (a custom overlay's own X/Cancel).
+        final closeNode = _findCloseControl(before);
+        final point = closeNode?.suggestedTapPoint;
+        if (closeNode != null && point != null) {
+          await _dispatchTap(point);
+          strategy = 'tapped_close';
+          tappedId = closeNode.id;
+        }
+      }
+      final actionSnapshot = await _snapshotAfterAction(before, params);
+      final after = actionSnapshot.snapshot;
+      final changed = _changed(before, after);
+      return _ok({
+        'action': 'dismiss',
+        'stable': actionSnapshot.stable,
+        'strategy': strategy,
+        'popped': popped,
+        'tappedClose': ?tappedId,
+        'result': changed
+            ? 'changed'
+            : (strategy == 'none'
+                  ? 'nothing_to_dismiss'
+                  : 'activated_no_observed_change'),
+        'before': before.summaryJson(),
+        'after': after.summaryJson(),
+        'delta': _delta(before, after),
+        'recentErrors': _recentErrors(),
+      });
+    } catch (error) {
+      return _fail('dismiss_failed', error.toString());
+    }
+  }
+
+  /// A close/cancel/back control among the current interactables, preferring
+  /// ones near the top of the screen (modal headers).
+  ScoutNode? _findCloseControl(ScoutSnapshot snapshot) {
+    const closeIds = {
+      'btn.xmark',
+      'btn.close',
+      'btn.cancel',
+      'btn.back',
+      'btn.chevron_left',
+      'tap.close',
+      'tap.cancel',
+    };
+    ScoutNode? best;
+    for (final node in snapshot.interactables) {
+      final id = node.id;
+      final label = (node.label ?? '').toLowerCase();
+      final looksClose =
+          closeIds.contains(id) ||
+          label == 'close' ||
+          label == 'cancel' ||
+          label == 'dismiss';
+      if (!looksClose) continue;
+      if (node.suggestedTapPoint == null) continue;
+      // Prefer the highest (smallest top) — modal close buttons live in the
+      // header.
+      if (best == null || (node.rect?.top ?? 1e9) < (best.rect?.top ?? 1e9)) {
+        best = node;
+      }
+    }
+    return best;
   }
 
   Future<developer.ServiceExtensionResponse> _handleWaitStable(

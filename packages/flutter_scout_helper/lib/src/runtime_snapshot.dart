@@ -172,24 +172,47 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     // Deepest (topmost) modal surface widget wins.
     String? surfaceKind;
     var surfaceDepth = -1;
+    var barrierDepth = -1;
     _walkVisible(root, (Element element) {
+      final depth = _elementDepth(element);
+      // A visible ModalBarrier is the general signal that a modal is open —
+      // showDialog/showModalBottomSheet/showGeneralDialog and most custom
+      // overlays put one behind their content. It catches modals that use no
+      // standard Dialog/BottomSheet widget (a plain Container-in-Stack panel).
+      if (_isModalBarrierWidget(element.widget)) {
+        final rect = _rectFor(element);
+        if (rect != null &&
+            _visibleRectFor(rect) != null &&
+            depth > barrierDepth) {
+          barrierDepth = depth;
+        }
+        return;
+      }
       final kind = _modalSurfaceKind(element.widget);
       if (kind == null) return;
-      final depth = _elementDepth(element);
       if (depth > surfaceDepth) {
         surfaceKind = kind;
         surfaceDepth = depth;
       }
     });
-    if (surfaceKind == null) {
-      // No recognized modal surface — still try to name the page from its
-      // deepest custom content widget (custom-named routes without a
-      // *Screen/*Page class, like an order builder body).
-      return _deepestCustomWidgetType(root, minDepth: -1);
+    if (surfaceKind != null) {
+      // Prefer the modal's actual content class over the generic surface kind.
+      return _deepestCustomWidgetType(root, minDepth: surfaceDepth) ??
+          surfaceKind;
     }
-    // Prefer the modal's actual content class over the generic surface kind.
-    return _deepestCustomWidgetType(root, minDepth: surfaceDepth) ??
-        surfaceKind;
+    if (barrierDepth >= 0) {
+      // Custom modal over a barrier: name from its content, else generic.
+      return _deepestCustomWidgetType(root, minDepth: barrierDepth) ?? 'Modal';
+    }
+    // No modal at all — still try to name the page from its deepest custom
+    // content widget (custom-named routes without a *Screen/*Page class).
+    return _deepestCustomWidgetType(root, minDepth: -1);
+  }
+
+  bool _isModalBarrierWidget(Widget widget) {
+    if (widget is ModalBarrier) return true;
+    // AnimatedModalBarrier is private-typed; match by name.
+    return widget.runtimeType.toString().contains('ModalBarrier');
   }
 
   /// The kind of modal surface a widget represents, or null.
@@ -224,6 +247,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final type = element.widget.runtimeType.toString();
       if (type.startsWith('_')) return;
       if (_frameworkWidgetPrefixes.any(type.startsWith)) return;
+      if (_frameworkScreenWidgets.contains(type)) return;
       if (type.endsWith('Screen') ||
           type.endsWith('Page') ||
           type.endsWith('Sheet') ||

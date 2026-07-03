@@ -403,10 +403,8 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         hidden = true;
         return false;
       }
-      if (widget is TickerMode && !widget.enabled) {
-        hidden = true;
-        return false;
-      }
+      // TickerMode(enabled:false) does NOT hide — it only pauses tickers; the
+      // subtree stays visible and hit-testable (see _hidesSubtree).
       if (widget is IgnorePointer && widget.ignoring) {
         hidden = true;
         return false;
@@ -724,6 +722,13 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       kind = 'dialog';
     } else if (widget is BottomSheet) {
       kind = 'bottomSheet';
+    } else if (_isModalBarrierWidget(widget)) {
+      // A visible barrier means a modal is up even when its content is a
+      // custom Container (no Dialog/BottomSheet widget) — so `overlays` is no
+      // longer empty and agents know a scrim is intercepting the background.
+      final rect = _rectFor(element);
+      if (rect == null || _visibleRectFor(rect) == null) return null;
+      kind = 'modalBarrier';
     } else {
       kind = null;
     }
@@ -939,9 +944,14 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final contained = [
       for (final textNode in textNodes)
         if (textNode.rect case final textRect?)
+          // A cell/card's own label is frequently NOT hit-testable because the
+          // card's tappable sits on top of it — so requiring hitTestable left
+          // list/grid cells unlabeled (tap.gesturedetector_N noise). Accept
+          // non-hittable text when THIS node fully contains it: the node is
+          // then what's occluding the text, so borrowing its label is safe.
           if (rect.contains(textRect.center) &&
               textNode.visibleFraction > 0 &&
-              textNode.hitTestable &&
+              (textNode.hitTestable || _contains(rect, textRect)) &&
               _isUsefulActionLabel(textNode.label!))
             textNode,
     ];
@@ -1200,12 +1210,14 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         (a.height - b.height).abs() < 0.5;
   }
 
-  _TextTargetMatch? _findVisibleTextMatch(String text) {
+  _TextTargetMatch? _findVisibleTextMatch(String text, {bool loose = false}) {
     final root = WidgetsBinding.instance.rootElement;
     if (root == null) return null;
     final wanted = text.trim();
+    final wantedLower = wanted.toLowerCase();
     _TextTargetMatch? exact;
     _TextTargetMatch? contains;
+    _TextTargetMatch? truncated;
     _walk(root, (Element element) {
       if (exact != null) return;
       final own = _ownText(element.widget)?.trim();
@@ -1218,13 +1230,25 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       final match = _TextTargetMatch(text: node, actionable: actionable);
       if (own == wanted) {
         exact = match;
-      } else if (wanted.length >= 3 &&
+        return;
+      }
+      final ownLower = own.toLowerCase();
+      if (wanted.length >= 3 &&
           contains == null &&
-          own.toLowerCase().contains(wanted.toLowerCase())) {
+          ownLower.contains(wantedLower)) {
         contains = match;
       }
+      // Truncation: the on-screen label is a shortened prefix of the query
+      // (e.g. "Prenatal Bliss…" for "Prenatal Bliss Massage"). Only with the
+      // explicit `loose` opt-in, since it is a weaker signal.
+      if (loose && truncated == null) {
+        final stripped = ownLower.replaceAll(RegExp(r'[…\.\s]+$'), '');
+        if (stripped.length >= 4 && wantedLower.startsWith(stripped)) {
+          truncated = match;
+        }
+      }
     });
-    return exact ?? contains;
+    return exact ?? contains ?? truncated;
   }
 
   List<Map<String, Object?>> _buildControlGroups(ScoutSnapshot snapshot) {

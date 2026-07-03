@@ -29,7 +29,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 5;
+  static const int expectedHelperProtocolVersion = 6;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -234,8 +234,10 @@ class FlutterScoutCli {
         'scroll-to' => _scrollTo(rest),
         'swipe' => _swipe(rest),
         'back' => _back(rest),
+        'dismiss' => _dismiss(rest),
         'wait' => _wait(rest),
         'wait-for' => _waitFor(rest),
+        'health' => _health(rest),
         'batch' => _batch(rest),
         'export-batch' => _exportBatch(rest),
         'serve' => _serve(rest),
@@ -1600,6 +1602,39 @@ String get _pidFile => p.join(_sessionDir.path, 'flutter.pid');
 String get _vmLogListenerPidFile =>
     p.join(_sessionDir.path, 'vm_log_listener.pid');
 String get _logFile => p.join(_sessionDir.path, 'logs.txt');
+
+/// Recent error-level lines from the Scout-owned log — app logs
+/// (`dart:developer.log`, `print`, `debugPrint`) that error handlers never
+/// see, so swallowed failures (a denied location permission, a failed API
+/// call) surface in `health`/`inspect` instead of hiding until someone runs
+/// `logs`. Empty for attach-only sessions with no Scout log.
+List<String> _recentLogErrors({int scanLines = 300, int max = 8}) {
+  final file = File(_logFile);
+  if (!file.existsSync()) return const [];
+  final pattern = RegExp(
+    r'\b(error|exception|failed|failure|denied|unhandled|fatal)\b',
+    caseSensitive: false,
+  );
+  // Ignore Scout's own noise and generic 'no error' style lines.
+  final ignore = RegExp(
+    r'FLUTTER_SCOUT|flutter_scout|no error|errorText:|error: null',
+    caseSensitive: false,
+  );
+  try {
+    final lines = file.readAsLinesSync();
+    final tail = lines.length <= scanLines
+        ? lines
+        : lines.sublist(lines.length - scanLines);
+    final hits = <String>[
+      for (final line in tail)
+        if (pattern.hasMatch(line) && !ignore.hasMatch(line)) line.trim(),
+    ];
+    return hits.length <= max ? hits : hits.sublist(hits.length - max);
+  } catch (_) {
+    return const [];
+  }
+}
+
 String get _sessionMetaFile => p.join(_sessionDir.path, 'session_meta.json');
 
 void _ensureSessionDir() {

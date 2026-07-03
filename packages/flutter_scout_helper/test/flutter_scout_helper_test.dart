@@ -718,6 +718,32 @@ void main() {
     expect(briefLength, lessThan(fullLength ~/ 2));
   });
 
+  testWidgets('tap-text --contains matches a truncated label', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 140,
+            child: Text(
+              'Prenatal Bliss\u2026',
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    // Exact/substring fails (query is longer than the shown label)...
+    expect(runtime.debugTapTextMatchId('Prenatal Bliss Massage'), isNull);
+    // ...but loose matches the truncated prefix.
+    expect(
+      runtime.debugTapTextMatchId('Prenatal Bliss Massage', loose: true),
+      isNotNull,
+    );
+  });
+
   testWidgets('brief adds position hints to duplicate handles', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(
@@ -985,6 +1011,37 @@ void main() {
     expect(selectedOf('tap.oney'), isNull);
   });
 
+  testWidgets('TickerMode-disabled content stays visible to inspect', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TickerMode(
+            // A backgrounded window / inactive tab disables TickerMode; the
+            // content is still painted and tappable, so Scout must still see
+            // it (regression for the pruned-dashboard-grid bug).
+            enabled: false,
+            child: Column(
+              children: [
+                ElevatedButton(onPressed: () {}, child: const Text('DashTile')),
+                const Text('visible under paused ticker'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    expect(snapshot.visibleText, contains('visible under paused ticker'));
+    expect(
+      snapshot.interactables.map((node) => node.id),
+      contains('btn.dashtile'),
+    );
+  });
+
   testWidgets('modal surfaces get a screen name instead of RootWidget', (
     tester,
   ) async {
@@ -1021,6 +1078,45 @@ void main() {
     expect(dialogScreen, 'Dialog');
   });
 
+  testWidgets('custom modal over a ModalBarrier is detected and named', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    final navKey = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: navKey,
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: ElevatedButton(
+                onPressed: () => showGeneralDialog<void>(
+                  context: context,
+                  barrierDismissible: true,
+                  barrierLabel: 'x',
+                  // Custom modal content: a plain Container, NOT a Dialog.
+                  pageBuilder: (context, animation, secondary) =>
+                      const _AnnouncementPanel(),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    // Screen names the modal (content class) instead of the base home.
+    expect(snapshot.screen, isNot('RootWidget'));
+    expect(snapshot.screen, anyOf('_AnnouncementPanel', 'Modal'));
+    // A modalBarrier overlay is reported so agents know a scrim is up.
+    expect(snapshot.overlays.any((o) => o['kind'] == 'modalBarrier'), isTrue);
+  });
+
   testWidgets('page-suffixed widgets are detected as the screen', (
     tester,
   ) async {
@@ -1031,6 +1127,38 @@ void main() {
       FlutterScoutHelper.debugRuntime.debugSnapshot().screen,
       '_CheckoutPage',
     );
+  });
+
+  testWidgets('dismiss finds a close control on a custom overlay', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              const Center(child: Text('base')),
+              // A custom overlay panel with its own close (xmark) in the header.
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                height: 60,
+                child: Row(
+                  children: [
+                    IconButton(icon: const Icon(Icons.close), onPressed: () {}),
+                    const Text('Panel'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(FlutterScoutHelper.debugRuntime.debugCloseControlId(), 'btn.close');
   });
 
   testWidgets('tap-text suggestions surface near matches', (tester) async {
@@ -1053,6 +1181,44 @@ void main() {
     final suggestions = runtime.debugTextSuggestions('save supplier now');
     expect(suggestions.first, 'Save Supplier');
     expect(runtime.debugTextSuggestions('zzz-no-match'), isEmpty);
+  });
+
+  testWidgets('list cell borrows its label even when text is not hittable', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 300,
+            height: 80,
+            // Opaque tappable ON TOP of the label — the label is inside it but
+            // not itself hit-testable (the card's gesture wins the hit test).
+            child: Stack(
+              children: [
+                const Center(child: Text('Prenatal Bliss Massage')),
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {},
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final ids = FlutterScoutHelper.debugRuntime
+        .debugSnapshot()
+        .interactables
+        .map((node) => node.id)
+        .toList();
+    // The cell borrows its content label instead of staying anonymous.
+    expect(ids, contains('tap.prenatal_bliss_massage'));
+    expect(ids.where((id) => id.startsWith('tap.gesturedetector')), isEmpty);
   });
 
   testWidgets('anonymous gesture detector over a labeled control is dropped', (
@@ -1304,5 +1470,21 @@ class _CheckoutPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(body: Center(child: Text('Checkout')));
+  }
+}
+
+class _AnnouncementPanel extends StatelessWidget {
+  const _AnnouncementPanel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        width: 300,
+        height: 200,
+        color: const Color(0xFFFFFFFF),
+        child: const Text('Announcement body'),
+      ),
+    );
   }
 }

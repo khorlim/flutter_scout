@@ -114,6 +114,28 @@ extension _CliCapture on FlutterScoutCli {
         );
       }
       rectNums = parts.cast<num>();
+      // The rect is in LOGICAL pixels; passing physical/DPR-scaled coords is a
+      // common mistake that used to silently produce a full-screen capture
+      // (the helper clamps an out-of-bounds rect to the whole screen). Catch
+      // it here against the actual logical size so it fails loudly instead.
+      inspect = await _call('ext.flutter_scout.inspect', {'brief': 'true'});
+      final size = inspect['logicalSize'];
+      if (size is List && size.length >= 2) {
+        final width = (size[0] as num).toDouble();
+        final height = (size[1] as num).toDouble();
+        final x = rectNums[0].toDouble();
+        final y = rectNums[1].toDouble();
+        final w = rectNums[2].toDouble();
+        final h = rectNums[3].toDouble();
+        if (w <= 0 || h <= 0 || x >= width || y >= height || x < 0 || y < 0) {
+          throw ScoutCliException(
+            'rect_out_of_bounds',
+            '--rect $rectOption is outside the logical screen '
+                '(${width.round()}x${height.round()}). Coordinates are LOGICAL '
+                'pixels (not physical/DPR-scaled); check your x,y,w,h.',
+          );
+        }
+      }
       cropLabel = 'rect_${rectNums[0]}_${rectNums[1]}';
     } else {
       inspect = await _call('ext.flutter_scout.inspect');
@@ -196,9 +218,8 @@ extension _CliCapture on FlutterScoutCli {
         'Could not decode simulator screenshot.',
       );
     }
-    // --rect skips the target-resolution inspect; fetch a brief one here just
-    // for the device pixel ratio.
-    inspect ??= await _call('ext.flutter_scout.inspect', {'brief': 'true'});
+    // `inspect` was already fetched above (rect-bounds check or target
+    // resolution), so it is available here for the device pixel ratio.
     final dpr =
         (inspect['devicePixelRatio'] as num?)?.toDouble() ??
         _inferDevicePixelRatio(inspect, source);

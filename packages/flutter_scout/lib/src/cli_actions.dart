@@ -96,13 +96,52 @@ extension _CliActions on FlutterScoutCli {
       );
     final parsed = parser.parse(args);
     final sections = parsed.option('sections');
-    return _callAndPrint(
+    final result = _withProtocolDiagnostics(
       'ext.flutter_scout.inspect',
-      params: {
+      await _call('ext.flutter_scout.inspect', {
         if (parsed.flag('brief')) 'brief': 'true',
         if (sections != null && sections.isNotEmpty) 'sections': sections,
-      },
+      }),
     );
+    // Surface swallowed app-log errors (location denied, failed API calls…)
+    // that the in-isolate error handlers never see, so a QA sweep notices
+    // them without a separate `logs` call.
+    final logErrors = _recentLogErrors();
+    if (logErrors.isNotEmpty && result['ok'] != false) {
+      result['recentLogErrors'] = logErrors;
+    }
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
+    return result['ok'] == false ? 1 : 0;
+  }
+
+  Future<int> _health(List<String> args) async {
+    final result = await _call('ext.flutter_scout.inspect', {'brief': 'true'});
+    if (result['ok'] == false) {
+      stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
+      return 1;
+    }
+    final errors = result['recentErrors'];
+    final errorList = errors is List ? errors : const <Object?>[];
+    final blocking = [
+      for (final e in errorList)
+        if (e is Map && e['blocking'] == true && e['stale'] != true) e,
+    ];
+    final interactables = result['interactables'];
+    final logErrors = _recentLogErrors();
+    final health = <String, Object?>{
+      'ok': true,
+      'screen': result['screen'],
+      'viewSignature': result['viewSignature'],
+      'idle': result['idle'],
+      'degradedNodes': result['degradedNodes'] ?? 0,
+      'interactableCount': interactables is List ? interactables.length : 0,
+      'blockingErrors': blocking,
+      'recentErrorCount': errorList.length,
+      'recentLogErrors': logErrors,
+      'healthy': blocking.isEmpty && (result['degradedNodes'] ?? 0) == 0,
+    };
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(health));
+    return 0;
   }
 
   Future<int> _waitFor(List<String> args) async {
@@ -278,6 +317,14 @@ extension _CliActions on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('allow-mismatch', defaultsTo: false, negatable: false)
+      ..addFlag(
+        'contains',
+        defaultsTo: false,
+        negatable: false,
+        help:
+            'Also match a truncated on-screen label that is a prefix of the '
+            'query (e.g. "Prenatal Bliss…").',
+      )
       ..addFlag('verbose', defaultsTo: false);
     _addExpectOptions(parser);
     final parsed = parser.parse(args);
@@ -292,6 +339,7 @@ extension _CliActions on FlutterScoutCli {
       'text': text,
       'waitMs': parsed.option('wait-ms') ?? '1500',
       if (parsed.flag('allow-mismatch')) 'allowMismatch': 'true',
+      if (parsed.flag('contains')) 'contains': 'true',
       ..._expectParams(parsed),
     };
     var result = await _call(
@@ -509,6 +557,19 @@ extension _CliActions on FlutterScoutCli {
     return _callAndPrint(
       'ext.flutter_scout.back',
       record: const {'cmd': 'back'},
+      compact: !parsed.flag('verbose'),
+    );
+  }
+
+  Future<int> _dismiss(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('wait-ms', defaultsTo: '1500')
+      ..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    return _callAndPrint(
+      'ext.flutter_scout.dismiss',
+      params: {'waitMs': parsed.option('wait-ms') ?? '1500'},
+      record: const {'cmd': 'dismiss'},
       compact: !parsed.flag('verbose'),
     );
   }
