@@ -232,6 +232,51 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     });
   }
 
+  /// Records, for each interactable that is fully enclosed by a larger
+  /// interactable, the enclosing handle. A small keyed control (an avatar or
+  /// icon inside a whole tappable row/card) can be a no-op on its own; the
+  /// enclosing handle is the reliable fallback, so agents don't tap a dead
+  /// center and give up.
+  List<ScoutNode> _linkEnclosingTargets(List<ScoutNode> nodes) {
+    final boxes = <int>[
+      for (var i = 0; i < nodes.length; i++)
+        if ((nodes[i].kind == 'btn' || nodes[i].kind == 'tap') &&
+            nodes[i].rect != null)
+          i,
+    ];
+    if (boxes.length < 2) return nodes;
+    final result = [...nodes];
+    for (final i in boxes) {
+      final inner = nodes[i].rect!;
+      final innerArea = inner.width * inner.height;
+      if (innerArea <= 0) continue;
+      String? bestId;
+      double bestArea = double.infinity;
+      for (final j in boxes) {
+        if (j == i) continue;
+        final outer = nodes[j].rect!;
+        final outerArea = outer.width * outer.height;
+        // Strictly larger, and fully containing the inner rect (small slop).
+        if (outerArea <= innerArea * 1.3) continue;
+        if (!_contains(outer, inner)) continue;
+        if (outerArea < bestArea) {
+          bestArea = outerArea;
+          bestId = nodes[j].id;
+        }
+      }
+      if (bestId != null) result[i] = nodes[i].withEnclosingTarget(bestId);
+    }
+    return result;
+  }
+
+  bool _contains(Rect outer, Rect inner) {
+    const slop = 2.0;
+    return inner.left >= outer.left - slop &&
+        inner.top >= outer.top - slop &&
+        inner.right <= outer.right + slop &&
+        inner.bottom <= outer.bottom + slop;
+  }
+
   /// Heuristic selection for CUSTOM segments/chips that expose no Semantics:
   /// in a horizontal run of >=3 adjacent same-kind tappables, when exactly
   /// one label color differs from an otherwise uniform rest, that outlier is
@@ -1038,6 +1083,35 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         );
       }
       indexesToRemove.add(i);
+    }
+
+    // Drop anonymous gesture-detector wrappers: an unlabeled, keyless `tap`
+    // node that substantially coincides with a LABELED interactable is a
+    // wrapper of that control, not a distinct action — it only adds
+    // tap.gesturedetector_N noise, and the labeled sibling is the real
+    // handle. Kept when it stands alone (a genuine invisible hit area).
+    for (var i = 0; i < result.length; i++) {
+      if (indexesToRemove.contains(i)) continue;
+      final node = result[i];
+      if (node.kind != 'tap' || node.rect == null) continue;
+      if ((node.label != null && node.label!.trim().isNotEmpty) ||
+          (node.key != null && node.key!.isNotEmpty)) {
+        continue;
+      }
+      for (var j = 0; j < result.length; j++) {
+        if (i == j || indexesToRemove.contains(j)) continue;
+        final other = result[j];
+        if (other.rect == null) continue;
+        final labeled =
+            (other.label != null && other.label!.trim().isNotEmpty) ||
+            (other.key != null && other.key!.isNotEmpty);
+        if (!labeled) continue;
+        if (other.kind != 'btn' && other.kind != 'tap') continue;
+        if (_overlapRatio(node.rect!, other.rect!) >= 0.8) {
+          indexesToRemove.add(i);
+          break;
+        }
+      }
     }
 
     return [

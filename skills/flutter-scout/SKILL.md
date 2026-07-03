@@ -96,11 +96,14 @@ If `tap-text` fails with `text_not_found`, the error includes `didYouMean` near-
 
 If one widget on the screen misbehaves, inspect reports `degradedNodes` with the count of skipped elements instead of failing outright — treat a non-zero value as "eyes are partial, not blind".
 
-For a one-image overview, use a set-of-marks screenshot — numbered marks are drawn over every visible interactable and the JSON includes the `marks` legend mapping each number to its handle:
+For a one-image overview, use a set-of-marks screenshot — numbered marks are drawn over every visible interactable and the JSON includes the `marks` legend mapping each number to its handle. Overlapping badges are suppressed so dense screens stay legible (the count appears as `marksOmitted`); use `--annotate-filter buttons|fields` to mark only one control type:
 
 ```bash
 flutter-scout screenshot --annotated -o /tmp/marked.png
+flutter-scout screenshot --annotated --annotate-filter buttons -o /tmp/buttons.png
 ```
+
+A small keyed handle (an avatar or icon inside a whole tappable row/card) can be a no-op on its own; when so, its brief entry carries `enclosingTarget` — the larger tappable it sits inside — as a reliable fallback. Duplicate handles (`btn.edit`, `btn.edit_2`, …) each carry a compact `at` position hint (grid cell + top-left pixels) so you can pick "the one in row 2" without full geometry. `screen` names the topmost modal surface (`Dialog`, `BottomSheet`, or the content widget) instead of a useless `RootWidget` when no `*Screen`/`*Page` widget exists.
 
 If the user manually annotated the running app, read the annotations before editing:
 
@@ -220,7 +223,7 @@ curl "localhost:$(cat /tmp/scout.port)/run" --data 'tap btn.save --expect-text S
 curl "localhost:$(cat /tmp/scout.port)/stop"
 ```
 
-Each `/run` response carries `exitCode` and the command's JSON `output`. Always `/stop` the daemon when the loop ends — a leaked daemon holds a VM connection open, and a later `stop`/relaunch orphans it. Don't spin up `serve` for a single command or a 2–3 step known sequence; the daemon lifecycle costs more than it saves there.
+Each `/run` response is `{"exitCode": N, "result": {...}}` — the command's JSON is nested as a parsed object under `result` (raw text under `output` only when the command didn't print JSON), so parse the response once. Always `/stop` the daemon when the loop ends — a leaked daemon holds a VM connection open, and a later `stop`/relaunch orphans it. Don't spin up `serve` for a single command or a 2–3 step known sequence; the daemon lifecycle costs more than it saves there.
 
 **Choosing between `serve`, `batch`, and plain commands** — the deciding factor is whether you know the sequence in advance, not how many steps it is. Ask: *"Could I write this whole sequence to a file right now, before running anything?"*
 

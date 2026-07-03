@@ -119,6 +119,52 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     }
   }
 
+  /// Selects which nodes get numbered marks for a set-of-marks capture and
+  /// builds the legend. [region] (inflated logical bounds, null = whole
+  /// screen) scopes marks to what the image shows; [filter] is all|buttons|
+  /// fields. Badges that would land on top of an already-placed badge are
+  /// suppressed so dense screens stay legible — those are counted in
+  /// [omitted] rather than stacked into an unreadable pile.
+  ({
+    List<({int n, Rect rect})> marks,
+    List<Map<String, Object?>> legend,
+    int omitted,
+  })
+  _buildCaptureMarks({Rect? region, String filter = 'all'}) {
+    final snapshot = _snapshot();
+    final marks = <({int n, Rect rect})>[];
+    final legend = <Map<String, Object?>>[];
+    final placedBadges = <Offset>[];
+    const badgeClearance = 20.0;
+    var omitted = 0;
+    var n = 0;
+    for (final node in [...snapshot.interactables, ...snapshot.fields]) {
+      final visible = node.visibleRect;
+      if (visible == null) continue;
+      if (region != null && !region.overlaps(visible)) continue;
+      if (filter == 'buttons' && node.kind != 'btn') continue;
+      if (filter == 'fields' && node.kind != 'field') continue;
+      final badge = visible.topLeft;
+      if (placedBadges.any(
+        (placed) => (placed - badge).distance < badgeClearance,
+      )) {
+        omitted += 1;
+        continue;
+      }
+      placedBadges.add(badge);
+      n += 1;
+      marks.add((n: n, rect: visible));
+      legend.add({
+        'n': n,
+        'id': node.id,
+        'kind': node.kind,
+        if (node.label != null) 'label': node.label,
+        if (node.selected != null) 'selected': node.selected,
+      });
+    }
+    return (marks: marks, legend: legend, omitted: omitted);
+  }
+
   developer.ServiceExtensionResponse _annotationCropResponse(
     String? id,
     String slot,
@@ -441,28 +487,15 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       // image and return the number -> handle legend alongside the bytes.
       List<({int n, Rect rect})>? marks;
       List<Map<String, Object?>>? legend;
+      var marksOmitted = 0;
       if (params['annotate'] == 'true') {
-        final snapshot = _snapshot();
-        // For crops, only mark nodes that intersect the captured region, so
-        // the legend matches what the image shows.
-        final markRegion = rect?.inflate(padding);
-        marks = [];
-        legend = [];
-        var n = 0;
-        for (final node in [...snapshot.interactables, ...snapshot.fields]) {
-          final visible = node.visibleRect;
-          if (visible == null) continue;
-          if (markRegion != null && !markRegion.overlaps(visible)) continue;
-          n += 1;
-          marks.add((n: n, rect: visible));
-          legend.add({
-            'n': n,
-            'id': node.id,
-            'kind': node.kind,
-            if (node.label != null) 'label': node.label,
-            if (node.selected != null) 'selected': node.selected,
-          });
-        }
+        final built = _buildCaptureMarks(
+          region: rect?.inflate(padding),
+          filter: params['annotateFilter'] ?? 'all',
+        );
+        marks = built.marks;
+        legend = built.legend;
+        marksOmitted = built.omitted;
       }
       final result = await _captureRegion(
         rect: rect,
@@ -498,6 +531,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
         'needsNative': result.needsNative,
         'bytes': base64Encode(result.bytes!),
         'marks': ?legend,
+        if (marksOmitted > 0) 'marksOmitted': marksOmitted,
         'width': result.width,
         'height': result.height,
         'pixelRatio': result.pixelRatio,

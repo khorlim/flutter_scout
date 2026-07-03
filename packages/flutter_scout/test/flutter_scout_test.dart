@@ -521,7 +521,11 @@ void main() {
 
       final apps = await get('/run?cmd=apps');
       expect(apps['exitCode'], 0);
-      expect(apps['output'], contains('sessions'));
+      // Command JSON is nested as an object, not a re-encoded string.
+      final appsResult = apps['result'] as Map<String, dynamic>;
+      expect(appsResult['ok'], isTrue);
+      expect(appsResult.containsKey('sessions'), isTrue);
+      expect(apps.containsKey('output'), isFalse);
 
       final bogus = await get('/run?cmd=serve');
       expect(bogus['exitCode'], 1);

@@ -25,7 +25,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         try {
           debugSnapshotNodeProbe?.call(element);
           final widgetType = element.widget.runtimeType.toString();
-          if (screen == 'RootWidget' && widgetType.endsWith('Screen')) {
+          if (screen == 'RootWidget' &&
+              (widgetType.endsWith('Screen') || widgetType.endsWith('Page')) &&
+              !_frameworkScreenWidgets.contains(widgetType)) {
             screen = widgetType;
           }
           final node = _nodeFromElement(element);
@@ -91,6 +93,11 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     } catch (_) {
       // Inference is best-effort; never let it cost the snapshot.
     }
+    try {
+      compactNodes = _linkEnclosingTargets(compactNodes);
+    } catch (_) {
+      // Best-effort enrichment.
+    }
     final interactables = compactNodes
         .where((node) => node.kind != 'text' && node.kind != 'field')
         .toList(growable: false);
@@ -101,6 +108,12 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         .where((node) => node.kind == 'text')
         .toList(growable: false);
     final route = root == null ? null : ModalRoute.of(root)?.settings.name;
+    // No *Screen/*Page widget (common for bottom sheets, dialogs, and
+    // custom-named order/checkout surfaces) would otherwise leave `screen`
+    // as the useless 'RootWidget'. Name the topmost modal surface instead.
+    if (screen == 'RootWidget' && root != null) {
+      screen = _modalScreenName(root) ?? screen;
+    }
     final snapshot = ScoutSnapshot(
       screen: route != null && route.isNotEmpty ? route : screen,
       routeGuess: route,
@@ -142,6 +155,111 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
             ],
     );
   }
+
+  /// Framework widgets whose type ends in Screen/Page but are NOT app pages
+  /// (e.g. the dialog-wrapping DisplayFeatureSubScreen), so screen detection
+  /// doesn't latch onto them.
+  static const Set<String> _frameworkScreenWidgets = {
+    'DisplayFeatureSubScreen',
+    'TwoDimensionalViewport',
+  };
+
+  /// A readable name for the topmost modal surface when no *Screen/*Page
+  /// widget exists — so bottom sheets, dialogs, and custom-named routes stop
+  /// reporting the useless 'RootWidget'. Prefers the pushed route's own
+  /// widget type; falls back to a generic surface kind.
+  String? _modalScreenName(Element root) {
+    // Deepest (topmost) modal surface widget wins.
+    String? surfaceKind;
+    var surfaceDepth = -1;
+    _walkVisible(root, (Element element) {
+      final kind = _modalSurfaceKind(element.widget);
+      if (kind == null) return;
+      final depth = _elementDepth(element);
+      if (depth > surfaceDepth) {
+        surfaceKind = kind;
+        surfaceDepth = depth;
+      }
+    });
+    if (surfaceKind == null) {
+      // No recognized modal surface — still try to name the page from its
+      // deepest custom content widget (custom-named routes without a
+      // *Screen/*Page class, like an order builder body).
+      return _deepestCustomWidgetType(root, minDepth: -1);
+    }
+    // Prefer the modal's actual content class over the generic surface kind.
+    return _deepestCustomWidgetType(root, minDepth: surfaceDepth) ??
+        surfaceKind;
+  }
+
+  /// The kind of modal surface a widget represents, or null.
+  String? _modalSurfaceKind(Widget widget) {
+    if (widget is Dialog || widget is AlertDialog || widget is SimpleDialog) {
+      return 'Dialog';
+    }
+    if (widget is BottomSheet) return 'BottomSheet';
+    final type = widget.runtimeType.toString();
+    if (type.contains('CupertinoActionSheet')) return 'ActionSheet';
+    if (type.contains('CupertinoAlertDialog')) return 'Dialog';
+    if (type.contains('DraggableScrollableSheet') ||
+        type.contains('_BottomSheet') ||
+        type.contains('ModalBottomSheet')) {
+      return 'BottomSheet';
+    }
+    if (type.contains('CupertinoPopupSurface') ||
+        type.contains('_CupertinoModal')) {
+      return 'Modal';
+    }
+    return null;
+  }
+
+  /// Deepest non-framework (non-`_`, non-SDK-prefixed) widget type below
+  /// [minDepth], used to name a modal from its actual content class.
+  String? _deepestCustomWidgetType(Element root, {required int minDepth}) {
+    String? best;
+    var bestDepth = minDepth;
+    _walkVisible(root, (Element element) {
+      final depth = _elementDepth(element);
+      if (depth <= bestDepth) return;
+      final type = element.widget.runtimeType.toString();
+      if (type.startsWith('_')) return;
+      if (_frameworkWidgetPrefixes.any(type.startsWith)) return;
+      if (type.endsWith('Screen') ||
+          type.endsWith('Page') ||
+          type.endsWith('Sheet') ||
+          type.endsWith('Dialog') ||
+          type.endsWith('Body') ||
+          type.endsWith('Content') ||
+          type.endsWith('View')) {
+        best = type;
+        bestDepth = depth;
+      }
+    });
+    return best;
+  }
+
+  static const List<String> _frameworkWidgetPrefixes = [
+    'Padding',
+    'Align',
+    'Center',
+    'Column',
+    'Row',
+    'Stack',
+    'Container',
+    'SizedBox',
+    'ListView',
+    'ScrollView',
+    'CustomScrollView',
+    'SingleChildScrollView',
+    'Scaffold',
+    'Material',
+    'SafeArea',
+    'Positioned',
+    'DecoratedBox',
+    'ConstrainedBox',
+    'FractionallySizedBox',
+    'Cupertino',
+  ];
 
   List<ScoutAnnotationTarget> _annotationTargets() {
     final root = WidgetsBinding.instance.rootElement;

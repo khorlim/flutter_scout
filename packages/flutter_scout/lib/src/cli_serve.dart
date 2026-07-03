@@ -117,9 +117,20 @@ extension _CliServe on FlutterScoutCli {
       stdout: () => capturedOut,
       stderr: () => capturedErr,
     );
+    // Commands print JSON; nest it as a real object so callers parse the
+    // response once, not twice (output was a JSON-encoded string). A command
+    // that prints multiple JSON objects (batch) or non-JSON keeps its raw
+    // text under `output`.
+    final text = capturedOut.text.trim();
+    Object? result;
+    try {
+      if (text.isNotEmpty) result = jsonDecode(text);
+    } catch (_) {
+      result = null;
+    }
     return {
       'exitCode': exitCode,
-      'output': capturedOut.text,
+      if (result != null) 'result': result else 'output': capturedOut.text,
       if (capturedErr.text.isNotEmpty) 'stderr': capturedErr.text,
       'error': ?error,
     };

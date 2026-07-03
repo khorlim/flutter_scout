@@ -27,7 +27,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 4;
+const int scoutHelperProtocolVersion = 5;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -195,6 +195,15 @@ class FlutterScoutRuntime {
   @visibleForTesting
   List<String> debugTextSuggestions(String query) =>
       _textSuggestions(_snapshot().visibleText, query);
+
+  /// Test-only view of set-of-marks selection (legend + omitted count).
+  @visibleForTesting
+  ({List<Map<String, Object?>> legend, int omitted}) debugCaptureMarks({
+    String filter = 'all',
+  }) {
+    final built = _buildCaptureMarks(filter: filter);
+    return (legend: built.legend, omitted: built.omitted);
+  }
 
   /// Test-only: runs the post-action expectation wait exactly as
   /// tap/tap-text/input/fill do for `expect*` params, returning the decoded
@@ -365,12 +374,23 @@ class FlutterScoutRuntime {
       'annotationMode': _annotationMode,
     };
     if (brief) {
+      // Duplicate handles (btn.save, btn.save_2, …) are indistinguishable in
+      // brief output; give the whole duplicate group a compact position hint
+      // so an agent can pick "the one in row 2" without full geometry.
+      final duplicateBaseIds = <String, int>{};
+      for (final node in snapshot.interactables) {
+        duplicateBaseIds.update(node.baseId, (n) => n + 1, ifAbsent: () => 1);
+      }
       payload.addAll({
         'visibleText': snapshot.visibleText,
         'hitTestableText': snapshot.hitTestableText,
         'offscreenText': snapshot.offscreenText,
         'interactables': [
-          for (final node in snapshot.interactables) _compactNodeJson(node),
+          for (final node in snapshot.interactables)
+            _compactNodeJson(
+              node,
+              withPositionHint: (duplicateBaseIds[node.baseId] ?? 0) > 1,
+            ),
         ],
         'fieldValues': {
           for (final field in snapshot.fields) field.id: field.value,
@@ -415,17 +435,38 @@ class FlutterScoutRuntime {
 
   /// Orientation-sized node summary for brief inspect: enough to pick a
   /// handle and know its state, nothing else.
-  Map<String, Object?> _compactNodeJson(ScoutNode node) {
+  Map<String, Object?> _compactNodeJson(
+    ScoutNode node, {
+    bool withPositionHint = false,
+  }) {
     return {
       'id': node.id,
       'kind': node.kind,
       if (node.label != null) 'label': node.label,
       if (node.selected != null) 'selected': node.selected,
       if (node.altIds.isNotEmpty) 'altIds': node.altIds,
+      if (node.enclosingTarget != null) 'enclosingTarget': node.enclosingTarget,
+      if (withPositionHint && node.rect != null)
+        'at': _positionHint(node.rect!),
       if (!node.enabled) 'enabled': false,
       if (!node.hitTestable) 'hitTestable': false,
       if (node.visibleFraction == 0) 'offscreen': true,
     };
+  }
+
+  /// Compact human-readable position for disambiguating duplicate handles:
+  /// a coarse grid cell of the screen (r1c1 = top-left) plus rounded top-left
+  /// pixels for tie-breaking.
+  String _positionHint(Rect rect) {
+    final size = _logicalSize();
+    final center = rect.center;
+    final col = size.width <= 0
+        ? 1
+        : ((center.dx / size.width) * 3).floor().clamp(0, 2) + 1;
+    final row = size.height <= 0
+        ? 1
+        : ((center.dy / size.height) * 4).floor().clamp(0, 3) + 1;
+    return 'r${row}c$col@${rect.left.round()},${rect.top.round()}';
   }
 
   /// Test-only view of the inspect payload assembly.

@@ -202,6 +202,7 @@ class ScoutNode {
     this.selected,
     this.altIds = const [],
     this.textColor,
+    this.enclosingTarget,
   });
 
   final String id;
@@ -231,6 +232,11 @@ class ScoutNode {
   /// segment-selection inference (see _inferSegmentSelection). Internal —
   /// not serialized.
   final int? textColor;
+
+  /// Handle of the smallest OTHER interactable that fully encloses this one.
+  /// A small keyed handle (an avatar inside a whole tappable row) may do
+  /// nothing on its own; the enclosing handle is the reliable fallback.
+  final String? enclosingTarget;
 
   /// Alternate handles derived from other label sources (icon glyph name,
   /// accessibility label, contained text). The primary id can drift between
@@ -271,6 +277,7 @@ class ScoutNode {
       selected: selected,
       altIds: altIds,
       textColor: textColor,
+      enclosingTarget: enclosingTarget,
     );
   }
 
@@ -298,6 +305,34 @@ class ScoutNode {
       selected: value,
       altIds: altIds,
       textColor: textColor,
+      enclosingTarget: enclosingTarget,
+    );
+  }
+
+  /// Copy carrying an [enclosingTarget] handle.
+  ScoutNode withEnclosingTarget(String? target) {
+    return ScoutNode(
+      id: id,
+      baseId: baseId,
+      ordinal: ordinal,
+      fallbackId: fallbackId,
+      kind: kind,
+      label: label,
+      value: value,
+      validationMessage: validationMessage,
+      widgetType: widgetType,
+      key: key,
+      rect: rect,
+      visibleRect: visibleRect,
+      visibleFraction: visibleFraction,
+      suggestedTapPoint: suggestedTapPoint,
+      hitTestable: hitTestable,
+      enabled: enabled,
+      confidence: confidence,
+      selected: selected,
+      altIds: altIds,
+      textColor: textColor,
+      enclosingTarget: target,
     );
   }
 
@@ -360,6 +395,7 @@ class ScoutNode {
       'confidence': confidence,
       if (selected != null) 'selected': selected,
       if (altIds.isNotEmpty) 'altIds': altIds,
+      if (enclosingTarget != null) 'enclosingTarget': enclosingTarget,
     };
   }
 }

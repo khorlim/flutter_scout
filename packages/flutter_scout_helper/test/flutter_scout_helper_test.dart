@@ -718,6 +718,39 @@ void main() {
     expect(briefLength, lessThan(fullLength ~/ 2));
   });
 
+  testWidgets('brief adds position hints to duplicate handles', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              ElevatedButton(onPressed: () {}, child: const Text('Edit')),
+              ElevatedButton(onPressed: () {}, child: const Text('Save')),
+              ElevatedButton(onPressed: () {}, child: const Text('Edit')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+    );
+    final nodes = (brief['interactables']! as List)
+        .cast<Map<String, Object?>>();
+    final edits = nodes
+        .where((n) => (n['label'] as String?) == 'Edit')
+        .toList();
+    expect(edits.length, 2);
+    // Duplicates carry an `at` position hint; the unique Save does not.
+    expect(edits.every((n) => n.containsKey('at')), isTrue);
+    expect(edits[0]['at'], isNot(edits[1]['at']));
+    final save = nodes.firstWhere((n) => (n['label'] as String?) == 'Save');
+    expect(save.containsKey('at'), isFalse);
+  });
+
   testWidgets('wait-for conditions match visible text case-insensitively', (
     tester,
   ) async {
@@ -952,6 +985,54 @@ void main() {
     expect(selectedOf('tap.oney'), isNull);
   });
 
+  testWidgets('modal surfaces get a screen name instead of RootWidget', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            return Scaffold(
+              body: Center(
+                child: ElevatedButton(
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    builder: (_) =>
+                        const AlertDialog(content: Text('confirm payment')),
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+    // No *Screen widget: base app should not report RootWidget uselessly —
+    // it is a plain MaterialApp home, so this stays generic.
+    final runtime = FlutterScoutHelper.debugRuntime;
+
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    final dialogScreen = runtime.debugSnapshot().screen;
+    expect(dialogScreen, isNot('RootWidget'));
+    expect(dialogScreen, 'Dialog');
+  });
+
+  testWidgets('page-suffixed widgets are detected as the screen', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(const MaterialApp(home: _CheckoutPage()));
+    await tester.pump();
+    expect(
+      FlutterScoutHelper.debugRuntime.debugSnapshot().screen,
+      '_CheckoutPage',
+    );
+  });
+
   testWidgets('tap-text suggestions surface near matches', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(
@@ -972,6 +1053,92 @@ void main() {
     final suggestions = runtime.debugTextSuggestions('save supplier now');
     expect(suggestions.first, 'Save Supplier');
     expect(runtime.debugTextSuggestions('zzz-no-match'), isEmpty);
+  });
+
+  testWidgets('anonymous gesture detector over a labeled control is dropped', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              // A labeled button wrapped in an anonymous GestureDetector
+              // (a very common pattern) — the wrapper is noise.
+              GestureDetector(
+                onTap: () {},
+                behavior: HitTestBehavior.opaque,
+                child: ElevatedButton(
+                  onPressed: () {},
+                  child: const Text('Confirm'),
+                ),
+              ),
+              // A standalone anonymous gesture area (no labeled sibling) must
+              // survive — it may be a real invisible hit target.
+              GestureDetector(
+                onTap: () {},
+                behavior: HitTestBehavior.opaque,
+                child: const SizedBox(width: 200, height: 80),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final ids = FlutterScoutHelper.debugRuntime
+        .debugSnapshot()
+        .interactables
+        .map((node) => node.id)
+        .toList();
+    expect(ids, contains('btn.confirm'));
+    // The wrapper over the labeled button is gone; the standalone one stays.
+    final anonymous = ids.where((id) => id.startsWith('tap.gesturedetector'));
+    expect(anonymous.length, 1);
+  });
+
+  testWidgets('small keyed handle records its enclosing tappable', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: GestureDetector(
+            key: const ValueKey('order_row'),
+            onTap: () {},
+            behavior: HitTestBehavior.opaque,
+            child: SizedBox(
+              width: 400,
+              height: 90,
+              child: Row(
+                children: [
+                  // A small keyed tappable (avatar) inside the whole row.
+                  GestureDetector(
+                    key: const ValueKey('order_avatar'),
+                    onTap: () {},
+                    child: const SizedBox(width: 48, height: 48),
+                  ),
+                  const Text('Tyuyu'),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    final avatar = snapshot.interactables.firstWhere(
+      (node) => node.id == 'tap.order_avatar',
+    );
+    expect(avatar.enclosingTarget, 'tap.order_row');
+    // The big row itself has nothing larger enclosing it.
+    final row = snapshot.interactables.firstWhere(
+      (node) => node.id == 'tap.order_row',
+    );
+    expect(row.enclosingTarget, isNull);
   });
 
   testWidgets('altIds keep alternate handles resolving', (tester) async {
@@ -1004,6 +1171,59 @@ void main() {
     expect(snapshot.findNode('btn.settings')?.id, node.id);
     // Kind-prefix-agnostic matching works for alternates too.
     expect(snapshot.findNode('settings')?.id, node.id);
+  });
+
+  testWidgets('set-of-marks suppresses overlapping badges and filters', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              // Two controls stacked at the SAME top-left: only one badge fits.
+              Positioned(
+                left: 10,
+                top: 10,
+                child: ElevatedButton(
+                  onPressed: () {},
+                  child: const Text('OnTop'),
+                ),
+              ),
+              const Positioned(
+                left: 12,
+                top: 12,
+                width: 60,
+                height: 30,
+                child: TextField(),
+              ),
+              // A well-separated button.
+              Positioned(
+                left: 300,
+                top: 300,
+                child: ElevatedButton(
+                  onPressed: () {},
+                  child: const Text('FarAway'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final runtime = FlutterScoutHelper.debugRuntime;
+
+    final all = runtime.debugCaptureMarks();
+    // The two co-located controls collapse to one badge; the far one stays.
+    expect(all.omitted, greaterThanOrEqualTo(1));
+    expect(all.legend.length, lessThan(3));
+
+    final buttonsOnly = runtime.debugCaptureMarks(filter: 'buttons');
+    expect(buttonsOnly.legend.every((mark) => mark['kind'] == 'btn'), isTrue);
+    final fieldsOnly = runtime.debugCaptureMarks(filter: 'fields');
+    expect(fieldsOnly.legend.every((mark) => mark['kind'] == 'field'), isTrue);
   });
 
   testWidgets('set-of-marks capture composites numbered marks onto the PNG', (
@@ -1076,4 +1296,13 @@ void main() {
       expect(tester.binding.transientCallbackCount, 0);
     },
   );
+}
+
+class _CheckoutPage extends StatelessWidget {
+  const _CheckoutPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: Text('Checkout')));
+  }
 }

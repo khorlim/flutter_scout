@@ -116,14 +116,16 @@ flutter-scout attach --debug-url http://127.0.0.1:XXXXX/...
 Use `ensure` when you want Scout to reuse a running app if possible and launch only when needed:
 
 ```bash
-flutter-scout ensure --device <simulator-id> --project <flutter-app-path>
+flutter-scout ensure --device <simulator-id> --project <flutter-app-path> --name add-member
 ```
 
 Launch through Flutter Scout when you intentionally need a new Scout-owned run:
 
 ```bash
-flutter-scout launch --device <simulator-id> --project <flutter-app-path>
+flutter-scout launch --device <simulator-id> --project <flutter-app-path> --name add-member
 ```
+
+Always pass `--name <feature>` when running the app — a short kebab-case slug of the feature/task in focus (`add-member`, `supplier-search`), or the current git branch when no single feature is. It registers the session so any later command can target it with `--app <feature>` from any directory, and labels the debug badge so concurrent runs stay distinguishable.
 
 Confirm the bridge:
 

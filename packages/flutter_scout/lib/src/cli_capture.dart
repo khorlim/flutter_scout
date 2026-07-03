@@ -254,13 +254,21 @@ extension _CliCapture on FlutterScoutCli {
   /// Asks the in-app helper to rasterise the screen (or a crop rect). Returns
   /// null when the capture extension is unavailable so callers fall back to a
   /// native screenshot.
-  Future<({Uint8List? bytes, bool needsNative, List<Object?>? marks})?>
+  Future<
+    ({
+      Uint8List? bytes,
+      bool needsNative,
+      List<Object?>? marks,
+      int marksOmitted,
+    })?
+  >
   _inAppCapture({
     required String mode,
     List<num>? rect,
     int? padding,
     String native = 'auto',
     bool annotate = false,
+    String annotateFilter = 'all',
   }) async {
     try {
       final params = <String, String>{'mode': mode, 'native': native};
@@ -272,20 +280,32 @@ extension _CliCapture on FlutterScoutCli {
       }
       if (annotate) {
         params['annotate'] = 'true';
+        params['annotateFilter'] = annotateFilter;
       }
       final res = await _call('ext.flutter_scout.capture', params);
       if (res['ok'] == false) return null;
       final needsNative = res['needsNative'] == true;
       final marks = res['marks'] is List ? res['marks'] as List<Object?> : null;
+      final marksOmitted = res['marksOmitted'] is int
+          ? res['marksOmitted'] as int
+          : 0;
       final bytes = res['bytes'];
       if (bytes is String && bytes.isNotEmpty) {
         return (
           bytes: base64Decode(bytes),
           needsNative: needsNative,
           marks: marks,
+          marksOmitted: marksOmitted,
         );
       }
-      if (needsNative) return (bytes: null, needsNative: true, marks: marks);
+      if (needsNative) {
+        return (
+          bytes: null,
+          needsNative: true,
+          marks: marks,
+          marksOmitted: marksOmitted,
+        );
+      }
       return null;
     } catch (_) {
       return null;
