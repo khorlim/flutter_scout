@@ -248,9 +248,13 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     'Container',
     'SizedBox',
     'ListView',
+    'GridView',
     'ScrollView',
     'CustomScrollView',
     'SingleChildScrollView',
+    'NestedScrollView',
+    'PageView',
+    'TabBarView',
     'Scaffold',
     'Material',
     'SafeArea',
@@ -259,6 +263,18 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     'ConstrainedBox',
     'FractionallySizedBox',
     'Cupertino',
+    // Common framework widgets whose type ends in Content/View and would
+    // otherwise masquerade as an app page.
+    'Reorderable',
+    'Animated',
+    'Sliver',
+    'Overflow',
+    'Viewport',
+    'Draggable',
+    'Dismissible',
+    'Transform',
+    'Opacity',
+    'RepaintBoundary',
   ];
 
   List<ScoutAnnotationTarget> _annotationTargets() {
