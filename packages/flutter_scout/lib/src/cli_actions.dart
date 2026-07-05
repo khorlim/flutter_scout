@@ -87,6 +87,13 @@ extension _CliActions on FlutterScoutCli {
             'Compact orientation payload: screen, text, compact interactables, '
             'field values, errors.',
       )
+      ..addFlag(
+        'surface',
+        defaultsTo: false,
+        help:
+            'Focus compact inspect on the top active modal/dialog surface when '
+            'Scout can identify its bounds.',
+      )
       ..addOption(
         'sections',
         help:
@@ -99,7 +106,8 @@ extension _CliActions on FlutterScoutCli {
     final result = _withProtocolDiagnostics(
       'ext.flutter_scout.inspect',
       await _call('ext.flutter_scout.inspect', {
-        if (parsed.flag('brief')) 'brief': 'true',
+        if (parsed.flag('brief') || parsed.flag('surface')) 'brief': 'true',
+        if (parsed.flag('surface')) 'surfaceOnly': 'true',
         if (sections != null && sections.isNotEmpty) 'sections': sections,
       }),
     );

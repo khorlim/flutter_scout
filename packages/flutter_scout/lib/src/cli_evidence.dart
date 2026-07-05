@@ -6,7 +6,13 @@ extension _CliEvidence on FlutterScoutCli {
   Future<int> _evidence(List<String> args) async {
     final parser = ArgParser()
       ..addOption('output', abbr: 'o')
-      ..addOption('last', defaultsTo: '120');
+      ..addOption('last', defaultsTo: '120')
+      ..addFlag(
+        'audit',
+        defaultsTo: false,
+        help:
+            'Also write audit.md and transcript.txt as a human-readable UI/UX audit scaffold.',
+      );
     final parsed = parser.parse(args);
     _ensureSessionDir();
     final output =
@@ -65,6 +71,27 @@ extension _CliEvidence on FlutterScoutCli {
     }
 
     final sessionActions = _readSessionActions();
+    final transcript = [
+      for (final item in sessionActions)
+        if (item is Map<String, dynamic>) _actionLine(item),
+    ];
+    if (transcript.isNotEmpty) {
+      File(
+        p.join(dir.path, 'transcript.txt'),
+      ).writeAsStringSync('${transcript.join('\n')}\n');
+    }
+    if (parsed.flag('audit')) {
+      File(p.join(dir.path, 'audit.md')).writeAsStringSync(
+        _auditScaffold(
+          status: status,
+          inspect: inspect,
+          inspectError: inspectError,
+          screenshot: screenshot,
+          logsSummary: logsSummary,
+          transcript: transcript,
+        ),
+      );
+    }
     final summary = {
       'ok': true,
       'path': dir.path,
@@ -95,6 +122,7 @@ extension _CliEvidence on FlutterScoutCli {
         'path': _sessionFile,
         'count': sessionActions.length,
         'last': _lastItems(sessionActions, 20),
+        if (transcript.isNotEmpty) 'transcript': _lastItems(transcript, 20),
       },
       'files': {
         'summary': p.join(dir.path, 'summary.json'),
@@ -103,6 +131,9 @@ extension _CliEvidence on FlutterScoutCli {
         'status': p.join(dir.path, 'status.json'),
         if (sessionActions.isNotEmpty)
           'session': p.join(dir.path, 'session.json'),
+        if (transcript.isNotEmpty)
+          'transcript': p.join(dir.path, 'transcript.txt'),
+        if (parsed.flag('audit')) 'audit': p.join(dir.path, 'audit.md'),
         if (screenshot['ok'] == true) 'screenshot': screenshotPath,
       },
     };
@@ -123,6 +154,92 @@ extension _CliEvidence on FlutterScoutCli {
     ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(summary));
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(summary));
     return 0;
+  }
+
+  String _actionLine(Map<String, dynamic> item) {
+    final cmd = item['cmd']?.toString() ?? 'unknown';
+    return switch (cmd) {
+      'tap-text' => 'tap-text "${item['text']}"',
+      'tap' =>
+        item['target'] != null
+            ? 'tap ${item['target']}'
+            : 'tap ${item['x']},${item['y']}',
+      'input' => 'input ${item['target'] ?? 'focused'}',
+      'fill' => 'fill ${_filledKeys(item['values'])}',
+      'long-press' => 'long-press ${item['target']}',
+      'scroll' => 'scroll ${item['direction'] ?? ''}'.trim(),
+      'swipe' => 'swipe ${item['direction'] ?? ''}'.trim(),
+      'scroll-to' => 'scroll-to ${item['target']}',
+      'back' => 'back',
+      'dismiss' => 'dismiss',
+      'reload' => 'reload',
+      'restart' => 'restart',
+      'deeplink' => 'deeplink ${item['url']}',
+      _ => cmd,
+    };
+  }
+
+  String _auditScaffold({
+    required Map<String, Object?> status,
+    required Map<String, dynamic>? inspect,
+    required Object? inspectError,
+    required Map<String, Object?> screenshot,
+    required Map<String, Object?> logsSummary,
+    required List<String> transcript,
+  }) {
+    final buffer = StringBuffer()
+      ..writeln('# Flutter Scout UI/UX Audit')
+      ..writeln()
+      ..writeln('Created: ${DateTime.now().toIso8601String()}')
+      ..writeln()
+      ..writeln('## Current State')
+      ..writeln()
+      ..writeln('- Status available: ${status['ok'] != false}')
+      ..writeln(
+        '- Screen: ${inspect == null ? 'unavailable' : inspect['screen'] ?? 'unknown'}',
+      )
+      ..writeln(
+        '- View signature: ${inspect == null ? 'unavailable' : inspect['viewSignature'] ?? 'unknown'}',
+      )
+      ..writeln(
+        '- Screenshot: ${screenshot['ok'] == true ? 'captured' : 'not captured'}',
+      )
+      ..writeln(
+        '- Logs available: ${logsSummary['available'] == true ? 'yes' : 'no'}',
+      );
+    if (inspect == null) {
+      buffer.writeln('- Inspect error: $inspectError');
+    }
+    buffer
+      ..writeln()
+      ..writeln('## Flow Transcript')
+      ..writeln();
+    if (transcript.isEmpty) {
+      buffer.writeln('No recorded Scout actions in this evidence bundle.');
+    } else {
+      for (var i = 0; i < transcript.length; i++) {
+        buffer.writeln('${i + 1}. ${transcript[i]}');
+      }
+    }
+    buffer
+      ..writeln()
+      ..writeln('## Findings')
+      ..writeln()
+      ..writeln('- P0: ')
+      ..writeln('- P1: ')
+      ..writeln('- P2: ')
+      ..writeln()
+      ..writeln('## Evidence Files')
+      ..writeln()
+      ..writeln('- `summary.json`')
+      ..writeln('- `status.json`')
+      ..writeln('- `logs.json`')
+      ..writeln('- `inspect.json` when inspect was available')
+      ..writeln('- `screenshot.png` when capture was available')
+      ..writeln(
+        '- `session.json` and `transcript.txt` when actions were recorded',
+      );
+    return buffer.toString();
   }
 
   Future<int> _replay(List<String> args) async {

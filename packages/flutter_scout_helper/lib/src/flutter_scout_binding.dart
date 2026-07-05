@@ -27,7 +27,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 7;
+const int scoutHelperProtocolVersion = 8;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -348,7 +348,13 @@ class FlutterScoutRuntime {
           .map((section) => section.trim())
           .where((section) => section.isNotEmpty)
           .toSet();
-      return _ok(_inspectPayload(brief: brief, sections: sections));
+      return _ok(
+        _inspectPayload(
+          brief: brief,
+          sections: sections,
+          surfaceOnly: params['surfaceOnly'] == 'true',
+        ),
+      );
     } catch (error) {
       return _fail('inspect_failed', error.toString());
     }
@@ -362,19 +368,74 @@ class FlutterScoutRuntime {
   Map<String, Object?> _inspectPayload({
     required bool brief,
     required Set<String> sections,
+    bool surfaceOnly = false,
   }) {
-    if (!brief && sections.isEmpty) {
+    final snapshot = _snapshot();
+    final surfaceRect = surfaceOnly ? _surfaceRectFor(snapshot) : null;
+    final surfaceAnchorOrdinal = surfaceOnly
+        ? _surfaceAnchorOrdinal(snapshot)
+        : null;
+    final surfaceApplied =
+        surfaceOnly && (surfaceRect != null || surfaceAnchorOrdinal != null);
+    final interactables = _nodesForSurface(
+      snapshot.interactables,
+      surfaceRect,
+      surfaceAnchorOrdinal,
+    );
+    final fields = _nodesForSurface(
+      snapshot.fields,
+      surfaceRect,
+      surfaceAnchorOrdinal,
+    );
+    final textTargets = _nodesForSurface(
+      snapshot.textTargets,
+      surfaceRect,
+      surfaceAnchorOrdinal,
+    );
+    final fullScreenSurface =
+        surfaceOnly &&
+        surfaceRect != null &&
+        surfaceRect.width >= snapshot.logicalSize.width * 0.90 &&
+        surfaceRect.height >= snapshot.logicalSize.height * 0.90;
+    final visibleText = surfaceRect == null
+        ? snapshot.visibleText
+        : fullScreenSurface
+        ? _surfaceVisibleLabels(snapshot, interactables, fields)
+        : _labelsFrom(textTargets);
+    final hitTestableText = surfaceRect == null
+        ? snapshot.hitTestableText
+        : fullScreenSurface
+        ? _surfaceVisibleLabels(snapshot, interactables, fields)
+        : _labelsFrom(textTargets.where((node) => node.hitTestable));
+    if (!brief && sections.isEmpty && !surfaceOnly) {
       final liveAnnotationTargets = _annotationTargets();
       return {
-        ..._snapshot().toJson(),
+        ...snapshot.toJson(),
         'annotationMode': _annotationMode,
         'annotations': _annotationJsonList(liveTargets: liveAnnotationTargets),
       };
     }
-    final snapshot = _snapshot();
     final payload = <String, Object?>{
       'screen': snapshot.screen,
       'routeGuess': snapshot.routeGuess,
+      if (snapshot.activeSurface != null)
+        'activeSurface': snapshot.activeSurface,
+      if (surfaceOnly)
+        'surfaceOnly': {
+          'applied': surfaceApplied,
+          if (!surfaceApplied)
+            'reason': snapshot.activeSurface == null
+                ? 'no_active_surface'
+                : 'surface_bounds_unavailable'
+          else if (surfaceRect != null)
+            'rect': [
+              surfaceRect.left,
+              surfaceRect.top,
+              surfaceRect.width,
+              surfaceRect.height,
+            ],
+          'anchorOrdinal': ?surfaceAnchorOrdinal,
+        },
       'viewSignature': snapshot.viewSignature,
       'visibleTextHash': snapshot.visibleTextHash,
       'idle': snapshot.idle,
@@ -385,51 +446,59 @@ class FlutterScoutRuntime {
       'annotationMode': _annotationMode,
     };
     if (brief) {
+      final briefInteractables = [
+        for (final node in interactables)
+          if (_includeInBriefInteractables(node)) node,
+      ];
       // Duplicate handles (btn.save, btn.save_2, …) are indistinguishable in
       // brief output; give the whole duplicate group a compact position hint
       // so an agent can pick "the one in row 2" without full geometry.
       final duplicateBaseIds = <String, int>{};
-      for (final node in snapshot.interactables) {
+      for (final node in briefInteractables) {
         duplicateBaseIds.update(node.baseId, (n) => n + 1, ifAbsent: () => 1);
       }
+      final omitted = interactables.length - briefInteractables.length;
+      final inspectWarnings = _inspectWarnings(
+        anonymousGenericTargetsOmitted: omitted,
+      );
       payload.addAll({
-        'visibleText': snapshot.visibleText,
-        'hitTestableText': snapshot.hitTestableText,
-        'offscreenText': snapshot.offscreenText,
+        'visibleText': visibleText,
+        'hitTestableText': hitTestableText,
+        if (!surfaceOnly) 'offscreenText': snapshot.offscreenText,
         'interactables': [
-          for (final node in snapshot.interactables)
+          for (final node in briefInteractables)
             _compactNodeJson(
               node,
               withPositionHint: (duplicateBaseIds[node.baseId] ?? 0) > 1,
             ),
         ],
-        'fieldValues': {
-          for (final field in snapshot.fields) field.id: field.value,
-        },
+        if (omitted > 0)
+          'interactablesOmitted': {
+            'count': omitted,
+            'reason': 'anonymous_generic_targets',
+            'hint':
+                'Use inspect --sections interactables when these low-label controls matter.',
+          },
+        if (inspectWarnings.isNotEmpty) 'inspectWarnings': inspectWarnings,
+        'fieldValues': {for (final field in fields) field.id: field.value},
       });
     }
     for (final section in sections) {
       payload.addAll(switch (section) {
         'text' => {
-          'visibleText': snapshot.visibleText,
-          'hitTestableText': snapshot.hitTestableText,
-          'offscreenText': snapshot.offscreenText,
+          'visibleText': visibleText,
+          'hitTestableText': hitTestableText,
+          if (!surfaceOnly) 'offscreenText': snapshot.offscreenText,
         },
         'interactables' => {
-          'interactables': [
-            for (final node in snapshot.interactables) node.toJson(),
-          ],
+          'interactables': [for (final node in interactables) node.toJson()],
         },
         'fields' => {
-          'fields': [for (final node in snapshot.fields) node.toJson()],
-          'fieldValues': {
-            for (final field in snapshot.fields) field.id: field.value,
-          },
+          'fields': [for (final node in fields) node.toJson()],
+          'fieldValues': {for (final field in fields) field.id: field.value},
         },
         'textTargets' => {
-          'textTargets': [
-            for (final node in snapshot.textTargets) node.toJson(),
-          ],
+          'textTargets': [for (final node in textTargets) node.toJson()],
         },
         'scrollables' => {'scrollables': snapshot.scrollables},
         'overlays' => {'overlays': snapshot.overlays},
@@ -442,6 +511,109 @@ class FlutterScoutRuntime {
       });
     }
     return payload;
+  }
+
+  List<Map<String, Object?>> _inspectWarnings({
+    required int anonymousGenericTargetsOmitted,
+  }) {
+    return [
+      if (anonymousGenericTargetsOmitted >= 20)
+        {
+          'code': 'many_anonymous_targets',
+          'count': anonymousGenericTargetsOmitted,
+          'message':
+              'Many visible tappables have no label, key, tooltip, or semantic action name.',
+          'hint':
+              'Add keys, tooltips, or Semantics labels to important controls.',
+        },
+    ];
+  }
+
+  Rect? _surfaceRectFor(ScoutSnapshot snapshot) {
+    for (final overlay in snapshot.overlays.reversed) {
+      if (overlay['kind'] == 'modalBarrier') continue;
+      final rect = _rectFromJson(overlay['rect']);
+      if (rect != null && rect.width > 0 && rect.height > 0) return rect;
+    }
+    return null;
+  }
+
+  int? _surfaceAnchorOrdinal(ScoutSnapshot snapshot) {
+    final value = snapshot.activeSurface?['anchorOrdinal'];
+    return value is int ? value : null;
+  }
+
+  Rect? _rectFromJson(Object? value) {
+    if (value is! List || value.length < 4) return null;
+    final left = (value[0] as num?)?.toDouble();
+    final top = (value[1] as num?)?.toDouble();
+    final width = (value[2] as num?)?.toDouble();
+    final height = (value[3] as num?)?.toDouble();
+    if (left == null || top == null || width == null || height == null) {
+      return null;
+    }
+    return Rect.fromLTWH(left, top, width, height);
+  }
+
+  List<ScoutNode> _nodesForSurface(
+    List<ScoutNode> nodes,
+    Rect? surfaceRect,
+    int? anchorOrdinal,
+  ) {
+    if (surfaceRect == null && anchorOrdinal == null) return nodes;
+    return [
+      for (final node in nodes)
+        if (node.hitTestable &&
+            (anchorOrdinal == null || node.ordinal >= anchorOrdinal))
+          if (surfaceRect == null)
+            node
+          else if (node.rect case final rect?)
+            if (rect.overlaps(surfaceRect) || surfaceRect.contains(rect.center))
+              node,
+    ];
+  }
+
+  List<String> _labelsFrom(Iterable<ScoutNode> nodes) {
+    final labels = <String>{};
+    for (final node in nodes) {
+      final label = node.label?.trim();
+      if (label != null && label.isNotEmpty) labels.add(label);
+    }
+    return labels.toList(growable: false);
+  }
+
+  List<String> _surfaceVisibleLabels(
+    ScoutSnapshot snapshot,
+    List<ScoutNode> interactables,
+    List<ScoutNode> fields,
+  ) {
+    final labels = <String>{};
+    final activeLabel = snapshot.activeSurface?['label']?.toString().trim();
+    if (activeLabel != null && activeLabel.isNotEmpty) {
+      labels.add(activeLabel);
+    } else {
+      labels.addAll(snapshot.hitTestableText);
+    }
+    labels.addAll(_labelsFrom([...interactables, ...fields]));
+    return labels.toList(growable: false);
+  }
+
+  bool _includeInBriefInteractables(ScoutNode node) {
+    if ((node.label ?? '').trim().isNotEmpty) return true;
+    if ((node.key ?? '').trim().isNotEmpty) return true;
+    if (node.altIds.isNotEmpty) return true;
+    if (node.selected != null) return true;
+    if (node.enclosingTarget != null) return true;
+    final id = node.id.toLowerCase();
+    final baseId = node.baseId.toLowerCase();
+    final widgetType = node.widgetType.toLowerCase();
+    final generic =
+        id.contains('gesturedetector') ||
+        baseId.contains('gesturedetector') ||
+        widgetType == 'gesturedetector' ||
+        widgetType == 'listener' ||
+        widgetType == 'rawgesturedetector';
+    return !generic;
   }
 
   /// Orientation-sized node summary for brief inspect: enough to pick a
@@ -485,5 +657,10 @@ class FlutterScoutRuntime {
   Map<String, Object?> debugInspectPayload({
     bool brief = false,
     Set<String> sections = const {},
-  }) => _inspectPayload(brief: brief, sections: sections);
+    bool surfaceOnly = false,
+  }) => _inspectPayload(
+    brief: brief,
+    sections: sections,
+    surfaceOnly: surfaceOnly,
+  );
 }

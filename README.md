@@ -22,10 +22,10 @@ Start here based on what you need:
 ## Capabilities
 
 - **Sessions & lifecycle** — named Scout-owned `ensure`/`launch`, explicit `attach`, exact device resolution, stale-session validation, extension-readiness preflight, `doctor`/`status`/`stop`, and launch timing metrics.
-- **Perception** — compact `inspect` snapshots with stable handles (keys, semantics, tooltips, Material icons/glyphs, inferred button labels), split text visibility (`visibleText`/`hitTestableText`/`offscreenText`), viewport metadata, and duplicate-safe field handles.
+- **Perception** — compact `inspect` snapshots with stable handles (keys, semantics, tooltips, Material icons/glyphs, inferred button labels), split text visibility (`visibleText`/`hitTestableText`/`offscreenText`), modal-focused `inspect --surface`, viewport metadata, and duplicate-safe field handles.
 - **Acting** — tap, tap-text, long-press, input, fill, coordinate-aware scroll/swipe, scroll-to, back; compact action output with per-field fill results and before/after deltas (`--verbose` for full payloads).
 - **Hot update** — reload/restart with capability hints and reload diagnostics that separate rejected VM reloads from apps still running old code.
-- **Visual & log evidence** — in-app and native screenshots/crops, attach-aware log capture, and shareable `evidence` bundles.
+- **Visual & log evidence** — in-app and native screenshots/crops, attach-aware log capture, and shareable `evidence` / `evidence --audit` bundles.
 - **Runtime signals** — hard Flutter/platform error capture with `severity`, `blocking`, `phase`, `ageMs`, and `stale` facts.
 - **Annotation handoff** — an in-app overlay where a human flags widgets and comments, then hands off to the agent (see [Annotation Mode](#annotation-mode)).
 - **Replay** — record sessions and replay flows after a fix, with a concise transcript.
@@ -107,10 +107,18 @@ dart run bin/flutter_scout.dart doctor --project ../../apps/scout_test_app --dev
 dart run bin/flutter_scout.dart status
 ```
 
+For local package development, install the fast local shim so `flutter-scout`
+does not route through `dart pub global run` on every command:
+
+```bash
+tool/install-local-shim.sh
+```
+
 Drive the sample flow:
 
 ```bash
 dart run bin/flutter_scout.dart inspect
+dart run bin/flutter_scout.dart inspect --surface
 dart run bin/flutter_scout.dart tap btn.add_supplier
 dart run bin/flutter_scout.dart fill --json '{"Supplier name":"Replay Supplier","Phone":"555"}'
 dart run bin/flutter_scout.dart tap btn.save_supplier
@@ -119,6 +127,7 @@ dart run bin/flutter_scout.dart screenshot -o /tmp/flutter_scout_test.png
 dart run bin/flutter_scout.dart crop btn.add_supplier -o /tmp/flutter_scout_add_button_crop.png
 dart run bin/flutter_scout.dart crop --text "-Hair Dye - Plum" -o /tmp/flutter_scout_label_crop.png
 dart run bin/flutter_scout.dart evidence -o /tmp/flutter_scout_evidence
+dart run bin/flutter_scout.dart evidence --audit -o /tmp/flutter_scout_evidence
 dart run bin/flutter_scout.dart replay .flutter_scout/session.json
 ```
 
@@ -146,7 +155,7 @@ Action commands return compact JSON by default: result, stability, delta, recent
 
 Scout-owned `launch` and `ensure` responses include a `timing` object when they start Flutter, for example `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`. Use this to tell rebuild cost from app startup or VM-service wait time.
 
-`inspect` includes `fieldsById`, `textTargets`, `visibleText`, `hitTestableText`, `offscreenText`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, `overlays`, `visualTree`, and `controlGroups` so agents can avoid stale, hidden, modal-blocked, or unsafe targets while still visualizing the UI hierarchy. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Icon-only controls should use keys, tooltips, or semantics when possible; Scout also derives handles for common Material icon widgets and glyph text, for example `btn.duplicate` from `Icons.copy`. Unlabeled gesture targets that contain clear action text can be promoted to `btn.*` handles, such as `btn.confirm_payment`, `btn.done`, or `btn.save_smoke`.
+`inspect` includes `fieldsById`, `textTargets`, `visibleText`, `hitTestableText`, `offscreenText`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, `overlays`, `visualTree`, and `controlGroups` so agents can avoid stale, hidden, modal-blocked, or unsafe targets while still visualizing the UI hierarchy. `inspect --brief` omits anonymous generic gesture targets and reports `interactablesOmitted`; dense anonymous screens add `inspectWarnings`. `inspect --surface` focuses on the reachable text/actions on the active modal, picker, dialog, or sheet. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Icon-only controls should use keys, tooltips, or semantics when possible; Scout also derives handles for common Material icon widgets and glyph text, for example `btn.duplicate` from `Icons.copy`. Unlabeled gesture targets that contain clear action text can be promoted to `btn.*` handles, such as `btn.confirm_payment`, `btn.done`, or `btn.save_smoke`.
 
 `fill` and `input` are for real editable text fields only. Custom controls such as numeric keypads are exposed in `visualTree` and `controlGroups`, for example a dialog region with title, display text, a `numeric_keypad` control group, key children like `key.1`, and commit actions like `btn.save`. Agents should operate those controls with explicit `tap` commands, the same way a human would press visible buttons.
 
@@ -181,7 +190,7 @@ Collect a shareable run bundle:
 dart run bin/flutter_scout.dart evidence -o /tmp/flutter_scout_evidence
 ```
 
-The bundle writes `summary.json`, `status.json`, `logs.json`, optional `inspect.json`, optional `session.json`, and a screenshot when the current target supports capture. Unsupported screenshots or missing attach logs are recorded as structured evidence instead of failing the command.
+The bundle writes `summary.json`, `status.json`, `logs.json`, optional `inspect.json`, optional `session.json`, optional `transcript.txt`, and a screenshot when the current target supports capture. Add `--audit` to also write an `audit.md` scaffold with current state, transcript, and finding placeholders. Unsupported screenshots or missing attach logs are recorded as structured evidence instead of failing the command.
 
 `recentErrors` reports runtime facts from Flutter/platform hooks. Entries include `severity`, `blocking`, `phase`, `ageMs`, and `stale` so agents can separate fresh blocking failures from older non-blocking startup noise.
 

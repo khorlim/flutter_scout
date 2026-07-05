@@ -679,6 +679,57 @@ void main() {
     );
   });
 
+  testWidgets('surface inspect focuses on bounded modal content', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                onPressed: () {
+                  showDialog<void>(
+                    context: context,
+                    builder: (_) => AlertDialog(
+                      title: const Text('Payment'),
+                      content: const Text('Confirm Payment'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Cancel'),
+                        ),
+                        TextButton(onPressed: () {}, child: const Text('Pay')),
+                      ],
+                    ),
+                  );
+                },
+                child: const Text('Open Payment'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open Payment'));
+    await tester.pumpAndSettle();
+
+    final surface = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+      surfaceOnly: true,
+    );
+    expect(surface['surfaceOnly'], containsPair('applied', true));
+    expect(surface['visibleText'], contains('Payment'));
+    expect(surface['visibleText'], isNot(contains('Open Payment')));
+    final ids = (surface['interactables']! as List)
+        .cast<Map<String, Object?>>()
+        .map((node) => node['id']);
+    expect(ids, contains('btn.cancel'));
+    expect(ids, contains('btn.pay'));
+    expect(ids, isNot(contains('btn.open_payment')));
+  });
+
   testWidgets('Scout chrome is excluded from inspect output', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(
@@ -841,6 +892,51 @@ void main() {
     expect(edits[0]['at'], isNot(edits[1]['at']));
     final save = nodes.firstWhere((n) => (n['label'] as String?) == 'Save');
     expect(save.containsKey('at'), isFalse);
+  });
+
+  testWidgets('brief omits anonymous generic gesture targets', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              for (var i = 0; i < 25; i++)
+                GestureDetector(
+                  onTap: () {},
+                  child: SizedBox(width: 20, height: 20),
+                ),
+              GestureDetector(
+                key: const ValueKey('keyed_generic'),
+                onTap: () {},
+                child: const SizedBox(width: 20, height: 20),
+              ),
+              ElevatedButton(onPressed: () {}, child: const Text('Save')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+    );
+    final nodes = (brief['interactables']! as List)
+        .cast<Map<String, Object?>>();
+    expect(nodes.any((n) => n['id'] == 'btn.save'), isTrue);
+    expect(nodes.any((n) => n['id'] == 'tap.keyed_generic'), isTrue);
+    expect(
+      nodes.any((n) => n['id'].toString().contains('gesturedetector')),
+      isFalse,
+    );
+    expect(
+      brief['interactablesOmitted'],
+      containsPair('reason', 'anonymous_generic_targets'),
+    );
+    final warnings = (brief['inspectWarnings']! as List)
+        .cast<Map<String, Object?>>();
+    expect(warnings.single, containsPair('code', 'many_anonymous_targets'));
   });
 
   testWidgets('wait-for conditions match visible text case-insensitively', (

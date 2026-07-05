@@ -66,7 +66,8 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
             } else {
               visibleText.add(trimmed);
               final point = _visibleCenter(rect);
-              if (point != null && _hitTestable(point)) {
+              if (point != null &&
+                  _hitTestable(point, target: element.renderObject)) {
                 hitTestableText.add(trimmed);
               }
             }
@@ -194,6 +195,11 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     if (!modalActive || (textTargets.isEmpty && visibleText.isEmpty)) {
       return null;
     }
+    final overlaySurface = _activeSurfaceFromOverlays(
+      overlays: overlays,
+      textTargets: textTargets,
+    );
+    if (overlaySurface != null) return overlaySurface;
     final candidates = [
       for (final node in textTargets)
         if (node.rect case final rect?)
@@ -215,10 +221,18 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           });
       final label = labels.isEmpty ? null : labels.first;
       if (label == null || label.isEmpty) return null;
+      final anchors = [
+        for (final node in textTargets)
+          if ((node.label ?? '').trim() == label) node,
+      ]..sort((a, b) => a.ordinal.compareTo(b.ordinal));
+      final anchor = anchors.isEmpty ? null : anchors.first;
       return {
         'kind': 'modal',
         'label': label,
         'screen': '${_pascalCaseSurfaceName(label)}Surface',
+        if (anchor != null) 'anchorOrdinal': anchor.ordinal,
+        if (anchor?.rect case final rect?)
+          'anchorRect': [rect.left, rect.top, rect.width, rect.height],
       };
     }
     candidates.sort((a, b) {
@@ -239,7 +253,36 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       'kind': 'modal',
       'label': label,
       'screen': '${_pascalCaseSurfaceName(label)}Surface',
+      'anchorOrdinal': candidates.first.ordinal,
+      if (candidates.first.rect case final rect?)
+        'anchorRect': [rect.left, rect.top, rect.width, rect.height],
     };
+  }
+
+  Map<String, Object?>? _activeSurfaceFromOverlays({
+    required List<Map<String, Object?>> overlays,
+    required List<ScoutNode> textTargets,
+  }) {
+    for (final overlay in overlays.reversed) {
+      if (overlay['kind'] == 'modalBarrier') continue;
+      final label = overlay['label']?.toString().trim();
+      if (label == null || label.isEmpty) continue;
+      final anchors = [
+        for (final node in textTargets)
+          if ((node.label ?? '').trim() == label) node,
+      ]..sort((a, b) => a.ordinal.compareTo(b.ordinal));
+      final anchor = anchors.isEmpty ? null : anchors.first;
+      return {
+        'kind': 'modal',
+        'label': label,
+        'screen': '${_pascalCaseSurfaceName(label)}Surface',
+        if (anchor != null) 'anchorOrdinal': anchor.ordinal,
+        if (anchor?.rect case final rect?)
+          'anchorRect': [rect.left, rect.top, rect.width, rect.height],
+        if (overlay['rect'] != null) 'rect': overlay['rect'],
+      };
+    }
+    return null;
   }
 
   static const Set<String> _genericModalSurfaceNames = {

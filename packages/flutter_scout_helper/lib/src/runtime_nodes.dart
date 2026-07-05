@@ -204,7 +204,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       suggestedTapPoint: suggestedTapPoint,
       hitTestable: suggestedTapPoint == null
           ? false
-          : _hitTestable(suggestedTapPoint),
+          : _hitTestable(suggestedTapPoint, target: element.renderObject),
       enabled: _enabledFor(widget),
       confidence: label == null ? 0.65 : 0.94,
       selected: kind == 'text' ? null : _selectedStateFor(element, widget),
@@ -762,7 +762,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return {
       'kind': kind,
       'widgetType': widget.runtimeType.toString(),
-      'label': _textBelow(element),
+      'label': _textBelow(element, maxDepth: 8),
       'rect': rect == null
           ? null
           : [rect.left, rect.top, rect.width, rect.height],
@@ -877,11 +877,12 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return visible.center;
   }
 
-  bool _hitTestable(Offset point) {
+  bool _hitTestable(Offset point, {RenderObject? target}) {
     try {
       final result = HitTestResult();
       WidgetsBinding.instance.hitTestInView(result, point, _primaryViewId);
-      return result.path.isNotEmpty;
+      if (target == null) return result.path.isNotEmpty;
+      return result.path.any((entry) => identical(entry.target, target));
     } catch (_) {
       return false;
     }

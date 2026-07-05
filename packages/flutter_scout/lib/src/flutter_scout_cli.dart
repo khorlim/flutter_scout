@@ -29,7 +29,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 7;
+  static const int expectedHelperProtocolVersion = 8;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -1515,7 +1515,7 @@ Usage:
   flutter-scout status
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
-  flutter-scout inspect
+  flutter-scout inspect [--brief] [--surface] [--sections <list>]
   flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|fixed|check]
   flutter-scout annotations wait [--timeout <seconds>] [--poll <ms>]
   flutter-scout annotations fixed <annotation-id> [--note <text>]
@@ -1536,7 +1536,7 @@ Usage:
   flutter-scout logs [--last <n>] [--contains <text>] [--summary]
   flutter-scout screenshot [-o <path>] [--target <target>] [--native]
   flutter-scout crop <target> | crop --text <visible text> | crop --rect x,y,w,h [-o <path>] [--native]
-  flutter-scout evidence [-o <dir>] [--last <n>]
+  flutter-scout evidence [-o <dir>] [--last <n>] [--audit]
   flutter-scout replay [session.json] [--verbose]
 ''');
   }

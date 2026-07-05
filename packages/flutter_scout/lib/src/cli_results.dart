@@ -210,6 +210,7 @@ extension _CliResults on FlutterScoutCli {
       if (result['fieldResults'] != null)
         'fieldResults': result['fieldResults'],
       if (result['warnings'] != null) 'warnings': result['warnings'],
+      if (_workflowHints().isNotEmpty) 'workflowHints': _workflowHints(),
       if (result['fallback'] != null) 'fallback': result['fallback'],
       if (result['helperProtocol'] != null)
         'helperProtocol': result['helperProtocol'],
@@ -218,6 +219,20 @@ extension _CliResults on FlutterScoutCli {
       if (result['recentErrors'] is List)
         'recentErrors': _lastItems(result['recentErrors'] as List, 3),
     };
+  }
+
+  List<Map<String, Object?>> _workflowHints() {
+    if (_reuseVmConnection) return const [];
+    final actionCount = _readSessionActions().length;
+    if (actionCount < 3) return const [];
+    return [
+      {
+        'code': 'consider_serve',
+        'actionCount': actionCount,
+        'message':
+            'This exploratory session has several plain CLI actions. Start `flutter-scout serve` for one persistent VM connection and faster follow-up commands.',
+      },
+    ];
   }
 
   Map<String, Object?> _compactNode(Map<String, dynamic> node) {

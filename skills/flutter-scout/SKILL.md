@@ -41,6 +41,13 @@ If installed as an executable, use:
 flutter-scout <command>
 ```
 
+For local package development, refresh the fast executable shim after changing
+Scout so normal `flutter-scout` calls do not go through `dart pub global run`:
+
+```bash
+/Users/han/flutter_packages/flutter_scout/tool/install-local-shim.sh
+```
+
 ## Preferred Workflow
 
 1. Prefer a named Scout-owned session for agent work:
@@ -85,11 +92,12 @@ Use `status` when session ownership is unclear. It reports `session.mode` and `h
 
 ```bash
 flutter-scout inspect --brief
+flutter-scout inspect --surface
 flutter-scout inspect
 flutter-scout inspect --sections textTargets,scrollables
 ```
 
-Prefer `inspect --brief` for orientation: it returns the screen name, visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, and errors at a fraction of the full payload size. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,annotations` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
+Prefer `inspect --brief` for orientation: it returns the screen name, visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, and errors at a fraction of the full payload size. Brief output omits anonymous generic gesture targets and reports `interactablesOmitted`; when many are omitted it adds an `inspectWarnings` item so you know semantics are weak without reading hundreds of `tap.gesturedetector_*` handles. Use `inspect --surface` when a modal, picker, dialog, or sheet is active and you want only the top surface's reachable text/actions. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,annotations` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
 
 Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it. For CUSTOM segments/chips with no semantics, Scout infers selection heuristically: in a run of 3+ adjacent same-kind tappables where exactly one label color differs, that outlier is marked selected — treat inferred values as strong hints, not ground truth.
 
@@ -236,6 +244,9 @@ curl "localhost:$(cat /tmp/scout.port)/stop"
 
 Each `/run` response is `{"exitCode": N, "result": {...}}` — the command's JSON is nested as a parsed object under `result` (raw text under `output` only when the command didn't print JSON), so parse the response once. Always `/stop` the daemon when the loop ends — a leaked daemon holds a VM connection open, and a later `stop`/relaunch orphans it. Don't spin up `serve` for a single command or a 2–3 step known sequence; the daemon lifecycle costs more than it saves there.
 
+If compact action output includes `workflowHints` with `code:"consider_serve"`,
+switch to `serve` for the rest of that exploratory loop.
+
 **Choosing between `serve`, `batch`, and plain commands** — the deciding factor is whether you know the sequence in advance, not how many steps it is. Ask: *"Could I write this whole sequence to a file right now, before running anything?"*
 
 - **No — each step depends on what the previous step showed** (you're discovering the app; your own reasoning is the branch): use **`serve`**. `batch` is a fixed list and cannot branch on results.
@@ -331,6 +342,7 @@ flutter-scout batch 'tap btn.a --expect-text B; tap-text C --expect-screen DScre
 flutter-scout apps
 flutter-scout --app my-session inspect --brief
 flutter-scout inspect --brief
+flutter-scout inspect --surface
 flutter-scout inspect --sections textTargets,scrollables
 flutter-scout screenshot --annotated -o /tmp/marked.png
 flutter-scout crop --rect 900,0,200,90 -o /tmp/region.png
@@ -353,6 +365,7 @@ flutter-scout deeplink myapp://route
 flutter-scout logs --summary
 flutter-scout logs --last 20
 flutter-scout evidence -o /tmp/flutter_scout_evidence
+flutter-scout evidence --audit -o /tmp/flutter_scout_evidence
 flutter-scout stop --clear-session
 ```
 
@@ -362,7 +375,7 @@ If `logs` reports `source:"attach_only_session"` and `available:false`, Scout is
 
 If `logs --contains <text>` reports `available:true` and `matched:0`, Scout did read a non-empty Scout-owned log but no lines matched that filter. Broaden the search or inspect the app's own logging path.
 
-Use `evidence` at the end of a significant run to collect `summary.json`, `status.json`, `logs.json`, optional `inspect.json`, optional `session.json`, and a screenshot when supported. Missing attach logs or unsupported screenshots are recorded as structured evidence rather than making the command fail.
+Use `evidence` at the end of a significant run to collect `summary.json`, `status.json`, `logs.json`, optional `inspect.json`, optional `session.json`, `transcript.txt`, and a screenshot when supported. Add `--audit` to also write an `audit.md` scaffold with current state, transcript, and finding placeholders. Missing attach logs or unsupported screenshots are recorded as structured evidence rather than making the command fail.
 
 `recentErrors` entries include severity facts such as `severity`, `blocking`, `phase`, `ageMs`, and `stale`. Treat fresh `blocking:true` errors as hard failures. Older or non-blocking startup/network entries may be relevant context, but they do not automatically mean the current flow failed.
 
@@ -373,7 +386,7 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Use `attach` only to preserve human-in-the-loop state or when the user explicitly asks for it.
 - Prefer `ensure` over repeated `launch`; repeated full launch causes slow native rebuilds.
 - Always pass `--name <feature>` when running the app via `launch`/`ensure` — never run unnamed. Use a kebab-case slug of the feature/task currently in focus (e.g. `add-member`), or the current git branch when no single feature is. Then address that session anywhere with `--app <feature>`.
-- Start with `inspect --brief`; use full `inspect` or `--sections` only when the brief payload is not enough. Avoid blind screenshots — but when you do need a visual map, prefer `screenshot --annotated` (numbered marks + handle legend) over a plain screenshot.
+- Start with `inspect --brief`; use `inspect --surface` for active modals/pickers/dialogs; use full `inspect` or `--sections` only when the compact payload is not enough. Avoid blind screenshots — but when you do need a visual map, prefer `screenshot --annotated` (numbered marks + handle legend) over a plain screenshot.
 - Treat `result:"already_selected"` as success-no-op (the tab/toggle was already in that state); never retry it.
 - Prefer `--expect-*` flags on actions over separate wait-for calls: act + gate in one VM call, no inter-command gap for timing-sensitive UI to drift through. Use standalone `wait-for` (text/gone/target/selected/screen/field) when no action precedes the wait.
 - Pick the execution mode by whether the sequence is known in advance: discovering the app step-by-step (each action depends on the last snapshot) → run a `serve` daemon and `/stop` it when done; a known multi-step flow → `batch` (one process, one connection); a one-off → a plain command. `batch` cannot branch on results — that is what `serve` is for.

@@ -199,6 +199,35 @@ void main() {
     });
   });
 
+  test('evidence audit mode writes transcript and markdown scaffold', () async {
+    await _withTempCwd(() async {
+      final sessionDir = Directory('.flutter_scout')..createSync();
+      File(p.join(sessionDir.path, 'session.json')).writeAsStringSync(
+        jsonEncode([
+          {'cmd': 'tap', 'target': 'btn.classroom'},
+          {'cmd': 'tap-text', 'text': 'Add Classroom'},
+        ]),
+      );
+
+      final exitCode = await FlutterScoutCli().run(['evidence', '--audit']);
+
+      expect(exitCode, 0);
+      final files = Directory(
+        '.flutter_scout/evidence',
+      ).listSync(recursive: true).whereType<File>().toList();
+      final audit = files.singleWhere((file) => file.path.endsWith('audit.md'));
+      final transcript = files.singleWhere(
+        (file) => file.path.endsWith('transcript.txt'),
+      );
+      expect(audit.readAsStringSync(), contains('# Flutter Scout UI/UX Audit'));
+      expect(transcript.readAsStringSync(), contains('tap btn.classroom'));
+      expect(
+        transcript.readAsStringSync(),
+        contains('tap-text "Add Classroom"'),
+      );
+    });
+  });
+
   test('annotation lifecycle commands require exactly one id', () async {
     await _withTempCwd(() async {
       final missingId = await FlutterScoutCli().run(['annotations', 'resolve']);
@@ -556,6 +585,31 @@ void main() {
   });
 
   group('helper protocol diagnostics', () {
+    test(
+      'compact action output suggests serve after several plain actions',
+      () async {
+        await _withTempCwd(() async {
+          final sessionDir = Directory('.flutter_scout')..createSync();
+          File(p.join(sessionDir.path, 'session.json')).writeAsStringSync(
+            jsonEncode([
+              {'cmd': 'tap', 'target': 'btn.one'},
+              {'cmd': 'tap', 'target': 'btn.two'},
+              {'cmd': 'tap', 'target': 'btn.three'},
+            ]),
+          );
+
+          final result = FlutterScoutCli().debugCompactActionResult({
+            'ok': true,
+            'action': 'tap btn.four',
+            'result': 'changed',
+          });
+
+          final hints = result['workflowHints'] as List<Object?>;
+          expect(hints.single, containsPair('code', 'consider_serve'));
+        });
+      },
+    );
+
     test('modern helper version passes clean, even for brief payloads', () {
       final cli = FlutterScoutCli();
       final result = cli.debugProtocolDiagnostics('ext.flutter_scout.inspect', {
