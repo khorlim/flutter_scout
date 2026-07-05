@@ -359,6 +359,14 @@ void main() {
         'tap-text',
         'T&C',
       ]);
+      expect(
+        FlutterScoutCli.splitCommandLine('tap-text --text "-Hair Dye - Plum"'),
+        ['tap-text', '--text', '-Hair Dye - Plum'],
+      );
+      expect(
+        FlutterScoutCli.splitCommandLine('crop --text "-Hair Dye - Plum"'),
+        ['crop', '--text', '-Hair Dye - Plum'],
+      );
       expect(FlutterScoutCli.splitCommandLine('wait-for --text "Saved; ok"'), [
         'wait-for',
         '--text',
@@ -456,8 +464,16 @@ void main() {
               'expectText': 'Saved',
               'expectTimeoutMs': '5000',
             },
+            {'cmd': 'tap-text', 'text': '-Hair Dye - Plum', 'waitMs': '1500'},
             {'cmd': 'input', 'target': 'field.name', 'value': 'QA name'},
             {'cmd': 'scroll', 'direction': 'down', 'distance': '300'},
+            {'cmd': 'scroll-to', 'target': 'tap.calendar', 'maxScrolls': '6'},
+            {
+              'cmd': 'scroll-to',
+              'target': 'tap.calendar',
+              'maxScrolls': '6',
+              'direction': 'up',
+            },
             {'cmd': 'bogus-thing', 'x': '1'},
           ]),
         );
@@ -468,8 +484,11 @@ void main() {
         expect(lines, [
           'tap btn.save',
           "tap-text 'T&C' --wait-ms 800 --expect-text Saved",
+          "tap-text --text '-Hair Dye - Plum'",
           "input --target field.name 'QA name'",
           'scroll down --distance 300',
+          'scroll-to tap.calendar --max-scrolls 6',
+          'scroll-to tap.calendar --max-scrolls 6 --direction up',
         ]);
         // Round-trips through the batch splitter.
         expect(FlutterScoutCli.splitCommandLine(lines[1]), [

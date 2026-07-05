@@ -8,7 +8,7 @@ description: Use Flutter Scout to give AI agents eyes and hands for Flutter apps
 Use Flutter Scout to verify Flutter changes on a simulator with a compact agent loop:
 
 ```text
-ensure or attach -> inspect -> act -> reload/restart after edits -> read delta/errors -> crop if needed -> replay
+named ensure/launch -> inspect -> act -> reload/restart after edits -> read delta/errors -> crop if needed -> replay
 ```
 
 ## Setup Check
@@ -43,20 +43,25 @@ flutter-scout <command>
 
 ## Preferred Workflow
 
-1. Prefer reusing an existing simulator app:
+1. Prefer a named Scout-owned session for agent work:
 
 ```bash
 flutter-scout ensure --device <simulator-id> --project <flutter-app-path> --name add-member
-flutter-scout attach --device <simulator-id>
-flutter-scout attach --debug-url <vm-service-url>
 ```
 
-`ensure` is the default for agent loops: it reuses a ready Scout VM service when possible and launches only when needed. Always pass `--name` (see below) — `attach` inherits the session that was named at launch/ensure, so it needs no name of its own.
+`ensure` is the default for agent loops: it reuses a ready Scout-owned VM service for that named session when possible and launches only when needed. Always pass `--name` (see below).
 
-2. Launch directly only when you intentionally need a new Scout-owned Flutter run:
+2. Launch directly when you intentionally need a fresh Scout-owned Flutter run:
 
 ```bash
 flutter-scout launch --device <simulator-id> --project <flutter-app-path> --name add-member
+```
+
+Use `attach` only when the user explicitly wants you to preserve or inspect a human-started app state:
+
+```bash
+flutter-scout attach --device <simulator-id>
+flutter-scout attach --debug-url <vm-service-url>
 ```
 
 **Always name the session — never run the app unnamed.** Pass `--name <label>` on every `launch`/`ensure`, deriving the label from what you are working on *right now*: a short kebab-case slug of the feature or task in focus. Working on an add-member flow → `--name add-member`; fixing supplier search → `--name supplier-search`. If no single feature is in focus, fall back to the current git branch name (e.g. `git rev-parse --abbrev-ref HEAD`). Setting it on every run is worth it because the label:
@@ -167,6 +172,8 @@ flutter-scout scroll-to side_panel_item --direction right
 
 It returns `result:"reached"` with `scrollsUsed` and the matched `target` on success, `result:"already_visible"` when no scroll was needed, and fails with `reason:"reached_scroll_end"` (hit an edge) or `reason:"target_not_reached"` (exhausted `--max-scrolls`; raise it for deeper targets). When a plain `tap`/`long-press` cannot find a handle and the screen has a scrollable, the `target_not_found` failure includes `reason:"maybe_offscreen_or_lazy"` and `reachHint:"scroll-to <target>"` — follow it rather than assuming the handle is wrong.
 
+If you omit `--direction`, `scroll-to` starts downward and automatically retries the opposite direction when it reaches the scroll edge without finding the target. Use an explicit `--direction` only when you know which way the target lives.
+
 Explicit widget `Key`s are always surfaced as handles in `interactables` (for example a keyed `InkWell`, `ListTile`, or `GestureDetector` appears as `tap.<key>`), and they win over text-derived ids, so prefer keyed handles when present. Handle matching is kind-prefix agnostic: `btn.gesture_menu_pin`, `tap.gesture_menu_pin`, and the bare `gesture_menu_pin` all resolve to the same keyed node.
 
 `swipe` and `long-press` accept a handle via `--target`/positional target (resolved to the target's safe point), so prefer `swipe left --target tap.task_1` or `long-press tap.task_2` over hand-computed coordinates for Dismissible rows, reorder handles, and context menus.
@@ -269,18 +276,19 @@ Prefer `reload` first because it preserves app state. Use `restart` when reload 
 ```bash
 flutter-scout bounds btn.save_supplier
 flutter-scout crop btn.save_supplier -o /tmp/save_button.png
+flutter-scout crop --text "-Hair Dye - Plum" -o /tmp/appointment_label.png
 flutter-scout crop --rect 900,0,200,90 -o /tmp/top_right.png
 flutter-scout screenshot -o /tmp/current_screen.png
 flutter-scout screenshot --annotated -o /tmp/marked.png
 ```
 
-`crop --rect x,y,w,h` captures an arbitrary logical region without needing a handle — useful for corners and composite areas. `crop --annotated` draws numbered marks over interactables inside the region and prints the legend.
+`crop --text "<visible text>"` crops the matched visible text bounds directly, which is useful when a label has no stable handle or starts with `-`. `crop --rect x,y,w,h` captures an arbitrary logical region without needing a handle — useful for corners and composite areas. `crop --annotated` draws numbered marks over interactables inside the region and prints the legend.
 
 For long or multi-line text, `input --target <field> --file /path/to/text.txt` reads the value from a file — no shell-quoting battles.
 
 Prefer `bounds` and crops over full screenshots when inspecting one control or dialog. `screenshot` and `crop` render in-app by default (works on any platform, including physical devices), and report `"backend": "in_app_capture"`. When the captured region contains a platform view (map, webview, native video) that would render blank, Scout automatically falls back to a native capture. Pass `--native` to force the native backend (iOS Simulator `simctl` / macOS app-window `screencapture`); native crops remain iOS Simulator-only and macOS attach returns `crop_unsupported_target`.
 
-`tap-text` activates the nearest safe actionable ancestor and returns both `target` and `textTarget`. Short labels like `OK` require exact matches. If the matched text maps to a different semantic action, Scout returns `tap_text_target_mismatch` instead of tapping. Use the explicit handle reported in the error, coordinates, or `tap-text --allow-mismatch` only when that mismatch is intentional. If a broad ancestor would be unsafe, Scout can tap the visible text point and report `activation.strategy:"broad_ancestor_text_point"`; if no actionable ancestor exists but the text point is hit-testable, it reports `activation.strategy:"visible_text_point"`.
+`tap-text` activates the nearest safe actionable ancestor and returns both `target` and `textTarget`. Use `tap-text --text "<visible text>"` when the label starts with `-` or another shell-sensitive token. Short labels like `OK` require exact matches. If the matched text maps to a different semantic action, Scout returns `tap_text_target_mismatch` instead of tapping. Use the explicit handle reported in the error, coordinates, or `tap-text --allow-mismatch` only when that mismatch is intentional. If a broad ancestor would be unsafe, Scout can tap the visible text point and report `activation.strategy:"broad_ancestor_text_point"`; if no actionable ancestor exists but the text point is hit-testable, it reports `activation.strategy:"visible_text_point"`.
 
 When a submit reveals validation, read `delta.newValidationMessages` and `delta.validationCandidates`; they identify the field id, label, and validation message that appeared.
 
@@ -330,6 +338,7 @@ flutter-scout reload
 flutter-scout restart
 flutter-scout input --target field.search "query"
 flutter-scout tap-text "GoodJob"
+flutter-scout tap-text --text "-Hair Dye - Plum"
 flutter-scout tap 1036 589
 flutter-scout long-press btn.more
 flutter-scout scroll down --distance 300
@@ -360,7 +369,8 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 ## Agent Rules
 
 - Treat Flutter Scout as eyes and hands, not a QA judge.
-- Prefer `attach` to preserve human-in-the-loop state.
+- Prefer named `ensure`/`launch` for agent-run verification sessions so Scout owns logs, restart, and session identity.
+- Use `attach` only to preserve human-in-the-loop state or when the user explicitly asks for it.
 - Prefer `ensure` over repeated `launch`; repeated full launch causes slow native rebuilds.
 - Always pass `--name <feature>` when running the app via `launch`/`ensure` — never run unnamed. Use a kebab-case slug of the feature/task currently in focus (e.g. `add-member`), or the current git branch when no single feature is. Then address that session anywhere with `--app <feature>`.
 - Start with `inspect --brief`; use full `inspect` or `--sections` only when the brief payload is not enough. Avoid blind screenshots — but when you do need a visual map, prefer `screenshot --annotated` (numbered marks + handle legend) over a plain screenshot.

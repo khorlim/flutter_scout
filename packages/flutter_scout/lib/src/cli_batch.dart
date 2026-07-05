@@ -179,7 +179,13 @@ extension _CliExportBatch on FlutterScoutCli {
           takePositional('y');
         }
       case 'tap-text':
-        takePositional('text');
+        final text = params.remove('text');
+        if (text == null) return null;
+        if (text.startsWith('-')) {
+          parts.addAll(['--text', FlutterScoutCli.quoteBatchArg(text)]);
+        } else {
+          parts.add(FlutterScoutCli.quoteBatchArg(text));
+        }
       case 'input':
         final target = params.remove('target');
         if (target != null && target != 'focused') {

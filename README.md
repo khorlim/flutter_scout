@@ -3,7 +3,7 @@
 Flutter Scout is an agent-oriented **eyes-and-hands bridge** for Flutter simulator apps. An AI agent inspects the running app, drives real feature flows, reads exactly what changed after each action, and catches hard runtime errors — with no per-screen test scaffolding in the app.
 
 ```text
-ensure/attach → inspect → act → reload/restart after edits → read delta + errors → crop → replay
+named ensure/launch → inspect → act → reload/restart after edits → read delta + errors → crop → replay
 ```
 
 ## Documentation map
@@ -21,10 +21,10 @@ Start here based on what you need:
 
 ## Capabilities
 
-- **Sessions & lifecycle** — attach-first `ensure`, explicit `launch`/`attach`, exact device resolution, stale-session validation, extension-readiness preflight, `doctor`/`status`/`stop`, and launch timing metrics.
+- **Sessions & lifecycle** — named Scout-owned `ensure`/`launch`, explicit `attach`, exact device resolution, stale-session validation, extension-readiness preflight, `doctor`/`status`/`stop`, and launch timing metrics.
 - **Perception** — compact `inspect` snapshots with stable handles (keys, semantics, tooltips, Material icons/glyphs, inferred button labels), split text visibility (`visibleText`/`hitTestableText`/`offscreenText`), viewport metadata, and duplicate-safe field handles.
 - **Acting** — tap, tap-text, long-press, input, fill, coordinate-aware scroll/swipe, scroll-to, back; compact action output with per-field fill results and before/after deltas (`--verbose` for full payloads).
-- **Hot update** — attach-first reload/restart with capability hints and reload diagnostics that separate rejected VM reloads from apps still running old code.
+- **Hot update** — reload/restart with capability hints and reload diagnostics that separate rejected VM reloads from apps still running old code.
 - **Visual & log evidence** — in-app and native screenshots/crops, attach-aware log capture, and shareable `evidence` bundles.
 - **Runtime signals** — hard Flutter/platform error capture with `severity`, `blocking`, `phase`, `ageMs`, and `stale` facts.
 - **Annotation handoff** — an in-app overlay where a human flags widgets and comments, then hands off to the agent (see [Annotation Mode](#annotation-mode)).
@@ -67,20 +67,26 @@ No per-screen or per-widget wrappers are required.
 
 ## Verified Simulator Flow
 
-Prefer `ensure` for day-to-day verification. It reuses a running Scout session when possible and launches only when needed:
+Prefer named `ensure` for day-to-day agent verification. It reuses a ready Scout-owned session for that name when possible and launches only when needed:
 
 ```bash
 cd packages/flutter_scout
-dart run bin/flutter_scout.dart ensure --device <simulator-id> --project ../../apps/scout_test_app
+dart run bin/flutter_scout.dart ensure --device <simulator-id> --project ../../apps/scout_test_app --name smoke-test
 ```
 
-Use `launch` when you explicitly need Scout to start a new Flutter run:
+Use `launch` when you explicitly need Scout to start a fresh Flutter run:
 
 ```bash
-dart run bin/flutter_scout.dart launch --device <simulator-id> --project ../../apps/scout_test_app
+dart run bin/flutter_scout.dart launch --device <simulator-id> --project ../../apps/scout_test_app --name smoke-test
 ```
 
-Add `--name <label>` (on `launch` or `ensure`) to distinguish concurrent sessions — e.g. one debug window per worktree on macOS/desktop. Scout injects it as a `--dart-define` and the in-app helper paints a small bottom-left HUD badge with that label in debug builds; tap the badge to collapse it to a dot when it's in the way:
+Use `attach` only when you intentionally need to preserve or inspect a human-started app state:
+
+```bash
+dart run bin/flutter_scout.dart attach --device <simulator-id> --debug-url <vm-service-url>
+```
+
+Pass `--name <label>` on every `launch` or `ensure` to distinguish concurrent sessions — e.g. one debug window per worktree on macOS/desktop. Scout injects it as a `--dart-define` and the in-app helper paints a small bottom-left HUD badge with that label in debug builds; tap the badge to collapse it to a dot when it's in the way:
 
 ```bash
 dart run bin/flutter_scout.dart launch --device macos --project ../../apps/scout_test_app --name feature-a
@@ -111,6 +117,7 @@ dart run bin/flutter_scout.dart tap btn.save_supplier
 dart run bin/flutter_scout.dart bounds btn.add_supplier
 dart run bin/flutter_scout.dart screenshot -o /tmp/flutter_scout_test.png
 dart run bin/flutter_scout.dart crop btn.add_supplier -o /tmp/flutter_scout_add_button_crop.png
+dart run bin/flutter_scout.dart crop --text "-Hair Dye - Plum" -o /tmp/flutter_scout_label_crop.png
 dart run bin/flutter_scout.dart evidence -o /tmp/flutter_scout_evidence
 dart run bin/flutter_scout.dart replay .flutter_scout/session.json
 ```
@@ -131,6 +138,7 @@ dart run bin/flutter_scout.dart tap btn.smoke_issues
 dart run bin/flutter_scout.dart fill --json '{"field.enter_duplicate_note":"One","field.enter_duplicate_note_2":"Two","field.committed_answer":"Committed"}'
 dart run bin/flutter_scout.dart tap btn.select_staff
 dart run bin/flutter_scout.dart tap-text GoodJob
+dart run bin/flutter_scout.dart tap-text --text "-Hair Dye - Plum"
 dart run bin/flutter_scout.dart scroll down --from 220,760 --distance 520
 ```
 
@@ -144,7 +152,7 @@ Scout-owned `launch` and `ensure` responses include a `timing` object when they 
 
 Target taps require a visible safe point. If a handle exists but is currently offscreen, `tap <handle>` returns `target_not_visible` instead of dispatching a gesture to an offscreen rect center. Scroll the control into view first, then tap the same handle.
 
-`tap-text` activates the nearest safe actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Very short text such as `OK` must match exactly. If the text appears to map to a different semantic action, such as `Select Room` inside a `Confirm` button region, Scout refuses with `tap_text_target_mismatch` instead of submitting the wrong action. Use the explicit target handle or `--allow-mismatch` only when that mismatch is intentional. If the only safe actionable ancestor is much larger than the text, Scout taps the text point instead of the broad ancestor center. If no actionable ancestor exists but the visible text point is hit-testable, Scout can still tap that point and reports `activation.strategy:"visible_text_point"`. If an attached app is still running an older helper that returns a raw text target, the CLI warns about the stale helper protocol and retries against the best overlapping actionable inspect target when possible.
+`tap-text` activates the nearest safe actionable ancestor for visible text and returns both the activated `target` and the matched `textTarget`. Use `tap-text --text "<visible text>"` when the label starts with `-` or another shell-sensitive token. Very short text such as `OK` must match exactly. If the text appears to map to a different semantic action, such as `Select Room` inside a `Confirm` button region, Scout refuses with `tap_text_target_mismatch` instead of submitting the wrong action. Use the explicit target handle or `--allow-mismatch` only when that mismatch is intentional. If the only safe actionable ancestor is much larger than the text, Scout taps the text point instead of the broad ancestor center. If no actionable ancestor exists but the visible text point is hit-testable, Scout can still tap that point and reports `activation.strategy:"visible_text_point"`. If an attached app is still running an older helper that returns a raw text target, the CLI warns about the stale helper protocol and retries against the best overlapping actionable inspect target when possible.
 
 When a submit action reveals field validation, action deltas include `newValidationMessages` and `validationCandidates` so agents can identify the missing field without guessing from raw text.
 

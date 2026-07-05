@@ -315,6 +315,12 @@ extension _CliActions on FlutterScoutCli {
 
   Future<int> _tapText(List<String> args) async {
     final parser = ArgParser()
+      ..addOption(
+        'text',
+        help:
+            'Visible text to tap. Use this when the label starts with `-` or '
+            'could otherwise be parsed as an option.',
+      )
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('allow-mismatch', defaultsTo: false, negatable: false)
       ..addFlag(
@@ -328,13 +334,23 @@ extension _CliActions on FlutterScoutCli {
       ..addFlag('verbose', defaultsTo: false);
     _addExpectOptions(parser);
     final parsed = parser.parse(args);
-    if (parsed.rest.isEmpty) {
+    final textOption = parsed.option('text');
+    if ((textOption == null || textOption.isEmpty) && parsed.rest.isEmpty) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout tap-text <visible text>',
+        'Usage: flutter-scout tap-text <visible text> or '
+            'flutter-scout tap-text --text <visible text>',
       );
     }
-    final text = parsed.rest.join(' ');
+    if (textOption != null && textOption.isNotEmpty && parsed.rest.isNotEmpty) {
+      throw const ScoutCliException(
+        'usage',
+        'Use either positional text or --text, not both.',
+      );
+    }
+    final text = textOption != null && textOption.isNotEmpty
+        ? textOption
+        : parsed.rest.join(' ');
     final params = <String, String>{
       'text': text,
       'waitMs': parsed.option('wait-ms') ?? '1500',
@@ -488,7 +504,7 @@ extension _CliActions on FlutterScoutCli {
   Future<int> _scrollTo(List<String> args) async {
     final parser = ArgParser()
       ..addOption('max-scrolls', defaultsTo: '20')
-      ..addOption('direction', defaultsTo: 'down')
+      ..addOption('direction')
       ..addOption('distance')
       ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
@@ -500,20 +516,80 @@ extension _CliActions on FlutterScoutCli {
             '[--direction down|up|left|right] [--distance <px>]',
       );
     }
+    final explicitDirection = _hasOption(args, 'direction');
+    final direction = parsed.option('direction') ?? 'down';
     final params = <String, String>{
       'target': target,
       'maxScrolls': parsed.option('max-scrolls') ?? '20',
-      'direction': parsed.option('direction') ?? 'down',
+      'direction': direction,
       if (parsed.option('distance') != null)
         'distance': parsed.option('distance')!,
     };
-    return _callAndPrint(
+    final recordParams = <String, String>{
+      'target': target,
+      'maxScrolls': parsed.option('max-scrolls') ?? '20',
+      if (explicitDirection) 'direction': direction,
+      if (parsed.option('distance') != null)
+        'distance': parsed.option('distance')!,
+    };
+    var result = _withProtocolDiagnostics(
       'ext.flutter_scout.scrollTo',
-      params: params,
-      record: {'cmd': 'scroll-to', ...params},
-      compact: !parsed.flag('verbose'),
+      await _call('ext.flutter_scout.scrollTo', params),
     );
+    if (result['ok'] == false &&
+        !explicitDirection &&
+        _shouldRetryScrollToOpposite(result)) {
+      final opposite = _oppositeDirection(direction);
+      final retryParams = {...params, 'direction': opposite};
+      final retry = _withProtocolDiagnostics(
+        'ext.flutter_scout.scrollTo',
+        await _call('ext.flutter_scout.scrollTo', retryParams),
+      );
+      retry['fallback'] = {
+        'used': true,
+        'reason': 'initial_direction_reached_scroll_end',
+        'initialDirection': direction,
+        'retryDirection': opposite,
+        'initialFailure': {
+          'reason': result['reason'],
+          'scrollsUsed': result['scrollsUsed'],
+          'message': result['error'] is Map
+              ? (result['error'] as Map)['message']
+              : null,
+        },
+      };
+      result = retry;
+    }
+    final output = parsed.flag('verbose')
+        ? result
+        : _compactActionResult(result);
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
+    if (result['ok'] == true) {
+      _recordAction({'cmd': 'scroll-to', ...recordParams});
+    }
+    return result['ok'] == false ? 1 : 0;
   }
+
+  bool _shouldRetryScrollToOpposite(Map<String, dynamic> result) {
+    final reason = result['reason'];
+    if (reason == 'reached_scroll_end' || reason == 'target_not_reached') {
+      return true;
+    }
+    final error = result['error'];
+    if (error is Map && error['code'] == 'target_not_reached') return true;
+    return false;
+  }
+
+  bool _hasOption(List<String> args, String name) =>
+      args.any((arg) => arg == '--$name' || arg.startsWith('--$name='));
+
+  String _oppositeDirection(String direction) => switch (direction) {
+    'down' => 'up',
+    'up' => 'down',
+    'left' => 'right',
+    'right' => 'left',
+    _ => 'up',
+  };
 
   Future<int> _dragCommand({
     required String method,

@@ -70,11 +70,23 @@ extension _CliCapture on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('target')
       ..addOption(
+        'text',
+        help:
+            'Crop around visible text. Use this when a label has no stable '
+            'handle or starts with `-`.',
+      )
+      ..addOption(
         'rect',
         help: 'Explicit logical rect `x,y,w,h` instead of a target handle.',
       )
       ..addOption('output', abbr: 'o')
       ..addOption('padding', defaultsTo: '12')
+      ..addFlag(
+        'contains',
+        defaultsTo: false,
+        negatable: false,
+        help: 'For --text, allow case-insensitive containment matching.',
+      )
       ..addFlag(
         'annotated',
         defaultsTo: false,
@@ -87,15 +99,29 @@ extension _CliCapture on FlutterScoutCli {
     final native = parsed.flag('native');
     final annotated = parsed.flag('annotated');
     final rectOption = parsed.option('rect');
+    final textOption = parsed.option('text');
     final target =
         parsed.option('target') ??
         (parsed.rest.isEmpty ? null : parsed.rest.first);
     if ((target == null || target.isEmpty) &&
+        (textOption == null || textOption.isEmpty) &&
         (rectOption == null || rectOption.isEmpty)) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout crop <target> [-o <path>] [--native] or '
+        'Usage: flutter-scout crop <target> [-o <path>] [--native], '
+            'flutter-scout crop --text <visible text> [-o <path>], or '
             'flutter-scout crop --rect x,y,w,h [-o <path>]',
+      );
+    }
+    final selectorCount = [
+      target != null && target.isNotEmpty,
+      textOption != null && textOption.isNotEmpty,
+      rectOption != null && rectOption.isNotEmpty,
+    ].where((selected) => selected).length;
+    if (selectorCount > 1) {
+      throw const ScoutCliException(
+        'usage',
+        'Use only one crop selector: target, --text, or --rect.',
       );
     }
 
@@ -139,11 +165,19 @@ extension _CliCapture on FlutterScoutCli {
       cropLabel = 'rect_${rectNums[0]}_${rectNums[1]}';
     } else {
       inspect = await _call('ext.flutter_scout.inspect');
-      final node = _findNodeInInspect(inspect, target!);
+      final node = textOption != null && textOption.isNotEmpty
+          ? _findTextNodeInInspect(
+              inspect,
+              textOption,
+              contains: parsed.flag('contains'),
+            )
+          : _findNodeInInspect(inspect, target!);
       if (node == null) {
         throw ScoutCliException(
           'target_not_found',
-          'No inspect target matched `$target`.',
+          textOption != null && textOption.isNotEmpty
+              ? 'No visible text target matched `$textOption`.'
+              : 'No inspect target matched `$target`.',
         );
       }
       final rect = node['rect'];
@@ -154,7 +188,9 @@ extension _CliCapture on FlutterScoutCli {
         );
       }
       rectNums = rect.cast<num>();
-      cropLabel = target;
+      cropLabel = textOption != null && textOption.isNotEmpty
+          ? 'text_$textOption'
+          : target!;
     }
     _ensureSessionDir();
     final padding = int.tryParse(parsed.option('padding') ?? '') ?? 12;
@@ -179,7 +215,9 @@ extension _CliCapture on FlutterScoutCli {
         stdout.writeln(
           jsonEncode({
             'ok': true,
-            'target': target ?? 'rect:$rectOption',
+            'target':
+                target ?? (textOption == null ? 'rect:$rectOption' : null),
+            if (textOption != null && textOption.isNotEmpty) 'text': textOption,
             'path': output,
             'rect': rectNums,
             'backend': 'in_app_capture',
@@ -228,7 +266,8 @@ extension _CliCapture on FlutterScoutCli {
     stdout.writeln(
       jsonEncode({
         'ok': true,
-        'target': target ?? 'rect:$rectOption',
+        'target': target ?? (textOption == null ? 'rect:$rectOption' : null),
+        if (textOption != null && textOption.isNotEmpty) 'text': textOption,
         'path': output,
         'source': shotPath,
         'rect': rectNums,

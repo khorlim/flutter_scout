@@ -812,6 +812,31 @@ print(String(data: data, encoding: .utf8)!)
     return null;
   }
 
+  Map<String, dynamic>? _findTextNodeInInspect(
+    Map<String, dynamic> inspect,
+    String text, {
+    bool contains = false,
+  }) {
+    final wanted = text.trim();
+    if (wanted.isEmpty) return null;
+    final wantedLower = wanted.toLowerCase();
+    Map<String, dynamic>? containsMatch;
+    final group = inspect['textTargets'];
+    if (group is! List) return null;
+    for (final node in group) {
+      if (node is! Map<String, dynamic>) continue;
+      final label = node['label']?.toString();
+      if (label == null || label.trim().isEmpty) continue;
+      if (label == wanted) return node;
+      if (contains &&
+          containsMatch == null &&
+          label.toLowerCase().contains(wantedLower)) {
+        containsMatch = node;
+      }
+    }
+    return containsMatch;
+  }
+
   bool _nodeMatches(Map<String, dynamic> node, String target) {
     final values = [
       node['id'],
@@ -1492,7 +1517,7 @@ Usage:
   flutter-scout annotations fixed <annotation-id> [--note <text>]
   flutter-scout bounds [target]
   flutter-scout tap <target> | tap <x> <y> | --x <x> --y <y> [--verbose]
-  flutter-scout tap-text <visible text> [--allow-mismatch] [--verbose]
+  flutter-scout tap-text <visible text> | tap-text --text <visible text> [--allow-mismatch] [--verbose]
   flutter-scout long-press <target> [--verbose]
   flutter-scout input [--target <field>] <value> [--verbose]
   flutter-scout fill --json <object> [--verbose]
@@ -1506,7 +1531,7 @@ Usage:
   flutter-scout deeplink <url>
   flutter-scout logs [--last <n>] [--contains <text>] [--summary]
   flutter-scout screenshot [-o <path>] [--target <target>] [--native]
-  flutter-scout crop <target> [-o <path>] [--native]
+  flutter-scout crop <target> | crop --text <visible text> | crop --rect x,y,w,h [-o <path>] [--native]
   flutter-scout evidence [-o <dir>] [--last <n>]
   flutter-scout replay [session.json] [--verbose]
 ''');
