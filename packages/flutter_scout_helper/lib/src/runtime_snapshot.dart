@@ -108,14 +108,41 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         .where((node) => node.kind == 'text')
         .toList(growable: false);
     final route = root == null ? null : ModalRoute.of(root)?.settings.name;
+    final modalScreenName = root == null ? null : _modalScreenName(root);
+    final concreteModalSurface = root != null && _hasConcreteModalSurface(root);
+    final genericModal =
+        concreteModalSurface &&
+        _genericModalSurfaceNames.contains(modalScreenName);
+    final activeSurface = _activeSurfaceFor(
+      modalActive: overlays.isNotEmpty || genericModal,
+      allowVisibleTextFallback: genericModal,
+      overlays: overlays,
+      visibleText: visibleText,
+      textTargets: textTargets,
+      logicalSize: logicalSize,
+    );
     // No *Screen/*Page widget (common for bottom sheets, dialogs, and
     // custom-named order/checkout surfaces) would otherwise leave `screen`
     // as the useless 'RootWidget'. Name the topmost modal surface instead.
     if (screen == 'RootWidget' && root != null) {
-      screen = _modalScreenName(root) ?? screen;
+      if (activeSurface != null) {
+        screen = activeSurface['screen']?.toString() ?? screen;
+      } else if (genericModal) {
+        screen = modalScreenName ?? screen;
+      } else if (modalScreenName != null &&
+          !modalScreenName.endsWith('Surface')) {
+        screen = modalScreenName;
+      }
+    }
+    var reportedScreen =
+        activeSurface?['screen']?.toString() ??
+        (route != null && route.isNotEmpty ? route : screen);
+    if (activeSurface == null && reportedScreen.endsWith('Surface')) {
+      reportedScreen = 'RootWidget';
     }
     final snapshot = ScoutSnapshot(
-      screen: route != null && route.isNotEmpty ? route : screen,
+      screen: reportedScreen,
+      activeSurface: activeSurface,
       routeGuess: route,
       idle: !WidgetsBinding.instance.hasScheduledFrame,
       devicePixelRatio: WidgetsBinding
@@ -154,6 +181,128 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
               },
             ],
     );
+  }
+
+  Map<String, Object?>? _activeSurfaceFor({
+    required bool modalActive,
+    required bool allowVisibleTextFallback,
+    required List<Map<String, Object?>> overlays,
+    required Set<String> visibleText,
+    required List<ScoutNode> textTargets,
+    required Size logicalSize,
+  }) {
+    if (!modalActive || (textTargets.isEmpty && visibleText.isEmpty)) {
+      return null;
+    }
+    final candidates = [
+      for (final node in textTargets)
+        if (node.rect case final rect?)
+          if (node.visibleFraction > 0 &&
+              rect.center.dy <= logicalSize.height * 0.20 &&
+              _surfaceLabelRank(node.label ?? '') > 0)
+            node,
+    ];
+    if (candidates.isEmpty) {
+      if (!allowVisibleTextFallback) return null;
+      final labels =
+          [
+            for (final label in visibleText)
+              if (_surfaceLabelRank(label) > 0) label.trim(),
+          ]..sort((a, b) {
+            final rank = _surfaceLabelRank(b).compareTo(_surfaceLabelRank(a));
+            if (rank != 0) return rank;
+            return a.length.compareTo(b.length);
+          });
+      final label = labels.isEmpty ? null : labels.first;
+      if (label == null || label.isEmpty) return null;
+      return {
+        'kind': 'modal',
+        'label': label,
+        'screen': '${_pascalCaseSurfaceName(label)}Surface',
+      };
+    }
+    candidates.sort((a, b) {
+      final rank = _surfaceLabelRank(
+        b.label ?? '',
+      ).compareTo(_surfaceLabelRank(a.label ?? ''));
+      if (rank != 0) return rank;
+      final center = logicalSize.width / 2;
+      final aCenter = ((a.rect?.center.dx ?? center) - center).abs();
+      final bCenter = ((b.rect?.center.dx ?? center) - center).abs();
+      final centered = aCenter.compareTo(bCenter);
+      if (centered != 0) return centered;
+      return (a.rect?.top ?? 0).compareTo(b.rect?.top ?? 0);
+    });
+    final label = candidates.first.label?.trim();
+    if (label == null || label.isEmpty) return null;
+    return {
+      'kind': 'modal',
+      'label': label,
+      'screen': '${_pascalCaseSurfaceName(label)}Surface',
+    };
+  }
+
+  static const Set<String> _genericModalSurfaceNames = {
+    'Dialog',
+    'BottomSheet',
+    'Modal',
+    'ActionSheet',
+  };
+
+  int _surfaceLabelRank(String label) {
+    final slug = _scoutSlug(label);
+    if (slug.isEmpty) return 0;
+    if (const {
+      'pending_order',
+      'pending_orders',
+      'select_member',
+      'payment',
+      'sales',
+      'sale',
+      'orders',
+      'order',
+      'appointment',
+      'appointments',
+      'announcement',
+      'announcements',
+    }.contains(slug)) {
+      return 100;
+    }
+    if (slug.startsWith('pending_order') ||
+        slug.startsWith('payment') ||
+        slug.startsWith('select_member')) {
+      return 95;
+    }
+    if (slug.contains('order') ||
+        slug.contains('payment') ||
+        slug.contains('member') ||
+        slug.contains('sales')) {
+      return 80;
+    }
+    if (const {
+      'deedee_shop',
+      'operation',
+      'dark_mode',
+      'showtest',
+      'search',
+    }.contains(slug)) {
+      return 0;
+    }
+    return 0;
+  }
+
+  String _pascalCaseSurfaceName(String label) {
+    final slug = _scoutSlug(label.replaceAll(RegExp(r'\([^)]*\)'), ''));
+    final parts = slug
+        .split('_')
+        .where((part) => part.isNotEmpty && !RegExp(r'^\d+$').hasMatch(part));
+    final buffer = StringBuffer();
+    for (final part in parts) {
+      buffer
+        ..write(part[0].toUpperCase())
+        ..write(part.length == 1 ? '' : part.substring(1));
+    }
+    return buffer.isEmpty ? 'Modal' : buffer.toString();
   }
 
   /// Framework widgets whose type ends in Screen/Page but are NOT app pages
@@ -213,6 +362,19 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     if (widget is ModalBarrier) return true;
     // AnimatedModalBarrier is private-typed; match by name.
     return widget.runtimeType.toString().contains('ModalBarrier');
+  }
+
+  bool _hasConcreteModalSurface(Element root) {
+    var found = false;
+    _walkVisible(root, (Element element) {
+      if (found) return;
+      final kind = _modalSurfaceKind(element.widget);
+      if (kind == null) return;
+      final rect = _rectFor(element);
+      if (rect == null || _visibleRectFor(rect) == null) return;
+      found = true;
+    });
+    return found;
   }
 
   /// The kind of modal surface a widget represents, or null.

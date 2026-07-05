@@ -549,6 +549,36 @@ void main() {
     expect(snapshot.textTargets.map((node) => node.id), contains('text.5'));
   });
 
+  testWidgets('deep button text labels replace generic Cupertino handles', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      CupertinoApp(
+        home: CupertinoPageScaffold(
+          child: Center(
+            child: CupertinoButton(
+              onPressed: () {},
+              child: const Padding(
+                padding: EdgeInsets.all(8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [SizedBox(height: 4), Text('Payment : 44.25')],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    final ids = snapshot.interactables.map((node) => node.id).toList();
+    expect(ids, contains('btn.payment_44_25'));
+    expect(ids, isNot(contains('btn.cupertinobutton')));
+  });
+
   testWidgets('interactables surface selection/toggle state', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(
@@ -611,6 +641,42 @@ void main() {
     expect(chipNode.selected, isFalse);
     // Serialized only when known.
     expect(switchNode.toJson()['selected'], isTrue);
+  });
+
+  testWidgets('modal overlays report an active surface screen', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: ElevatedButton(
+                onPressed: () {
+                  showDialog<void>(
+                    context: context,
+                    builder: (_) => const AlertDialog(
+                      title: Text('Payment'),
+                      content: Text('Confirm Payment'),
+                    ),
+                  );
+                },
+                child: const Text('Open Payment'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open Payment'));
+    await tester.pumpAndSettle();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    expect(snapshot.screen, 'PaymentSurface');
+    expect(snapshot.activeSurface?['label'], 'Payment');
+    expect(
+      snapshot.summaryJson()['activeSurface'],
+      isA<Map<String, Object?>>(),
+    );
   });
 
   testWidgets('Scout chrome is excluded from inspect output', (tester) async {
@@ -1073,9 +1139,10 @@ void main() {
 
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    final dialogScreen = runtime.debugSnapshot().screen;
-    expect(dialogScreen, isNot('RootWidget'));
-    expect(dialogScreen, 'Dialog');
+    final snapshot = runtime.debugSnapshot();
+    expect(snapshot.screen, isNot('RootWidget'));
+    expect(snapshot.screen, 'ConfirmPaymentSurface');
+    expect(snapshot.activeSurface?['label'], 'confirm payment');
   });
 
   testWidgets('custom modal over a ModalBarrier is detected and named', (
@@ -1112,7 +1179,11 @@ void main() {
     final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
     // Screen names the modal (content class) instead of the base home.
     expect(snapshot.screen, isNot('RootWidget'));
-    expect(snapshot.screen, anyOf('_AnnouncementPanel', 'Modal'));
+    expect(
+      snapshot.screen,
+      anyOf('AnnouncementSurface', '_AnnouncementPanel', 'Modal'),
+    );
+    expect(snapshot.activeSurface?['label'], anyOf('Announcement', isNull));
     // A modalBarrier overlay is reported so agents know a scrim is up.
     expect(snapshot.overlays.any((o) => o['kind'] == 'modalBarrier'), isTrue);
   });
@@ -1126,6 +1197,18 @@ void main() {
     expect(
       FlutterScoutHelper.debugRuntime.debugSnapshot().screen,
       '_CheckoutPage',
+    );
+  });
+
+  testWidgets('surface-suffixed widgets are not page names without a modal', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(const MaterialApp(home: _AppointmentSurface()));
+    await tester.pump();
+    expect(
+      FlutterScoutHelper.debugRuntime.debugSnapshot().screen,
+      isNot('AppointmentSurface'),
     );
   });
 
@@ -1470,6 +1553,15 @@ class _CheckoutPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(body: Center(child: Text('Checkout')));
+  }
+}
+
+class _AppointmentSurface extends StatelessWidget {
+  const _AppointmentSurface();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: Text('Appointment')));
   }
 }
 

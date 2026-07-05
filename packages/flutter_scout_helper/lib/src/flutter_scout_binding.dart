@@ -27,7 +27,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 6;
+const int scoutHelperProtocolVersion = 7;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();

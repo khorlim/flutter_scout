@@ -138,29 +138,66 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     const badgeClearance = 20.0;
     var omitted = 0;
     var n = 0;
+    bool addMark({
+      required Rect visible,
+      required String id,
+      required String kind,
+      String? label,
+      bool? selected,
+    }) {
+      final badge = visible.topLeft;
+      if (placedBadges.any(
+        (placed) => (placed - badge).distance < badgeClearance,
+      )) {
+        omitted += 1;
+        return false;
+      }
+      placedBadges.add(badge);
+      n += 1;
+      marks.add((n: n, rect: visible));
+      final legendEntry = <String, Object?>{'n': n, 'id': id, 'kind': kind};
+      if (label != null) legendEntry['label'] = label;
+      if (selected != null) legendEntry['selected'] = selected;
+      legend.add(legendEntry);
+      return true;
+    }
+
     for (final node in [...snapshot.interactables, ...snapshot.fields]) {
       final visible = node.visibleRect;
       if (visible == null) continue;
       if (region != null && !region.overlaps(visible)) continue;
       if (filter == 'buttons' && node.kind != 'btn') continue;
       if (filter == 'fields' && node.kind != 'field') continue;
-      final badge = visible.topLeft;
-      if (placedBadges.any(
-        (placed) => (placed - badge).distance < badgeClearance,
-      )) {
-        omitted += 1;
-        continue;
+      addMark(
+        visible: visible,
+        id: node.id,
+        kind: node.kind,
+        label: node.label,
+        selected: node.selected,
+      );
+    }
+    if (filter == 'all' && marks.length < 8) {
+      final existing = [for (final mark in marks) mark.rect];
+      for (final target in _annotationTargets()) {
+        if (target.kind != 'tap' &&
+            target.kind != 'btn' &&
+            target.kind != 'card' &&
+            target.kind != 'widget' &&
+            target.kind != 'layout') {
+          continue;
+        }
+        final visible = target.visibleRect;
+        if (region != null && !region.overlaps(visible)) continue;
+        if (existing.any((rect) => rect.overlaps(visible))) continue;
+        if (addMark(
+          visible: visible,
+          id: target.scoutNodeId ?? target.stableId,
+          kind: target.kind,
+          label: target.label ?? target.text,
+        )) {
+          existing.add(visible);
+        }
       }
-      placedBadges.add(badge);
-      n += 1;
-      marks.add((n: n, rect: visible));
-      legend.add({
-        'n': n,
-        'id': node.id,
-        'kind': node.kind,
-        if (node.label != null) 'label': node.label,
-        if (node.selected != null) 'selected': node.selected,
-      });
     }
     return (marks: marks, legend: legend, omitted: omitted);
   }

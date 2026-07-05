@@ -29,13 +29,17 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 6;
+  static const int expectedHelperProtocolVersion = 7;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
     String method,
     Map<String, dynamic> result,
   ) => _withProtocolDiagnostics(method, result);
+
+  /// Test-only view of default compact action output.
+  Map<String, dynamic> debugCompactActionResult(Map<String, dynamic> result) =>
+      _compactActionResult(result);
 
   // Batch-mode connection cache: one WebSocket serves every step of a batch
   // instead of connect/dispose per command. See cli_batch.dart.

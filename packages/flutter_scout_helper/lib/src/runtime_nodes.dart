@@ -155,7 +155,11 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final kind = _kindFor(widget, element);
     if (kind == null) return null;
 
-    final label = _labelFor(element, widget);
+    final label = _labelFor(
+      element,
+      widget,
+      deepText: _usesDeepTextLabel(widget),
+    );
     final baseId = _stableId(
       kind,
       label,
@@ -423,7 +427,18 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return true;
   }
 
-  String? _labelFor(Element element, Widget widget) {
+  bool _usesDeepTextLabel(Widget widget) {
+    return widget is ButtonStyleButton ||
+        widget is IconButton ||
+        widget is FloatingActionButton ||
+        widget is CupertinoButton ||
+        widget is GestureDetector ||
+        widget is InkWell ||
+        widget is InkResponse ||
+        widget is ListTile;
+  }
+
+  String? _labelFor(Element element, Widget widget, {bool deepText = false}) {
     if (widget is Tooltip) return widget.message;
     if (widget is Semantics) {
       final semanticsLabel = widget.properties.label;
@@ -444,6 +459,15 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (widget is TextField) {
       return widget.decoration?.labelText ?? widget.decoration?.hintText;
     }
+    final widgetType = widget.runtimeType.toString();
+    if (widget is Switch ||
+        widget is CupertinoSwitch ||
+        widget is Checkbox ||
+        widgetType == 'Switch' ||
+        widgetType == 'CupertinoSwitch' ||
+        widgetType == 'Checkbox') {
+      return null;
+    }
     final tooltip = _tooltipBelow(element);
     if (tooltip != null && tooltip.isNotEmpty) return tooltip;
     final own = _ownText(widget);
@@ -455,7 +479,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       if (iconText != null) return iconText;
       if (_hasWord(own)) return own.trim();
     }
-    final text = _textBelow(element);
+    final text = _textBelow(element, maxDepth: deepText ? 18 : 5);
     if (text != null &&
         text.isNotEmpty &&
         _hasWord(text) &&
@@ -704,13 +728,13 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return true;
   }
 
-  String? _textBelow(Element element, {int depth = 0}) {
-    if (depth > 5) return null;
+  String? _textBelow(Element element, {int depth = 0, int maxDepth = 5}) {
+    if (depth > maxDepth) return null;
     final own = _ownText(element.widget);
     if (own != null && own.trim().isNotEmpty) return own.trim();
     String? result;
     element.visitChildElements((Element child) {
-      result ??= _textBelow(child, depth: depth + 1);
+      result ??= _textBelow(child, depth: depth + 1, maxDepth: maxDepth);
     });
     return result;
   }
@@ -923,7 +947,10 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         .toList(growable: false);
     return [
       for (final node in nodes)
-        if ((node.kind == 'tap' || node.kind == 'btn') &&
+        if (_isStateControlWidgetType(node.widgetType))
+          node.withoutLabel(confidence: 0.65)
+        else if ((node.kind == 'tap' || node.kind == 'btn') &&
+            !_isStateControlWidgetType(node.widgetType) &&
             (node.label == null ||
                 node.id == '${node.kind}.${_slug(node.widgetType)}'))
           _inferActionableLabel(node, textNodes)
@@ -987,8 +1014,17 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (trimmed.runes.length == 1 && RegExp(r'^\d$').hasMatch(trimmed)) {
       return false;
     }
+    if (RegExp(r'^\d+([.,]\d+)?$').hasMatch(trimmed)) {
+      return true;
+    }
     return _actionLabelRank(trimmed) > 0 ||
         (trimmed.length >= 3 && RegExp(r'[A-Za-z]').hasMatch(trimmed));
+  }
+
+  bool _isStateControlWidgetType(String widgetType) {
+    return widgetType == 'Switch' ||
+        widgetType == 'CupertinoSwitch' ||
+        widgetType == 'Checkbox';
   }
 
   bool _buttonLikeActionLabel(String label) {

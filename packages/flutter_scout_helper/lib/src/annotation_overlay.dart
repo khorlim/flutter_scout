@@ -453,7 +453,8 @@ class _FlutterScoutAnnotationOverlayState
           runtime: widget.runtime,
           child: Stack(
             children: [
-              const _ScoutInstanceBadge(),
+              if (widget.runtime._captureClearRects.isEmpty)
+                const _ScoutInstanceBadge(),
               if (enabled)
                 Positioned.fill(
                   child: GestureDetector(
@@ -509,19 +510,21 @@ class _FlutterScoutAnnotationOverlayState
                     ),
                   ),
                 ),
-              Positioned(
-                left: toggleButtonOffset.dx,
-                top: toggleButtonOffset.dy,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onPanUpdate: (details) => _moveToggleButton(details, context),
-                  child: _AnnotationToggleButton(
-                    enabled: enabled,
-                    count: widget.runtime._activeAnnotationCount,
-                    onPressed: _toggleAnnotationMode,
+              if (widget.runtime._captureClearRects.isEmpty)
+                Positioned(
+                  left: toggleButtonOffset.dx,
+                  top: toggleButtonOffset.dy,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onPanUpdate: (details) =>
+                        _moveToggleButton(details, context),
+                    child: _AnnotationToggleButton(
+                      enabled: enabled,
+                      count: widget.runtime._activeAnnotationCount,
+                      onPressed: _toggleAnnotationMode,
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         );

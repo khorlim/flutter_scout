@@ -232,6 +232,13 @@ extension _CliResults on FlutterScoutCli {
   Map<String, Object?> _compactSummary(Map<String, dynamic> summary) {
     return {
       if (summary['screen'] != null) 'screen': summary['screen'],
+      if (summary['activeSurface'] != null)
+        'activeSurface': summary['activeSurface'],
+      if (summary['routeGuess'] != null) 'routeGuess': summary['routeGuess'],
+      if (summary['viewSignature'] != null)
+        'viewSignature': summary['viewSignature'],
+      if (summary['visibleTextHash'] != null)
+        'visibleTextHash': summary['visibleTextHash'],
       if (summary['idle'] != null) 'idle': summary['idle'],
       if (summary['visibleText'] is List)
         'visibleText': _lastItems(summary['visibleText'] as List, 12),
@@ -240,10 +247,8 @@ extension _CliResults on FlutterScoutCli {
       if (summary['offscreenText'] is List)
         'offscreenText': _lastItems(summary['offscreenText'] as List, 8),
       if (summary['fieldValues'] != null) 'fieldValues': summary['fieldValues'],
-      if (summary['fieldsById'] != null) 'fieldsById': summary['fieldsById'],
-      if (summary['visualTree'] != null) 'visualTree': summary['visualTree'],
-      if (summary['controlGroups'] != null)
-        'controlGroups': summary['controlGroups'],
+      if (summary['degradedNodes'] != null)
+        'degradedNodes': summary['degradedNodes'],
       if (summary['suggestedActions'] != null)
         'suggestedActions': summary['suggestedActions'],
     };

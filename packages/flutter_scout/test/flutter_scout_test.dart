@@ -592,6 +592,44 @@ void main() {
       expect(protocol['status'], 'stale_or_old_helper');
     });
   });
+
+  test('compact action output omits heavy inspect sections', () {
+    final cli = FlutterScoutCli();
+    final result = cli.debugCompactActionResult({
+      'ok': true,
+      'action': 'tap btn.payment',
+      'result': 'activated',
+      'after': {
+        'screen': 'Payment',
+        'routeGuess': 'HomeScreen',
+        'viewSignature': 'Payment | Cash | Confirm',
+        'visibleTextHash': '12345678',
+        'idle': true,
+        'visibleText': List<String>.generate(20, (index) => 'text $index'),
+        'hitTestableText': ['Payment', 'Confirm Payment'],
+        'offscreenText': ['hidden'],
+        'fieldValues': {'field.note': ''},
+        'fieldsById': {
+          'field.note': {'label': 'Note'},
+        },
+        'visualTree': {'children': List<int>.generate(100, (index) => index)},
+        'controlGroups': [
+          {'kind': 'keypad'},
+        ],
+        'suggestedActions': [
+          {'intent': 'enterValue'},
+        ],
+      },
+    });
+
+    final summary = result['afterSummary'] as Map<String, Object?>;
+    expect(summary['screen'], 'Payment');
+    expect(summary['viewSignature'], 'Payment | Cash | Confirm');
+    expect(summary.containsKey('visualTree'), isFalse);
+    expect(summary.containsKey('controlGroups'), isFalse);
+    expect(summary.containsKey('fieldsById'), isFalse);
+    expect((summary['visibleText'] as List).length, 12);
+  });
 }
 
 Future<void> _withTempCwd(Future<void> Function() body) async {

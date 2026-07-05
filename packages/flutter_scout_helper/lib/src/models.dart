@@ -6,6 +6,7 @@ part of 'flutter_scout_binding.dart';
 class ScoutSnapshot {
   const ScoutSnapshot({
     required this.screen,
+    required this.activeSurface,
     required this.routeGuess,
     required this.idle,
     required this.devicePixelRatio,
@@ -26,6 +27,7 @@ class ScoutSnapshot {
   });
 
   final String screen;
+  final Map<String, Object?>? activeSurface;
   final String? routeGuess;
   final bool idle;
   final double devicePixelRatio;
@@ -54,6 +56,7 @@ class ScoutSnapshot {
   }) {
     return ScoutSnapshot(
       screen: screen,
+      activeSurface: activeSurface,
       routeGuess: routeGuess,
       idle: idle,
       devicePixelRatio: devicePixelRatio,
@@ -131,6 +134,7 @@ class ScoutSnapshot {
   Map<String, Object?> summaryJson() {
     return {
       'screen': screen,
+      if (activeSurface != null) 'activeSurface': activeSurface,
       'routeGuess': routeGuess,
       'viewSignature': viewSignature,
       'visibleTextHash': visibleTextHash,
@@ -303,6 +307,33 @@ class ScoutNode {
       enabled: enabled,
       confidence: confidence,
       selected: value,
+      altIds: altIds,
+      textColor: textColor,
+      enclosingTarget: enclosingTarget,
+    );
+  }
+
+  /// Copy that intentionally removes a misleading inferred label.
+  ScoutNode withoutLabel({double? confidence}) {
+    return ScoutNode(
+      id: id,
+      baseId: baseId,
+      ordinal: ordinal,
+      fallbackId: fallbackId,
+      kind: kind,
+      label: null,
+      value: value,
+      validationMessage: validationMessage,
+      widgetType: widgetType,
+      key: key,
+      rect: rect,
+      visibleRect: visibleRect,
+      visibleFraction: visibleFraction,
+      suggestedTapPoint: suggestedTapPoint,
+      hitTestable: hitTestable,
+      enabled: enabled,
+      confidence: confidence ?? this.confidence,
+      selected: selected,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
