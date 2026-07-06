@@ -55,6 +55,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           }
           final overlay = _overlayFor(element);
           if (overlay != null) {
+            overlay['ordinal'] = nodes.length;
             overlays.add(overlay);
           }
           final text = _ownText(element.widget);
@@ -163,24 +164,20 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       overlays: overlays,
       visualTree: null,
       controlGroups: const [],
+      structuredRows: const [],
       suggestedActions: const [],
       recentErrors: _recentErrors(),
       degradedNodes: degradedNodes,
     );
     final controlGroups = _buildControlGroups(snapshot);
-    return snapshot.copyWith(
+    final structuredRows = _buildStructuredRows(snapshot);
+    final enriched = snapshot.copyWith(
       controlGroups: controlGroups,
+      structuredRows: structuredRows,
       visualTree: _buildVisualTree(snapshot, controlGroups),
-      suggestedActions: controlGroups.isEmpty
-          ? const []
-          : const [
-              {
-                'intent': 'enterValue',
-                'method': 'tapSequence',
-                'reason':
-                    'A custom control group is visible. It is not a text field; operate it by tapping the exposed child controls in order, then tap the commit action if needed.',
-              },
-            ],
+    );
+    return enriched.copyWith(
+      suggestedActions: _buildSuggestedActions(enriched, controlGroups),
     );
   }
 
@@ -198,14 +195,18 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final overlaySurface = _activeSurfaceFromOverlays(
       overlays: overlays,
       textTargets: textTargets,
+      logicalSize: logicalSize,
     );
     if (overlaySurface != null) return overlaySurface;
+    final contentStartOrdinal = _modalContentStartOrdinal(overlays);
     final candidates = [
       for (final node in textTargets)
         if (node.rect case final rect?)
           if (node.visibleFraction > 0 &&
-              rect.center.dy <= logicalSize.height * 0.20 &&
-              _surfaceLabelRank(node.label ?? '') > 0)
+              (contentStartOrdinal == null || node.hitTestable) &&
+              (contentStartOrdinal != null ||
+                  rect.center.dy <= logicalSize.height * 0.30) &&
+              _surfaceLabelScore(node.label ?? '') > 0)
             node,
     ];
     if (candidates.isEmpty) {
@@ -213,14 +214,15 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final labels =
           [
             for (final label in visibleText)
-              if (_surfaceLabelRank(label) > 0) label.trim(),
+              if (_surfaceLabelScore(label) > 0) label.trim(),
           ]..sort((a, b) {
-            final rank = _surfaceLabelRank(b).compareTo(_surfaceLabelRank(a));
+            final rank = _surfaceLabelScore(b).compareTo(_surfaceLabelScore(a));
             if (rank != 0) return rank;
             return a.length.compareTo(b.length);
           });
       final label = labels.isEmpty ? null : labels.first;
       if (label == null || label.isEmpty) return null;
+      final displayLabel = _surfaceDisplayLabel(label);
       final anchors = [
         for (final node in textTargets)
           if ((node.label ?? '').trim() == label) node,
@@ -228,17 +230,20 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final anchor = anchors.isEmpty ? null : anchors.first;
       return {
         'kind': 'modal',
-        'label': label,
-        'screen': '${_pascalCaseSurfaceName(label)}Surface',
+        'label': displayLabel,
+        'screen': '${_pascalCaseSurfaceName(displayLabel)}Surface',
         if (anchor != null) 'anchorOrdinal': anchor.ordinal,
         if (anchor?.rect case final rect?)
           'anchorRect': [rect.left, rect.top, rect.width, rect.height],
+        'source': 'visibleText',
+        'confidence': 0.62,
       };
     }
     candidates.sort((a, b) {
-      final rank = _surfaceLabelRank(
-        b.label ?? '',
-      ).compareTo(_surfaceLabelRank(a.label ?? ''));
+      final rank = _surfaceTitleRank(
+        b,
+        logicalSize,
+      ).compareTo(_surfaceTitleRank(a, logicalSize));
       if (rank != 0) return rank;
       final center = logicalSize.width / 2;
       final aCenter = ((a.rect?.center.dx ?? center) - center).abs();
@@ -249,24 +254,36 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     });
     final label = candidates.first.label?.trim();
     if (label == null || label.isEmpty) return null;
+    final displayLabel = _surfaceDisplayLabel(label);
     return {
       'kind': 'modal',
-      'label': label,
-      'screen': '${_pascalCaseSurfaceName(label)}Surface',
+      'label': displayLabel,
+      'screen': '${_pascalCaseSurfaceName(displayLabel)}Surface',
       'anchorOrdinal': candidates.first.ordinal,
       if (candidates.first.rect case final rect?)
         'anchorRect': [rect.left, rect.top, rect.width, rect.height],
+      'source': 'prominentText',
+      'confidence': _surfaceLabelRank(label) > 0 ? 0.92 : 0.74,
     };
   }
 
   Map<String, Object?>? _activeSurfaceFromOverlays({
     required List<Map<String, Object?>> overlays,
     required List<ScoutNode> textTargets,
+    required Size logicalSize,
   }) {
     for (final overlay in overlays.reversed) {
       if (overlay['kind'] == 'modalBarrier') continue;
-      final label = overlay['label']?.toString().trim();
+      final rect = _rectFromJsonList(overlay['rect']);
+      final title = _surfaceTitleForRegion(
+        textTargets: textTargets,
+        region: rect,
+        fallbackLabel: overlay['label']?.toString(),
+        logicalSize: logicalSize,
+      );
+      final label = title?.label.trim();
       if (label == null || label.isEmpty) continue;
+      final displayLabel = _surfaceDisplayLabel(label);
       final anchors = [
         for (final node in textTargets)
           if ((node.label ?? '').trim() == label) node,
@@ -274,15 +291,61 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final anchor = anchors.isEmpty ? null : anchors.first;
       return {
         'kind': 'modal',
-        'label': label,
-        'screen': '${_pascalCaseSurfaceName(label)}Surface',
+        'label': displayLabel,
+        'screen': '${_pascalCaseSurfaceName(displayLabel)}Surface',
         if (anchor != null) 'anchorOrdinal': anchor.ordinal,
         if (anchor?.rect case final rect?)
           'anchorRect': [rect.left, rect.top, rect.width, rect.height],
         if (overlay['rect'] != null) 'rect': overlay['rect'],
+        'source': title?.source ?? 'overlayLabel',
+        'confidence': title?.confidence ?? 0.86,
       };
     }
     return null;
+  }
+
+  int? _modalContentStartOrdinal(List<Map<String, Object?>> overlays) {
+    for (final overlay in overlays.reversed) {
+      if (overlay['kind'] != 'modalBarrier') continue;
+      final ordinal = overlay['ordinal'];
+      if (ordinal is int) return ordinal;
+    }
+    return null;
+  }
+
+  ({String label, String source, double confidence})? _surfaceTitleForRegion({
+    required List<ScoutNode> textTargets,
+    required Rect? region,
+    required String? fallbackLabel,
+    required Size logicalSize,
+  }) {
+    final fallback = fallbackLabel?.trim();
+    if (fallback != null && _surfaceLabelScore(fallback) > 0) {
+      return (label: fallback, source: 'overlayLabel', confidence: 0.9);
+    }
+    final candidates = [
+      for (final node in textTargets)
+        if (node.rect case final rect?)
+          if (node.visibleFraction > 0 &&
+              (region != null || node.hitTestable) &&
+              (region == null ||
+                  region.contains(rect.center) ||
+                  rect.overlaps(region)) &&
+              _surfaceLabelScore(node.label ?? '') > 0)
+            node,
+    ];
+    if (candidates.isEmpty) return null;
+    candidates.sort((a, b) {
+      final rank = _surfaceTitleRank(
+        b,
+        logicalSize,
+      ).compareTo(_surfaceTitleRank(a, logicalSize));
+      if (rank != 0) return rank;
+      return (a.rect?.top ?? 0).compareTo(b.rect?.top ?? 0);
+    });
+    final label = candidates.first.label?.trim();
+    if (label == null || label.isEmpty) return null;
+    return (label: label, source: 'regionTitle', confidence: 0.78);
   }
 
   static const Set<String> _genericModalSurfaceNames = {
@@ -334,11 +397,84 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     return 0;
   }
 
+  int _surfaceLabelScore(String label) {
+    final trimmed = label.trim();
+    if (trimmed.isEmpty) return 0;
+    final slug = _scoutSlug(trimmed);
+    if (slug.isEmpty) return 0;
+    final allowlistRank = _surfaceLabelRank(trimmed);
+    if (allowlistRank > 0) return allowlistRank;
+    if (trimmed.length > 48) return 0;
+    if (!_hasWordCharacter(trimmed)) return 0;
+    if (_surfaceLooksLikePureValue(trimmed)) return 0;
+    if (_looksLikeActionOnlyLabel(slug)) return 0;
+    final wordCount = slug.split('_').where((part) => part.isNotEmpty).length;
+    if (wordCount > 7) return 0;
+    var score = 24;
+    if (wordCount <= 4) score += 8;
+    if (RegExp(r'^[A-Z0-9]').hasMatch(trimmed)) score += 4;
+    if (trimmed.contains(':')) score -= 8;
+    return score.clamp(0, 79);
+  }
+
+  int _surfaceTitleRank(ScoutNode node, Size logicalSize) {
+    final rect = node.rect;
+    final label = node.label ?? '';
+    var score = _surfaceLabelScore(label);
+    if (score <= 0 || rect == null) return score;
+    final topBias = logicalSize.height <= 0
+        ? 0
+        : ((1 - (rect.top / logicalSize.height).clamp(0, 1)) * 12).round();
+    final center = logicalSize.width / 2;
+    final centeredBias = logicalSize.width <= 0
+        ? 0
+        : ((1 - ((rect.center.dx - center).abs() / center).clamp(0, 1)) * 8)
+              .round();
+    return score + topBias + centeredBias;
+  }
+
+  bool _hasWordCharacter(String value) =>
+      RegExp(r'[A-Za-z0-9]').hasMatch(value);
+
+  bool _surfaceLooksLikePureValue(String value) {
+    return RegExp(r'^[\d\s()+\-.%/,]+$').hasMatch(value.trim()) &&
+        RegExp(r'\d').hasMatch(value);
+  }
+
+  bool _looksLikeActionOnlyLabel(String slug) {
+    return const {
+      'ok',
+      'yes',
+      'no',
+      'save',
+      'done',
+      'apply',
+      'cancel',
+      'close',
+      'back',
+      'next',
+      'previous',
+      'continue',
+      'submit',
+      'delete',
+      'edit',
+      'add',
+      'search',
+      'clear',
+      'reset',
+    }.contains(slug);
+  }
+
   String _pascalCaseSurfaceName(String label) {
     final slug = _scoutSlug(label.replaceAll(RegExp(r'\([^)]*\)'), ''));
     final parts = slug
         .split('_')
-        .where((part) => part.isNotEmpty && !RegExp(r'^\d+$').hasMatch(part));
+        .where(
+          (part) =>
+              part.isNotEmpty &&
+              !RegExp(r'^\d+$').hasMatch(part) &&
+              !_surfaceNameStopWords.contains(part),
+        );
     final buffer = StringBuffer();
     for (final part in parts) {
       buffer
@@ -347,6 +483,27 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     }
     return buffer.isEmpty ? 'Modal' : buffer.toString();
   }
+
+  String _surfaceDisplayLabel(String label) {
+    var result = label.trim();
+    for (final word in _surfaceNameStopWords) {
+      result = result.replaceFirst(
+        RegExp('\\s+$word\$', caseSensitive: false),
+        '',
+      );
+    }
+    return result.trim().isEmpty ? label.trim() : result.trim();
+  }
+
+  static const Set<String> _surfaceNameStopWords = {
+    'body',
+    'content',
+    'details',
+    'detail',
+    'description',
+    'message',
+    'text',
+  };
 
   /// Framework widgets whose type ends in Screen/Page but are NOT app pages
   /// (e.g. the dialog-wrapping DisplayFeatureSubScreen), so screen detection
@@ -389,16 +546,29 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     });
     if (surfaceKind != null) {
       // Prefer the modal's actual content class over the generic surface kind.
-      return _deepestCustomWidgetType(root, minDepth: surfaceDepth) ??
+      return _deepestCustomWidgetType(
+            root,
+            minDepth: surfaceDepth,
+            allowSurfaceSuffix: true,
+          ) ??
           surfaceKind;
     }
     if (barrierDepth >= 0) {
       // Custom modal over a barrier: name from its content, else generic.
-      return _deepestCustomWidgetType(root, minDepth: barrierDepth) ?? 'Modal';
+      return _deepestCustomWidgetType(
+            root,
+            minDepth: barrierDepth,
+            allowSurfaceSuffix: true,
+          ) ??
+          'Modal';
     }
     // No modal at all — still try to name the page from its deepest custom
     // content widget (custom-named routes without a *Screen/*Page class).
-    return _deepestCustomWidgetType(root, minDepth: -1);
+    return _deepestCustomWidgetType(
+      root,
+      minDepth: -1,
+      allowSurfaceSuffix: false,
+    );
   }
 
   bool _isModalBarrierWidget(Widget widget) {
@@ -443,9 +613,14 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
 
   /// Deepest non-framework (non-`_`, non-SDK-prefixed) widget type below
   /// [minDepth], used to name a modal from its actual content class.
-  String? _deepestCustomWidgetType(Element root, {required int minDepth}) {
+  String? _deepestCustomWidgetType(
+    Element root, {
+    required int minDepth,
+    required bool allowSurfaceSuffix,
+  }) {
     String? best;
     var bestDepth = minDepth;
+    var bestRank = 0;
     _walkVisible(root, (Element element) {
       final depth = _elementDepth(element);
       if (depth <= bestDepth) return;
@@ -453,18 +628,45 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       if (type.startsWith('_')) return;
       if (_frameworkWidgetPrefixes.any(type.startsWith)) return;
       if (_frameworkScreenWidgets.contains(type)) return;
-      if (type.endsWith('Screen') ||
-          type.endsWith('Page') ||
-          type.endsWith('Sheet') ||
-          type.endsWith('Dialog') ||
-          type.endsWith('Body') ||
-          type.endsWith('Content') ||
-          type.endsWith('View')) {
+      final rank = _customWidgetScreenRank(
+        type,
+        allowSurfaceSuffix: allowSurfaceSuffix,
+      );
+      if (rank > 0 &&
+          (rank > bestRank || rank == bestRank && depth > bestDepth)) {
         best = type;
         bestDepth = depth;
+        bestRank = rank;
       }
     });
     return best;
+  }
+
+  int _customWidgetScreenRank(String type, {required bool allowSurfaceSuffix}) {
+    if (type == 'MyApp' ||
+        type == 'App' ||
+        type == 'Root' ||
+        type == 'Bootstrap' ||
+        type == 'ProviderScope') {
+      return 0;
+    }
+    if (type.endsWith('Screen') ||
+        type.endsWith('Page') ||
+        type.endsWith('Sheet') ||
+        type.endsWith('Dialog') ||
+        type.endsWith('Body') ||
+        type.endsWith('Content') ||
+        type.endsWith('View') ||
+        type.endsWith('Panel') ||
+        type.endsWith('Pane') ||
+        type.endsWith('Flow') ||
+        type.endsWith('Workspace')) {
+      return 100;
+    }
+    if (allowSurfaceSuffix && type.endsWith('Surface')) return 90;
+    if (type.endsWith('Surface')) return 0;
+    if (RegExp(r'^[A-Z][A-Za-z0-9]{3,}$').hasMatch(type)) return 20;
+    return 0;
   }
 
   static const List<String> _frameworkWidgetPrefixes = [
@@ -476,6 +678,24 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     'Stack',
     'Container',
     'SizedBox',
+    'Text',
+    'RichText',
+    'DefaultTextStyle',
+    'Icon',
+    'Builder',
+    'Semantics',
+    'GestureDetector',
+    'Listener',
+    'RawGestureDetector',
+    'MouseRegion',
+    'Focus',
+    'Shortcuts',
+    'Actions',
+    'Navigator',
+    'Overlay',
+    'Hero',
+    'Flexible',
+    'Expanded',
     'ListView',
     'GridView',
     'ScrollView',

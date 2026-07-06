@@ -143,6 +143,8 @@ extension _CliActions on FlutterScoutCli {
       'idle': result['idle'],
       'degradedNodes': result['degradedNodes'] ?? 0,
       'interactableCount': interactables is List ? interactables.length : 0,
+      if (result['semanticQuality'] != null)
+        'semanticQuality': result['semanticQuality'],
       'blockingErrors': blocking,
       'recentErrorCount': errorList.length,
       'recentLogErrors': logErrors,

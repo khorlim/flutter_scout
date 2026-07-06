@@ -319,6 +319,17 @@ void main() {
   });
 
   test(
+    'explore once prints persistent-mode setup without serving forever',
+    () async {
+      await _withTempCwd(() async {
+        final exitCode = await FlutterScoutCli().run(['explore', '--once']);
+
+        expect(exitCode, 0);
+      });
+    },
+  );
+
+  test(
     'attach fails fast against an unresponsive vm service',
     () async {
       // A socket that completes the WebSocket handshake but never answers a
@@ -683,6 +694,57 @@ void main() {
     expect(summary.containsKey('controlGroups'), isFalse);
     expect(summary.containsKey('fieldsById'), isFalse);
     expect((summary['visibleText'] as List).length, 12);
+  });
+
+  test('compact action output compacts failed expectation payloads', () {
+    final cli = FlutterScoutCli();
+    final result = cli.debugCompactActionResult({
+      'ok': false,
+      'error': {'code': 'expectation_not_met', 'message': 'Timed out'},
+      'action': 'tap btn.save',
+      'result': 'activated_no_observed_change',
+      'target': {
+        'id': 'btn.save',
+        'label': 'Save',
+        'kind': 'btn',
+        'rect': [1, 2, 300, 80],
+        'confidence': 0.95,
+      },
+      'expectation': {
+        'met': false,
+        'conditions': {'text': 'Saved'},
+      },
+      'before': {
+        'screen': 'EditScreen',
+        'viewSignature': 'Edit | Save',
+        'visibleText': List<String>.generate(25, (index) => 'before $index'),
+        'textTargets': List<int>.generate(100, (index) => index),
+      },
+      'after': {
+        'screen': 'EditScreen',
+        'viewSignature': 'Edit | Save',
+        'visibleText': List<String>.generate(25, (index) => 'after $index'),
+        'visualTree': {'children': List<int>.generate(100, (index) => index)},
+      },
+      'recentErrors': [
+        {'message': 'old'},
+        {'message': 'middle'},
+        {'message': 'newer'},
+        {'message': 'newest'},
+      ],
+    });
+
+    expect(result['ok'], isFalse);
+    expect(result.containsKey('before'), isFalse);
+    expect(result.containsKey('after'), isFalse);
+    final target = result['target'] as Map<String, Object?>;
+    expect(target, {'id': 'btn.save', 'label': 'Save', 'kind': 'btn'});
+    final before = result['beforeSummary'] as Map<String, Object?>;
+    final after = result['afterSummary'] as Map<String, Object?>;
+    expect(before.containsKey('textTargets'), isFalse);
+    expect(after.containsKey('visualTree'), isFalse);
+    expect((before['visibleText'] as List).length, 12);
+    expect((result['recentErrors'] as List).length, 3);
   });
 }
 

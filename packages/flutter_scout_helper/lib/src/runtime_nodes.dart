@@ -747,6 +747,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     } else if (widget is BottomSheet) {
       kind = 'bottomSheet';
     } else if (_isModalBarrierWidget(widget)) {
+      if (!_isBlockingModalBarrierWidget(widget)) return null;
       // A visible barrier means a modal is up even when its content is a
       // custom Container (no Dialog/BottomSheet widget) — so `overlays` is no
       // longer empty and agents know a scrim is intercepting the background.
@@ -775,6 +776,16 @@ extension _RuntimeNodes on FlutterScoutRuntime {
               visibleRect.height,
             ],
     };
+  }
+
+  bool _isBlockingModalBarrierWidget(Widget widget) {
+    if (widget is ModalBarrier) {
+      final color = widget.color;
+      return widget.dismissible || (color != null && color.a > 0.05);
+    }
+    final type = widget.runtimeType.toString();
+    if (type.contains('AnimatedModalBarrier')) return true;
+    return false;
   }
 
   String _stableId(String kind, String? label, Key? key, String widgetType) {
@@ -1252,11 +1263,10 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (root == null) return null;
     final wanted = text.trim();
     final wantedLower = wanted.toLowerCase();
-    _TextTargetMatch? exact;
-    _TextTargetMatch? contains;
-    _TextTargetMatch? truncated;
+    final exact = <_TextTargetMatch>[];
+    final contains = <_TextTargetMatch>[];
+    final truncated = <_TextTargetMatch>[];
     _walk(root, (Element element) {
-      if (exact != null) return;
       final own = _ownText(element.widget)?.trim();
       if (own == null || own.isEmpty) return;
       final rect = _rectFor(element);
@@ -1266,26 +1276,65 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       final actionable = _nearestActionableAncestor(element);
       final match = _TextTargetMatch(text: node, actionable: actionable);
       if (own == wanted) {
-        exact = match;
+        exact.add(match);
         return;
       }
       final ownLower = own.toLowerCase();
-      if (wanted.length >= 3 &&
-          contains == null &&
-          ownLower.contains(wantedLower)) {
-        contains = match;
+      if (wanted.length >= 3 && ownLower.contains(wantedLower)) {
+        contains.add(match);
       }
       // Truncation: the on-screen label is a shortened prefix of the query
       // (e.g. "Prenatal Bliss…" for "Prenatal Bliss Massage"). Only with the
       // explicit `loose` opt-in, since it is a weaker signal.
-      if (loose && truncated == null) {
+      if (loose) {
         final stripped = ownLower.replaceAll(RegExp(r'[…\.\s]+$'), '');
         if (stripped.length >= 4 && wantedLower.startsWith(stripped)) {
-          truncated = match;
+          truncated.add(match);
         }
       }
     });
-    return exact ?? contains ?? truncated;
+    return _bestTextTargetMatch(exact) ??
+        _bestTextTargetMatch(contains) ??
+        _bestTextTargetMatch(truncated);
+  }
+
+  _TextTargetMatch? _bestTextTargetMatch(List<_TextTargetMatch> matches) {
+    if (matches.isEmpty) return null;
+    matches.sort(
+      (a, b) => _textTargetMatchRank(b).compareTo(_textTargetMatchRank(a)),
+    );
+    return matches.first;
+  }
+
+  int _textTargetMatchRank(_TextTargetMatch match) {
+    var score = 0;
+    if (match.text.hitTestable) score += 40;
+    final actionable = match.actionable;
+    if (actionable != null) {
+      score += 25;
+      if (actionable.enabled) score += 8;
+      if (actionable.id == match.text.id) score += 6;
+      final actionRect = actionable.rect;
+      final textRect = match.text.rect;
+      if (actionRect != null && textRect != null) {
+        final ratio = _areaRatio(actionRect, textRect);
+        if (ratio <= 8) {
+          score += 8;
+        } else if (ratio > 24) {
+          score -= 12;
+        }
+      }
+    }
+    if (match.text.visibleFraction >= 1) score += 4;
+    final top = match.text.rect?.top ?? 0;
+    score -= (top / 100).round();
+    return score;
+  }
+
+  double _areaRatio(Rect outer, Rect inner) {
+    final innerArea = _rectArea(inner);
+    if (innerArea <= 0) return double.infinity;
+    return _rectArea(outer) / innerArea;
   }
 
   List<Map<String, Object?>> _buildControlGroups(ScoutSnapshot snapshot) {
@@ -1293,6 +1342,131 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (surface == null) return const [];
     return [surface.toControlGroupJson()];
   }
+
+  List<Map<String, Object?>> _buildSuggestedActions(
+    ScoutSnapshot snapshot,
+    List<Map<String, Object?>> controlGroups,
+  ) {
+    final suggestions = <Map<String, Object?>>[];
+    if (controlGroups.isNotEmpty) {
+      suggestions.add({
+        'intent': 'enterValue',
+        'method': 'tapSequence',
+        'reason':
+            'A custom control group is visible. It is not a text field; operate it by tapping the exposed child controls in order, then tap the commit action if needed.',
+      });
+    }
+    if (snapshot.fields.isNotEmpty) {
+      suggestions.add({
+        'intent': 'fillForm',
+        'method': 'fill',
+        'fields': [
+          for (final field in snapshot.fields.take(20))
+            {
+              'target': field.id,
+              if (field.label != null) 'label': field.label,
+              if (field.value != null) 'value': field.value,
+            },
+        ],
+      });
+    }
+    final pickerOptions = _pickerOptions(snapshot);
+    if (pickerOptions.isNotEmpty) {
+      final dateLike = pickerOptions.any(
+        (option) => _datePresetSlugs.contains(option['slug']),
+      );
+      suggestions.add({
+        'intent': dateLike ? 'setDateRange' : 'selectOption',
+        'method': 'tap',
+        'options': [
+          for (final option in pickerOptions.take(16))
+            {
+              'label': option['label'],
+              'target': option['target'],
+              if (option['selected'] != null) 'selected': option['selected'],
+            },
+        ],
+      });
+    }
+    final commit = _customInputCommitAction(snapshot);
+    if (commit != null && snapshot.fields.isNotEmpty) {
+      suggestions.add({
+        'intent': 'submitForm',
+        'method': 'tap',
+        'target': commit.id,
+        if (commit.label != null) 'label': commit.label,
+      });
+    }
+    return suggestions;
+  }
+
+  List<Map<String, Object?>> _pickerOptions(ScoutSnapshot snapshot) {
+    final options = <Map<String, Object?>>[];
+    final seen = <String>{};
+    for (final node in [...snapshot.interactables, ...snapshot.textTargets]) {
+      final label = node.label?.trim();
+      if (label == null || label.isEmpty) continue;
+      final slug = _slug(label);
+      final pickerLike =
+          _datePresetSlugs.contains(slug) ||
+          _genericPickerSlugs.contains(slug) ||
+          _pickerWidgetTypes.contains(node.widgetType);
+      if (!pickerLike) continue;
+      if (node.visibleFraction <= 0) continue;
+      final target = node.kind == 'text'
+          ? node.enclosingTarget ?? node.id
+          : node.id;
+      final key = '$slug:$target';
+      if (!seen.add(key)) continue;
+      options.add({
+        'label': label,
+        'slug': slug,
+        'target': target,
+        if (node.selected != null) 'selected': node.selected,
+      });
+    }
+    options.sort(
+      (a, b) => a['label'].toString().compareTo(b['label'].toString()),
+    );
+    return options;
+  }
+
+  static const Set<String> _datePresetSlugs = {
+    'today',
+    'yesterday',
+    'tomorrow',
+    'this_week',
+    'last_week',
+    'next_week',
+    'this_month',
+    'last_month',
+    'next_month',
+    'this_year',
+    'last_year',
+    'custom',
+    'custom_range',
+  };
+
+  static const Set<String> _genericPickerSlugs = {
+    'all',
+    'active',
+    'inactive',
+    'enabled',
+    'disabled',
+    'pending',
+    'approved',
+    'rejected',
+    'paid',
+    'unpaid',
+  };
+
+  static const Set<String> _pickerWidgetTypes = {
+    'ChoiceChip',
+    'FilterChip',
+    'DropdownMenuItem',
+    'PopupMenuItem',
+    'CupertinoSegmentedControl',
+  };
 
   Map<String, Object?> _buildVisualTree(
     ScoutSnapshot snapshot,
@@ -1440,6 +1614,300 @@ extension _RuntimeNodes on FlutterScoutRuntime {
           ].where((node) => node.visibleFraction > 0).toList(growable: false)
           ..sort(_compareNodesByPosition);
     return [for (final node in nodes.take(60)) _visualNode(node)];
+  }
+
+  List<Map<String, Object?>> _buildStructuredRows(ScoutSnapshot snapshot) {
+    final viewportArea =
+        snapshot.logicalSize.width * snapshot.logicalSize.height;
+    final candidates =
+        <
+          ({
+            ScoutNode primary,
+            Rect rect,
+            List<ScoutNode> texts,
+            List<ScoutNode> actions,
+          })
+        >[];
+
+    for (final node in snapshot.interactables) {
+      final rect = node.rect;
+      if (rect == null || node.visibleFraction <= 0) continue;
+      if (rect.width < 80 || rect.height < 28) continue;
+      final area = _rectArea(rect);
+      if (viewportArea > 0 && area / viewportArea > 0.35) continue;
+      final texts = [
+        for (final text in snapshot.textTargets)
+          if (text.rect case final textRect?)
+            if (text.visibleFraction > 0 &&
+                rect.contains(textRect.center) &&
+                _isStructuredRowText(text.label))
+              text,
+      ]..sort(_compareNodesByPosition);
+      final uniqueText = _uniqueNodesByLabel(texts);
+      if (uniqueText.length < 2) continue;
+      final actions = [
+        node,
+        for (final action in snapshot.interactables)
+          if (action.id != node.id)
+            if (action.rect case final actionRect?)
+              if (action.visibleFraction > 0 &&
+                  rect.contains(actionRect.center))
+                action,
+      ]..sort(_compareNodesByPosition);
+      candidates.add((
+        primary: node,
+        rect: rect,
+        texts: uniqueText,
+        actions: actions,
+      ));
+    }
+
+    final kept =
+        <
+          ({
+            ScoutNode primary,
+            Rect rect,
+            List<ScoutNode> texts,
+            List<ScoutNode> actions,
+          })
+        >[];
+    candidates.sort(
+      (a, b) => _rowCandidateRank(b).compareTo(_rowCandidateRank(a)),
+    );
+    for (final candidate in candidates) {
+      final duplicate = kept.any(
+        (row) =>
+            _overlapRatio(row.rect, candidate.rect) > 0.78 ||
+            _sameRowText(row.texts, candidate.texts),
+      );
+      if (!duplicate) kept.add(candidate);
+    }
+    kept.sort((a, b) {
+      final top = a.rect.top.compareTo(b.rect.top);
+      if (top != 0) return top;
+      return a.rect.left.compareTo(b.rect.left);
+    });
+
+    final slugCounts = <String, int>{};
+    final result = [
+      for (var i = 0; i < kept.length && i < 80; i++)
+        _structuredRowJson(kept[i], i, slugCounts),
+    ];
+    final existingTextSets = {
+      for (final row in result) _rowTextKey(row['text']),
+    }..remove('');
+    for (final row in _textGeometryRows(snapshot, startIndex: result.length)) {
+      final key = _rowTextKey(row['text']);
+      if (key.isNotEmpty && existingTextSets.contains(key)) continue;
+      result.add(row);
+      existingTextSets.add(key);
+      if (result.length >= 80) break;
+    }
+    return result;
+  }
+
+  int _rowCandidateRank(
+    ({
+      ScoutNode primary,
+      Rect rect,
+      List<ScoutNode> texts,
+      List<ScoutNode> actions,
+    })
+    candidate,
+  ) {
+    final keyBonus = (candidate.primary.key ?? '').isNotEmpty ? 30 : 0;
+    final labelBonus = (candidate.primary.label ?? '').isNotEmpty ? 15 : 0;
+    return candidate.texts.length * 100 +
+        candidate.actions.length * 8 +
+        keyBonus +
+        labelBonus +
+        (candidate.rect.width / 100).round();
+  }
+
+  Map<String, Object?> _structuredRowJson(
+    ({
+      ScoutNode primary,
+      Rect rect,
+      List<ScoutNode> texts,
+      List<ScoutNode> actions,
+    })
+    row,
+    int index,
+    Map<String, int> slugCounts,
+  ) {
+    final labels = [
+      for (final text in row.texts)
+        if ((text.label ?? '').trim().isNotEmpty) text.label!.trim(),
+    ];
+    final baseSlug = _slug(labels.isEmpty ? 'row_${index + 1}' : labels.first);
+    final ordinal = slugCounts.update(
+      baseSlug,
+      (value) => value + 1,
+      ifAbsent: () => 1,
+    );
+    final rowId = ordinal == 1 ? 'row.$baseSlug' : 'row.${baseSlug}_$ordinal';
+    final primaryTarget = row.primary.id;
+    final handles = <String, String>{
+      rowId: primaryTarget,
+      'row.${index + 1}': primaryTarget,
+    };
+    if (ordinal == 1) handles['row.$baseSlug'] = primaryTarget;
+    for (final action in row.actions) {
+      final actionSlug = _rowActionSlug(action);
+      if (actionSlug.isEmpty) continue;
+      handles['$rowId.$actionSlug'] = action.id;
+      if (ordinal == 1) handles['row.$baseSlug.$actionSlug'] = action.id;
+    }
+    return {
+      'id': rowId,
+      'index': index,
+      'kind': 'row',
+      'label': labels.take(4).join(' | '),
+      'text': labels,
+      'rect': _rectToJson(row.rect),
+      'primaryTarget': primaryTarget,
+      'actions': [
+        for (final action in row.actions)
+          {
+            'id': action.id,
+            'kind': action.kind,
+            if (action.label != null) 'label': action.label,
+            'role': action.id == primaryTarget ? 'primary' : 'action',
+          },
+      ],
+      'handles': handles,
+    };
+  }
+
+  List<Map<String, Object?>> _textGeometryRows(
+    ScoutSnapshot snapshot, {
+    int startIndex = 0,
+  }) {
+    final textNodes = [
+      for (final node in snapshot.textTargets)
+        if (node.visibleFraction > 0 &&
+            node.rect != null &&
+            _isStructuredRowText(node.label))
+          node,
+    ]..sort(_compareNodesByPosition);
+    final rows = <List<ScoutNode>>[];
+    for (final node in textNodes) {
+      final rect = node.rect!;
+      List<ScoutNode>? row;
+      for (final candidate in rows) {
+        final bounds = candidate
+            .map((node) => node.rect!)
+            .reduce((value, element) => value.expandToInclude(element));
+        final sameLine = (bounds.center.dy - rect.center.dy).abs() <= 14;
+        final stackedLine =
+            rect.top - bounds.bottom <= 32 &&
+            (rect.left - bounds.left).abs() <= 32;
+        if (sameLine || stackedLine || bounds.overlaps(rect)) {
+          row = candidate;
+          break;
+        }
+      }
+      (row ?? (rows..add(<ScoutNode>[])).last).add(node);
+    }
+    final result = <Map<String, Object?>>[];
+    for (var i = 0; i < rows.length && result.length < 80; i++) {
+      final row = _uniqueNodesByLabel(rows[i])..sort(_compareNodesByPosition);
+      if (row.length < 2) continue;
+      final rect = row
+          .map((node) => node.rect!)
+          .reduce((value, element) => value.expandToInclude(element));
+      final labels = [for (final node in row) node.label!.trim()];
+      final rowIndex = startIndex + result.length;
+      final baseSlug = _slug(
+        labels.isEmpty ? 'row_${rowIndex + 1}' : labels.first,
+      );
+      final rowId = 'row.$baseSlug';
+      final actionBand = Rect.fromLTRB(
+        0,
+        (rect.top - 12).clamp(0, snapshot.logicalSize.height),
+        snapshot.logicalSize.width,
+        (rect.bottom + 12).clamp(0, snapshot.logicalSize.height),
+      );
+      final actions = [
+        for (final action in snapshot.interactables)
+          if (action.rect case final actionRect?)
+            if (action.visibleFraction > 0 &&
+                actionBand.contains(actionRect.center))
+              action,
+      ]..sort(_compareNodesByPosition);
+      final primary = actions.length == 1 ? actions.single.id : null;
+      final handles = <String, String>{};
+      if (primary != null) {
+        handles[rowId] = primary;
+        handles['row.${rowIndex + 1}'] = primary;
+      }
+      for (final action in actions) {
+        final actionSlug = _rowActionSlug(action);
+        if (actionSlug.isEmpty) continue;
+        handles['$rowId.$actionSlug'] = action.id;
+      }
+      result.add({
+        'id': rowId,
+        'index': rowIndex,
+        'kind': 'textRow',
+        'label': labels.take(4).join(' | '),
+        'text': labels,
+        'rect': _rectToJson(rect),
+        'primaryTarget': ?primary,
+        if (actions.isNotEmpty)
+          'actions': [
+            for (final action in actions)
+              {
+                'id': action.id,
+                'kind': action.kind,
+                if (action.label != null) 'label': action.label,
+                'role': action.id == primary ? 'primary' : 'action',
+              },
+          ],
+        'handles': handles,
+      });
+    }
+    return result;
+  }
+
+  String _rowTextKey(Object? value) {
+    if (value is! List) return '';
+    return value.map((item) => item.toString().trim().toLowerCase()).join('|');
+  }
+
+  List<ScoutNode> _uniqueNodesByLabel(List<ScoutNode> nodes) {
+    final seen = <String>{};
+    final result = <ScoutNode>[];
+    for (final node in nodes) {
+      final label = node.label?.trim();
+      if (label == null || label.isEmpty) continue;
+      if (seen.add(label.toLowerCase())) result.add(node);
+    }
+    return result;
+  }
+
+  bool _sameRowText(List<ScoutNode> a, List<ScoutNode> b) {
+    final aLabels = {for (final node in a) ?node.label?.trim().toLowerCase()};
+    final bLabels = {for (final node in b) ?node.label?.trim().toLowerCase()};
+    aLabels.remove(null);
+    bLabels.remove(null);
+    return aLabels.isNotEmpty &&
+        aLabels.length == bLabels.length &&
+        aLabels.containsAll(bLabels);
+  }
+
+  bool _isStructuredRowText(String? label) {
+    final trimmed = label?.trim();
+    if (trimmed == null || trimmed.isEmpty) return false;
+    if (trimmed.length > 80) return false;
+    return RegExp(r'[A-Za-z0-9]').hasMatch(trimmed);
+  }
+
+  String _rowActionSlug(ScoutNode action) {
+    final label = action.label?.trim();
+    if (label != null && label.isNotEmpty) return _slug(label);
+    final parts = action.id.split('.');
+    return parts.isEmpty ? '' : _slug(parts.last);
   }
 
   Map<String, Object?> _visualNode(ScoutNode node, {String? role}) {

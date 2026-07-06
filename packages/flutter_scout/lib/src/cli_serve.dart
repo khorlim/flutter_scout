@@ -11,6 +11,41 @@ part of 'flutter_scout_cli.dart';
 //   curl "localhost:$(cat /tmp/scout.port)/stop"
 
 extension _CliServe on FlutterScoutCli {
+  Future<int> _explore(List<String> args) async {
+    final parser = ArgParser()
+      ..addFlag('once', negatable: false, help: 'Print setup JSON and exit.')
+      ..addOption('port', defaultsTo: '0', help: '0 picks a free port.')
+      ..addOption(
+        'port-file',
+        help: 'Write the bound port here so callers can discover it.',
+      );
+    if (args.contains('--help') || args.contains('-h')) {
+      stdout.writeln(
+        'Usage: flutter-scout explore [--port <port>] [--port-file <path>] [--once]',
+      );
+      return 0;
+    }
+    final parsed = parser.parse(args);
+    if (parsed.flag('once')) {
+      final portFile =
+          parsed.option('port-file') ?? '.flutter_scout/explore_port';
+      stdout.writeln(
+        const JsonEncoder.withIndent('  ').convert({
+          'ok': true,
+          'mode': 'persistent_explore',
+          'command':
+              'flutter-scout explore --port ${parsed.option('port')} --port-file $portFile',
+          'portFile': portFile,
+          'endpoints': ['/run?cmd=<command line>', '/health', '/stop'],
+          'reason':
+              'Use one persistent VM connection for exploratory agent loops.',
+        }),
+      );
+      return 0;
+    }
+    return _serve(args);
+  }
+
   Future<int> _serve(List<String> args) async {
     final parser = ArgParser()
       ..addOption('port', defaultsTo: '0', help: '0 picks a free port.')
@@ -99,8 +134,11 @@ extension _CliServe on FlutterScoutCli {
     if (argv.isEmpty) {
       return {'exitCode': 1, 'error': 'empty command'};
     }
-    if (argv.first == 'serve') {
-      return {'exitCode': 1, 'error': 'nested serve is not supported'};
+    if (argv.first == 'serve' || argv.first == 'explore') {
+      return {
+        'exitCode': 1,
+        'error': 'nested persistent mode is not supported',
+      };
     }
     final capturedOut = _CapturedStdio();
     final capturedErr = _CapturedStdio();

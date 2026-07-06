@@ -126,6 +126,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
           'Text `$text` is visible, but no actionable ancestor was found.',
         );
       }
+      final activationRisk = _tapTextActivationRisk(match);
       await _dispatchTap(point);
       final actionSnapshot = await _snapshotAfterAction(before, params);
       final stable = actionSnapshot.stable;
@@ -143,10 +144,15 @@ extension _RuntimeActions on FlutterScoutRuntime {
           'dispatched': true,
           'observedChange': changed,
           'strategy': _tapTextStrategy(match),
+          'risk': activationRisk,
         },
-        if (!changed && targetNode.selected != true)
-          'warnings': const [
-            'tap-text activated the nearest actionable target, but no synchronous UI change was observed before the wait timeout.',
+        if ((!changed && targetNode.selected != true) ||
+            activationRisk['level'] != 'low')
+          'warnings': [
+            if (!changed && targetNode.selected != true)
+              'tap-text activated the nearest actionable target, but no synchronous UI change was observed before the wait timeout.',
+            if (activationRisk['level'] != 'low')
+              'tap-text used a higher-risk activation path; prefer a concrete handle from inspect when repeating this action.',
           ],
         'before': before.summaryJson(),
         'after': after.summaryJson(),
@@ -219,6 +225,53 @@ extension _RuntimeActions on FlutterScoutRuntime {
     if (match.actionable!.id == match.text.id) return 'text_target';
     if (_shouldTapTextPoint(match)) return 'broad_ancestor_text_point';
     return 'nearest_actionable_ancestor';
+  }
+
+  Map<String, Object?> _tapTextActivationRisk(_TextTargetMatch match) {
+    final reasons = <String>[];
+    var score = 0;
+    final actionable = match.actionable;
+    if (actionable == null) {
+      reasons.add('visible_text_without_actionable_ancestor');
+      score += 25;
+    } else {
+      if (actionable.id != match.text.id) {
+        reasons.add('actionable_ancestor');
+        score += 8;
+      }
+      final actionRect = actionable.rect;
+      final textRect = match.text.rect;
+      if (actionRect != null && textRect != null) {
+        final textArea = textRect.width * textRect.height;
+        final actionArea = actionRect.width * actionRect.height;
+        if (textArea > 0 && actionArea / textArea > 16) {
+          reasons.add('broad_ancestor');
+          score += 16;
+        }
+      }
+      if (!actionable.hitTestable) {
+        reasons.add('target_not_hit_testable_at_center');
+        score += 10;
+      }
+      if (actionable.confidence < 0.75) {
+        reasons.add('low_confidence_target');
+        score += 8;
+      }
+    }
+    if (!match.text.hitTestable) {
+      reasons.add('text_not_hit_testable');
+      score += 10;
+    }
+    final level = score >= 24
+        ? 'high'
+        : score >= 10
+        ? 'medium'
+        : 'low';
+    return {
+      'level': level,
+      'confidence': (1 - (score / 60)).clamp(0.0, 1.0),
+      if (reasons.isNotEmpty) 'reasons': reasons,
+    };
   }
 
   bool _unsafeTapTextActivation(_TextTargetMatch match, String requestedText) {

@@ -167,8 +167,46 @@ extension _CliResults on FlutterScoutCli {
 
   Map<String, dynamic> _compactActionResult(Map<String, dynamic> result) {
     if (result['ok'] == false) {
+      final before = result['before'];
+      final after = result['after'];
       return {
-        ...result,
+        'ok': false,
+        if (result['error'] != null) 'error': result['error'],
+        if (result['action'] != null) 'action': result['action'],
+        if (result['stable'] != null) 'stable': result['stable'],
+        if (result['result'] != null) 'result': result['result'],
+        if (result['lateChangeObserved'] != null)
+          'lateChangeObserved': result['lateChangeObserved'],
+        if (result['waitTimedOut'] != null)
+          'waitTimedOut': result['waitTimedOut'],
+        if (result['method'] != null) 'method': result['method'],
+        if (result['state'] != null) 'state': result['state'],
+        if (result['appReachable'] != null)
+          'appReachable': result['appReachable'],
+        if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
+        if (result['message'] != null) 'message': result['message'],
+        if (result['reason'] != null) 'reason': result['reason'],
+        if (result['target'] is Map<String, dynamic>)
+          'target': _compactNode(result['target'] as Map<String, dynamic>),
+        if (result['textTarget'] is Map<String, dynamic>)
+          'textTarget': _compactNode(
+            result['textTarget'] as Map<String, dynamic>,
+          ),
+        if (result['activation'] != null) 'activation': result['activation'],
+        if (result['expectation'] != null) 'expectation': result['expectation'],
+        if (result['warnings'] != null) 'warnings': result['warnings'],
+        if (result['didYouMean'] != null) 'didYouMean': result['didYouMean'],
+        if (result['reachHint'] != null) 'reachHint': result['reachHint'],
+        if (result['suggestedActions'] != null)
+          'suggestedActions': result['suggestedActions'],
+        if (result['fallback'] != null) 'fallback': result['fallback'],
+        if (result['helperProtocol'] != null)
+          'helperProtocol': result['helperProtocol'],
+        if (before is Map<String, dynamic>)
+          'beforeSummary': _compactSummary(before),
+        if (after is Map<String, dynamic>)
+          'afterSummary': _compactSummary(after),
+        if (result['delta'] != null) 'delta': result['delta'],
         if (result['recentErrors'] is List)
           'recentErrors': _lastItems(result['recentErrors'] as List, 3),
       };
@@ -255,6 +293,7 @@ extension _CliResults on FlutterScoutCli {
       if (summary['visibleTextHash'] != null)
         'visibleTextHash': summary['visibleTextHash'],
       if (summary['idle'] != null) 'idle': summary['idle'],
+      if (summary['perception'] != null) 'perception': summary['perception'],
       if (summary['visibleText'] is List)
         'visibleText': _lastItems(summary['visibleText'] as List, 12),
       if (summary['hitTestableText'] is List)
@@ -266,12 +305,19 @@ extension _CliResults on FlutterScoutCli {
         'degradedNodes': summary['degradedNodes'],
       if (summary['suggestedActions'] != null)
         'suggestedActions': summary['suggestedActions'],
+      if (summary['structuredRows'] is List)
+        'structuredRows': _firstItems(summary['structuredRows'] as List, 8),
     };
   }
 
   List<Object?> _lastItems(List<dynamic> items, int count) {
     if (items.length <= count) return List<Object?>.from(items);
     return items.sublist(items.length - count);
+  }
+
+  List<Object?> _firstItems(List<dynamic> items, int count) {
+    if (items.length <= count) return List<Object?>.from(items);
+    return items.take(count).toList(growable: false);
   }
 
   Future<Map<String, dynamic>> _call(

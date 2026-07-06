@@ -835,6 +835,27 @@ void main() {
     expect(briefLength, lessThan(fullLength ~/ 2));
   });
 
+  testWidgets('inspect reports perception provenance', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: Center(child: Text('Visible source'))),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    final perception =
+        snapshot.summaryJson()['perception']! as Map<String, Object?>;
+    expect((perception['text']! as Map)['source'], 'flutter_widget_tree');
+    expect((perception['visual']! as Map)['ocrInPayload'], isFalse);
+
+    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+    );
+    expect(brief['perception'], isA<Map<String, Object?>>());
+  });
+
   testWidgets('tap-text --contains matches a truncated label', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(
@@ -859,6 +880,47 @@ void main() {
       runtime.debugTapTextMatchId('Prenatal Bliss Massage', loose: true),
       isNotNull,
     );
+  });
+
+  testWidgets('tap-text ranking prefers hit-testable duplicate text', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              const Positioned(left: 20, top: 20, child: Text('Save')),
+              Positioned(
+                left: 0,
+                top: 0,
+                width: 120,
+                height: 80,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {},
+                ),
+              ),
+              Positioned(
+                left: 20,
+                top: 120,
+                child: TextButton(onPressed: () {}, child: const Text('Save')),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final summary = FlutterScoutHelper.debugRuntime.debugTapTextMatchSummary(
+      'Save',
+    );
+    expect(summary, isNotNull);
+    expect(summary!['textHitTestable'], isTrue);
+    expect(summary['actionableId'].toString(), startsWith('btn.save'));
+    expect((summary['risk']! as Map)['level'], 'low');
   });
 
   testWidgets('brief adds position hints to duplicate handles', (tester) async {
@@ -937,6 +999,41 @@ void main() {
     final warnings = (brief['inspectWarnings']! as List)
         .cast<Map<String, Object?>>();
     expect(warnings.single, containsPair('code', 'many_anonymous_targets'));
+  });
+
+  testWidgets('semantic quality reports UI instrumentation issues', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              ElevatedButton(onPressed: () {}, child: const Text('Save')),
+              ElevatedButton(onPressed: () {}, child: const Text('Save')),
+              for (var i = 0; i < 3; i++)
+                GestureDetector(
+                  onTap: () {},
+                  child: const SizedBox(width: 24, height: 24),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+    );
+    final quality = brief['semanticQuality']! as Map<String, Object?>;
+    expect(quality['score'], lessThan(100));
+    final issues = (quality['issues']! as List).cast<Map<String, Object?>>();
+    expect(
+      issues.map((issue) => issue['code']),
+      containsAll(['unlabeled_interactables', 'duplicate_action_labels']),
+    );
   });
 
   testWidgets('wait-for conditions match visible text case-insensitively', (
@@ -1284,6 +1381,37 @@ void main() {
     expect(snapshot.overlays.any((o) => o['kind'] == 'modalBarrier'), isTrue);
   });
 
+  testWidgets('generic modal titles create active surfaces', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => ElevatedButton(
+              onPressed: () => showGeneralDialog<void>(
+                context: context,
+                barrierDismissible: true,
+                barrierLabel: 'dismiss',
+                pageBuilder: (context, animation, secondary) =>
+                    const _ClientPreferencesPanel(),
+              ),
+              child: const Text('open preferences'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('open preferences'));
+    await tester.pumpAndSettle();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    expect(snapshot.activeSurface?['label'], 'Client Preferences');
+    expect(snapshot.activeSurface?['screen'], 'ClientPreferencesSurface');
+    expect(snapshot.activeSurface?['source'], 'prominentText');
+    expect(snapshot.screen, 'ClientPreferencesSurface');
+  });
+
   testWidgets('page-suffixed widgets are detected as the screen', (
     tester,
   ) async {
@@ -1293,6 +1421,18 @@ void main() {
     expect(
       FlutterScoutHelper.debugRuntime.debugSnapshot().screen,
       '_CheckoutPage',
+    );
+  });
+
+  testWidgets('public custom widgets without page suffix can name the screen', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(const MaterialApp(home: InventoryWorkspace()));
+    await tester.pump();
+    expect(
+      FlutterScoutHelper.debugRuntime.debugSnapshot().screen,
+      'InventoryWorkspace',
     );
   });
 
@@ -1486,6 +1626,101 @@ void main() {
     expect(row.enclosingTarget, isNull);
   });
 
+  testWidgets('structured rows expose row-scoped handles', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              ListTile(
+                key: const ValueKey('acme_row'),
+                title: const Text('Acme Supplies'),
+                subtitle: const Text('INV-1001'),
+                trailing: IconButton(
+                  tooltip: 'More actions',
+                  icon: const Icon(Icons.more_vert),
+                  onPressed: () {},
+                ),
+                onTap: () {},
+              ),
+              ListTile(
+                key: const ValueKey('zen_row'),
+                title: const Text('Zen Retail'),
+                subtitle: const Text('INV-1002'),
+                onTap: () {},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final snapshot = runtime.debugSnapshot();
+    final tappableRow = snapshot.structuredRows.firstWhere(
+      (row) => (row['text']! as List).contains('Zen Retail'),
+    );
+    final primaryTarget = tappableRow['primaryTarget'] as String;
+    final tappableHandles = (tappableRow['handles']! as Map)
+        .cast<String, String>();
+    expect(tappableHandles['row.zen_retail'], primaryTarget);
+    expect(snapshot.findNode('row.zen_retail')?.id, primaryTarget);
+
+    final actionRow = snapshot.structuredRows.firstWhere(
+      (row) => (row['text']! as List).contains('Acme Supplies'),
+    );
+    final actionHandles = (actionRow['handles']! as Map).cast<String, String>();
+    final moreHandle = actionHandles.entries.firstWhere(
+      (entry) => entry.key.contains('more'),
+    );
+    expect(snapshot.findNode(moreHandle.key)?.id, moreHandle.value);
+
+    final brief = runtime.debugInspectPayload(brief: true);
+    expect(brief['structuredRows'], isA<List<Object?>>());
+    final sectioned = runtime.debugInspectPayload(sections: {'rows'});
+    expect(sectioned['structuredRows'], isA<List<Object?>>());
+  });
+
+  testWidgets('suggested actions model forms and picker presets', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              const TextField(decoration: InputDecoration(labelText: 'Name')),
+              Wrap(
+                children: [
+                  TextButton(onPressed: () {}, child: const Text('Today')),
+                  TextButton(onPressed: () {}, child: const Text('Last Month')),
+                  TextButton(onPressed: () {}, child: const Text('Custom')),
+                ],
+              ),
+              ElevatedButton(onPressed: () {}, child: const Text('Apply')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final actions = FlutterScoutHelper.debugRuntime
+        .debugSnapshot()
+        .suggestedActions;
+    expect(actions.any((action) => action['intent'] == 'fillForm'), isTrue);
+    final dateRange = actions.firstWhere(
+      (action) => action['intent'] == 'setDateRange',
+    );
+    final options = (dateRange['options']! as List)
+        .cast<Map<String, Object?>>();
+    expect(options.map((option) => option['label']), contains('Last Month'));
+    expect(actions.any((action) => action['intent'] == 'submitForm'), isTrue);
+  });
+
   testWidgets('altIds keep alternate handles resolving', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(
@@ -1658,6 +1893,38 @@ class _AppointmentSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(body: Center(child: Text('Appointment')));
+  }
+}
+
+class InventoryWorkspace extends StatelessWidget {
+  const InventoryWorkspace({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: Text('Inventory')));
+  }
+}
+
+class _ClientPreferencesPanel extends StatelessWidget {
+  const _ClientPreferencesPanel();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Material(
+        child: SizedBox(
+          width: 280,
+          height: 160,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: const [
+              Text('Client Preferences'),
+              Text('Notification defaults'),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

@@ -29,7 +29,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 8;
+  static const int expectedHelperProtocolVersion = 9;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -245,6 +245,7 @@ class FlutterScoutCli {
         'batch' => _batch(rest),
         'export-batch' => _exportBatch(rest),
         'serve' => _serve(rest),
+        'explore' => _explore(rest),
         'apps' => _apps(),
         'reload' => _reload(rest),
         'restart' => _restart(rest),
@@ -1530,6 +1531,7 @@ Usage:
   flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--to x,y] [--verbose]
   flutter-scout back [--verbose]
   flutter-scout wait stable
+  flutter-scout explore [--port <port>] [--port-file <path>] [--once]
   flutter-scout reload [--verbose]
   flutter-scout restart [--verbose]
   flutter-scout deeplink <url>

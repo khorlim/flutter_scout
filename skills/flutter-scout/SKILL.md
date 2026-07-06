@@ -97,7 +97,7 @@ flutter-scout inspect
 flutter-scout inspect --sections textTargets,scrollables
 ```
 
-Prefer `inspect --brief` for orientation: it returns the screen name, visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, and errors at a fraction of the full payload size. Brief output omits anonymous generic gesture targets and reports `interactablesOmitted`; when many are omitted it adds an `inspectWarnings` item so you know semantics are weak without reading hundreds of `tap.gesturedetector_*` handles. Use `inspect --surface` when a modal, picker, dialog, or sheet is active and you want only the top surface's reachable text/actions. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,annotations` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier` and `field.supplier_name` over coordinates.
+Prefer `inspect --brief` for orientation: it returns the screen name, visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, structured rows, suggested actions, semantic quality, perception provenance, and errors at a fraction of the full payload size. Brief output omits anonymous generic gesture targets and reports `interactablesOmitted`; when many are omitted it adds an `inspectWarnings` item so you know semantics are weak without reading hundreds of `tap.gesturedetector_*` handles. Use `inspect --surface` when a modal, picker, dialog, or sheet is active and you want only the top surface's reachable text/actions. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,rows,annotations` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier`, `field.supplier_name`, and `row.customer_name.more_actions` over coordinates.
 
 Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it. For CUSTOM segments/chips with no semantics, Scout infers selection heuristically: in a run of 3+ adjacent same-kind tappables where exactly one label color differs, that outlier is marked selected — treat inferred values as strong hints, not ground truth.
 
@@ -107,7 +107,7 @@ Snapshots include `viewSignature` (most prominent visible texts) and `visibleTex
 
 If `tap-text` fails with `text_not_found`, the error includes `didYouMean` near-matches — try one of those before re-inspecting. For labels the UI truncates with an ellipsis, pass `tap-text --contains "<full label>"` to match a shortened prefix.
 
-`inspect` output includes `recentLogErrors` when the app has logged error-level lines (via `dart:developer.log`/`print`/`debugPrint`) that the crash handlers never see — so swallowed failures (a denied permission, a failed API call) surface without a separate `logs` call. For a one-shot readout run `flutter-scout health`: it returns `{screen, viewSignature, degradedNodes, interactableCount, blockingErrors, recentLogErrors, healthy}` — ideal between navigation steps in a QA sweep.
+`inspect` output includes `recentLogErrors` when the app has logged error-level lines (via `dart:developer.log`/`print`/`debugPrint`) that the crash handlers never see — so swallowed failures (a denied permission, a failed API call) surface without a separate `logs` call. For a one-shot readout run `flutter-scout health`: it returns `{screen, viewSignature, degradedNodes, interactableCount, semanticQuality, blockingErrors, recentLogErrors, healthy}` — ideal between navigation steps in a QA sweep.
 
 To close a screen without guessing between a system back and an in-app close button, use `flutter-scout dismiss`: it pops the top route (handles `showDialog`/`showModalBottomSheet`/pushed screens) and, if nothing pops, taps a close-like control (xmark/close/cancel) for custom overlay modals. It reports `strategy` (`popped_route` / `tapped_close` / `none`).
 
@@ -120,7 +120,13 @@ flutter-scout screenshot --annotated -o /tmp/marked.png
 flutter-scout screenshot --annotated --annotate-filter buttons -o /tmp/buttons.png
 ```
 
-A small keyed handle (an avatar or icon inside a whole tappable row/card) can be a no-op on its own; when so, its brief entry carries `enclosingTarget` — the larger tappable it sits inside — as a reliable fallback. Duplicate handles (`btn.edit`, `btn.edit_2`, …) each carry a compact `at` position hint (grid cell + top-left pixels) so you can pick "the one in row 2" without full geometry. `screen` names the topmost modal surface (`Dialog`, `BottomSheet`, or the content widget) instead of a useless `RootWidget` when no `*Screen`/`*Page` widget exists — including custom modals detected via their `ModalBarrier` scrim, which also appears in `overlays` as `kind:"modalBarrier"`. Content that is visible and tappable is always inspectable even when its `TickerMode` is paused (backgrounded windows, inactive tab pages) — Scout no longer treats a disabled `TickerMode` as hidden.
+A small keyed handle (an avatar or icon inside a whole tappable row/card) can be a no-op on its own; when so, its brief entry carries `enclosingTarget` — the larger tappable it sits inside — as a reliable fallback. Duplicate handles (`btn.edit`, `btn.edit_2`, …) each carry a compact `at` position hint (grid cell + top-left pixels) so you can pick "the one in row 2" without full geometry.
+
+`structuredRows` groups list/table/card content into compact row objects with `text`, `primaryTarget`, row-scoped `actions`, and `handles`. Use `row.<label>` when the whole row is tappable, and `row.<label>.<action>` for row-local trailing actions such as menus. Row handles resolve through normal `tap`, `scroll-to`, and `wait-for --target` lookup, so prefer `row.acme_supplies.more_actions` over brittle coordinates when repeated row labels make generic handles ambiguous.
+
+`semanticQuality` summarizes how agent-readable the current UI is: score, grade, counts for unlabeled or duplicate actions, non-hit-testable controls, low-confidence targets, fields, and structured rows. Low quality is not automatically a product bug, but it tells you to prefer keys/explicit handles and to be cautious with ambiguous gestures. `perception` states where Scout's evidence came from (`flutter_widget_tree`, widget/semantics labels, render-box geometry) and explicitly notes that screenshots/OCR are not in the inspect payload; request `screenshot`/`crop` when pixel-level visual confirmation matters.
+
+`screen` names the topmost modal surface (`Dialog`, `BottomSheet`, or the content widget) instead of a useless `RootWidget` when no `*Screen`/`*Page` widget exists — including custom modals detected via their blocking `ModalBarrier` scrim, which also appears in `overlays` as `kind:"modalBarrier"`. Generic transparent route barriers are ignored. Content that is visible and tappable is always inspectable even when its `TickerMode` is paused (backgrounded windows, inactive tab pages) — Scout no longer treats a disabled `TickerMode` as hidden.
 
 If the user manually annotated the running app, read the annotations before editing:
 
@@ -192,7 +198,7 @@ Icon-only controls can expose handles from keys, tooltips, semantics, common Mat
 
 Duplicate unkeyed fields are suffixed in inspect output, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Use the exact `fieldsById` key when filling or inputting duplicate labels.
 
-Use `fill` and `input` only for real editable text fields. If inspect shows `visualTree` or `controlGroups` for a custom control such as a numeric keypad, operate it explicitly with `tap` commands. Control group children can expose aliases such as `key.1`, `key.5`, and commit actions such as `btn.save`; tap them in the order a human would.
+Use `fill` and `input` only for real editable text fields. If inspect shows `visualTree` or `controlGroups` for a custom control such as a numeric keypad, operate it explicitly with `tap` commands. Control group children can expose aliases such as `key.1`, `key.5`, and commit actions such as `btn.save`; tap them in the order a human would. Read `suggestedActions` for general forms and pickers too: it can suggest `fillForm`, `setDateRange`, `selectOption`, `enterValue`, and `submitForm` intents with concrete targets/options.
 
 4. Act in feature-sized steps:
 
@@ -204,7 +210,7 @@ flutter-scout tap btn.save_supplier
 
 After every action, read `result`, `delta`, `fieldValues`, and `recentErrors`. Do not run a separate screenshot or full inspect unless the delta is unclear.
 
-Action output is compact by default. Add `--verbose` only when full before/after summaries are needed.
+Action output is compact by default, including failures; failed expectations include compact before/after summaries, target, expectation, delta, warnings, and recent errors instead of dumping full inspect trees. Add `--verbose` only when full before/after summaries are needed.
 
 When an action reports `activated_no_observed_change`, Scout dispatched the gesture but did not observe a synchronous Flutter tree, field, text, or geometry change before the wait timeout. Check `activation`, `warnings`, `recentErrors`, overlays, and logs before retrying. A tap on an already-selected tab/toggle instead reports `result:"already_selected"` — that is expected behavior, not a failure; do not retry it.
 
@@ -233,9 +239,11 @@ flutter-scout wait-for --view "Admin"       # viewSignature contains (same-route
 
 Text matching is case-insensitive; success returns `result:"met"` with `waitedMs`, timeout fails with `wait_for_timeout` (including final `visibleText`), and a fresh blocking error exits early with `blocking_error_during_wait`.
 
-For exploratory loops (inspect, think, act, think), run the **`serve` daemon** instead of separate CLI invocations — one persistent VM connection, each step a ~ms HTTP call instead of a fresh process:
+For exploratory loops (inspect, think, act, think), run the **`explore`/`serve` daemon** instead of separate CLI invocations — one persistent VM connection, each step a ~ms HTTP call instead of a fresh process. Use `explore --once` when you want a machine-readable setup hint without starting the daemon:
 
 ```bash
+flutter-scout explore --once
+flutter-scout --app my-app explore --port-file /tmp/scout.port &
 flutter-scout --app my-app serve --port-file /tmp/scout.port &
 curl "localhost:$(cat /tmp/scout.port)/run?cmd=inspect%20--brief"
 curl "localhost:$(cat /tmp/scout.port)/run" --data 'tap btn.save --expect-text Saved'
@@ -245,7 +253,7 @@ curl "localhost:$(cat /tmp/scout.port)/stop"
 Each `/run` response is `{"exitCode": N, "result": {...}}` — the command's JSON is nested as a parsed object under `result` (raw text under `output` only when the command didn't print JSON), so parse the response once. Always `/stop` the daemon when the loop ends — a leaked daemon holds a VM connection open, and a later `stop`/relaunch orphans it. Don't spin up `serve` for a single command or a 2–3 step known sequence; the daemon lifecycle costs more than it saves there.
 
 If compact action output includes `workflowHints` with `code:"consider_serve"`,
-switch to `serve` for the rest of that exploratory loop.
+switch to `explore`/`serve` for the rest of that exploratory loop.
 
 **Choosing between `serve`, `batch`, and plain commands** — the deciding factor is whether you know the sequence in advance, not how many steps it is. Ask: *"Could I write this whole sequence to a file right now, before running anything?"*
 
@@ -303,6 +311,8 @@ Prefer `bounds` and crops over full screenshots when inspecting one control or d
 
 When a submit reveals validation, read `delta.newValidationMessages` and `delta.validationCandidates`; they identify the field id, label, and validation message that appeared.
 
+`tap-text` ranks duplicate visible text matches before tapping: hit-testable/actionable targets beat covered text and broad ambiguous ancestors. Every `tap-text` response includes `activation.risk` with a level, confidence, and reasons. Treat medium/high risk as a sign to prefer an explicit handle from `inspect` when repeating the action.
+
 If a response reports `helperProtocol.status:"older_than_cli"` (or `"stale_or_old_helper"` from very old helpers), the attached app compiled an older flutter_scout_helper than this CLI expects. Hot reload cannot refresh a git/pub-cache dependency — bump the dependency (or patch the resolved pub-cache checkout) and fully relaunch with `stop --clear-session` + `launch`.
 
 7. Replay after a fix:
@@ -339,11 +349,13 @@ flutter-scout tap btn.save --expect-text "Saved"
 flutter-scout tap-text "Setting" --expect-text "Branding"
 flutter-scout input --target field.tnc --file /tmp/tnc.txt --expect-text "rev. 5"
 flutter-scout batch 'tap btn.a --expect-text B; tap-text C --expect-screen DScreen'
+flutter-scout explore --once
+flutter-scout --app my-session explore --port-file /tmp/scout.port
 flutter-scout apps
 flutter-scout --app my-session inspect --brief
 flutter-scout inspect --brief
 flutter-scout inspect --surface
-flutter-scout inspect --sections textTargets,scrollables
+flutter-scout inspect --sections textTargets,scrollables,rows
 flutter-scout screenshot --annotated -o /tmp/marked.png
 flutter-scout crop --rect 900,0,200,90 -o /tmp/region.png
 flutter-scout reload
@@ -386,15 +398,18 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Use `attach` only to preserve human-in-the-loop state or when the user explicitly asks for it.
 - Prefer `ensure` over repeated `launch`; repeated full launch causes slow native rebuilds.
 - Always pass `--name <feature>` when running the app via `launch`/`ensure` — never run unnamed. Use a kebab-case slug of the feature/task currently in focus (e.g. `add-member`), or the current git branch when no single feature is. Then address that session anywhere with `--app <feature>`.
-- Start with `inspect --brief`; use `inspect --surface` for active modals/pickers/dialogs; use full `inspect` or `--sections` only when the compact payload is not enough. Avoid blind screenshots — but when you do need a visual map, prefer `screenshot --annotated` (numbered marks + handle legend) over a plain screenshot.
+- Start with `inspect --brief`; use `inspect --surface` for active modals/pickers/dialogs; use full `inspect` or `--sections` only when the compact payload is not enough. Read `semanticQuality`, `perception`, `structuredRows`, and `suggestedActions` before deciding whether to use handles, row aliases, form fill, picker options, or visual crops. Avoid blind screenshots — but when you do need a visual map, prefer `screenshot --annotated` (numbered marks + handle legend) over a plain screenshot.
 - Treat `result:"already_selected"` as success-no-op (the tab/toggle was already in that state); never retry it.
 - Prefer `--expect-*` flags on actions over separate wait-for calls: act + gate in one VM call, no inter-command gap for timing-sensitive UI to drift through. Use standalone `wait-for` (text/gone/target/selected/screen/field) when no action precedes the wait.
-- Pick the execution mode by whether the sequence is known in advance: discovering the app step-by-step (each action depends on the last snapshot) → run a `serve` daemon and `/stop` it when done; a known multi-step flow → `batch` (one process, one connection); a one-off → a plain command. `batch` cannot branch on results — that is what `serve` is for.
+- Pick the execution mode by whether the sequence is known in advance: discovering the app step-by-step (each action depends on the last snapshot) → run an `explore`/`serve` daemon and `/stop` it when done; a known multi-step flow → `batch` (one process, one connection); a one-off → a plain command. `batch` cannot branch on results — that is what the persistent daemon is for.
 - Use `--app <name>` to address a named session from any directory; `export-batch` after a `serve` exploration to freeze it into a replayable `batch` script.
 - Treat non-zero `degradedNodes` as partial eyes: the listed nodes are trustworthy, but a few elements could not be read.
 - After Dart-only edits, run `reload` or `restart` before replaying flows.
 - Prefer `fill` for real text fields, but do not use it for custom pickers, keypads, steppers, calendars, or segmented controls.
 - For custom controls, read `visualTree`, `controlGroups`, and `suggestedActions`, then use explicit `tap`/`tap-text`/scroll commands.
+- For repeated list/table/card content, prefer `structuredRows` aliases (`row.<label>` / `row.<label>.<action>`) over coordinates or generic repeated handles.
+- Treat low `semanticQuality` as a warning that handles may be ambiguous or missing; prefer keys, row aliases, crops, or explicit coordinates only after inspecting the evidence.
+- Treat `perception.visual.ocrInPayload:false` as a reminder that inspect is widget/render evidence, not OCR; use `crop`/`screenshot` when visual appearance matters.
 - Trust action deltas for next-step planning.
 - Use `scroll-to <handle>` to reach an offscreen or lazy-unbuilt target instead of emitting many manual `scroll` calls; raise `--max-scrolls` for deep targets.
 - When `tap`/`long-press` returns `target_not_found` with `reason:"maybe_offscreen_or_lazy"`, follow the `reachHint` (`scroll-to <target>`) before concluding the handle is wrong.
@@ -402,6 +417,7 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Pass a handle to `swipe`/`long-press` via `--target` for Dismissible rows, reorder, and menus rather than computing coordinates.
 - Read `delta.changedText` (`{key, from, to}`) to confirm a tap that only updated a keyed status label, without a follow-up `inspect`.
 - Read `activation` and `warnings` when an action reports `activated_no_observed_change`.
+- For `tap-text`, read `activation.risk`; medium/high risk means Scout used a broad, inferred, or non-hit-testable path, so prefer an explicit handle next time.
 - Treat `tap_text_target_mismatch` as a safety stop; do not retry blindly. Use an explicit handle or `--allow-mismatch` only after confirming the target is intended.
 - Read `delta.newValidationMessages` after save/confirm actions before guessing which required field is missing.
 - Treat `lateChangeObserved:true` as a real observed post-action change, not a stale screen.

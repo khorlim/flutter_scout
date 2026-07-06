@@ -21,6 +21,7 @@ class ScoutSnapshot {
     required this.overlays,
     required this.visualTree,
     required this.controlGroups,
+    required this.structuredRows,
     required this.suggestedActions,
     required this.recentErrors,
     this.degradedNodes = 0,
@@ -42,6 +43,7 @@ class ScoutSnapshot {
   final List<Map<String, Object?>> overlays;
   final Map<String, Object?>? visualTree;
   final List<Map<String, Object?>> controlGroups;
+  final List<Map<String, Object?>> structuredRows;
   final List<Map<String, Object?>> suggestedActions;
   final List<Map<String, Object?>> recentErrors;
 
@@ -52,6 +54,7 @@ class ScoutSnapshot {
   ScoutSnapshot copyWith({
     Map<String, Object?>? visualTree,
     List<Map<String, Object?>>? controlGroups,
+    List<Map<String, Object?>>? structuredRows,
     List<Map<String, Object?>>? suggestedActions,
   }) {
     return ScoutSnapshot(
@@ -71,6 +74,7 @@ class ScoutSnapshot {
       overlays: overlays,
       visualTree: visualTree ?? this.visualTree,
       controlGroups: controlGroups ?? this.controlGroups,
+      structuredRows: structuredRows ?? this.structuredRows,
       suggestedActions: suggestedActions ?? this.suggestedActions,
       recentErrors: recentErrors,
       degradedNodes: degradedNodes,
@@ -118,8 +122,42 @@ class ScoutSnapshot {
   }
 
   ScoutNode? findNode(String target) {
+    final normalized = target.trim();
+    if (normalized.startsWith('row.')) {
+      final rowTarget = _rowHandleTarget(normalized);
+      if (rowTarget != null && rowTarget != normalized) {
+        for (final node in [...interactables, ...fields, ...textTargets]) {
+          if (node.matches(rowTarget)) return node;
+        }
+      }
+    }
     for (final node in [...interactables, ...fields, ...textTargets]) {
       if (node.matches(target)) return node;
+    }
+    final rowTarget = _rowHandleTarget(target);
+    if (rowTarget != null && rowTarget != target) {
+      for (final node in [...interactables, ...fields, ...textTargets]) {
+        if (node.matches(rowTarget)) return node;
+      }
+    }
+    return null;
+  }
+
+  String? _rowHandleTarget(String target) {
+    final normalized = target.trim();
+    if (normalized.isEmpty) return null;
+    for (final row in structuredRows) {
+      final handles = row['handles'];
+      if (handles is! Map) continue;
+      final exact = handles[normalized];
+      if (exact is String && exact.isNotEmpty) return exact;
+      final slug = _scoutSlug(normalized);
+      for (final entry in handles.entries) {
+        final key = entry.key?.toString();
+        final value = entry.value;
+        if (key == null || value is! String || value.isEmpty) continue;
+        if (key.endsWith('.$slug') || _scoutSlug(key) == slug) return value;
+      }
     }
     return null;
   }
@@ -141,11 +179,13 @@ class ScoutSnapshot {
       'idle': idle,
       'devicePixelRatio': devicePixelRatio,
       'logicalSize': [logicalSize.width, logicalSize.height],
+      'perception': perceptionJson(),
       'visibleText': visibleText,
       'hitTestableText': hitTestableText,
       'offscreenText': offscreenText,
       if (visualTree != null) 'visualTree': visualTree,
       if (controlGroups.isNotEmpty) 'controlGroups': controlGroups,
+      if (structuredRows.isNotEmpty) 'structuredRows': structuredRows,
       if (suggestedActions.isNotEmpty) 'suggestedActions': suggestedActions,
       if (degradedNodes > 0) 'degradedNodes': degradedNodes,
       'fieldValues': {for (final field in fields) field.id: field.value},
@@ -177,9 +217,36 @@ class ScoutSnapshot {
       'overlays': overlays,
       if (visualTree != null) 'visualTree': visualTree,
       if (controlGroups.isNotEmpty) 'controlGroups': controlGroups,
+      if (structuredRows.isNotEmpty) 'structuredRows': structuredRows,
       if (suggestedActions.isNotEmpty) 'suggestedActions': suggestedActions,
       'keyboard': {'visible': false},
       'recentErrors': recentErrors,
+    };
+  }
+
+  Map<String, Object?> perceptionJson() {
+    return {
+      'text': {
+        'source': 'flutter_widget_tree',
+        'visibleCount': visibleText.length,
+        'hitTestableCount': hitTestableText.length,
+        'offscreenCount': offscreenText.length,
+      },
+      'semantics': {
+        'source': 'widget_properties_and_semantics',
+        'usedForLabels': true,
+      },
+      'geometry': {
+        'source': 'render_box_bounds',
+        'devicePixelRatio': devicePixelRatio,
+        'logicalSize': [logicalSize.width, logicalSize.height],
+      },
+      'visual': {
+        'screenshotInPayload': false,
+        'ocrInPayload': false,
+        'fallback':
+            'Use `flutter-scout screenshot` or `flutter-scout crop <target>` when pixel-level visual confirmation is needed.',
+      },
     };
   }
 }

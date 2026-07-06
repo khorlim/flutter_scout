@@ -27,7 +27,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 8;
+const int scoutHelperProtocolVersion = 9;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -197,6 +197,23 @@ class FlutterScoutRuntime {
   String? debugTapTextMatchId(String text, {bool loose = false}) =>
       _findVisibleTextMatch(text, loose: loose)?.text.id;
 
+  /// Test-only: compact details for the tap-text match picker.
+  @visibleForTesting
+  Map<String, Object?>? debugTapTextMatchSummary(
+    String text, {
+    bool loose = false,
+  }) {
+    final match = _findVisibleTextMatch(text, loose: loose);
+    if (match == null) return null;
+    return {
+      'textId': match.text.id,
+      'textHitTestable': match.text.hitTestable,
+      'actionableId': match.actionable?.id,
+      'actionableHitTestable': match.actionable?.hitTestable,
+      'risk': _tapTextActivationRisk(match),
+    };
+  }
+
   /// Test-only: the close control that `dismiss` would tap when no route
   /// pops.
   @visibleForTesting
@@ -364,7 +381,7 @@ class FlutterScoutRuntime {
   /// textTargets and visualTree an agent rarely needs — so [brief] returns a
   /// compact orientation payload and [sections] opts into named full sections
   /// (text, interactables, fields, textTargets, scrollables, overlays,
-  /// visualTree, controlGroups, annotations). Both empty → full payload.
+  /// visualTree, controlGroups, rows, annotations). Both empty → full payload.
   Map<String, Object?> _inspectPayload({
     required bool brief,
     required Set<String> sections,
@@ -441,7 +458,9 @@ class FlutterScoutRuntime {
       'idle': snapshot.idle,
       'devicePixelRatio': snapshot.devicePixelRatio,
       'logicalSize': [snapshot.logicalSize.width, snapshot.logicalSize.height],
+      'perception': snapshot.perceptionJson(),
       if (snapshot.degradedNodes > 0) 'degradedNodes': snapshot.degradedNodes,
+      'semanticQuality': _semanticQuality(snapshot),
       'recentErrors': snapshot.recentErrors,
       'annotationMode': _annotationMode,
     };
@@ -480,6 +499,12 @@ class FlutterScoutRuntime {
                 'Use inspect --sections interactables when these low-label controls matter.',
           },
         if (inspectWarnings.isNotEmpty) 'inspectWarnings': inspectWarnings,
+        'semanticQuality': _semanticQuality(
+          snapshot,
+          anonymousGenericTargetsOmitted: omitted,
+        ),
+        if (snapshot.structuredRows.isNotEmpty)
+          'structuredRows': snapshot.structuredRows.take(20).toList(),
         'fieldValues': {for (final field in fields) field.id: field.value},
       });
     }
@@ -504,6 +529,7 @@ class FlutterScoutRuntime {
         'overlays' => {'overlays': snapshot.overlays},
         'visualTree' => {'visualTree': snapshot.visualTree},
         'controlGroups' => {'controlGroups': snapshot.controlGroups},
+        'rows' => {'structuredRows': snapshot.structuredRows},
         'annotations' => {
           'annotations': _annotationJsonList(liveTargets: _annotationTargets()),
         },
@@ -511,6 +537,114 @@ class FlutterScoutRuntime {
       });
     }
     return payload;
+  }
+
+  Map<String, Object?> _semanticQuality(
+    ScoutSnapshot snapshot, {
+    int anonymousGenericTargetsOmitted = 0,
+  }) {
+    final interactables = snapshot.interactables
+        .where((node) => node.visibleFraction > 0)
+        .toList(growable: false);
+    final unlabeled = [
+      for (final node in interactables)
+        if ((node.label ?? '').trim().isEmpty &&
+            (node.key ?? '').trim().isEmpty &&
+            node.altIds.isEmpty)
+          node,
+    ];
+    final disabledHitTargets = [
+      for (final node in interactables)
+        if (!node.hitTestable && node.enabled) node,
+    ];
+    final lowConfidence = [
+      for (final node in interactables)
+        if (node.confidence < 0.7) node,
+    ];
+    final labels = <String, int>{};
+    for (final node in interactables) {
+      final label = node.label?.trim();
+      if (label == null || label.isEmpty) continue;
+      labels.update(
+        label.toLowerCase(),
+        (count) => count + 1,
+        ifAbsent: () => 1,
+      );
+    }
+    final duplicates = labels.values
+        .where((count) => count > 1)
+        .fold<int>(0, (sum, count) => sum + count);
+    final issues = <Map<String, Object?>>[
+      if (unlabeled.isNotEmpty || anonymousGenericTargetsOmitted > 0)
+        {
+          'code': 'unlabeled_interactables',
+          'severity': anonymousGenericTargetsOmitted >= 10 ? 'high' : 'medium',
+          'count': unlabeled.length + anonymousGenericTargetsOmitted,
+          'hint':
+              'Add keys, tooltips, or Semantics labels to important controls.',
+        },
+      if (duplicates > 0)
+        {
+          'code': 'duplicate_action_labels',
+          'severity': 'low',
+          'count': duplicates,
+          'hint': 'Use keys or more specific labels for repeated actions.',
+        },
+      if (disabledHitTargets.isNotEmpty)
+        {
+          'code': 'non_hit_testable_actions',
+          'severity': 'medium',
+          'count': disabledHitTargets.length,
+          'hint':
+              'Visible enabled controls should usually be reachable at their suggested tap point.',
+        },
+      if (lowConfidence.isNotEmpty)
+        {
+          'code': 'low_confidence_targets',
+          'severity': 'low',
+          'count': lowConfidence.length,
+          'hint':
+              'Prefer explicit keys or Semantics labels for inferred targets.',
+        },
+      if (snapshot.structuredRows.isEmpty && interactables.length >= 8)
+        {
+          'code': 'no_structured_rows',
+          'severity': 'low',
+          'hint':
+              'Dense list or table screens are easier to operate when rows can be inferred.',
+        },
+    ];
+    var score = 100;
+    score -= (unlabeled.length * 8 + anonymousGenericTargetsOmitted * 2).clamp(
+      0,
+      35,
+    );
+    score -= (duplicates * 3).clamp(0, 15);
+    score -= (disabledHitTargets.length * 4).clamp(0, 20);
+    score -= (lowConfidence.length * 2).clamp(0, 10);
+    if (snapshot.degradedNodes > 0) score -= 10;
+    score = score.clamp(0, 100);
+    return {
+      'score': score,
+      'grade': score >= 90
+          ? 'excellent'
+          : score >= 75
+          ? 'good'
+          : score >= 60
+          ? 'fair'
+          : 'poor',
+      'metrics': {
+        'visibleInteractables': interactables.length,
+        'unlabeledInteractables': unlabeled.length,
+        'anonymousGenericTargetsOmitted': anonymousGenericTargetsOmitted,
+        'duplicateLabelInstances': duplicates,
+        'nonHitTestableActions': disabledHitTargets.length,
+        'lowConfidenceTargets': lowConfidence.length,
+        'fields': snapshot.fields.length,
+        'structuredRows': snapshot.structuredRows.length,
+      },
+      if (issues.isNotEmpty) 'issues': issues,
+    };
   }
 
   List<Map<String, Object?>> _inspectWarnings({

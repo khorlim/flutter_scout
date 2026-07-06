@@ -70,6 +70,12 @@ dart pub get
 dart run bin/flutter_scout.dart <command>
 ```
 
+To refresh the normal `flutter-scout` executable from the local checkout after package changes:
+
+```bash
+/Users/han/flutter_packages/flutter_scout/tool/install-local-shim.sh
+```
+
 For global use from Git:
 
 ```bash
@@ -136,6 +142,7 @@ flutter-scout inspect
 ```
 
 Successful setup means `status` reports running and `inspect` returns visible text, interactables, fields, field geometry, and no setup error.
+For exploratory agent loops after setup, `flutter-scout explore --once` prints the persistent daemon command/endpoints without starting it; `flutter-scout explore --port-file /tmp/scout.port` starts the fast loop.
 
 `ensure`, `launch`, and `attach` report `ready` when they connect to or start a VM service. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
 
