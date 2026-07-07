@@ -136,13 +136,13 @@ flutter-scout annotations list
 
 Annotations contain the user's comment plus the selected widget metadata. They are persistent review markers, so code fixes and hot reloads do not automatically remove them. `inspect` also includes top-level `annotationMode` and `annotations` fields, but `annotations list` is the clearest handoff from manual review to agent work.
 
-**Handoff (block until the user is done).** Instead of polling, ask the user to annotate and tap the **"Send to agent"** button in the overlay, then block on:
+**Manual annotation handoff.** After the user reviews the app and says annotations are ready, read the current pins:
 
 ```bash
-flutter-scout annotations wait --timeout 600 --poll 1000
+flutter-scout annotations list
 ```
 
-`wait` returns the full annotation list the moment the user taps "Send to agent" (`"handoff": true`). On timeout it returns `"timedOut": true, "handoff": false` — just call it again to keep waiting. This removes the need for the user to type a "check annotations" message.
+Then use `$flutter-scout-annotations`: fix one pin, delete that fixed pin, and repeat until no actionable pins remain.
 
 **Crops (see what the user saw).** Each annotation carries an in-app screenshot of the flagged widget. `annotations list`/`wait` materialize them under `.flutter_scout/crops/` and expose `beforeCropPath` (captured when the annotation was created). Read that image to understand visual bugs ("too wide", "misaligned") that text alone can't convey. If `beforeCropNeedsNative` is true the widget is a platform view (map/webview); the CLI falls back to a native capture automatically, or sets `beforeCropMissing` when unavailable.
 

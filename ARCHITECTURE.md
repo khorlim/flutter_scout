@@ -35,7 +35,7 @@ accessible because all parts share one library).
 | `runtime_snapshot.dart` | `_snapshot` (reads the widget tree) + annotation target collection + hit testing. |
 | `runtime_nodes.dart` | Node post-processing: compaction, label inference, id disambiguation, visual tree, geometry helpers. *(largest part; a future split candidate.)* |
 | `runtime_internals.dart` | Low-level pointer dispatch, tree walk, snapshot delta, `_ok`/`_fail` JSON responses. |
-| `annotation_overlay.dart` | Overlay widgets: toggle pill, "Send to agent" button, comment panel, pin popup, animated pin reticles, target painter. |
+| `annotation_overlay.dart` | Overlay widgets: toggle pill, comment panel, pin popup, animated pin reticles, target painter. |
 | `scout_design.dart` | The **"Recon HUD" design system** — tokens (`ScoutColors`/`Space`/`Radius`/`Type`/`Motion`) + primitives (`ScoutPanel`/`Button`/`Pill`/`Field`). Use it, not Material, for Scout chrome. See `docs/scout-design-system.md`. |
 | `models.dart` | Data types: `ScoutSnapshot`, `ScoutNode`, `ScoutAnnotation`, `ScoutAnnotationTarget`, `_CaptureResult`, … |
 
@@ -70,8 +70,8 @@ commands. Key pieces:
   served via `get-crop`, and materialized to `.flutter_scout/crops/` by the CLI
   (`cli_annotations.dart`), cached by a capture-identity token to survive app
   restarts (IDs reset to `ann_001`).
-- **Handoff**: the overlay "Send to agent" button bumps `handoffSeq`; the CLI
-  `annotations wait` blocks (resilient to transient disconnects) until it changes.
+- **Manual handoff**: the reviewer tells the agent annotations are ready; the
+  CLI reads current pins with `annotations list` and manages lifecycle commands.
 - **Verification**: `pending_review` status (amber pins) + before/after crops.
 
 ## Conventions for modifying this code

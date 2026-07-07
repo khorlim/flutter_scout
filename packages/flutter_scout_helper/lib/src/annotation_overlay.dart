@@ -177,7 +177,6 @@ class _FlutterScoutAnnotationOverlayState
   int _candidateIndex = 0;
   int _lastCollectedRevision = -1;
   bool _targetRefreshScheduled = false;
-  bool _handoffSent = false;
   // The pin whose delete popup is open (tapped an existing annotation pin).
   // Carries everything the exit ghost needs so it can always animate out even
   // if the live target list shifts before delete.
@@ -360,14 +359,6 @@ class _FlutterScoutAnnotationOverlayState
     });
   }
 
-  void _sendToAgent() {
-    widget.runtime._signalAnnotationHandoff();
-    setState(() => _handoffSent = true);
-    Future<void>.delayed(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _handoffSent = false);
-    });
-  }
-
   void _scheduleTargetRefresh(int revision) {
     if (_targetRefreshScheduled || _lastCollectedRevision == revision) return;
     _targetRefreshScheduled = true;
@@ -493,23 +484,6 @@ class _FlutterScoutAnnotationOverlayState
                   onDelete: _deleteSelectedPin,
                   onClose: () => setState(() => _selectedPin = null),
                 ),
-              if (enabled &&
-                  _selectedTarget == null &&
-                  _selectedPin == null &&
-                  widget.runtime._activeAnnotationCount > 0)
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  bottom: MediaQuery.paddingOf(context).bottom + 12,
-                  child: Align(
-                    alignment: Alignment.bottomCenter,
-                    child: _AnnotationHandoffButton(
-                      sent: _handoffSent,
-                      count: widget.runtime._activeAnnotationCount,
-                      onPressed: _sendToAgent,
-                    ),
-                  ),
-                ),
               if (widget.runtime._captureClearRects.isEmpty)
                 Positioned(
                   left: toggleButtonOffset.dx,
@@ -551,42 +525,6 @@ class _AnnotationToggleButton extends StatelessWidget {
       active: enabled,
       count: count,
       onPressed: onPressed,
-    );
-  }
-}
-
-class _AnnotationHandoffButton extends StatelessWidget {
-  const _AnnotationHandoffButton({
-    required this.sent,
-    required this.count,
-    required this.onPressed,
-  });
-
-  final bool sent;
-  final int count;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedSwitcher(
-      duration: ScoutMotion.base,
-      switchInCurve: ScoutMotion.enter,
-      transitionBuilder: (child, anim) =>
-          FadeTransition(opacity: anim, child: child),
-      child: sent
-          ? ScoutButton(
-              key: const ValueKey('sent'),
-              label: 'Sent',
-              icon: Icons.check_circle_outline,
-              kind: ScoutButtonKind.ghost,
-              onPressed: () {},
-            )
-          : ScoutButton(
-              key: const ValueKey('send'),
-              label: 'Send $count to agent',
-              icon: Icons.podcasts,
-              onPressed: onPressed,
-            ),
     );
   }
 }

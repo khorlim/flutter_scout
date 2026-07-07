@@ -190,7 +190,14 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
             const SizedBox(height: 16),
             Expanded(
               child: _suppliers.isEmpty
-                  ? const Center(child: Text('No suppliers found'))
+                  ? Center(
+                      child: Text(
+                        'No suppliers found',
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                      ),
+                    )
                   : ListView.builder(
                       itemCount: _suppliers.length,
                       itemBuilder: (context, index) =>
