@@ -304,12 +304,13 @@ extension _CliEvidence on FlutterScoutCli {
         'deeplink' => await _replayDeeplink(item['url']?.toString()),
         _ => {'ok': false, 'error': 'unknown replay cmd: $cmd'},
       };
+      final enrichedResult = await _withRecentLogSignals(result);
       results.add(
-        parsed.flag('verbose') || result['ok'] == false
-            ? result
-            : _compactActionResult(result),
+        parsed.flag('verbose') || enrichedResult['ok'] == false
+            ? enrichedResult
+            : _compactActionResult(enrichedResult),
       );
-      transcript.add(_transcriptStep(item, result));
+      transcript.add(_transcriptStep(item, enrichedResult));
     }
     stdout.writeln(
       const JsonEncoder.withIndent(

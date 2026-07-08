@@ -107,7 +107,7 @@ Snapshots include `viewSignature` (most prominent visible texts) and `visibleTex
 
 If `tap-text` fails with `text_not_found`, the error includes `didYouMean` near-matches — try one of those before re-inspecting. For labels the UI truncates with an ellipsis, pass `tap-text --contains "<full label>"` to match a shortened prefix.
 
-`inspect` output includes `recentLogErrors` when the app has logged error-level lines (via `dart:developer.log`/`print`/`debugPrint`) that the crash handlers never see — so swallowed failures (a denied permission, a failed API call) surface without a separate `logs` call. For a one-shot readout run `flutter-scout health`: it returns `{screen, viewSignature, degradedNodes, interactableCount, semanticQuality, blockingErrors, recentLogErrors, healthy}` — ideal between navigation steps in a QA sweep.
+`inspect` output includes `recentLogSignals` when Scout-owned logs contain factual runtime signals that the in-isolate crash handlers never saw — for example Flutter build errors, uncaught exceptions, RenderFlex overflows, high-severity app logs, denied permissions, or failed API/network requests. `recentLogErrors` remains as a line-only compatibility view. For a one-shot readout run `flutter-scout health`: it returns `{screen, viewSignature, degradedNodes, interactableCount, semanticQuality, blockingErrors, blockingLogSignals, recentLogSignals, healthy}` and marks `healthy:false` for fresh blocking log signals.
 
 To close a screen without guessing between a system back and an in-app close button, use `flutter-scout dismiss`: it pops the top route (handles `showDialog`/`showModalBottomSheet`/pushed screens) and, if nothing pops, taps a close-like control (xmark/close/cancel) for custom overlay modals. It reports `strategy` (`popped_route` / `tapped_close` / `none`).
 
@@ -208,7 +208,7 @@ flutter-scout fill --json '{"Supplier name":"QA Supplier","Phone":"0123456789"}'
 flutter-scout tap btn.save_supplier
 ```
 
-After every action, read `result`, `delta`, `fieldValues`, and `recentErrors`. Do not run a separate screenshot or full inspect unless the delta is unclear.
+After every action, read `result`, `delta`, `fieldValues`, `recentErrors`, and `recentLogSignals`. Do not run a separate screenshot or full inspect unless the delta is unclear.
 
 Action output is compact by default, including failures; failed expectations include compact before/after summaries, target, expectation, delta, warnings, and recent errors instead of dumping full inspect trees. Add `--verbose` only when full before/after summaries are needed.
 
@@ -383,13 +383,15 @@ flutter-scout stop --clear-session
 
 For Scout-owned `launch`/`ensure` sessions, `logs` captures `print`, `debugPrint`, and `dart:developer` `log()` output. Capture runs over a dedicated VM-service listener (Stdout, Stderr, and Logging streams), so it keeps working across hot reload, hot restart, and app backgrounding rather than depending on the fragile Flutter tool console.
 
+`logs --summary` includes `recentLogSignals` and `blockingLogSignals`: structured classifications of hard evidence in Scout-owned logs. This catches cases where the app logs a build/framework error, but the helper's `recentErrors` list is empty because the app swallowed or reformatted the exception. Treat fresh `blocking:true` log signals as hard failures.
+
 If `logs` reports `source:"attach_only_session"` and `available:false`, Scout is attached to a VS Code/Cursor/terminal-owned Flutter run. Scout can still inspect and act, but cannot read that owner console. Use the owning terminal or IDE console for those app logs, run `flutter logs` separately, or start with `flutter-scout ensure`/`launch` when Scout should own log capture.
 
 If `logs --contains <text>` reports `available:true` and `matched:0`, Scout did read a non-empty Scout-owned log but no lines matched that filter. Broaden the search or inspect the app's own logging path.
 
 Use `evidence` at the end of a significant run to collect `summary.json`, `status.json`, `logs.json`, optional `inspect.json`, optional `session.json`, `transcript.txt`, and a screenshot when supported. Add `--audit` to also write an `audit.md` scaffold with current state, transcript, and finding placeholders. Missing attach logs or unsupported screenshots are recorded as structured evidence rather than making the command fail.
 
-`recentErrors` entries include severity facts such as `severity`, `blocking`, `phase`, `ageMs`, and `stale`. Treat fresh `blocking:true` errors as hard failures. Older or non-blocking startup/network entries may be relevant context, but they do not automatically mean the current flow failed.
+`recentErrors` entries include severity facts such as `severity`, `blocking`, `phase`, `ageMs`, and `stale`. `recentLogSignals` entries use the same idea for Scout-owned log evidence and include `kind`, `message`, `line`, and compact stack/context when available. Treat fresh `blocking:true` errors or log signals as hard failures. Older or non-blocking startup/network entries may be relevant context, but they do not automatically mean the current flow failed.
 
 ## Agent Rules
 
@@ -425,7 +427,8 @@ Use `evidence` at the end of a significant run to collect `summary.json`, `statu
 - Treat drag `result:"navigated"` as a real route/screen transition caused by the gesture, not a plain scroll.
 - Trust `status` to refresh stale VM service URIs when it reports `staleRefreshed:true`; reattach only if it reports `staleCleared` or cannot discover a current URI.
 - Stop and fix code when `recentErrors` reports Flutter/platform errors.
-- Treat fresh `recentErrors` with `blocking:true` as hard failures; separate stale/non-blocking startup errors from the current flow.
+- Stop and fix code when `recentLogSignals` reports a fresh blocking Flutter build/framework/native error, even if helper `recentErrors` is empty.
+- Treat fresh `recentErrors` or `recentLogSignals` with `blocking:true` as hard failures; separate stale/non-blocking startup errors from the current flow.
 - Use `tap-text` for visible text rows or picker rows when generic row handles are ambiguous; it returns an actionable `target` and the matched `textTarget`.
 - When `tap-text` falls back because the helper is stale, follow the warning and restart/reload the attached app before relying on further text-target behavior.
 - Use coordinate scroll/swipe starts when the default gesture may hit the wrong layer.

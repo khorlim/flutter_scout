@@ -41,6 +41,19 @@ class FlutterScoutCli {
   Map<String, dynamic> debugCompactActionResult(Map<String, dynamic> result) =>
       _compactActionResult(result);
 
+  /// Test-only view of Scout-owned runtime log signal classification.
+  List<Map<String, Object?>> debugRecentLogSignalsFromLines(
+    List<String> lines, {
+    int scanLines = 300,
+    int max = 8,
+  }) => _logSignalMaps(
+    _logSignalsFromLines(lines, scanLines: scanLines, max: max),
+  );
+
+  /// Test-only view of `logs --summary` classification.
+  Map<String, Object?> debugLogSummary(List<String> lines, {int last = 20}) =>
+      _summarizeLogLines(lines, last: last);
+
   // Batch-mode connection cache: one WebSocket serves every step of a batch
   // instead of connect/dispose per command. See cli_batch.dart.
   bool _reuseVmConnection = false;
@@ -681,33 +694,39 @@ print(String(data: data, encoding: .utf8)!)
     required int last,
   }) {
     final important = <String>[];
-    var errors = 0;
+    final signals = _logSignalsFromLines(
+      lines,
+      scanLines: lines.length,
+      max: lines.length,
+    );
+    final signalLines = {for (final signal in signals) signal.line};
     var warnings = 0;
     String? vmServiceUri;
     for (final line in lines) {
       final lower = line.toLowerCase();
-      final negatedError =
-          lower.contains('no error') || lower.contains('0 errors');
-      final isError =
-          !negatedError &&
-          (lower.contains('error') ||
-              lower.contains('exception') ||
-              lower.contains('failed') ||
-              lower.contains('fatal'));
-      final isWarning = lower.contains('warning') || lower.contains('warn ');
+      final isSignal = signalLines.contains(line.trim());
+      final isWarning =
+          RegExp(r'\bwarn(?:ing)?\b', caseSensitive: false).hasMatch(line) &&
+          !_isNegatedLogError(lower);
       final uri = _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
-      if (isError) errors++;
       if (isWarning) warnings++;
       if (uri != null) vmServiceUri = _normalizeVmUri(uri);
-      if (isError || isWarning || uri != null) {
+      if (isSignal || isWarning || uri != null) {
         important.add(line);
       }
     }
     final limit = last <= 0 ? 20 : last;
+    final recentSignals = signals.length > limit
+        ? signals.sublist(signals.length - limit)
+        : signals;
     return {
-      'errors': errors,
+      'errors': signals.where((signal) => signal.severity != 'warning').length,
       'warnings': warnings,
       'vmServiceUri': vmServiceUri,
+      'recentLogSignals': _logSignalMaps(recentSignals),
+      'blockingLogSignals': _logSignalMaps(
+        signals.where((signal) => signal.blocking).toList(growable: false),
+      ),
       'lastImportantLines': important.length > limit
           ? important.sublist(important.length - limit)
           : important,
@@ -1634,36 +1653,329 @@ String get _vmLogListenerPidFile =>
     p.join(_sessionDir.path, 'vm_log_listener.pid');
 String get _logFile => p.join(_sessionDir.path, 'logs.txt');
 
-/// Recent error-level lines from the Scout-owned log — app logs
-/// (`dart:developer.log`, `print`, `debugPrint`) that error handlers never
-/// see, so swallowed failures (a denied location permission, a failed API
-/// call) surface in `health`/`inspect` instead of hiding until someone runs
-/// `logs`. Empty for attach-only sessions with no Scout log.
-List<String> _recentLogErrors({int scanLines = 300, int max = 8}) {
-  final file = File(_logFile);
-  if (!file.existsSync()) return const [];
-  final pattern = RegExp(
-    r'\b(error|exception|failed|failure|denied|unhandled|fatal)\b',
-    caseSensitive: false,
-  );
-  // Ignore Scout's own noise and generic 'no error' style lines.
-  final ignore = RegExp(
-    r'FLUTTER_SCOUT|flutter_scout|no error|errorText:|error: null',
-    caseSensitive: false,
-  );
+List<String> _readLogLinesSync(File file) {
   try {
-    final lines = file.readAsLinesSync();
-    final tail = lines.length <= scanLines
-        ? lines
-        : lines.sublist(lines.length - scanLines);
-    final hits = <String>[
-      for (final line in tail)
-        if (pattern.hasMatch(line) && !ignore.hasMatch(line)) line.trim(),
-    ];
-    return hits.length <= max ? hits : hits.sublist(hits.length - max);
+    final text = utf8.decode(file.readAsBytesSync(), allowMalformed: true);
+    return const LineSplitter().convert(text);
   } catch (_) {
     return const [];
   }
+}
+
+/// Recent hard runtime signals from the Scout-owned log — app logs and Flutter
+/// console lines that the in-isolate error hooks can miss. Empty for attach
+/// sessions with no Scout-owned log.
+List<_LogSignal> _recentLogSignals({int scanLines = 300, int max = 8}) {
+  final file = File(_logFile);
+  if (!file.existsSync()) return const [];
+  try {
+    return _logSignalsFromLines(
+      _readLogLinesSync(file),
+      scanLines: scanLines,
+      max: max,
+    );
+  } catch (_) {
+    return const [];
+  }
+}
+
+List<_LogSignal> _logSignalsFromLines(
+  List<String> lines, {
+  int scanLines = 300,
+  int max = 8,
+}) {
+  if (lines.isEmpty || scanLines <= 0 || max <= 0) return const [];
+  final tail = lines.length <= scanLines
+      ? lines
+      : lines.sublist(lines.length - scanLines);
+  final signals = <_LogSignal>[];
+  for (var i = 0; i < tail.length; i++) {
+    final line = tail[i].trim();
+    final classification = _classifyLogLine(line);
+    if (classification == null) continue;
+    signals.add(
+      _LogSignal(
+        kind: classification.kind,
+        severity: classification.severity,
+        blocking: classification.blocking,
+        message: classification.message,
+        line: line,
+        timestamp: _extractLogTimestamp(line),
+        context: _logSignalContext(tail, i),
+      ),
+    );
+  }
+  return signals.length <= max
+      ? signals
+      : signals.sublist(signals.length - max);
+}
+
+_LogClassification? _classifyLogLine(String rawLine) {
+  final line = _stripLogAnsi(rawLine).trim();
+  if (line.isEmpty) return null;
+  final lowerLine = line.toLowerCase();
+  if (lowerLine.contains('[flutter_scout]') ||
+      lowerLine.contains('flutter_scout_vm_uri') ||
+      RegExp(r'\berror\s*=\s*null\b').hasMatch(lowerLine) ||
+      _isNegatedLogError(lowerLine)) {
+    return null;
+  }
+
+  final payload = _stripLogMetadata(line);
+  final lower = payload.toLowerCase();
+  if (lower.isEmpty || _isNegatedLogError(lower)) return null;
+
+  final buildError = RegExp(
+    r'build error:\s*(.+)$',
+    caseSensitive: false,
+  ).firstMatch(payload);
+  if (buildError != null) {
+    return _LogClassification(
+      kind: 'flutter_build_error',
+      severity: 'blocking',
+      blocking: true,
+      message: buildError.group(1)!.trim(),
+    );
+  }
+
+  if (lower.contains('exception caught by widgets library') ||
+      lower.contains('another exception was thrown') ||
+      lower.contains('failed assertion') ||
+      lower.contains('setstate() or markneedsbuild()')) {
+    return _LogClassification(
+      kind: 'flutter_framework_error',
+      severity: 'blocking',
+      blocking: true,
+      message: payload,
+    );
+  }
+
+  if (lower.contains('null check operator used on a null value')) {
+    return _LogClassification(
+      kind: 'dart_null_check_error',
+      severity: 'blocking',
+      blocking: true,
+      message: payload,
+    );
+  }
+
+  if (lower.contains('unhandled exception')) {
+    return _LogClassification(
+      kind: 'unhandled_exception',
+      severity: 'blocking',
+      blocking: true,
+      message: payload,
+    );
+  }
+
+  if (lower.contains('renderflex overflow') ||
+      lower.contains('overflowed by') ||
+      lower.contains('bottom overflowed')) {
+    return _LogClassification(
+      kind: 'render_overflow',
+      severity: 'blocking',
+      blocking: true,
+      message: payload,
+    );
+  }
+
+  if (lower.contains('[error:flutter/') ||
+      lower.startsWith('[error:') ||
+      RegExp(r'\bfatal\b', caseSensitive: false).hasMatch(payload)) {
+    return _LogClassification(
+      kind: 'native_runtime_error',
+      severity: 'blocking',
+      blocking: true,
+      message: payload,
+    );
+  }
+
+  final level = _extractLogLevel(line);
+  if (level != null && level >= 1000) {
+    return _LogClassification(
+      kind: 'app_log_error',
+      severity: 'non_blocking',
+      blocking: false,
+      message: payload,
+    );
+  }
+
+  if (RegExp(
+    r'(\b(permission|location|authorization|camera|photo)\b.*\bdenied\b|\bdenied\b.*\b(permission|location|authorization|camera|photo)\b)',
+    caseSensitive: false,
+  ).hasMatch(payload)) {
+    return _LogClassification(
+      kind: 'permission_denied',
+      severity: 'warning',
+      blocking: false,
+      message: payload,
+    );
+  }
+
+  if (RegExp(
+    r'(\b(api|http|request|network|socket)\b.*\b(failed|failure)\b|\b(failed|failure)\b.*\b(api|http|request|network|socket)\b)',
+    caseSensitive: false,
+  ).hasMatch(payload)) {
+    return _LogClassification(
+      kind: 'app_request_failure',
+      severity: 'non_blocking',
+      blocking: false,
+      message: payload,
+    );
+  }
+
+  return null;
+}
+
+List<String> _logSignalContext(List<String> lines, int signalIndex) {
+  final context = <String>[];
+  final before = <String>[];
+  for (
+    var i = signalIndex - 1;
+    i >= 0 && before.length < 3 && signalIndex - i <= 8;
+    i--
+  ) {
+    final line = lines[i].trim();
+    if (line.isEmpty) continue;
+    if (_classifyLogLine(line) != null) break;
+    final payload = _stripLogMetadata(_stripLogAnsi(line));
+    if (_looksLikeFlutterErrorContext(payload)) {
+      before.insert(0, line);
+      continue;
+    }
+    if (before.isNotEmpty) break;
+  }
+  context.addAll(before);
+  for (
+    var i = signalIndex + 1;
+    i < lines.length && context.length < 6 && i <= signalIndex + 12;
+    i++
+  ) {
+    final line = lines[i].trim();
+    if (line.isEmpty) continue;
+    if (_classifyLogLine(line) != null) break;
+    final payload = _stripLogMetadata(_stripLogAnsi(line));
+    if (_looksLikeFlutterErrorContext(payload)) {
+      context.add(line);
+      continue;
+    }
+    if (context.isNotEmpty) break;
+  }
+  return context;
+}
+
+bool _looksLikeFlutterErrorContext(String payload) {
+  final lower = payload.toLowerCase();
+  return RegExp(r'^#\d+\s+').hasMatch(payload) ||
+      payload.contains('package:') ||
+      payload.contains('.dart:') ||
+      lower.contains('the relevant error-causing widget was') ||
+      lower.contains('when the exception was thrown') ||
+      lower.contains('the following assertion was thrown') ||
+      lower.contains('the following stateerror was thrown') ||
+      lower.contains('the following fluttererror was thrown');
+}
+
+DateTime? _extractLogTimestamp(String line) {
+  final match = RegExp(
+    r'^\[([0-9]{4}-[0-9]{2}-[0-9]{2}T[^\]]+)\]',
+  ).firstMatch(line);
+  if (match == null) return null;
+  return DateTime.tryParse(match.group(1)!);
+}
+
+int? _extractLogLevel(String line) {
+  final match = RegExp(r'\blevel=(\d+)\b').firstMatch(line);
+  if (match == null) return null;
+  return int.tryParse(match.group(1)!);
+}
+
+String _stripLogMetadata(String line) {
+  var text = line.trim();
+  text = text.replaceFirst(RegExp(r'^\[[^\]]+\]\s+'), '');
+  text = text.replaceFirst(RegExp(r'^\[VM_STD(?:OUT|ERR)\]\s+'), '');
+  if (text.startsWith('[VM_LOG]')) {
+    text = text.substring('[VM_LOG]'.length).trimLeft();
+    text = text.replaceFirst(RegExp(r'^\[[^\]]+\]\s+'), '');
+    text = text.replaceFirst(RegExp(r'^(?:level=\d+\s+)?(?:seq=\d+\s+)?'), '');
+  }
+  return text.trim();
+}
+
+String _stripLogAnsi(String value) =>
+    value.replaceAll(RegExp(r'\x1B\[[0-?]*[ -/]*[@-~]'), '');
+
+bool _isNegatedLogError(String lower) {
+  return lower.contains('no error') ||
+      lower.contains('0 errors') ||
+      lower.contains('without error') ||
+      lower.contains('error-free') ||
+      lower.contains('errortext:');
+}
+
+List<Map<String, Object?>> _logSignalMaps(
+  List<_LogSignal> signals, {
+  DateTime? now,
+}) {
+  final effectiveNow = now ?? DateTime.now();
+  return [for (final signal in signals) signal.toJson(now: effectiveNow)];
+}
+
+class _LogSignal {
+  const _LogSignal({
+    required this.kind,
+    required this.severity,
+    required this.blocking,
+    required this.message,
+    required this.line,
+    required this.context,
+    this.timestamp,
+  });
+
+  final String kind;
+  final String severity;
+  final bool blocking;
+  final String message;
+  final String line;
+  final List<String> context;
+  final DateTime? timestamp;
+
+  bool isStale(DateTime now) {
+    final parsed = timestamp;
+    if (parsed == null) return false;
+    return now.difference(parsed) > const Duration(seconds: 30);
+  }
+
+  bool isFreshBlocking(DateTime now) => blocking && !isStale(now);
+
+  Map<String, Object?> toJson({required DateTime now}) {
+    final parsed = timestamp;
+    final ageMs = parsed == null ? null : now.difference(parsed).inMilliseconds;
+    return {
+      'kind': kind,
+      'severity': severity,
+      'blocking': blocking,
+      'message': message,
+      'line': line,
+      if (context.isNotEmpty) 'context': context,
+      if (parsed != null) 'timestamp': parsed.toIso8601String(),
+      if (ageMs case final value?) ...{'ageMs': value, 'stale': value > 30000},
+    };
+  }
+}
+
+class _LogClassification {
+  const _LogClassification({
+    required this.kind,
+    required this.severity,
+    required this.blocking,
+    required this.message,
+  });
+
+  final String kind;
+  final String severity;
+  final bool blocking;
+  final String message;
 }
 
 String get _sessionMetaFile => p.join(_sessionDir.path, 'session_meta.json');

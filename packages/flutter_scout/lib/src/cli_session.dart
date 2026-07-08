@@ -102,7 +102,7 @@ extension _CliSession on FlutterScoutCli {
     while (DateTime.now().isBefore(deadline)) {
       final logFile = File(_logFile);
       if (logFile.existsSync()) {
-        final currentLines = logFile.readAsLinesSync();
+        final currentLines = _readLogLinesSync(logFile);
         for (final line in currentLines.skip(readLineCount)) {
           handleLine(line);
           vmUri ??= _extractVmUri(line) ?? _extractFlutterToolVmUri(line);

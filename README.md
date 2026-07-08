@@ -178,6 +178,14 @@ dart run bin/flutter_scout.dart logs --summary
 dart run bin/flutter_scout.dart logs --last 20
 ```
 
+`logs --summary` classifies Scout-owned VM/flutter log output into structured
+`recentLogSignals`, including framework build errors, uncaught exceptions,
+RenderFlex overflows, native Flutter errors, high-severity app logs, and
+permission/request failures. Fresh blocking signals also appear as
+`blockingLogSignals`, so agents can stop on hard facts without grepping
+`logs.txt` manually. The legacy `recentLogErrors` field in `inspect`, `health`,
+and compact action output remains a line-only compatibility view.
+
 When `logs --contains <text>` finds no matching lines in a non-empty Scout-owned log, the command keeps `available:true`, reports `matched:0`, and says no lines matched the filter.
 
 For attach-only sessions started by VS Code, Cursor, or another terminal, `logs` reports `source:"attach_only_session"` with `available:false`; Scout can still inspect and act through the VM service, but the owning process keeps the console logs. Start with `flutter-scout ensure` or `flutter-scout launch` when Scout should own log capture.
@@ -192,7 +200,7 @@ dart run bin/flutter_scout.dart evidence -o /tmp/flutter_scout_evidence
 
 The bundle writes `summary.json`, `status.json`, `logs.json`, optional `inspect.json`, optional `session.json`, optional `transcript.txt`, and a screenshot when the current target supports capture. Add `--audit` to also write an `audit.md` scaffold with current state, transcript, and finding placeholders. Unsupported screenshots or missing attach logs are recorded as structured evidence instead of failing the command.
 
-`recentErrors` reports runtime facts from Flutter/platform hooks. Entries include `severity`, `blocking`, `phase`, `ageMs`, and `stale` so agents can separate fresh blocking failures from older non-blocking startup noise.
+`recentErrors` reports runtime facts from Flutter/platform hooks. `recentLogSignals` reports hard facts inferred from Scout-owned logs when an app swallows an error before the hooks see it. Entries include `severity`, `blocking`, `ageMs`, and `stale` where available so agents can separate fresh blocking failures from older non-blocking startup noise.
 
 Replay output includes both `results` and a concise `transcript` array. The transcript is intended for quick run reports, while `results` keeps the structured command evidence.
 

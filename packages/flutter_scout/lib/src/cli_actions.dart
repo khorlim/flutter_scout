@@ -114,9 +114,12 @@ extension _CliActions on FlutterScoutCli {
     // Surface swallowed app-log errors (location denied, failed API calls…)
     // that the in-isolate error handlers never see, so a QA sweep notices
     // them without a separate `logs` call.
-    final logErrors = _recentLogErrors();
-    if (logErrors.isNotEmpty && result['ok'] != false) {
-      result['recentLogErrors'] = logErrors;
+    final logSignals = _recentLogSignals();
+    if (logSignals.isNotEmpty && result['ok'] != false) {
+      result['recentLogSignals'] = _logSignalMaps(logSignals);
+      result['recentLogErrors'] = [
+        for (final signal in logSignals) signal.line,
+      ];
     }
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
     return result['ok'] == false ? 1 : 0;
@@ -135,7 +138,12 @@ extension _CliActions on FlutterScoutCli {
         if (e is Map && e['blocking'] == true && e['stale'] != true) e,
     ];
     final interactables = result['interactables'];
-    final logErrors = _recentLogErrors();
+    final logSignals = _recentLogSignals();
+    final now = DateTime.now();
+    final blockingLogSignals = [
+      for (final signal in logSignals)
+        if (signal.isFreshBlocking(now)) signal,
+    ];
     final health = <String, Object?>{
       'ok': true,
       'screen': result['screen'],
@@ -146,9 +154,14 @@ extension _CliActions on FlutterScoutCli {
       if (result['semanticQuality'] != null)
         'semanticQuality': result['semanticQuality'],
       'blockingErrors': blocking,
+      'blockingLogSignals': _logSignalMaps(blockingLogSignals, now: now),
       'recentErrorCount': errorList.length,
-      'recentLogErrors': logErrors,
-      'healthy': blocking.isEmpty && (result['degradedNodes'] ?? 0) == 0,
+      'recentLogSignals': _logSignalMaps(logSignals, now: now),
+      'recentLogErrors': [for (final signal in logSignals) signal.line],
+      'healthy':
+          blocking.isEmpty &&
+          blockingLogSignals.isEmpty &&
+          (result['degradedNodes'] ?? 0) == 0,
     };
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(health));
     return 0;
@@ -375,6 +388,7 @@ extension _CliActions on FlutterScoutCli {
     );
     result = await _tapTextFallbackIfNeeded(result, params);
     result = _withProtocolDiagnostics('ext.flutter_scout.tapText', result);
+    result = await _withRecentLogSignals(result);
     stdout.writeln(
       const JsonEncoder.withIndent(
         '  ',
@@ -463,15 +477,18 @@ extension _CliActions on FlutterScoutCli {
       signal: ProcessSignal.sigusr1,
       fullRestart: false,
     );
+    final enrichedResult = await _withRecentLogSignals(result);
     stdout.writeln(
-      const JsonEncoder.withIndent(
-        '  ',
-      ).convert(parsed.flag('verbose') ? result : _compactActionResult(result)),
+      const JsonEncoder.withIndent('  ').convert(
+        parsed.flag('verbose')
+            ? enrichedResult
+            : _compactActionResult(enrichedResult),
+      ),
     );
-    if (result['ok'] == true) {
+    if (enrichedResult['ok'] == true) {
       _recordAction(const {'cmd': 'reload'});
     }
-    return result['ok'] == false ? 1 : 0;
+    return enrichedResult['ok'] == false ? 1 : 0;
   }
 
   Future<int> _restart(List<String> args) async {
@@ -482,15 +499,18 @@ extension _CliActions on FlutterScoutCli {
       signal: ProcessSignal.sigusr2,
       fullRestart: true,
     );
+    final enrichedResult = await _withRecentLogSignals(result);
     stdout.writeln(
-      const JsonEncoder.withIndent(
-        '  ',
-      ).convert(parsed.flag('verbose') ? result : _compactActionResult(result)),
+      const JsonEncoder.withIndent('  ').convert(
+        parsed.flag('verbose')
+            ? enrichedResult
+            : _compactActionResult(enrichedResult),
+      ),
     );
-    if (result['ok'] == true) {
+    if (enrichedResult['ok'] == true) {
       _recordAction(const {'cmd': 'restart'});
     }
-    return result['ok'] == false ? 1 : 0;
+    return enrichedResult['ok'] == false ? 1 : 0;
   }
 
   Future<int> _scroll(List<String> args) {
@@ -570,6 +590,7 @@ extension _CliActions on FlutterScoutCli {
       };
       result = retry;
     }
+    result = await _withRecentLogSignals(result);
     final output = parsed.flag('verbose')
         ? result
         : _compactActionResult(result);
@@ -723,7 +744,7 @@ extension _CliActions on FlutterScoutCli {
           'lines': const <String>[],
       };
     }
-    final allLines = _dedupeVmStdoutEcho(file.readAsLinesSync());
+    final allLines = _dedupeVmStdoutEcho(_readLogLinesSync(file));
     if (summary) {
       final summary = _summarizeLogLines(allLines, last: last);
       return {

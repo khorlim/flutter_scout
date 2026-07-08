@@ -76,6 +76,17 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
     });
   }
 
+  void _emitLogSignal() {
+    developer.log(
+      'Build Error: Null check operator used on a null value',
+      name: 'ScoutSynthetic',
+    );
+    debugPrint(
+      '#0      _ScoutSyntheticHeader._collapsedOpacity '
+      '(package:scout_test_app/main.dart:123:45)',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -158,6 +169,11 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                       );
                     },
                     child: const Text('Emit logs'),
+                  ),
+                  TextButton(
+                    key: const ValueKey('emit_log_signal'),
+                    onPressed: _emitLogSignal,
+                    child: const Text('Emit log signal'),
                   ),
                   TextButton(
                     key: const ValueKey('show_ok_dialog'),

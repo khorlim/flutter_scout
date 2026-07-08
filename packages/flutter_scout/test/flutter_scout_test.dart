@@ -155,6 +155,25 @@ void main() {
     });
   });
 
+  test('logs summary tolerates malformed utf8 bytes', () async {
+    await _withTempCwd(() async {
+      Directory('.flutter_scout').createSync();
+      File('.flutter_scout/logs.txt').writeAsBytesSync([
+        ...utf8.encode(
+          '[2026-07-08T13:00:00.000] [VM_LOG] [ScoutSynthetic] '
+          'level=0 seq=1 Build Error: Null check operator used on a null value\n',
+        ),
+        0xff,
+        0xfe,
+        ...utf8.encode('\n'),
+      ]);
+
+      final exitCode = await FlutterScoutCli().run(['logs', '--summary']);
+
+      expect(exitCode, 0);
+    });
+  });
+
   test(
     'logs reports attach-only sessions without using stale log files',
     () async {
@@ -746,6 +765,64 @@ void main() {
     expect(after.containsKey('visualTree'), isFalse);
     expect((before['visibleText'] as List).length, 12);
     expect((result['recentErrors'] as List).length, 3);
+  });
+
+  test('log signals classify Flutter build errors without failed-text noise', () {
+    final cli = FlutterScoutCli();
+    final timestamp = DateTime.now().toIso8601String();
+    final signals = cli.debugRecentLogSignalsFromLines([
+      '[2026-07-08T12:38:59.000] [VM_LOG] [CloudDebug] level=0 seq=536 status=failed but handled by app state',
+      '[$timestamp] [VM_STDERR] #0      _CollapsedToolbarTitle._collapsedOpacity (package:tunaipro/general_module/tunai_whatsapp_module/ui/widget/collapsing_avatar_header_scaffold.dart:495:38)',
+      '[$timestamp] [VM_LOG] [TunaiLogger] level=0 seq=537 Build Error: Null check operator used on a null value',
+      '��═══════════════════════════',
+      '[$timestamp] [VM_STDERR] #1      _CollapsedToolbarTitle.build (package:tunaipro/general_module/tunai_whatsapp_module/ui/widget/collapsing_avatar_header_scaffold.dart:512:17)',
+    ]);
+
+    expect(signals, hasLength(1));
+    expect(signals.single['kind'], 'flutter_build_error');
+    expect(signals.single['severity'], 'blocking');
+    expect(signals.single['blocking'], isTrue);
+    expect(
+      signals.single['message'],
+      'Null check operator used on a null value',
+    );
+    expect(
+      signals.single['line'],
+      contains('Build Error: Null check operator used on a null value'),
+    );
+    expect(signals.single['context'], isA<List>());
+    expect(
+      signals.single['context'].toString(),
+      contains('collapsing_avatar_header_scaffold.dart:495:38'),
+    );
+    expect(signals.single['context'].toString(), isNot(contains('═══')));
+  });
+
+  test('log summary reports structured blocking log signals', () {
+    final cli = FlutterScoutCli();
+    final timestamp = DateTime.now().toIso8601String();
+    final summary = cli.debugLogSummary([
+      'Flutter run key commands.',
+      '[$timestamp] [VM_LOG] [TunaiLogger] level=0 seq=537 Build Error: Null check operator used on a null value',
+      '[$timestamp] [VM_STDERR] #0      _CollapsedToolbarTitle._collapsedOpacity (package:tunaipro/widget.dart:495:38)',
+      '[2026-07-08T12:39:01.000] [VM_LOG] [CloudDebug] level=0 seq=538 status=failed but not a runtime failure',
+    ]);
+
+    expect(summary['errors'], 1);
+    expect(summary['warnings'], 0);
+    final recentSignals = summary['recentLogSignals'] as List;
+    final blockingSignals = summary['blockingLogSignals'] as List;
+    expect(recentSignals, hasLength(1));
+    expect(blockingSignals, hasLength(1));
+    expect((blockingSignals.single as Map)['kind'], 'flutter_build_error');
+    expect(
+      summary['lastImportantLines'].toString(),
+      contains('Build Error: Null check operator used on a null value'),
+    );
+    expect(
+      summary['lastImportantLines'].toString(),
+      isNot(contains('seq=538')),
+    );
   });
 }
 

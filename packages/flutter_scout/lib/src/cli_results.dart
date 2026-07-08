@@ -14,12 +14,31 @@ extension _CliResults on FlutterScoutCli {
       method,
       await _call(method, params, callTimeout),
     );
-    final output = compact ? _compactActionResult(result) : result;
+    final enrichedResult = await _withRecentLogSignals(result);
+    final output = compact
+        ? _compactActionResult(enrichedResult)
+        : enrichedResult;
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
-    if (record != null && result['ok'] == true) {
+    if (record != null && enrichedResult['ok'] == true) {
       _recordAction(record);
     }
-    return result['ok'] == false ? 1 : 0;
+    return enrichedResult['ok'] == false ? 1 : 0;
+  }
+
+  Future<Map<String, dynamic>> _withRecentLogSignals(
+    Map<String, dynamic> result, {
+    Duration settleDelay = const Duration(milliseconds: 150),
+  }) async {
+    if (settleDelay > Duration.zero && File(_logFile).existsSync()) {
+      await Future<void>.delayed(settleDelay);
+    }
+    final signals = _recentLogSignals();
+    if (signals.isEmpty) return result;
+    return {
+      ...result,
+      'recentLogSignals': _logSignalMaps(signals),
+      'recentLogErrors': [for (final signal in signals) signal.line],
+    };
   }
 
   Future<Map<String, dynamic>> _tapTextFallbackIfNeeded(
@@ -209,6 +228,10 @@ extension _CliResults on FlutterScoutCli {
         if (result['delta'] != null) 'delta': result['delta'],
         if (result['recentErrors'] is List)
           'recentErrors': _lastItems(result['recentErrors'] as List, 3),
+        if (result['recentLogSignals'] is List)
+          'recentLogSignals': _lastItems(result['recentLogSignals'] as List, 3),
+        if (result['recentLogErrors'] is List)
+          'recentLogErrors': _lastItems(result['recentLogErrors'] as List, 3),
       };
     }
     final after = result['after'];
@@ -256,6 +279,10 @@ extension _CliResults on FlutterScoutCli {
       if (result['delta'] != null) 'delta': result['delta'],
       if (result['recentErrors'] is List)
         'recentErrors': _lastItems(result['recentErrors'] as List, 3),
+      if (result['recentLogSignals'] is List)
+        'recentLogSignals': _lastItems(result['recentLogSignals'] as List, 3),
+      if (result['recentLogErrors'] is List)
+        'recentLogErrors': _lastItems(result['recentLogErrors'] as List, 3),
     };
   }
 
