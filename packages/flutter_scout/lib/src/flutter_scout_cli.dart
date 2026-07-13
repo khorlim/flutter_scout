@@ -29,7 +29,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 9;
+  static const int expectedHelperProtocolVersion = 10;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -59,6 +59,12 @@ class FlutterScoutCli {
   bool _reuseVmConnection = false;
   VmService? _cachedVmService;
   String? _cachedVmUri;
+
+  // Batch mode keeps normal action methods intact while collecting their
+  // compact results into one final timeline instead of printing a large JSON
+  // document per step.
+  bool _suppressActionOutput = false;
+  final List<Map<String, dynamic>> _suppressedActionResults = [];
 
   /// Splits a batch script into commands on `;` and newlines, honoring
   /// single/double quotes so quoted arguments can contain separators.
@@ -1535,7 +1541,7 @@ Usage:
   flutter-scout status
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
-  flutter-scout inspect [--brief] [--surface] [--sections <list>]
+  flutter-scout inspect [--brief] [--surface] [--max-items <n>] [--sections <list>]
   flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|fixed|check]
   flutter-scout annotations wait [--timeout <seconds>] [--poll <ms>]
   flutter-scout annotations fixed <annotation-id> [--note <text>]
@@ -1550,6 +1556,8 @@ Usage:
   flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--to x,y] [--verbose]
   flutter-scout back [--verbose]
   flutter-scout wait stable
+  flutter-scout batch '<command>; <command>' [--keep-going] [--verbose]
+  flutter-scout export-batch [-o <path>]
   flutter-scout explore [--port <port>] [--port-file <path>] [--once]
   flutter-scout reload [--verbose]
   flutter-scout restart [--verbose]

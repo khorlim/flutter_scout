@@ -629,7 +629,8 @@ void main() {
             ]),
           );
 
-          final result = FlutterScoutCli().debugCompactActionResult({
+          final cli = FlutterScoutCli();
+          final result = cli.debugCompactActionResult({
             'ok': true,
             'action': 'tap btn.four',
             'result': 'changed',
@@ -637,6 +638,12 @@ void main() {
 
           final hints = result['workflowHints'] as List<Object?>;
           expect(hints.single, containsPair('code', 'consider_serve'));
+          final repeated = cli.debugCompactActionResult({
+            'ok': true,
+            'action': 'tap btn.five',
+            'result': 'changed',
+          });
+          expect(repeated.containsKey('workflowHints'), isFalse);
         });
       },
     );
@@ -704,6 +711,14 @@ void main() {
         'suggestedActions': [
           {'intent': 'enterValue'},
         ],
+        'structuredRows': [
+          {
+            'id': 'row.payment',
+            'label': 'Payment',
+            'text': List<String>.generate(20, (index) => 'row $index'),
+            'actions': List<int>.generate(20, (index) => index),
+          },
+        ],
       },
     });
 
@@ -713,6 +728,8 @@ void main() {
     expect(summary.containsKey('visualTree'), isFalse);
     expect(summary.containsKey('controlGroups'), isFalse);
     expect(summary.containsKey('fieldsById'), isFalse);
+    expect(summary.containsKey('structuredRows'), isFalse);
+    expect(summary['structuredRowCount'], 1);
     expect((summary['visibleText'] as List).length, 12);
   });
 

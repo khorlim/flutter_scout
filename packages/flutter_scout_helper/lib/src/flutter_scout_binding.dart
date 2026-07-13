@@ -27,7 +27,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 9;
+const int scoutHelperProtocolVersion = 10;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -360,6 +360,8 @@ class FlutterScoutRuntime {
     try {
       await _waitForFrame();
       final brief = params['brief'] == 'true';
+      final requestedMaxItems = int.tryParse(params['maxItems'] ?? '');
+      final maxItems = (requestedMaxItems ?? 20).clamp(1, 100).toInt();
       final sections = (params['sections'] ?? '')
           .split(',')
           .map((section) => section.trim())
@@ -368,6 +370,7 @@ class FlutterScoutRuntime {
       return _ok(
         _inspectPayload(
           brief: brief,
+          maxItems: maxItems,
           sections: sections,
           surfaceOnly: params['surfaceOnly'] == 'true',
         ),
@@ -384,6 +387,7 @@ class FlutterScoutRuntime {
   /// visualTree, controlGroups, rows, annotations). Both empty → full payload.
   Map<String, Object?> _inspectPayload({
     required bool brief,
+    int maxItems = 20,
     required Set<String> sections,
     bool surfaceOnly = false,
   }) {
@@ -480,12 +484,23 @@ class FlutterScoutRuntime {
       final inspectWarnings = _inspectWarnings(
         anonymousGenericTargetsOmitted: omitted,
       );
+      final briefVisibleText = _takeItems(visibleText, maxItems);
+      final briefHitTestableText = _takeItems(hitTestableText, maxItems);
+      final briefOffscreenText = _takeItems(
+        snapshot.offscreenText,
+        (maxItems ~/ 2).clamp(4, 20).toInt(),
+      );
+      final briefRows = snapshot.structuredRows
+          .take((maxItems ~/ 4).clamp(2, 6).toInt())
+          .map(_compactStructuredRow)
+          .toList(growable: false);
+      final briefFields = fields.take(maxItems);
       payload.addAll({
-        'visibleText': visibleText,
-        'hitTestableText': hitTestableText,
-        if (!surfaceOnly) 'offscreenText': snapshot.offscreenText,
+        'visibleText': briefVisibleText,
+        'hitTestableText': briefHitTestableText,
+        if (!surfaceOnly) 'offscreenText': briefOffscreenText,
         'interactables': [
-          for (final node in briefInteractables)
+          for (final node in briefInteractables.take(maxItems))
             _compactNodeJson(
               node,
               withPositionHint: (duplicateBaseIds[node.baseId] ?? 0) > 1,
@@ -503,9 +518,31 @@ class FlutterScoutRuntime {
           snapshot,
           anonymousGenericTargetsOmitted: omitted,
         ),
-        if (snapshot.structuredRows.isNotEmpty)
-          'structuredRows': snapshot.structuredRows.take(20).toList(),
-        'fieldValues': {for (final field in fields) field.id: field.value},
+        if (snapshot.structuredRows.isNotEmpty) 'structuredRows': briefRows,
+        if (visibleText.length > briefVisibleText.length ||
+            hitTestableText.length > briefHitTestableText.length ||
+            snapshot.offscreenText.length > briefOffscreenText.length ||
+            briefInteractables.length > maxItems ||
+            snapshot.structuredRows.length > briefRows.length ||
+            fields.length > maxItems)
+          'omitted': {
+            if (visibleText.length > briefVisibleText.length)
+              'visibleText': visibleText.length - briefVisibleText.length,
+            if (hitTestableText.length > briefHitTestableText.length)
+              'hitTestableText':
+                  hitTestableText.length - briefHitTestableText.length,
+            if (snapshot.offscreenText.length > briefOffscreenText.length)
+              'offscreenText':
+                  snapshot.offscreenText.length - briefOffscreenText.length,
+            if (briefInteractables.length > maxItems)
+              'interactables': briefInteractables.length - maxItems,
+            if (snapshot.structuredRows.length > briefRows.length)
+              'structuredRows':
+                  snapshot.structuredRows.length - briefRows.length,
+            if (fields.length > maxItems) 'fields': fields.length - maxItems,
+            'hint': 'Use inspect --sections <name> for full detail.',
+          },
+        'fieldValues': {for (final field in briefFields) field.id: field.value},
       });
     }
     for (final section in sections) {
@@ -533,10 +570,24 @@ class FlutterScoutRuntime {
         'annotations' => {
           'annotations': _annotationJsonList(liveTargets: _annotationTargets()),
         },
+        'semantics' => {'semanticDiagnostics': _semanticDiagnostics(snapshot)},
         _ => {'unknownSections': '$section (ignored)'},
       });
     }
     return payload;
+  }
+
+  List<T> _takeItems<T>(List<T> items, int maxItems) =>
+      items.length <= maxItems ? items : items.take(maxItems).toList();
+
+  Map<String, Object?> _compactStructuredRow(Map<String, Object?> row) {
+    final text = row['text'];
+    return {
+      if (row['id'] != null) 'id': row['id'],
+      if (row['label'] != null) 'label': row['label'],
+      if (text is List) 'text': _takeItems(List<Object?>.from(text), 6),
+      if (row['primaryTarget'] != null) 'primaryTarget': row['primaryTarget'],
+    };
   }
 
   Map<String, Object?> _semanticQuality(
@@ -644,6 +695,61 @@ class FlutterScoutRuntime {
         'structuredRows': snapshot.structuredRows.length,
       },
       if (issues.isNotEmpty) 'issues': issues,
+    };
+  }
+
+  /// Concrete, factual follow-up to the compact semantic-quality counters.
+  /// This is deliberately opt-in: it identifies handles and evidence but does
+  /// not make a subjective UX judgment.
+  Map<String, Object?> _semanticDiagnostics(ScoutSnapshot snapshot) {
+    final visible = snapshot.interactables
+        .where((node) => node.visibleFraction > 0)
+        .toList(growable: false);
+    Map<String, Object?> nodeJson(ScoutNode node, String evidence) => {
+      'id': node.id,
+      'kind': node.kind,
+      if (node.label != null) 'label': node.label,
+      if (node.key != null) 'key': node.key,
+      if (node.altIds.isNotEmpty) 'altIds': node.altIds,
+      'evidence': evidence,
+    };
+    final labels = <String, List<ScoutNode>>{};
+    for (final node in visible) {
+      final label = node.label?.trim();
+      if (label != null && label.isNotEmpty) {
+        (labels[label.toLowerCase()] ??= []).add(node);
+      }
+    }
+    final duplicates = [
+      for (final entry in labels.entries)
+        if (entry.value.length > 1)
+          {
+            'label': entry.key,
+            'controls': [
+              for (final node in entry.value.take(12))
+                nodeJson(node, 'duplicate visible label'),
+            ],
+          },
+    ];
+    return {
+      'unlabeledControls': [
+        for (final node in visible)
+          if ((node.label ?? '').trim().isEmpty &&
+              (node.key ?? '').trim().isEmpty &&
+              node.altIds.isEmpty)
+            nodeJson(node, 'no label, key, or derived alias'),
+      ],
+      'nonHitTestableControls': [
+        for (final node in visible)
+          if (node.enabled && !node.hitTestable)
+            nodeJson(node, 'visible and enabled but has no safe tap point'),
+      ],
+      'lowConfidenceControls': [
+        for (final node in visible)
+          if (node.confidence < 0.7)
+            nodeJson(node, 'inferred handle confidence ${node.confidence}'),
+      ],
+      if (duplicates.isNotEmpty) 'duplicateLabels': duplicates,
     };
   }
 
@@ -790,10 +896,12 @@ class FlutterScoutRuntime {
   @visibleForTesting
   Map<String, Object?> debugInspectPayload({
     bool brief = false,
+    int maxItems = 20,
     Set<String> sections = const {},
     bool surfaceOnly = false,
   }) => _inspectPayload(
     brief: brief,
+    maxItems: maxItems,
     sections: sections,
     surfaceOnly: surfaceOnly,
   );

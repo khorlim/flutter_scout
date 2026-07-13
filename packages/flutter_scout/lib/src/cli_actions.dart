@@ -95,20 +95,37 @@ extension _CliActions on FlutterScoutCli {
             'Scout can identify its bounds.',
       )
       ..addOption(
+        'max-items',
+        help:
+            'Maximum entries per brief list (1-100, default 20). Request '
+            'full named data with --sections instead of raising this by default.',
+      )
+      ..addOption(
         'sections',
         help:
             'Comma-separated full sections to include: text, interactables, '
             'fields, textTargets, scrollables, overlays, visualTree, '
-            'controlGroups, annotations.',
+            'controlGroups, rows, annotations, semantics.',
       );
     final parsed = parser.parse(args);
     final sections = parsed.option('sections');
+    final maxItems = parsed.option('max-items');
+    if (maxItems != null &&
+        (int.tryParse(maxItems) == null ||
+            int.parse(maxItems) < 1 ||
+            int.parse(maxItems) > 100)) {
+      throw const ScoutCliException(
+        'usage',
+        '--max-items must be an integer from 1 to 100.',
+      );
+    }
     final result = _withProtocolDiagnostics(
       'ext.flutter_scout.inspect',
       await _call('ext.flutter_scout.inspect', {
         if (parsed.flag('brief') || parsed.flag('surface')) 'brief': 'true',
         if (parsed.flag('surface')) 'surfaceOnly': 'true',
         if (sections != null && sections.isNotEmpty) 'sections': sections,
+        'maxItems': ?maxItems,
       }),
     );
     // Surface swallowed app-log errors (location denied, failed API calls…)
@@ -389,10 +406,10 @@ extension _CliActions on FlutterScoutCli {
     result = await _tapTextFallbackIfNeeded(result, params);
     result = _withProtocolDiagnostics('ext.flutter_scout.tapText', result);
     result = await _withRecentLogSignals(result);
-    stdout.writeln(
-      const JsonEncoder.withIndent(
-        '  ',
-      ).convert(parsed.flag('verbose') ? result : _compactActionResult(result)),
+    _emitActionOutput(
+      Map<String, dynamic>.from(
+        parsed.flag('verbose') ? result : _compactActionResult(result),
+      ),
     );
     if (result['ok'] == true) {
       _recordAction({'cmd': 'tap-text', ...params});
@@ -594,7 +611,7 @@ extension _CliActions on FlutterScoutCli {
     final output = parsed.flag('verbose')
         ? result
         : _compactActionResult(result);
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
+    _emitActionOutput(output);
     if (result['ok'] == true) {
       _recordAction({'cmd': 'scroll-to', ...recordParams});
     }

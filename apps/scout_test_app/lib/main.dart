@@ -37,6 +37,24 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
   int _duplicateActions = 0;
   int _glyphDuplicateActions = 0;
   String _customPhone = 'Not set';
+  String _intentAliasStatus = 'Idle';
+  int _testAnnotationsCreated = 0;
+
+  void _createTestAnnotation() {
+    // This is a fixture-only control used to prove Scout's cross-restart
+    // annotation persistence. Production applications never need this API.
+    // ignore: invalid_use_of_visible_for_testing_member
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final target = runtime.visibleAnnotationTargets().where(
+      (candidate) => candidate.scoutNodeId == 'btn.add_supplier',
+    );
+    if (target.isEmpty) return;
+    runtime.addAnnotation(
+      target: target.first,
+      comment: 'Test annotation survives a Scout restart.',
+    );
+    setState(() => _testAnnotationsCreated++);
+  }
 
   Future<void> _openAddSupplierDialog() async {
     final supplier = await showDialog<String>(
@@ -132,6 +150,27 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                       style: const TextStyle(fontFamily: 'MaterialIcons'),
                     ),
                   ),
+                  // Intentionally icon-only: Scout should retain the raw
+                  // settings handle while also deriving the nearby intent
+                  // alias `btn.account_settings`.
+                  IconButton(
+                    onPressed: () {
+                      setState(() => _intentAliasStatus = 'Opened');
+                    },
+                    icon: const Icon(Icons.settings),
+                  ),
+                  const Text('Account settings'),
+                  // Deliberately anonymous fixture for the factual semantics
+                  // diagnostics. Real apps should use keys/semantics here.
+                  GestureDetector(
+                    onTap: () {},
+                    child: const SizedBox(width: 18, height: 18),
+                  ),
+                  TextButton(
+                    key: const ValueKey('create_test_annotation'),
+                    onPressed: _createTestAnnotation,
+                    child: const Text('Create test annotation'),
+                  ),
                   TextButton(
                     key: const ValueKey('smoke_issues'),
                     onPressed: () {
@@ -203,6 +242,8 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
             Text('Duplicate actions: $_duplicateActions'),
             Text('Glyph duplicate actions: $_glyphDuplicateActions'),
             Text('Custom phone: $_customPhone'),
+            Text('Intent alias: $_intentAliasStatus'),
+            Text('Test annotations: $_testAnnotationsCreated'),
             const SizedBox(height: 16),
             Expanded(
               child: _suppliers.isEmpty

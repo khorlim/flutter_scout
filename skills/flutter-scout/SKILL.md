@@ -97,7 +97,7 @@ flutter-scout inspect
 flutter-scout inspect --sections textTargets,scrollables
 ```
 
-Prefer `inspect --brief` for orientation: it returns the screen name, visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, structured rows, suggested actions, semantic quality, perception provenance, and errors at a fraction of the full payload size. Brief output omits anonymous generic gesture targets and reports `interactablesOmitted`; when many are omitted it adds an `inspectWarnings` item so you know semantics are weak without reading hundreds of `tap.gesturedetector_*` handles. Use `inspect --surface` when a modal, picker, dialog, or sheet is active and you want only the top surface's reachable text/actions. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,rows,annotations` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier`, `field.supplier_name`, and `row.customer_name.more_actions` over coordinates.
+Prefer `inspect --brief` for orientation: it returns the screen name, bounded visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, row previews, suggested actions, semantic quality, perception provenance, and errors. Its default is capped at 20 items per list; read `omitted`, use `--max-items <1-100>` when a slightly larger digest is justified, or request a named full section instead of dumping the tree. Brief output omits anonymous generic gesture targets and reports `interactablesOmitted`; when many are omitted it adds an `inspectWarnings` item so you know semantics are weak without reading hundreds of `tap.gesturedetector_*` handles. Use `inspect --surface` when a modal, picker, dialog, or sheet is active and you want only the top surface's reachable text/actions. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,rows,annotations,semantics` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier`, `field.supplier_name`, and `row.customer_name.more_actions` over coordinates.
 
 Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it. For CUSTOM segments/chips with no semantics, Scout infers selection heuristically: in a run of 3+ adjacent same-kind tappables where exactly one label color differs, that outlier is marked selected — treat inferred values as strong hints, not ground truth.
 
@@ -134,7 +134,7 @@ If the user manually annotated the running app, read the annotations before edit
 flutter-scout annotations list
 ```
 
-Annotations contain the user's comment plus the selected widget metadata. They are persistent review markers, so code fixes and hot reloads do not automatically remove them. `inspect` also includes top-level `annotationMode` and `annotations` fields, but `annotations list` is the clearest handoff from manual review to agent work.
+Annotations contain the user's comment plus the selected widget metadata. They are persistent review markers: the CLI records active pins and crops in the session, then restores them into a fresh helper runtime after hot restart/relaunch. `inspect` also includes top-level `annotationMode` and `annotations` fields, but `annotations list` is the clearest handoff from manual review to agent work.
 
 **Manual annotation handoff.** After the user reviews the app and says annotations are ready, read the current pins:
 
@@ -270,7 +270,7 @@ flutter-scout batch 'tap btn.admin --expect-text Setting; tap-text Setting --exp
 flutter-scout batch --file /tmp/flow.scout   # one command per line, # comments
 ```
 
-The batch summary reports `failed` (step index, cmd, exitCode), per-step `stepTimingsMs`, and `totalMs` — read it to pinpoint what broke without re-running. After a successful interactive session, `flutter-scout export-batch -o flow.scout` converts the recorded actions (including any `--expect-*` gates you used) into a replayable batch script — the modern replacement for `replay`.
+The default batch summary returns one compact `timeline` with each step's guarded result, plus `failed` (step index, cmd, exitCode), per-step `stepTimingsMs`, and `totalMs` — read it to pinpoint what broke without re-running. Pass `--verbose` only when you need every raw step payload. After a successful interactive session, `flutter-scout export-batch -o flow.scout` converts the recorded actions (including any `--expect-*` gates you used) into a replayable batch script — the modern replacement for `replay`.
 
 **Address sessions by name from anywhere** — `launch`/`ensure --name <label>` registers the session globally; any command then takes `--app <label>` without cd'ing to the project, and `flutter-scout apps` lists registered sessions:
 

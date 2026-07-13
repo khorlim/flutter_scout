@@ -168,7 +168,7 @@ After setup, run `flutter-scout status` when session ownership is unclear. The `
 - No Flutter Scout extensions: confirm `FlutterScoutBinding.ensureInitialized()` runs before `runApp`.
 - Scout-owned run still active: run `flutter-scout stop --clear-session`.
 - `screenshot_unsupported_target`: no screenshot-capable target is recorded, or the macOS VM service is reachable but Scout cannot find a capturable open app window. For iOS Simulator, attach/launch with the simulator device id. For macOS, attach to the app VM service and keep the app window open and not minimized.
-- `crop_unsupported_target`: targeted crops are currently iOS Simulator-only. Use `flutter-scout screenshot -o <path>` for a full macOS app-window capture.
+- `crop_unsupported_target`: the requested crop contains a platform view and no native crop backend is available. Normal in-app targeted crops work on macOS; use `flutter-scout screenshot -o <path>` when a platform view needs a full native macOS window capture.
 - Simulator screenshot/crop failures: confirm `xcrun simctl` can see the booted simulator and that the session was attached/launched with the iOS Simulator device id.
 - macOS screenshot failures: confirm `screencapture` has Screen Recording permission if macOS blocks capture, and that the attached VM service belongs to the visible Flutter `.app` process.
 

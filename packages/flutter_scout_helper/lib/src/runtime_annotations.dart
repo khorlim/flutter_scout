@@ -50,6 +50,10 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
             'removed': removed,
             'notFound': notFound,
           });
+        case 'restore':
+          final restored = restoreAnnotations(params['records']);
+          await _waitForFrame();
+          return _ok({..._annotationsStateJson(), 'restored': restored});
         case 'resolve':
           final updated = _updateAnnotationStatus(
             id: params['id'],
@@ -675,7 +679,10 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     required String comment,
   }) {
     final annotation = ScoutAnnotation(
-      id: 'ann_${_nextAnnotationId.toString().padLeft(3, '0')}',
+      // A restart resets the helper isolate. Include a timestamp so a new
+      // human pin never collides with a durable CLI-session pin restored into
+      // a later helper instance.
+      id: 'ann_${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}_${_nextAnnotationId.toString().padLeft(3, '0')}',
       createdAt: DateTime.now(),
       comment: comment,
       status: 'open',
@@ -686,6 +693,115 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     _bumpAnnotationRevision();
     unawaited(_captureAnnotationCrop(annotation, slot: 'before'));
     return annotation;
+  }
+
+  /// Rehydrates CLI-owned active annotations after a hot restart/full relaunch.
+  /// Crops remain in the CLI session cache; the helper only needs enough
+  /// metadata to draw/match the pin and capture a fresh after-crop on `fixed`.
+  int restoreAnnotations(String? recordsJson) {
+    if (recordsJson == null || recordsJson.isEmpty) return 0;
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(recordsJson);
+    } catch (_) {
+      return 0;
+    }
+    if (decoded is! List) return 0;
+    var restored = 0;
+    for (final raw in decoded) {
+      if (raw is! Map) continue;
+      final record = Map<String, dynamic>.from(raw);
+      final annotation = _annotationFromJson(record);
+      if (annotation == null ||
+          _annotations.any((existing) => existing.id == annotation.id)) {
+        continue;
+      }
+      _annotations.add(annotation);
+      restored += 1;
+    }
+    if (restored > 0) _bumpAnnotationRevision();
+    return restored;
+  }
+
+  ScoutAnnotation? _annotationFromJson(Map<String, dynamic> record) {
+    final id = record['id']?.toString().trim();
+    final comment = record['comment']?.toString();
+    final status = record['status']?.toString();
+    final targetRaw = record['target'];
+    if (id == null ||
+        id.isEmpty ||
+        comment == null ||
+        status == null ||
+        targetRaw is! Map) {
+      return null;
+    }
+    final target = _annotationTargetFromJson(
+      Map<String, dynamic>.from(targetRaw),
+    );
+    if (target == null) return null;
+    final createdAt = DateTime.tryParse(record['createdAt']?.toString() ?? '');
+    final annotation = ScoutAnnotation(
+      id: id,
+      createdAt: createdAt ?? DateTime.now(),
+      comment: comment,
+      status: status,
+      target: target,
+    );
+    annotation.updatedAt = DateTime.tryParse(
+      record['updatedAt']?.toString() ?? '',
+    );
+    final note = record['note']?.toString().trim();
+    annotation.note = note == null || note.isEmpty ? null : note;
+    return annotation;
+  }
+
+  ScoutAnnotationTarget? _annotationTargetFromJson(Map<String, dynamic> json) {
+    List<double>? rectFor(String key) {
+      final raw = json[key];
+      if (raw is! List || raw.length < 4) return null;
+      final values = raw.take(4).map((value) => (value as num?)?.toDouble());
+      if (values.any((value) => value == null)) return null;
+      return values.cast<double>().toList(growable: false);
+    }
+
+    final rect = rectFor('rect');
+    final visibleRect = rectFor('visibleRect') ?? rect;
+    final id = json['id']?.toString().trim();
+    final stableId = json['stableId']?.toString().trim();
+    if (rect == null ||
+        visibleRect == null ||
+        id == null ||
+        id.isEmpty ||
+        stableId == null ||
+        stableId.isEmpty) {
+      return null;
+    }
+    return ScoutAnnotationTarget(
+      id: id,
+      stableId: stableId,
+      kind: json['kind']?.toString() ?? 'widget',
+      widgetType: json['widgetType']?.toString() ?? 'Widget',
+      key: json['key']?.toString(),
+      label: json['label']?.toString(),
+      text: json['text']?.toString(),
+      screen: json['screen']?.toString() ?? 'unknown',
+      routeGuess: json['routeGuess']?.toString(),
+      rect: Rect.fromLTWH(rect[0], rect[1], rect[2], rect[3]),
+      visibleRect: Rect.fromLTWH(
+        visibleRect[0],
+        visibleRect[1],
+        visibleRect[2],
+        visibleRect[3],
+      ),
+      visibleFraction: (json['visibleFraction'] as num?)?.toDouble() ?? 1,
+      depth: (json['depth'] as num?)?.toInt() ?? 0,
+      ancestorSummary: json['ancestorSummary'] is List
+          ? (json['ancestorSummary'] as List)
+                .map((value) => value.toString())
+                .toList(growable: false)
+          : const [],
+      scoutNodeId: json['scoutNodeId']?.toString(),
+    );
   }
 
   /// Collects the ids targeted by a `delete` action from either `ids`

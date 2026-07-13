@@ -158,13 +158,117 @@ extension _CliAnnotations on FlutterScoutCli {
   /// session `crops/` dir (with native fallback for platform-view regions),
   /// then prints the augmented JSON.
   Future<int> _runAnnotationsAndPrint(Map<String, String> params) async {
-    final result = await _call('ext.flutter_scout.annotations', params);
+    final action = params['action'];
+    if (_annotationActionNeedsPreflightRestore(action)) {
+      final state = await _call('ext.flutter_scout.annotations', {
+        'action': 'list',
+      });
+      await _restoreAnnotationsIfNeeded(state, 'list');
+    }
+    var result = await _call('ext.flutter_scout.annotations', params);
+    if (_annotationActionCanRestoreAfterResponse(action)) {
+      result = await _restoreAnnotationsIfNeeded(result, action);
+    }
     final annotations = result['annotations'];
     if (result['ok'] != false && annotations is List) {
       await _attachCropPaths(annotations);
+      _writeAnnotationManifest(annotations);
     }
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
     return result['ok'] == false ? 1 : 0;
+  }
+
+  Future<Map<String, dynamic>> _restoreAnnotationsIfNeeded(
+    Map<String, dynamic> result,
+    String? action,
+  ) async {
+    // Annotation state belongs to the human review session, not just the
+    // current Dart isolate. A hot restart replaces the helper runtime (and its
+    // in-memory pin list), so restore active pins from the local session ledger
+    // before reporting an unexpectedly empty review queue.
+    if (!_annotationActionCanRestoreAfterResponse(action) ||
+        result['ok'] == false ||
+        _annotationList(result).isNotEmpty) {
+      return result;
+    }
+    final records = _restorableAnnotationRecords();
+    if (records.isEmpty) return result;
+    final restored = await _call('ext.flutter_scout.annotations', {
+      'action': 'restore',
+      'records': jsonEncode(records),
+    });
+    if (restored['ok'] != false) {
+      restored['restoredFromSession'] = records.length;
+    }
+    return restored;
+  }
+
+  bool _annotationActionCanRestoreAfterResponse(String? action) =>
+      switch (action) {
+        'list' || 'targets' || 'check' => true,
+        _ => false,
+      };
+
+  bool _annotationActionNeedsPreflightRestore(String? action) =>
+      switch (action) {
+        'mark-fixed' || 'resolve' || 'dismiss' || 'reopen' || 'delete' => true,
+        _ => false,
+      };
+
+  List<Map<String, dynamic>> _annotationList(Map<String, dynamic> result) {
+    final annotations = result['annotations'];
+    if (annotations is! List) return const [];
+    return [
+      for (final annotation in annotations)
+        if (annotation is Map) Map<String, dynamic>.from(annotation),
+    ];
+  }
+
+  /// Durable, CLI-owned review ledger. The helper deliberately stays
+  /// main-only and in-memory; this file bridges a helper restart without
+  /// adding app storage or requiring app-specific annotation wiring.
+  File get _annotationManifestFile =>
+      File(p.join(_sessionDir.path, 'annotations.json'));
+
+  List<Map<String, dynamic>> _readAnnotationManifest() {
+    final file = _annotationManifestFile;
+    if (!file.existsSync()) return const [];
+    try {
+      final decoded = jsonDecode(file.readAsStringSync());
+      final records = decoded is Map ? decoded['annotations'] : null;
+      if (records is! List) return const [];
+      return [
+        for (final record in records)
+          if (record is Map) Map<String, dynamic>.from(record),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  List<Map<String, dynamic>> _restorableAnnotationRecords() =>
+      _readAnnotationManifest();
+
+  void _writeAnnotationManifest(List<dynamic> annotations) {
+    _ensureSessionDir();
+    final records = [
+      for (final annotation in annotations)
+        if (annotation is Map) Map<String, dynamic>.from(annotation),
+    ];
+    final file = _annotationManifestFile;
+    if (records.isEmpty) {
+      if (file.existsSync()) file.deleteSync();
+      return;
+    }
+    final temporary = File('${file.path}.tmp');
+    temporary.writeAsStringSync(
+      const JsonEncoder.withIndent('  ').convert({
+        'schemaVersion': 1,
+        'updatedAt': DateTime.now().toIso8601String(),
+        'annotations': records,
+      }),
+    );
+    temporary.renameSync(file.path);
   }
 
   Future<int> _annotationsWait(ArgResults parsed) async {
@@ -174,9 +278,10 @@ extension _CliAnnotations on FlutterScoutCli {
       60000,
     );
     final deadline = DateTime.now().add(Duration(seconds: timeoutSeconds));
-    final initial = await _call('ext.flutter_scout.annotations', {
+    var initial = await _call('ext.flutter_scout.annotations', {
       'action': 'list',
     });
+    initial = await _restoreAnnotationsIfNeeded(initial, 'list');
     if (initial['ok'] == false) {
       stdout.writeln(const JsonEncoder.withIndent('  ').convert(initial));
       return 1;
@@ -184,7 +289,7 @@ extension _CliAnnotations on FlutterScoutCli {
     final baseline = (initial['handoffSeq'] as num?)?.toInt() ?? 0;
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(Duration(milliseconds: pollMs));
-      final Map<String, dynamic> state;
+      late Map<String, dynamic> state;
       try {
         state = await _call('ext.flutter_scout.annotations', {
           'action': 'list',
@@ -195,6 +300,7 @@ extension _CliAnnotations on FlutterScoutCli {
         continue;
       }
       if (state['ok'] == false) continue;
+      state = await _restoreAnnotationsIfNeeded(state, 'list');
       final seq = (state['handoffSeq'] as num?)?.toInt() ?? 0;
       if (seq > baseline) {
         final annotations = state['annotations'];
@@ -207,9 +313,10 @@ extension _CliAnnotations on FlutterScoutCli {
         return 0;
       }
     }
-    final timeoutState = await _call('ext.flutter_scout.annotations', {
+    var timeoutState = await _call('ext.flutter_scout.annotations', {
       'action': 'list',
     });
+    timeoutState = await _restoreAnnotationsIfNeeded(timeoutState, 'list');
     // The app may have disconnected during the wait; don't report a clean
     // timeout (exit 0) on top of an error payload.
     if (timeoutState['ok'] == false) {

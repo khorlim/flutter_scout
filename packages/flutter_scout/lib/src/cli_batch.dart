@@ -11,6 +11,12 @@ extension _CliBatch on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('file', help: 'Read commands from a file, one per line.')
       ..addFlag(
+        'verbose',
+        defaultsTo: false,
+        negatable: false,
+        help: 'Print each step output instead of one compact final timeline.',
+      )
+      ..addFlag(
         'keep-going',
         defaultsTo: false,
         negatable: false,
@@ -42,9 +48,13 @@ extension _CliBatch on FlutterScoutCli {
     // Save/restore so a batch nested under `serve` (which holds the cached
     // connection for its whole lifetime) does not tear the connection down.
     final hadReuse = _reuseVmConnection;
+    final hadSuppressedOutput = _suppressActionOutput;
+    final outputStart = _suppressedActionResults.length;
     _reuseVmConnection = true;
+    _suppressActionOutput = !parsed.flag('verbose');
     final failed = <Map<String, Object?>>[];
     final stepTimingsMs = <int>[];
+    final timeline = <Map<String, Object?>>[];
     var ranSteps = 0;
     try {
       for (var i = 0; i < commands.length; i++) {
@@ -56,17 +66,35 @@ extension _CliBatch on FlutterScoutCli {
             'Nested batch commands are not supported.',
           );
         }
-        stdout.writeln(
-          jsonEncode({
-            'step': i + 1,
-            'of': commands.length,
-            'cmd': commands[i],
-          }),
-        );
+        if (parsed.flag('verbose')) {
+          stdout.writeln(
+            jsonEncode({
+              'step': i + 1,
+              'of': commands.length,
+              'cmd': commands[i],
+            }),
+          );
+        }
         ranSteps += 1;
+        final stepOutputStart = _suppressedActionResults.length;
         final stopwatch = Stopwatch()..start();
         final code = await run(argv);
-        stepTimingsMs.add(stopwatch.elapsedMilliseconds);
+        final elapsedMs = stopwatch.elapsedMilliseconds;
+        stepTimingsMs.add(elapsedMs);
+        final outputs = _suppressedActionResults.sublist(stepOutputStart);
+        timeline.add({
+          'step': i + 1,
+          'cmd': commands[i],
+          'exitCode': code,
+          'elapsedMs': elapsedMs,
+          if (outputs.length == 1) 'result': _compactBatchStep(outputs.single),
+          if (outputs.length > 1)
+            'results': [
+              for (final output in outputs) _compactBatchStep(output),
+            ],
+          if (outputs.isEmpty && !parsed.flag('verbose'))
+            'result': {'summary': 'Command emitted no compact action result.'},
+        });
         if (code != 0) {
           failed.add({'step': i + 1, 'cmd': commands[i], 'exitCode': code});
           if (!parsed.flag('keep-going')) break;
@@ -74,6 +102,7 @@ extension _CliBatch on FlutterScoutCli {
       }
     } finally {
       _reuseVmConnection = hadReuse;
+      _suppressActionOutput = hadSuppressedOutput;
       if (!hadReuse) await _disposeCachedVmService();
     }
     stdout.writeln(
@@ -84,11 +113,54 @@ extension _CliBatch on FlutterScoutCli {
         'failedSteps': failed.length,
         if (failed.isNotEmpty) 'failed': failed,
         'stepTimingsMs': stepTimingsMs,
+        if (!parsed.flag('verbose')) 'timeline': timeline,
         'totalMs': stepTimingsMs.fold<int>(0, (sum, ms) => sum + ms),
         'stoppedEarly': ranSteps < commands.length,
       }),
     );
+    if (_suppressedActionResults.length > outputStart) {
+      _suppressedActionResults.removeRange(
+        outputStart,
+        _suppressedActionResults.length,
+      );
+    }
     return failed.isEmpty ? 0 : 1;
+  }
+
+  /// Batch already provides the chronological context, so repeating every
+  /// action's full after-summary makes a short flow unreadable. Keep only the
+  /// facts needed to decide whether to continue; `--verbose` remains the
+  /// escape hatch for the complete per-step responses.
+  Map<String, Object?> _compactBatchStep(Map<String, dynamic> result) {
+    final after = result['afterSummary'];
+    final afterSummary = after is Map
+        ? {
+            if (after['screen'] != null) 'screen': after['screen'],
+            if (after['activeSurface'] != null)
+              'activeSurface': after['activeSurface'],
+            if (after['viewSignature'] != null)
+              'viewSignature': after['viewSignature'],
+            if (after['fieldValues'] != null)
+              'fieldValues': after['fieldValues'],
+          }
+        : null;
+    return {
+      'ok': result['ok'],
+      if (result['action'] != null) 'action': result['action'],
+      if (result['result'] != null) 'result': result['result'],
+      if (result['stable'] != null) 'stable': result['stable'],
+      if (result['target'] != null) 'target': result['target'],
+      if (result['filled'] != null) 'filled': result['filled'],
+      if (result['failed'] != null) 'failed': result['failed'],
+      if (result['activation'] != null) 'activation': result['activation'],
+      if (afterSummary != null && afterSummary.isNotEmpty)
+        'after': afterSummary,
+      if (result['delta'] != null) 'delta': result['delta'],
+      if (result['error'] != null) 'error': result['error'],
+      if (result['expectation'] != null) 'expectation': result['expectation'],
+      if (result['recentErrors'] != null)
+        'recentErrors': result['recentErrors'],
+    };
   }
 
   Future<void> _disposeCachedVmService() async {

@@ -155,6 +155,47 @@ void main() {
   });
 
   testWidgets(
+    'restores durable annotation metadata into a fresh runtime list',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      final runtime = FlutterScoutHelper.debugRuntime;
+      runtime.debugAnnotations.clear();
+      const target = ScoutAnnotationTarget(
+        id: 'target.add_supplier',
+        stableId: 'stable.add_supplier',
+        kind: 'btn',
+        widgetType: 'FilledButton',
+        key: 'add_supplier',
+        label: 'Add supplier',
+        text: 'Add supplier',
+        screen: 'SupplierListScreen',
+        routeGuess: '/',
+        rect: Rect.fromLTWH(8, 12, 120, 44),
+        visibleRect: Rect.fromLTWH(8, 12, 120, 44),
+        visibleFraction: 1,
+        depth: 2,
+        ancestorSummary: <String>['Scaffold'],
+        scoutNodeId: 'btn.add_supplier',
+      );
+      final original = ScoutAnnotation(
+        id: 'ann_durable_001',
+        createdAt: DateTime.utc(2026, 7, 13, 10),
+        comment: 'Keep this review pin after restart.',
+        status: 'pending_review',
+        target: target,
+      )..note = 'Implementation ready';
+      final json = original.toJson();
+
+      expect(runtime.restoreAnnotations(jsonEncode([json])), 1);
+      expect(runtime.debugAnnotations.single.id, 'ann_durable_001');
+      expect(runtime.debugAnnotations.single.status, 'pending_review');
+      expect(runtime.debugAnnotations.single.note, 'Implementation ready');
+      expect(runtime.restoreAnnotations(jsonEncode([json])), 0);
+      runtime.debugAnnotations.clear();
+    },
+  );
+
+  testWidgets(
     'annotation targets exclude non-interactive content under an opaque layer',
     (tester) async {
       FlutterScoutHelper.ensureRegistered();
@@ -835,6 +876,64 @@ void main() {
     expect(briefLength, lessThan(fullLength ~/ 2));
   });
 
+  testWidgets('brief inspect enforces max items and keeps full rows opt-in', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              for (var i = 0; i < 8; i++)
+                ElevatedButton(onPressed: () {}, child: Text('Action $i')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+      maxItems: 2,
+    );
+    expect((brief['interactables'] as List).length, lessThanOrEqualTo(2));
+    expect((brief['visibleText'] as List).length, lessThanOrEqualTo(2));
+    expect(brief['omitted'], isA<Map<String, Object?>>());
+    final fullRows = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      sections: {'rows'},
+    );
+    expect(fullRows['structuredRows'], isA<List<Object?>>());
+  });
+
+  testWidgets('nearby intent text becomes a unique icon control alias', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Row(
+            children: [
+              IconButton(onPressed: () {}, icon: const Icon(Icons.settings)),
+              const Text('Account settings'),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+    );
+    final settings = (brief['interactables'] as List)
+        .cast<Map<String, Object?>>()
+        .firstWhere((node) => node['id'] == 'btn.settings');
+    expect(settings['altIds'], contains('btn.account_settings'));
+  });
+
   testWidgets('inspect reports perception provenance', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(
@@ -1034,6 +1133,12 @@ void main() {
       issues.map((issue) => issue['code']),
       containsAll(['unlabeled_interactables', 'duplicate_action_labels']),
     );
+    final diagnostics = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      sections: {'semantics'},
+    );
+    final detail = diagnostics['semanticDiagnostics']! as Map<String, Object?>;
+    expect(detail['unlabeledControls'], isA<List<Object?>>());
+    expect(detail['duplicateLabels'], isA<List<Object?>>());
   });
 
   testWidgets('wait-for conditions match visible text case-insensitively', (

@@ -434,6 +434,38 @@ class ScoutNode {
     );
   }
 
+  /// Adds stable intent aliases without replacing the primary raw handle.
+  /// Agents can use the readable alias while replay remains compatible with
+  /// the icon/key-derived primary id.
+  ScoutNode withAltIds(Iterable<String> aliases) {
+    final merged = <String>{...altIds, ...aliases}
+      ..remove(id)
+      ..remove(baseId);
+    return ScoutNode(
+      id: id,
+      baseId: baseId,
+      ordinal: ordinal,
+      fallbackId: fallbackId,
+      kind: kind,
+      label: label,
+      value: value,
+      validationMessage: validationMessage,
+      widgetType: widgetType,
+      key: key,
+      rect: rect,
+      visibleRect: visibleRect,
+      visibleFraction: visibleFraction,
+      suggestedTapPoint: suggestedTapPoint,
+      hitTestable: hitTestable,
+      enabled: enabled,
+      confidence: confidence,
+      selected: selected,
+      altIds: merged.toList(growable: false),
+      textColor: textColor,
+      enclosingTarget: enclosingTarget,
+    );
+  }
+
   bool matches(String target) {
     final normalized = target.trim();
     if (id == normalized ||

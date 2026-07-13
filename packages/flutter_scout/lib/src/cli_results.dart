@@ -18,11 +18,19 @@ extension _CliResults on FlutterScoutCli {
     final output = compact
         ? _compactActionResult(enrichedResult)
         : enrichedResult;
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
+    _emitActionOutput(output);
     if (record != null && enrichedResult['ok'] == true) {
       _recordAction(record);
     }
     return enrichedResult['ok'] == false ? 1 : 0;
+  }
+
+  void _emitActionOutput(Map<String, dynamic> output) {
+    if (_suppressActionOutput) {
+      _suppressedActionResults.add(Map<String, dynamic>.from(output));
+      return;
+    }
+    stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
   }
 
   Future<Map<String, dynamic>> _withRecentLogSignals(
@@ -225,7 +233,8 @@ extension _CliResults on FlutterScoutCli {
           'beforeSummary': _compactSummary(before),
         if (after is Map<String, dynamic>)
           'afterSummary': _compactSummary(after),
-        if (result['delta'] != null) 'delta': result['delta'],
+        if (result['delta'] is Map)
+          'delta': _compactDelta(result['delta'] as Map),
         if (result['recentErrors'] is List)
           'recentErrors': _lastItems(result['recentErrors'] as List, 3),
         if (result['recentLogSignals'] is List)
@@ -235,6 +244,7 @@ extension _CliResults on FlutterScoutCli {
       };
     }
     final after = result['after'];
+    final workflowHints = _workflowHints();
     return {
       'ok': result['ok'],
       if (result['action'] != null) 'action': result['action'],
@@ -268,15 +278,26 @@ extension _CliResults on FlutterScoutCli {
           result['textTarget'] as Map<String, dynamic>,
         ),
       if (result['activation'] != null) 'activation': result['activation'],
-      if (result['fieldResults'] != null)
-        'fieldResults': result['fieldResults'],
+      if (result['fieldResults'] is List)
+        'fieldResults': [
+          for (final field in result['fieldResults'] as List)
+            if (field is Map)
+              {
+                if (field['target'] != null) 'target': field['target'],
+                if (field['ok'] != null) 'ok': field['ok'],
+                if (field['changed'] != null) 'changed': field['changed'],
+                if (field['delta'] is Map)
+                  'delta': _compactDelta(field['delta'] as Map),
+              },
+        ],
       if (result['warnings'] != null) 'warnings': result['warnings'],
-      if (_workflowHints().isNotEmpty) 'workflowHints': _workflowHints(),
+      if (workflowHints.isNotEmpty) 'workflowHints': workflowHints,
       if (result['fallback'] != null) 'fallback': result['fallback'],
       if (result['helperProtocol'] != null)
         'helperProtocol': result['helperProtocol'],
       if (after is Map<String, dynamic>) 'afterSummary': _compactSummary(after),
-      if (result['delta'] != null) 'delta': result['delta'],
+      if (result['delta'] is Map)
+        'delta': _compactDelta(result['delta'] as Map),
       if (result['recentErrors'] is List)
         'recentErrors': _lastItems(result['recentErrors'] as List, 3),
       if (result['recentLogSignals'] is List)
@@ -290,6 +311,7 @@ extension _CliResults on FlutterScoutCli {
     if (_reuseVmConnection) return const [];
     final actionCount = _readSessionActions().length;
     if (actionCount < 3) return const [];
+    if (!_claimWorkflowHint('consider_serve')) return const [];
     return [
       {
         'code': 'consider_serve',
@@ -298,6 +320,17 @@ extension _CliResults on FlutterScoutCli {
             'This exploratory session has several plain CLI actions. Start `flutter-scout serve` for one persistent VM connection and faster follow-up commands.',
       },
     ];
+  }
+
+  bool _claimWorkflowHint(String code) {
+    final meta = _readSessionMeta() ?? <String, dynamic>{};
+    final emitted = (meta['emittedWorkflowHints'] is List)
+        ? List<String>.from(meta['emittedWorkflowHints'] as List)
+        : <String>[];
+    if (emitted.contains(code)) return false;
+    emitted.add(code);
+    _writeSessionMeta({...meta, 'emittedWorkflowHints': emitted});
+    return true;
   }
 
   Map<String, Object?> _compactNode(Map<String, dynamic> node) {
@@ -312,15 +345,16 @@ extension _CliResults on FlutterScoutCli {
   Map<String, Object?> _compactSummary(Map<String, dynamic> summary) {
     return {
       if (summary['screen'] != null) 'screen': summary['screen'],
-      if (summary['activeSurface'] != null)
-        'activeSurface': summary['activeSurface'],
+      if (summary['activeSurface'] is Map)
+        'activeSurface': _compactActiveSurface(summary['activeSurface'] as Map),
       if (summary['routeGuess'] != null) 'routeGuess': summary['routeGuess'],
       if (summary['viewSignature'] != null)
         'viewSignature': summary['viewSignature'],
       if (summary['visibleTextHash'] != null)
         'visibleTextHash': summary['visibleTextHash'],
       if (summary['idle'] != null) 'idle': summary['idle'],
-      if (summary['perception'] != null) 'perception': summary['perception'],
+      if (summary['perception'] is Map)
+        'perception': _compactPerception(summary['perception'] as Map),
       if (summary['visibleText'] is List)
         'visibleText': _lastItems(summary['visibleText'] as List, 12),
       if (summary['hitTestableText'] is List)
@@ -330,11 +364,95 @@ extension _CliResults on FlutterScoutCli {
       if (summary['fieldValues'] != null) 'fieldValues': summary['fieldValues'],
       if (summary['degradedNodes'] != null)
         'degradedNodes': summary['degradedNodes'],
-      if (summary['suggestedActions'] != null)
-        'suggestedActions': summary['suggestedActions'],
-      if (summary['structuredRows'] is List)
-        'structuredRows': _firstItems(summary['structuredRows'] as List, 8),
+      if (summary['suggestedActions'] is List)
+        'suggestedActions': [
+          for (final action in _firstItems(
+            summary['suggestedActions'] as List,
+            6,
+          ))
+            if (action is Map) _compactSuggestedAction(action),
+        ],
+      if (summary['structuredRows'] is List) ...{
+        'structuredRowCount': (summary['structuredRows'] as List).length,
+        'rowPreview': [
+          for (final row in _firstItems(summary['structuredRows'] as List, 2))
+            if (row is Map)
+              {
+                if (row['id'] != null) 'id': row['id'],
+                if (row['label'] != null) 'label': row['label'],
+                if (row['primaryTarget'] != null)
+                  'primaryTarget': row['primaryTarget'],
+                if (row['text'] is List)
+                  'text': _firstItems(row['text'] as List, 4),
+              },
+        ],
+      },
     };
+  }
+
+  Map<String, Object?> _compactPerception(Map perception) {
+    final text = perception['text'];
+    final semantics = perception['semantics'];
+    return {
+      if (text is Map && text['source'] != null) 'textSource': text['source'],
+      if (semantics is Map && semantics['usedForLabels'] != null)
+        'semanticsUsed': semantics['usedForLabels'],
+    };
+  }
+
+  Map<String, Object?> _compactActiveSurface(Map surface) => {
+    if (surface['kind'] != null) 'kind': surface['kind'],
+    if (surface['label'] != null) 'label': surface['label'],
+    if (surface['screen'] != null) 'screen': surface['screen'],
+  };
+
+  Map<String, Object?> _compactSuggestedAction(Map action) {
+    return {
+      if (action['intent'] != null) 'intent': action['intent'],
+      if (action['method'] != null) 'method': action['method'],
+      if (action['target'] != null) 'target': action['target'],
+      if (action['label'] != null) 'label': action['label'],
+      if (action['fields'] is List)
+        'fields': [
+          for (final field in _firstItems(action['fields'] as List, 4))
+            if (field is Map)
+              {
+                if (field['target'] != null) 'target': field['target'],
+                if (field['label'] != null) 'label': field['label'],
+              },
+        ],
+    };
+  }
+
+  Map<String, Object?> _compactDelta(Map delta) {
+    const listKeys = {
+      'newText',
+      'removedText',
+      'changedText',
+      'newFields',
+      'removedFields',
+      'changedFields',
+      'newValidationMessages',
+      'validationCandidates',
+      'changedGeometry',
+      'newInteractables',
+      'removedInteractables',
+    };
+    final compact = <String, Object?>{};
+    for (final entry in delta.entries) {
+      final key = entry.key.toString();
+      final value = entry.value;
+      if (listKeys.contains(key)) {
+        if (value is List && value.isNotEmpty) {
+          compact[key] = _firstItems(value, 12);
+        }
+        continue;
+      }
+      if (value == true || (value != null && value != false)) {
+        compact[key] = value;
+      }
+    }
+    return compact;
   }
 
   List<Object?> _lastItems(List<dynamic> items, int count) {
@@ -587,9 +705,9 @@ extension _CliResults on FlutterScoutCli {
     }
   }
 
-  Future<Map<String, dynamic>?> _tryInspect() async {
+  Future<Map<String, dynamic>?> _tryInspect({Duration? callTimeout}) async {
     try {
-      return await _call('ext.flutter_scout.inspect');
+      return await _call('ext.flutter_scout.inspect', const {}, callTimeout);
     } catch (_) {
       return null;
     }
@@ -600,7 +718,13 @@ extension _CliResults on FlutterScoutCli {
   }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
-      final inspect = await _tryInspect();
+      // A restarted isolate can leave an in-flight service-extension call
+      // hanging until the normal 20-second command timeout. Bound each probe
+      // so the loop can reconnect after the new isolate registers instead of
+      // reporting a false restart timeout even though the app is back.
+      final inspect = await _tryInspect(
+        callTimeout: const Duration(seconds: 1),
+      );
       if (inspect != null && inspect['ok'] == true) return inspect;
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }

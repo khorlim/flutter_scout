@@ -82,7 +82,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     List<ScoutNode> compactNodes;
     try {
       compactNodes = _disambiguateIds(
-        _inferActionableLabels(_compactNodes(nodes)),
+        _inferIntentAliases(_inferActionableLabels(_compactNodes(nodes))),
       );
     } catch (_) {
       // Post-processing failed as a batch; fall back to the raw nodes so the
@@ -180,6 +180,87 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       suggestedActions: _buildSuggestedActions(enriched, controlGroups),
     );
   }
+
+  /// Gives an icon-only control a readable alias when a single nearby text
+  /// label clearly describes it (for example `btn.gear_alt` ->
+  /// `btn.change_mode`). The raw handle remains primary; aliases are only
+  /// added when unique so Scout never trades obscure handles for ambiguity.
+  List<ScoutNode> _inferIntentAliases(List<ScoutNode> nodes) {
+    final textNodes = nodes
+        .where((node) => node.kind == 'text' && node.label != null)
+        .toList(growable: false);
+    final proposed = <int, String>{};
+    final aliasCounts = <String, int>{};
+    for (var index = 0; index < nodes.length; index++) {
+      final node = nodes[index];
+      final rect = node.rect;
+      if ((node.kind != 'btn' && node.kind != 'tap') ||
+          rect == null ||
+          node.key != null ||
+          rect.width > 96 ||
+          rect.height > 96 ||
+          node.id.contains('gesturedetector')) {
+        continue;
+      }
+      final candidates = [
+        for (final text in textNodes)
+          if (text.rect case final textRect?)
+            if (text.visibleFraction > 0 &&
+                // Material icon glyphs are exposed as RichText nodes too.
+                // They describe their own icon, not the intent of a nearby
+                // control, so never use them as cross-control labels.
+                text.widgetType != 'RichText' &&
+                _isUsefulActionLabel(text.label!) &&
+                !_contains(rect, textRect) &&
+                _nearbyIntentLabel(rect, textRect))
+              text,
+      ];
+      if (candidates.isEmpty) continue;
+      candidates.sort(
+        (a, b) => _intentLabelDistance(
+          rect,
+          a.rect!,
+        ).compareTo(_intentLabelDistance(rect, b.rect!)),
+      );
+      // A nearby icon can have more than one qualifying text node in a dense
+      // toolbar. Keep the clearly nearest label, but refuse a tie rather than
+      // inventing an ambiguous intent alias.
+      if (candidates.length > 1 &&
+          (_intentLabelDistance(rect, candidates[1].rect!) -
+                      _intentLabelDistance(rect, candidates.first.rect!))
+                  .abs() <
+              8) {
+        continue;
+      }
+      final alias = '${node.kind}.${_slug(candidates.first.label!)}';
+      if (alias == node.id) continue;
+      proposed[index] = alias;
+      aliasCounts.update(alias, (count) => count + 1, ifAbsent: () => 1);
+    }
+    return [
+      for (var index = 0; index < nodes.length; index++)
+        if (proposed[index] case final alias?)
+          if (aliasCounts[alias] == 1)
+            nodes[index].withAltIds([alias])
+          else
+            nodes[index]
+        else
+          nodes[index],
+    ];
+  }
+
+  bool _nearbyIntentLabel(Rect control, Rect label) {
+    final verticalGap = (control.center.dy - label.center.dy).abs();
+    // Intent labels are only inferred from the immediately trailing text. A
+    // symmetric "nearby" search makes adjacent toolbar icons borrow each
+    // other's Material icon labels (for example copy -> settings), which is
+    // worse than exposing no alias at all.
+    final trailingGap = label.left - control.right;
+    return verticalGap <= 24 && trailingGap >= 0 && trailingGap <= 32;
+  }
+
+  double _intentLabelDistance(Rect control, Rect label) =>
+      (control.center - label.center).distance;
 
   Map<String, Object?>? _activeSurfaceFor({
     required bool modalActive,
