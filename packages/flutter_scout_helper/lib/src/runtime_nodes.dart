@@ -2182,4 +2182,34 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     });
     return result;
   }
+
+  /// Finds the navigator that owns a full-view ModalBarrier. Nested
+  /// navigators can have their own local barriers and are often deeper in the
+  /// element tree, but popping them while a root dialog is active leaves the
+  /// dialog stranded over the wrong page.
+  NavigatorState? _findViewportModalNavigator(Element root) {
+    final logicalSize = _logicalSize();
+    NavigatorState? result;
+    _walkVisible(root, (Element element) {
+      if (!_isModalBarrierWidget(element.widget) ||
+          !_isBlockingModalBarrierWidget(element.widget)) {
+        return;
+      }
+      final rect = _rectFor(element);
+      final visibleRect = rect == null ? null : _visibleRectFor(rect);
+      if (visibleRect == null ||
+          visibleRect.width < logicalSize.width * 0.90 ||
+          visibleRect.height < logicalSize.height * 0.90) {
+        return;
+      }
+      element.visitAncestorElements((ancestor) {
+        if (ancestor is StatefulElement && ancestor.state is NavigatorState) {
+          result = ancestor.state as NavigatorState;
+          return false;
+        }
+        return true;
+      });
+    });
+    return result;
+  }
 }

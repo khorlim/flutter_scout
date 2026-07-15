@@ -720,6 +720,93 @@ void main() {
     );
   });
 
+  testWidgets('nested navigator barriers do not create a false modal surface', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Row(
+            children: [
+              const Expanded(child: Center(child: Text('Dashboard'))),
+              SizedBox(
+                width: 250,
+                child: Stack(
+                  children: const [
+                    Positioned.fill(
+                      child: Center(child: Text('Excluded Contacts')),
+                    ),
+                    // This mirrors the route boundary created by a nested
+                    // Navigator: it blocks only the local right-hand pane,
+                    // not the whole app view.
+                    Positioned.fill(child: ModalBarrier(dismissible: true)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    expect(snapshot.overlays.any((o) => o['kind'] == 'modalBarrier'), isTrue);
+    expect(snapshot.activeSurface, isNull);
+  });
+
+  testWidgets('deepest visible screen names nested navigation content', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(const MaterialApp(home: _HomeScreen()));
+    await tester.pump();
+
+    expect(
+      FlutterScoutHelper.debugRuntime.debugSnapshot().screen,
+      '_AppointmentTemplateSettingsScreen',
+    );
+  });
+
+  testWidgets('viewport dialog owner wins over a nested navigator', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    final rootNavigatorKey = GlobalKey<NavigatorState>();
+    final nestedNavigatorKey = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: rootNavigatorKey,
+        home: Scaffold(
+          body: Navigator(
+            key: nestedNavigatorKey,
+            onGenerateRoute: (_) => MaterialPageRoute<void>(
+              builder: (_) => const Scaffold(body: Text('Nested page')),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    nestedNavigatorKey.currentState!.push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Nested details')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    showDialog<void>(
+      context: rootNavigatorKey.currentContext!,
+      builder: (_) => const AlertDialog(title: Text('Root dialog')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      FlutterScoutHelper.debugRuntime.debugViewportModalNavigator(),
+      same(rootNavigatorKey.currentState),
+    );
+  });
+
   testWidgets('surface inspect focuses on bounded modal content', (
     tester,
   ) async {
@@ -1989,6 +2076,24 @@ class _CheckoutPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(body: Center(child: Text('Checkout')));
+  }
+}
+
+class _HomeScreen extends StatelessWidget {
+  const _HomeScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: _AppointmentTemplateSettingsScreen());
+  }
+}
+
+class _AppointmentTemplateSettingsScreen extends StatelessWidget {
+  const _AppointmentTemplateSettingsScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(child: Text('Appointment template settings'));
   }
 }
 

@@ -219,6 +219,13 @@ class FlutterScoutRuntime {
   @visibleForTesting
   String? debugCloseControlId() => _findCloseControl(_snapshot())?.id;
 
+  /// Test-only view of the navigator that owns the current full-view modal.
+  @visibleForTesting
+  NavigatorState? debugViewportModalNavigator() {
+    final root = WidgetsBinding.instance.rootElement;
+    return root == null ? null : _findViewportModalNavigator(root);
+  }
+
   /// Test-only view of the tap-text near-match suggestions.
   @visibleForTesting
   List<String> debugTextSuggestions(String query) =>

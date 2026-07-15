@@ -12,6 +12,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final hitTestableText = <String>{};
     final offscreenText = <String>{};
     var screen = 'RootWidget';
+    var screenDepth = -1;
     var degradedNodes = 0;
     final logicalSize = _logicalSize();
     if (root != null) {
@@ -25,10 +26,12 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         try {
           debugSnapshotNodeProbe?.call(element);
           final widgetType = element.widget.runtimeType.toString();
-          if (screen == 'RootWidget' &&
-              (widgetType.endsWith('Screen') || widgetType.endsWith('Page')) &&
-              !_frameworkScreenWidgets.contains(widgetType)) {
+          final elementDepth = _elementDepth(element);
+          if ((widgetType.endsWith('Screen') || widgetType.endsWith('Page')) &&
+              !_frameworkScreenWidgets.contains(widgetType) &&
+              elementDepth >= screenDepth) {
             screen = widgetType;
+            screenDepth = elementDepth;
           }
           final node = _nodeFromElement(element);
           if (node != null) {
@@ -115,8 +118,23 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final genericModal =
         concreteModalSurface &&
         _genericModalSurfaceNames.contains(modalScreenName);
+    final hasConcreteOverlaySurface = overlays.any(
+      (overlay) =>
+          overlay['kind'] == 'dialog' || overlay['kind'] == 'bottomSheet',
+    );
+    final hasViewportModalBarrier = overlays.any(
+      (overlay) =>
+          overlay['kind'] == 'modalBarrier' &&
+          _coversViewport(overlay, logicalSize),
+    );
     final activeSurface = _activeSurfaceFor(
-      modalActive: overlays.isNotEmpty || genericModal,
+      // Nested navigators create local ModalBarriers for their own route
+      // stack. They are not dialogs: treating any such barrier as modal made
+      // Scout relabel a normal page using the first prominent row title.
+      // A bare barrier is modal evidence only when it covers this app view;
+      // standard Dialog/BottomSheet surfaces remain valid at any size.
+      modalActive:
+          hasConcreteOverlaySurface || hasViewportModalBarrier || genericModal,
       allowVisibleTextFallback: genericModal,
       overlays: overlays,
       visibleText: visibleText,
@@ -346,6 +364,19 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       'source': 'prominentText',
       'confidence': _surfaceLabelRank(label) > 0 ? 0.92 : 0.74,
     };
+  }
+
+  bool _coversViewport(Map<String, Object?> overlay, Size logicalSize) {
+    final rect =
+        _rectFromJsonList(overlay['visibleRect']) ??
+        _rectFromJsonList(overlay['rect']);
+    if (rect == null || logicalSize.width <= 0 || logicalSize.height <= 0) {
+      return false;
+    }
+    // Permit minor safe-area/frame insets while rejecting a modal barrier
+    // owned by a nested panel (for example, the right pane in a desktop app).
+    return rect.width >= logicalSize.width * 0.90 &&
+        rect.height >= logicalSize.height * 0.90;
   }
 
   Map<String, Object?>? _activeSurfaceFromOverlays({

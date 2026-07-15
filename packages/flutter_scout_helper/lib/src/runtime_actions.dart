@@ -722,7 +722,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
       if (rootContext == null) {
         return _fail('no_root', 'No root element is attached.');
       }
-      final navigator = _findActiveNavigator(rootContext);
+      final navigator =
+          _findViewportModalNavigator(rootContext) ??
+          _findActiveNavigator(rootContext);
       final popped = await navigator?.maybePop() ?? false;
       final stable = await _waitStableForAction(params);
       final after = _snapshot();
@@ -756,7 +758,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
       if (rootContext == null) {
         return _fail('no_root', 'No root element is attached.');
       }
-      final navigator = _findActiveNavigator(rootContext);
+      final navigator =
+          _findViewportModalNavigator(rootContext) ??
+          _findActiveNavigator(rootContext);
       final popped = await navigator?.maybePop() ?? false;
       String strategy = popped ? 'popped_route' : 'none';
       String? tappedId;
