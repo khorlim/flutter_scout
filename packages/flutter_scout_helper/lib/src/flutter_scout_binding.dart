@@ -27,7 +27,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 10;
+const int scoutHelperProtocolVersion = 11;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -84,6 +84,8 @@ class FlutterScoutRuntime {
   // beneath instead of silently activating Scout's own UI. Human taps are
   // unaffected. A counter, not a bool, so overlapping dispatches compose.
   int _syntheticGestureDepth = 0;
+  _HeldDragState? _heldDrag;
+  Timer? _heldDragExpiry;
 
   /// Whether Scout's overlay chrome should be invisible to hit testing right
   /// now — during annotation-target collection and agent gesture dispatch.
@@ -117,6 +119,11 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.scroll', _handleScroll);
     _registerExtension('ext.flutter_scout.scrollTo', _handleScrollTo);
     _registerExtension('ext.flutter_scout.swipe', _handleSwipe);
+    _registerExtension('ext.flutter_scout.dragStart', _handleDragStart);
+    _registerExtension('ext.flutter_scout.dragMove', _handleDragMove);
+    _registerExtension('ext.flutter_scout.dragEnd', _handleDragEnd);
+    _registerExtension('ext.flutter_scout.dragCancel', _handleDragCancel);
+    _registerExtension('ext.flutter_scout.dragStatus', _handleDragStatus);
     _registerExtension('ext.flutter_scout.back', _handleBack);
     _registerExtension('ext.flutter_scout.waitStable', _handleWaitStable);
     _registerExtension('ext.flutter_scout.waitFor', _handleWaitFor);
@@ -178,6 +185,31 @@ class FlutterScoutRuntime {
   @visibleForTesting
   Future<void> debugDispatchTap(Offset point) => _dispatchTap(point);
 
+  /// Test-app primitive matching the service-extension held-drag lifecycle.
+  @visibleForTesting
+  Future<void> debugDragStart(Offset point) async {
+    final state = await _beginHeldDrag(point, _snapshot());
+    _recordHeldDragSample(state, state.before);
+  }
+
+  @visibleForTesting
+  Future<void> debugDragMove(Offset point) async {
+    final state = _heldDrag;
+    if (state == null) throw StateError('No held drag is active.');
+    await _moveHeldDrag(point);
+    _recordHeldDragSample(state, _snapshot());
+  }
+
+  @visibleForTesting
+  Future<List<Map<String, Object?>>> debugDragEnd() async {
+    final state = await _finishHeldDrag(cancel: false);
+    _recordHeldDragSample(state, _snapshot(), phase: 'end');
+    return state.path;
+  }
+
+  @visibleForTesting
+  bool get debugHeldDragActive => _heldDrag != null;
+
   /// Test-only view of wait-for condition evaluation against a snapshot.
   /// [conditions] uses wait-for param names: text, gone, target, selected,
   /// screen, field (`<handle>=<value>`).
@@ -218,6 +250,13 @@ class FlutterScoutRuntime {
   /// pops.
   @visibleForTesting
   String? debugCloseControlId() => _findCloseControl(_snapshot())?.id;
+
+  /// Test-only view of the navigator that owns the current full-view modal.
+  @visibleForTesting
+  NavigatorState? debugViewportModalNavigator() {
+    final root = WidgetsBinding.instance.rootElement;
+    return root == null ? null : _findViewportModalNavigator(root);
+  }
 
   /// Test-only view of the tap-text near-match suggestions.
   @visibleForTesting
@@ -519,6 +558,16 @@ class FlutterScoutRuntime {
           anonymousGenericTargetsOmitted: omitted,
         ),
         if (snapshot.structuredRows.isNotEmpty) 'structuredRows': briefRows,
+        if (snapshot.scrollables.isNotEmpty)
+          'scrollables': [
+            for (final scrollable in snapshot.scrollables.take(6))
+              {
+                'id': scrollable['id'],
+                'axis': scrollable['axis'],
+                'axisDirection': scrollable['axisDirection'],
+                if (scrollable['key'] != null) 'key': scrollable['key'],
+              },
+          ],
         if (visibleText.length > briefVisibleText.length ||
             hitTestableText.length > briefHitTestableText.length ||
             snapshot.offscreenText.length > briefOffscreenText.length ||
@@ -905,4 +954,24 @@ class FlutterScoutRuntime {
     sections: sections,
     surfaceOnly: surfaceOnly,
   );
+}
+
+class _HeldDragState {
+  _HeldDragState({
+    required this.pointer,
+    required this.viewId,
+    required this.start,
+    required this.position,
+    required this.startedAt,
+    required this.before,
+    required this.path,
+  });
+
+  final int pointer;
+  final int viewId;
+  final Offset start;
+  Offset position;
+  final DateTime startedAt;
+  final ScoutSnapshot before;
+  final List<Map<String, Object?>> path;
 }

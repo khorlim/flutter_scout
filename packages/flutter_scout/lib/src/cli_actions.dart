@@ -106,6 +106,11 @@ extension _CliActions on FlutterScoutCli {
             'Comma-separated full sections to include: text, interactables, '
             'fields, textTargets, scrollables, overlays, visualTree, '
             'controlGroups, rows, annotations, semantics.',
+      )
+      ..addFlag(
+        'include-stale',
+        defaultsTo: false,
+        help: 'Include log signals older than 30 seconds.',
       );
     final parsed = parser.parse(args);
     final sections = parsed.option('sections');
@@ -131,7 +136,9 @@ extension _CliActions on FlutterScoutCli {
     // Surface swallowed app-log errors (location denied, failed API calls…)
     // that the in-isolate error handlers never see, so a QA sweep notices
     // them without a separate `logs` call.
-    final logSignals = _recentLogSignals();
+    final logSignals = parsed.flag('include-stale')
+        ? _recentLogSignals()
+        : _freshRecentLogSignals();
     if (logSignals.isNotEmpty && result['ok'] != false) {
       result['recentLogSignals'] = _logSignalMaps(logSignals);
       result['recentLogErrors'] = [
@@ -143,6 +150,8 @@ extension _CliActions on FlutterScoutCli {
   }
 
   Future<int> _health(List<String> args) async {
+    final parser = ArgParser()..addFlag('include-stale', defaultsTo: false);
+    final parsed = parser.parse(args);
     final result = await _call('ext.flutter_scout.inspect', {'brief': 'true'});
     if (result['ok'] == false) {
       stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
@@ -155,8 +164,11 @@ extension _CliActions on FlutterScoutCli {
         if (e is Map && e['blocking'] == true && e['stale'] != true) e,
     ];
     final interactables = result['interactables'];
-    final logSignals = _recentLogSignals();
+    final allLogSignals = _recentLogSignals();
     final now = DateTime.now();
+    final logSignals = parsed.flag('include-stale')
+        ? allLogSignals
+        : allLogSignals.where((signal) => !signal.isStale(now)).toList();
     final blockingLogSignals = [
       for (final signal in logSignals)
         if (signal.isFreshBlocking(now)) signal,
@@ -477,13 +489,24 @@ extension _CliActions on FlutterScoutCli {
   }
 
   Future<int> _wait(List<String> args) async {
+    final stableArgs = args.isNotEmpty && args.first == 'stable'
+        ? args.skip(1).toList(growable: false)
+        : args;
     if (args.isNotEmpty && args.first != 'stable') {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout wait stable',
+        'Usage: flutter-scout wait stable [--timeout <ms>] [--verbose]',
       );
     }
-    return _callAndPrint('ext.flutter_scout.waitStable');
+    final parser = ArgParser()
+      ..addOption('timeout', defaultsTo: '3000')
+      ..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(stableArgs);
+    return _callAndPrint(
+      'ext.flutter_scout.waitStable',
+      params: {'timeoutMs': parsed.option('timeout') ?? '3000'},
+      compact: !parsed.flag('verbose'),
+    );
   }
 
   Future<int> _reload(List<String> args) async {
@@ -547,6 +570,108 @@ extension _CliActions on FlutterScoutCli {
       args: args,
     );
   }
+
+  Future<int> _dragStart(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('target')
+      ..addOption('from')
+      ..addOption('x')
+      ..addOption('y')
+      ..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    final params = <String, String>{
+      if (parsed.option('target') != null) 'target': parsed.option('target')!,
+      if (parsed.option('from') != null) 'point': parsed.option('from')!,
+      if (parsed.option('x') != null) 'x': parsed.option('x')!,
+      if (parsed.option('y') != null) 'y': parsed.option('y')!,
+    };
+    return _callAndPrint(
+      'ext.flutter_scout.dragStart',
+      params: params,
+      record: {'cmd': 'drag-start', ...params},
+      compact: !parsed.flag('verbose'),
+    );
+  }
+
+  Future<int> _dragMove(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('to')
+      ..addOption('by')
+      ..addOption('x')
+      ..addOption('y')
+      ..addOption('screenshot')
+      ..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    final params = _heldDragPointParams(parsed);
+    if (params.isEmpty) {
+      throw const ScoutCliException(
+        'usage',
+        'Usage: flutter-scout drag-move (--to x,y | --by dx,dy)',
+      );
+    }
+    var result = _withProtocolDiagnostics(
+      'ext.flutter_scout.dragMove',
+      await _call('ext.flutter_scout.dragMove', params),
+    );
+    final screenshot = parsed.option('screenshot');
+    if (result['ok'] == true && screenshot != null && screenshot.isNotEmpty) {
+      final capture = await _inAppCapture(mode: 'screen');
+      if (capture?.bytes != null) {
+        final file = File(screenshot);
+        file.parent.createSync(recursive: true);
+        file.writeAsBytesSync(capture!.bytes!);
+        result = {...result, 'screenshot': file.absolute.path};
+      } else {
+        result = {
+          ...result,
+          'warnings': [
+            ..._objectList(result['warnings']),
+            'Could not capture the held-drag frame in-app.',
+          ],
+        };
+      }
+    }
+    result = await _withRecentLogSignals(result);
+    _emitActionOutput(
+      parsed.flag('verbose') ? result : _compactActionResult(result),
+    );
+    if (result['ok'] == true) {
+      _recordAction({'cmd': 'drag-move', ...params});
+    }
+    return result['ok'] == false ? 1 : 0;
+  }
+
+  Future<int> _dragEnd(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('to')
+      ..addOption('by')
+      ..addOption('x')
+      ..addOption('y')
+      ..addFlag('verbose', defaultsTo: false);
+    final parsed = parser.parse(args);
+    final params = _heldDragPointParams(parsed);
+    return _callAndPrint(
+      'ext.flutter_scout.dragEnd',
+      params: params,
+      record: {'cmd': 'drag-end', ...params},
+      compact: !parsed.flag('verbose'),
+    );
+  }
+
+  Future<int> _dragCancel(List<String> args) =>
+      _callAndPrint('ext.flutter_scout.dragCancel', compact: true);
+
+  Future<int> _dragStatus(List<String> args) => _callAndPrint(
+    'ext.flutter_scout.dragStatus',
+    compact: !args.contains('--verbose'),
+  );
+
+  Map<String, String> _heldDragPointParams(ArgResults parsed) => {
+    if (parsed.option('to') != null) 'to': parsed.option('to')!,
+    if (parsed.option('by') != null) 'by': parsed.option('by')!,
+    if (parsed.option('x') != null) 'x': parsed.option('x')!,
+    if (parsed.option('y') != null) 'y': parsed.option('y')!,
+  };
 
   Future<int> _scrollTo(List<String> args) async {
     final parser = ArgParser()

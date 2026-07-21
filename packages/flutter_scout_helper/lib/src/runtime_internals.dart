@@ -19,12 +19,11 @@ extension _RuntimeInternals on FlutterScoutRuntime {
   }
 
   Future<void> _dispatchPress(Offset point, {required Duration hold}) async {
-    final binding = GestureBinding.instance;
     final pointer = _nextSyntheticPointer++;
     final viewId = _primaryViewId;
     _syntheticGestureDepth += 1;
     try {
-      binding.handlePointerEvent(
+      await _dispatchPointerEvent(
         PointerAddedEvent(
           pointer: pointer,
           device: pointer,
@@ -33,7 +32,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
           viewId: viewId,
         ),
       );
-      binding.handlePointerEvent(
+      await _dispatchPointerEvent(
         PointerDownEvent(
           pointer: pointer,
           device: pointer,
@@ -44,7 +43,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
         ),
       );
       await Future<void>.delayed(hold);
-      binding.handlePointerEvent(
+      await _dispatchPointerEvent(
         PointerUpEvent(
           pointer: pointer,
           device: pointer,
@@ -53,7 +52,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
           viewId: viewId,
         ),
       );
-      binding.handlePointerEvent(
+      await _dispatchPointerEvent(
         PointerRemovedEvent(
           pointer: pointer,
           device: pointer,
@@ -68,12 +67,11 @@ extension _RuntimeInternals on FlutterScoutRuntime {
   }
 
   Future<void> _dispatchDrag(Offset start, Offset delta) async {
-    final binding = GestureBinding.instance;
     final pointer = _nextSyntheticPointer++;
     final viewId = _primaryViewId;
     _syntheticGestureDepth += 1;
     try {
-      binding.handlePointerEvent(
+      await _dispatchPointerEvent(
         PointerAddedEvent(
           pointer: pointer,
           device: pointer,
@@ -82,7 +80,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
           viewId: viewId,
         ),
       );
-      binding.handlePointerEvent(
+      await _dispatchPointerEvent(
         PointerDownEvent(
           pointer: pointer,
           device: pointer,
@@ -95,7 +93,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
       const steps = 8;
       for (var i = 1; i <= steps; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 16));
-        binding.handlePointerEvent(
+        await _dispatchPointerEvent(
           PointerMoveEvent(
             pointer: pointer,
             device: pointer,
@@ -108,7 +106,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
         );
       }
       await Future<void>.delayed(const Duration(milliseconds: 16));
-      binding.handlePointerEvent(
+      await _dispatchPointerEvent(
         PointerUpEvent(
           pointer: pointer,
           device: pointer,
@@ -117,7 +115,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
           viewId: viewId,
         ),
       );
-      binding.handlePointerEvent(
+      await _dispatchPointerEvent(
         PointerRemovedEvent(
           pointer: pointer,
           device: pointer,
@@ -129,6 +127,140 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     } finally {
       _syntheticGestureDepth -= 1;
     }
+  }
+
+  /// Flutter briefly locks pointer dispatch while reassembling and while
+  /// flushing a frame. A Scout action can arrive in that window immediately
+  /// after hot reload; retrying the same not-yet-dispatched event on the next
+  /// frame avoids leaking GestureBinding's internal `!locked` assertion.
+  Future<void> _dispatchPointerEvent(PointerEvent event) async {
+    final deadline = DateTime.now().add(const Duration(milliseconds: 750));
+    while (true) {
+      try {
+        GestureBinding.instance.handlePointerEvent(event);
+        return;
+      } catch (error) {
+        final locked = error.toString().contains('!locked');
+        if (!locked || DateTime.now().isAfter(deadline)) rethrow;
+        WidgetsBinding.instance.scheduleFrame();
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+    }
+  }
+
+  Future<_HeldDragState> _beginHeldDrag(
+    Offset position,
+    ScoutSnapshot before,
+  ) async {
+    if (_heldDrag != null) {
+      throw StateError(
+        'A held drag is already active. End or cancel it first.',
+      );
+    }
+    final state = _HeldDragState(
+      pointer: _nextSyntheticPointer++,
+      viewId: _primaryViewId,
+      start: position,
+      position: position,
+      startedAt: DateTime.now(),
+      before: before,
+      path: <Map<String, Object?>>[],
+    );
+    _syntheticGestureDepth += 1;
+    try {
+      await _dispatchPointerEvent(
+        PointerAddedEvent(
+          pointer: state.pointer,
+          device: state.pointer,
+          position: position,
+          kind: PointerDeviceKind.touch,
+          viewId: state.viewId,
+        ),
+      );
+      await _dispatchPointerEvent(
+        PointerDownEvent(
+          pointer: state.pointer,
+          device: state.pointer,
+          position: position,
+          kind: PointerDeviceKind.touch,
+          buttons: kPrimaryButton,
+          viewId: state.viewId,
+        ),
+      );
+      _heldDrag = state;
+      _resetHeldDragExpiry();
+      return state;
+    } catch (_) {
+      _syntheticGestureDepth -= 1;
+      rethrow;
+    }
+  }
+
+  Future<void> _moveHeldDrag(Offset position) async {
+    final state = _heldDrag;
+    if (state == null) throw StateError('No held drag is active.');
+    final delta = position - state.position;
+    await _dispatchPointerEvent(
+      PointerMoveEvent(
+        pointer: state.pointer,
+        device: state.pointer,
+        position: position,
+        delta: delta,
+        kind: PointerDeviceKind.touch,
+        buttons: kPrimaryButton,
+        viewId: state.viewId,
+      ),
+    );
+    state.position = position;
+    _resetHeldDragExpiry();
+    WidgetsBinding.instance.scheduleFrame();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+
+  Future<_HeldDragState> _finishHeldDrag({required bool cancel}) async {
+    final state = _heldDrag;
+    if (state == null) throw StateError('No held drag is active.');
+    try {
+      await _dispatchPointerEvent(
+        cancel
+            ? PointerCancelEvent(
+                pointer: state.pointer,
+                device: state.pointer,
+                position: state.position,
+                kind: PointerDeviceKind.touch,
+                viewId: state.viewId,
+              )
+            : PointerUpEvent(
+                pointer: state.pointer,
+                device: state.pointer,
+                position: state.position,
+                kind: PointerDeviceKind.touch,
+                viewId: state.viewId,
+              ),
+      );
+      await _dispatchPointerEvent(
+        PointerRemovedEvent(
+          pointer: state.pointer,
+          device: state.pointer,
+          position: state.position,
+          kind: PointerDeviceKind.touch,
+          viewId: state.viewId,
+        ),
+      );
+      return state;
+    } finally {
+      _heldDragExpiry?.cancel();
+      _heldDragExpiry = null;
+      _heldDrag = null;
+      _syntheticGestureDepth -= 1;
+    }
+  }
+
+  void _resetHeldDragExpiry() {
+    _heldDragExpiry?.cancel();
+    _heldDragExpiry = Timer(const Duration(minutes: 2), () {
+      if (_heldDrag != null) unawaited(_finishHeldDrag(cancel: true));
+    });
   }
 
   int get _primaryViewId {
@@ -161,11 +293,16 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     final widget = element.widget;
     if (widget is Offstage) return widget.offstage;
     if (widget is Visibility) return !widget.visible && !widget.maintainSize;
-    // NOTE: TickerMode(enabled:false) is deliberately NOT treated as hidden.
-    // It only pauses animation tickers; the subtree stays fully painted and
-    // hit-testable. Backgrounded desktop windows and inactive TabBarView pages
-    // disable TickerMode, and pruning here blinded Scout to visible, tappable
-    // content (e.g. a whole dashboard grid) that a coordinate tap still hit.
+    // A disabled TickerMode alone does not imply hidden: backgrounded desktop
+    // windows can remain painted and tappable. Navigator's maintained previous
+    // route is also TickerMode-disabled, but is occluded by the current route.
+    // Hit testing distinguishes those cases without calling ModalRoute.of
+    // during a tree walk (which would register inherited dependencies).
+    if (widget is TickerMode &&
+        !widget.enabled &&
+        !_isSubtreeOnActiveHitPath(element)) {
+      return true;
+    }
     if (widget is IgnorePointer) return widget.ignoring;
     return false;
   }

@@ -835,8 +835,19 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (target == null || target.isEmpty) return null;
     // Reuse the caller's snapshot when it has one — building a fresh one just
     // to resolve a handle doubles the per-action tree-walk cost.
-    final node = (snapshot ?? _snapshot()).findNode(target);
-    return node?.suggestedTapPoint;
+    final current = snapshot ?? _snapshot();
+    final node = current.findNode(target);
+    if (node?.suggestedTapPoint case final point?) return point;
+    for (final scrollable in current.scrollables) {
+      if (scrollable['id'] != target && scrollable['baseId'] != target) {
+        continue;
+      }
+      final rect =
+          _rectFromJsonList(scrollable['visibleRect']) ??
+          _rectFromJsonList(scrollable['rect']);
+      if (rect != null) return rect.center;
+    }
+    return null;
   }
 
   Offset? _pointFromParams(Map<String, String> params, {String prefix = ''}) {
@@ -2179,6 +2190,36 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       if (element is StatefulElement && element.state is NavigatorState) {
         result = element.state as NavigatorState;
       }
+    });
+    return result;
+  }
+
+  /// Finds the navigator that owns a full-view ModalBarrier. Nested
+  /// navigators can have their own local barriers and are often deeper in the
+  /// element tree, but popping them while a root dialog is active leaves the
+  /// dialog stranded over the wrong page.
+  NavigatorState? _findViewportModalNavigator(Element root) {
+    final logicalSize = _logicalSize();
+    NavigatorState? result;
+    _walkVisible(root, (Element element) {
+      if (!_isModalBarrierWidget(element.widget) ||
+          !_isBlockingModalBarrierWidget(element.widget)) {
+        return;
+      }
+      final rect = _rectFor(element);
+      final visibleRect = rect == null ? null : _visibleRectFor(rect);
+      if (visibleRect == null ||
+          visibleRect.width < logicalSize.width * 0.90 ||
+          visibleRect.height < logicalSize.height * 0.90) {
+        return;
+      }
+      element.visitAncestorElements((ancestor) {
+        if (ancestor is StatefulElement && ancestor.state is NavigatorState) {
+          result = ancestor.state as NavigatorState;
+          return false;
+        }
+        return true;
+      });
     });
     return result;
   }
