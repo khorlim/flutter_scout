@@ -187,6 +187,7 @@ class ScoutSnapshot {
       if (controlGroups.isNotEmpty) 'controlGroups': controlGroups,
       if (structuredRows.isNotEmpty) 'structuredRows': structuredRows,
       if (suggestedActions.isNotEmpty) 'suggestedActions': suggestedActions,
+      if (scrollables.isNotEmpty) 'scrollables': scrollables,
       if (degradedNodes > 0) 'degradedNodes': degradedNodes,
       'fieldValues': {for (final field in fields) field.id: field.value},
       'fieldsById': {
@@ -213,7 +214,6 @@ class ScoutSnapshot {
       'textTargets': textTargets
           .map((node) => node.toJson())
           .toList(growable: false),
-      'scrollables': scrollables,
       'overlays': overlays,
       if (visualTree != null) 'visualTree': visualTree,
       if (controlGroups.isNotEmpty) 'controlGroups': controlGroups,

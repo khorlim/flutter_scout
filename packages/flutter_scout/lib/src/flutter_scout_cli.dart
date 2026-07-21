@@ -29,7 +29,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 10;
+  static const int expectedHelperProtocolVersion = 11;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -40,6 +40,10 @@ class FlutterScoutCli {
   /// Test-only view of default compact action output.
   Map<String, dynamic> debugCompactActionResult(Map<String, dynamic> result) =>
       _compactActionResult(result);
+
+  /// Test-only session-safe VM URI selection from mixed log output.
+  String? debugPreferredVmUriFromLogText(String text) =>
+      _preferredVmUriFromLogText(text);
 
   /// Test-only view of Scout-owned runtime log signal classification.
   List<Map<String, Object?>> debugRecentLogSignalsFromLines(
@@ -256,6 +260,11 @@ class FlutterScoutCli {
         'scroll' => _scroll(rest),
         'scroll-to' => _scrollTo(rest),
         'swipe' => _swipe(rest),
+        'drag-start' => _dragStart(rest),
+        'drag-move' => _dragMove(rest),
+        'drag-end' => _dragEnd(rest),
+        'drag-cancel' => _dragCancel(rest),
+        'drag-status' => _dragStatus(rest),
         'back' => _back(rest),
         'dismiss' => _dismiss(rest),
         'wait' => _wait(rest),
@@ -972,7 +981,11 @@ print(String(data: data, encoding: .utf8)!)
     final file = File(_logFile);
     if (!file.existsSync()) return null;
     final text = file.readAsStringSync();
-    return _extractVmUri(text) ?? _extractFlutterToolVmUri(text);
+    // In a Scout-owned run, the Flutter tool's own service line is scoped to
+    // the process this session launched. VM logging can contain app-emitted
+    // Scout markers from another Flutter app on the same simulator; preferring
+    // those could silently retarget a named session to the wrong application.
+    return _preferredVmUriFromLogText(text);
   }
 
   Future<_FlutterDevice?> _resolveFlutterDevice(String requested) async {
@@ -1155,6 +1168,7 @@ print(String(data: data, encoding: .utf8)!)
       RegExp(r'(https?://localhost:\d+/\S*=/?)'),
     ];
     for (final line in text.split('\n').reversed) {
+      if (line.contains('[FLUTTER_SCOUT_VM_URI]')) continue;
       for (final pattern in patterns) {
         final match = pattern.firstMatch(line);
         if (match != null) return match.group(1);
@@ -1162,6 +1176,9 @@ print(String(data: data, encoding: .utf8)!)
     }
     return null;
   }
+
+  String? _preferredVmUriFromLogText(String text) =>
+      _extractFlutterToolVmUri(text) ?? _extractVmUri(text);
 
   String _normalizeVmUri(String uri) {
     var value = uri.trim();
@@ -1554,8 +1571,12 @@ Usage:
   flutter-scout scroll [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--verbose]
   flutter-scout scroll-to <target> [--max-scrolls <n>] [--direction down|up|left|right] [--distance <px>] [--verbose]
   flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--to x,y] [--verbose]
+  flutter-scout drag-start [--target <target> | --from x,y]
+  flutter-scout drag-move (--to x,y | --by dx,dy) [--screenshot <path>] [--verbose]
+  flutter-scout drag-end [--to x,y | --by dx,dy] [--verbose]
+  flutter-scout drag-status | drag-cancel
   flutter-scout back [--verbose]
-  flutter-scout wait stable
+  flutter-scout wait stable [--timeout <ms>] [--verbose]
   flutter-scout batch '<command>; <command>' [--keep-going] [--verbose]
   flutter-scout export-batch [-o <path>]
   flutter-scout explore [--port <port>] [--port-file <path>] [--once]
@@ -1685,6 +1706,14 @@ List<_LogSignal> _recentLogSignals({int scanLines = 300, int max = 8}) {
   } catch (_) {
     return const [];
   }
+}
+
+List<_LogSignal> _freshRecentLogSignals({int scanLines = 300, int max = 8}) {
+  final now = DateTime.now();
+  return _recentLogSignals(
+    scanLines: scanLines,
+    max: max,
+  ).where((signal) => !signal.isStale(now)).toList(growable: false);
 }
 
 List<_LogSignal> _logSignalsFromLines(

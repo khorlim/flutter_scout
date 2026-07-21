@@ -939,7 +939,7 @@ void main() {
     expect(brief['visibleText'], contains('Save'));
     expect(brief.containsKey('textTargets'), isFalse);
     expect(brief.containsKey('visualTree'), isFalse);
-    expect(brief.containsKey('scrollables'), isFalse);
+    expect(brief['scrollables'], isA<List<Object?>>());
     final interactables = brief['interactables']! as List<Object?>;
     final save = interactables.cast<Map<String, Object?>>().firstWhere(
       (node) => node['id'] == 'btn.save',
@@ -962,6 +962,64 @@ void main() {
     final briefLength = jsonEncode(brief).length;
     expect(briefLength, lessThan(fullLength ~/ 2));
   });
+
+  testWidgets('inspect exposes stable keyed scroll handles', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ListView(
+          key: const ValueKey('appointments'),
+          children: const [Text('Appointment one'), Text('Appointment two')],
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+    );
+    final scrollables = (brief['scrollables']! as List<Object?>)
+        .cast<Map<String, Object?>>();
+    expect(scrollables, isNotEmpty);
+    expect(scrollables.first['id'], 'scroll.appointments');
+    expect(scrollables.first['axis'], 'vertical');
+  });
+
+  testWidgets(
+    'held drag supports reversal before pointer-up and records path',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      final updates = <double>[];
+      var ended = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragUpdate: (details) => updates.add(details.delta.dy),
+            onVerticalDragEnd: (_) => ended += 1,
+            child: const SizedBox.expand(),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final runtime = FlutterScoutHelper.debugRuntime;
+      await tester.runAsync(() async {
+        await runtime.debugDragStart(const Offset(200, 300));
+        await runtime.debugDragMove(const Offset(200, 380));
+        await runtime.debugDragMove(const Offset(200, 330));
+        expect(runtime.debugHeldDragActive, isTrue);
+        final path = await runtime.debugDragEnd();
+        expect(path.length, 4);
+      });
+      await tester.pump();
+
+      expect(updates.any((delta) => delta > 0), isTrue);
+      expect(updates.any((delta) => delta < 0), isTrue);
+      expect(ended, 1);
+      expect(runtime.debugHeldDragActive, isFalse);
+    },
+  );
 
   testWidgets('brief inspect enforces max items and keeps full rows opt-in', (
     tester,
@@ -1490,6 +1548,26 @@ void main() {
     expect(
       snapshot.interactables.map((node) => node.id),
       contains('btn.dashtile'),
+    );
+  });
+
+  testWidgets('maintained previous routes do not leak into inspect', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(const MaterialApp(home: _PreviousRouteScreen()));
+    await tester.tap(find.text('Open current route'));
+    await tester.pumpAndSettle();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    expect(snapshot.screen, '_CurrentRouteScreen');
+    expect(snapshot.visibleText, contains('Current route only'));
+    expect(snapshot.visibleText, isNot(contains('Previous route secret')));
+    expect(
+      snapshot.scrollables.any(
+        (scrollable) => scrollable['id'] == 'scroll.previous_route',
+      ),
+      isFalse,
     );
   });
 
@@ -2151,5 +2229,38 @@ class _AnnouncementPanel extends StatelessWidget {
         child: const Text('Announcement body'),
       ),
     );
+  }
+}
+
+class _PreviousRouteScreen extends StatelessWidget {
+  const _PreviousRouteScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: ListView(
+        key: const ValueKey('previous_route'),
+        children: [
+          const Text('Previous route secret'),
+          FilledButton(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const _CurrentRouteScreen(),
+              ),
+            ),
+            child: const Text('Open current route'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CurrentRouteScreen extends StatelessWidget {
+  const _CurrentRouteScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(body: Center(child: Text('Current route only')));
   }
 }

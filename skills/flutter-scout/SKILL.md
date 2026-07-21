@@ -107,7 +107,7 @@ Snapshots include `viewSignature` (most prominent visible texts) and `visibleTex
 
 If `tap-text` fails with `text_not_found`, the error includes `didYouMean` near-matches — try one of those before re-inspecting. For labels the UI truncates with an ellipsis, pass `tap-text --contains "<full label>"` to match a shortened prefix.
 
-`inspect` output includes `recentLogSignals` when Scout-owned logs contain factual runtime signals that the in-isolate crash handlers never saw — for example Flutter build errors, uncaught exceptions, RenderFlex overflows, high-severity app logs, denied permissions, or failed API/network requests. `recentLogErrors` remains as a line-only compatibility view. For a one-shot readout run `flutter-scout health`: it returns `{screen, viewSignature, degradedNodes, interactableCount, semanticQuality, blockingErrors, blockingLogSignals, recentLogSignals, healthy}` and marks `healthy:false` for fresh blocking log signals.
+`inspect` output includes fresh `recentLogSignals` when Scout-owned logs contain factual runtime signals that the in-isolate crash handlers never saw — for example Flutter build errors, uncaught exceptions, RenderFlex overflows, high-severity app logs, denied permissions, or failed API/network requests. Signals older than 30 seconds are hidden by default; use `inspect --include-stale`, `health --include-stale`, or `logs --summary` only when historical context matters. `recentLogErrors` remains as a line-only compatibility view. For a one-shot readout run `flutter-scout health`: it returns `{screen, viewSignature, degradedNodes, interactableCount, semanticQuality, blockingErrors, blockingLogSignals, recentLogSignals, healthy}` and marks `healthy:false` for fresh blocking log signals.
 
 To close a screen without guessing between a system back and an in-app close button, use `flutter-scout dismiss`: it pops the top route (handles `showDialog`/`showModalBottomSheet`/pushed screens) and, if nothing pops, taps a close-like control (xmark/close/cancel) for custom overlay modals. It reports `strategy` (`popped_route` / `tapped_close` / `none`).
 
@@ -191,6 +191,18 @@ If you omit `--direction`, `scroll-to` starts downward and automatically retries
 Explicit widget `Key`s are always surfaced as handles in `interactables` (for example a keyed `InkWell`, `ListTile`, or `GestureDetector` appears as `tap.<key>`), and they win over text-derived ids, so prefer keyed handles when present. Handle matching is kind-prefix agnostic: `btn.gesture_menu_pin`, `tap.gesture_menu_pin`, and the bare `gesture_menu_pin` all resolve to the same keyed node.
 
 `swipe` and `long-press` accept a handle via `--target`/positional target (resolved to the target's safe point), so prefer `swipe left --target tap.task_1` or `long-press tap.task_2` over hand-computed coordinates for Dismissible rows, reorder handles, and context menus.
+
+When the UI must be inspected while a finger is still down, use one continuous held drag:
+
+```bash
+flutter-scout drag-start --target tap.task_1
+flutter-scout drag-move --by=-80,0 --screenshot /tmp/drag-1.png
+flutter-scout drag-move --by=30,0 --screenshot /tmp/drag-2.png
+flutter-scout drag-status --verbose
+flutter-scout drag-end --verbose
+```
+
+`drag-move` accepts `--to x,y` (absolute) or `--by dx,dy` (relative) and supports reversing direction without lifting. `drag-end --verbose` returns the recorded `gesturePath` with elapsed time and view signatures. Use `drag-cancel` when abandoning the gesture; Scout also auto-cancels after two minutes. Brief inspect exposes keyed scrollable areas as stable handles such as `scroll.appointments`; prefer `scroll --target scroll.appointments` or `drag-start --target scroll.appointments` to coordinates.
 
 After an action, read `delta.changedText` for keyed `Text` widgets — it reports `{key, from, to}` so a tap that only updates a status label is self-confirming without a follow-up `inspect`.
 
@@ -342,6 +354,7 @@ flutter-scout annotations resolve ann_001 --note "Fixed"
 flutter-scout annotations dismiss ann_002
 flutter-scout annotations clear --resolved
 flutter-scout wait stable
+flutter-scout wait stable --verbose
 flutter-scout wait-for --text "Saved" --timeout 8000
 flutter-scout wait-for --gone "Loading"
 flutter-scout wait-for --target btn.menu --selected tap.t_c

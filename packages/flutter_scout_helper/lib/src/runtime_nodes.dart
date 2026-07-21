@@ -835,8 +835,19 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (target == null || target.isEmpty) return null;
     // Reuse the caller's snapshot when it has one — building a fresh one just
     // to resolve a handle doubles the per-action tree-walk cost.
-    final node = (snapshot ?? _snapshot()).findNode(target);
-    return node?.suggestedTapPoint;
+    final current = snapshot ?? _snapshot();
+    final node = current.findNode(target);
+    if (node?.suggestedTapPoint case final point?) return point;
+    for (final scrollable in current.scrollables) {
+      if (scrollable['id'] != target && scrollable['baseId'] != target) {
+        continue;
+      }
+      final rect =
+          _rectFromJsonList(scrollable['visibleRect']) ??
+          _rectFromJsonList(scrollable['rect']);
+      if (rect != null) return rect.center;
+    }
+    return null;
   }
 
   Offset? _pointFromParams(Map<String, String> params, {String prefix = ''}) {

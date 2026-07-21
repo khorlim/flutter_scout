@@ -40,7 +40,7 @@ extension _CliResults on FlutterScoutCli {
     if (settleDelay > Duration.zero && File(_logFile).existsSync()) {
       await Future<void>.delayed(settleDelay);
     }
-    final signals = _recentLogSignals();
+    final signals = _freshRecentLogSignals();
     if (signals.isEmpty) return result;
     return {
       ...result,
@@ -211,6 +211,10 @@ extension _CliResults on FlutterScoutCli {
         if (result['appReachable'] != null)
           'appReachable': result['appReachable'],
         if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
+        if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
+        if (result['active'] != null) 'active': result['active'],
+        if (result['position'] != null) 'position': result['position'],
+        if (result['pathLength'] != null) 'pathLength': result['pathLength'],
         if (result['message'] != null) 'message': result['message'],
         if (result['reason'] != null) 'reason': result['reason'],
         if (result['target'] is Map<String, dynamic>)
@@ -259,6 +263,14 @@ extension _CliResults on FlutterScoutCli {
       if (result['appReachable'] != null)
         'appReachable': result['appReachable'],
       if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
+      if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
+      if (result['active'] != null) 'active': result['active'],
+      if (result['position'] != null) 'position': result['position'],
+      if (result['pathLength'] != null) 'pathLength': result['pathLength'],
+      if (result['gestureStart'] != null)
+        'gestureStart': result['gestureStart'],
+      if (result['gestureEnd'] != null) 'gestureEnd': result['gestureEnd'],
+      if (result['screenshot'] != null) 'screenshot': result['screenshot'],
       if (result['message'] != null) 'message': result['message'],
       if (result['fullRebuildRequired'] != null)
         'fullRebuildRequired': result['fullRebuildRequired'],
@@ -361,6 +373,8 @@ extension _CliResults on FlutterScoutCli {
         'hitTestableText': _lastItems(summary['hitTestableText'] as List, 12),
       if (summary['offscreenText'] is List)
         'offscreenText': _lastItems(summary['offscreenText'] as List, 8),
+      if (summary['scrollables'] is List)
+        'scrollables': _firstItems(summary['scrollables'] as List, 6),
       if (summary['fieldValues'] != null) 'fieldValues': summary['fieldValues'],
       if (summary['degradedNodes'] != null)
         'degradedNodes': summary['degradedNodes'],
@@ -725,7 +739,20 @@ extension _CliResults on FlutterScoutCli {
       final inspect = await _tryInspect(
         callTimeout: const Duration(seconds: 1),
       );
-      if (inspect != null && inspect['ok'] == true) return inspect;
+      if (inspect != null && inspect['ok'] == true) {
+        // Reassembly can make inspect reachable slightly before Flutter has
+        // unlocked pointer dispatch. Let the helper observe a stable frame so
+        // the next tap/drag is safe immediately after this command returns.
+        try {
+          await _call('ext.flutter_scout.waitStable', const {
+            'timeoutMs': '1500',
+          }, const Duration(seconds: 3));
+        } catch (_) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        return await _tryInspect(callTimeout: const Duration(seconds: 1)) ??
+            inspect;
+      }
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
     return null;

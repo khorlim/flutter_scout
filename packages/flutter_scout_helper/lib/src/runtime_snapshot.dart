@@ -7,6 +7,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final root = WidgetsBinding.instance.rootElement;
     final nodes = <ScoutNode>[];
     final scrollables = <Map<String, Object?>>[];
+    final scrollableIds = <String, int>{};
     final overlays = <Map<String, Object?>>[];
     final visibleText = <String>{};
     final hitTestableText = <String>{};
@@ -29,7 +30,8 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           final elementDepth = _elementDepth(element);
           if ((widgetType.endsWith('Screen') || widgetType.endsWith('Page')) &&
               !_frameworkScreenWidgets.contains(widgetType) &&
-              elementDepth >= screenDepth) {
+              elementDepth >= screenDepth &&
+              _isElementOnActiveHitPath(element)) {
             screen = widgetType;
             screenDepth = elementDepth;
           }
@@ -41,8 +43,22 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
             final rect = _rectFor(element);
             if (rect != null) {
               final visibleRect = _visibleRectFor(rect);
+              final widget = element.widget as Scrollable;
+              final keyLabel = _nearestScrollableKey(element);
+              final baseId =
+                  'scroll.${_slug(keyLabel ?? widget.axisDirection.name)}';
+              final occurrence = scrollableIds.update(
+                baseId,
+                (count) => count + 1,
+                ifAbsent: () => 1,
+              );
               scrollables.add({
+                'id': occurrence == 1 ? baseId : '${baseId}_$occurrence',
+                'baseId': baseId,
+                'key': ?keyLabel,
                 'widgetType': element.widget.runtimeType.toString(),
+                'axis': axisDirectionToAxis(widget.axisDirection).name,
+                'axisDirection': widget.axisDirection.name,
                 'rect': [rect.left, rect.top, rect.width, rect.height],
                 'visibleRect': visibleRect == null
                     ? null
@@ -197,6 +213,70 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     return enriched.copyWith(
       suggestedActions: _buildSuggestedActions(enriched, controlGroups),
     );
+  }
+
+  String? _nearestScrollableKey(Element element) {
+    String? stableKey(Key? key) {
+      if (key is ValueKey) return key.value.toString();
+      return null;
+    }
+
+    final own = stableKey(element.widget.key);
+    if (own != null && own.trim().isNotEmpty) return own.trim();
+    String? found;
+    element.visitAncestorElements((ancestor) {
+      final label = stableKey(ancestor.widget.key);
+      if (label != null && label.trim().isNotEmpty) {
+        found = label.trim();
+        return false;
+      }
+      return true;
+    });
+    return found;
+  }
+
+  bool _isElementOnActiveHitPath(Element element) {
+    final rect = _rectFor(element);
+    final visible = rect == null ? null : _visibleRectFor(rect);
+    final renderObject = element.renderObject;
+    if (visible == null || renderObject == null) return false;
+    final points = <Offset>[
+      visible.center,
+      Offset(
+        visible.left + visible.width * 0.2,
+        visible.top + visible.height * 0.2,
+      ),
+      Offset(
+        visible.right - visible.width * 0.2,
+        visible.top + visible.height * 0.2,
+      ),
+      Offset(
+        visible.left + visible.width * 0.2,
+        visible.bottom - visible.height * 0.2,
+      ),
+      Offset(
+        visible.right - visible.width * 0.2,
+        visible.bottom - visible.height * 0.2,
+      ),
+    ];
+    return points.any((point) => _hitTestable(point, target: renderObject));
+  }
+
+  bool _isSubtreeOnActiveHitPath(Element element) {
+    var visited = 0;
+    var active = false;
+    void probe(Element candidate) {
+      if (active || visited >= 40) return;
+      visited += 1;
+      if (_isElementOnActiveHitPath(candidate)) {
+        active = true;
+        return;
+      }
+      candidate.visitChildElements(probe);
+    }
+
+    probe(element);
+    return active;
   }
 
   /// Gives an icon-only control a readable alias when a single nearby text
@@ -521,6 +601,8 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     if (_surfaceLooksLikePureValue(trimmed)) return 0;
     if (_looksLikeActionOnlyLabel(slug)) return 0;
     final wordCount = slug.split('_').where((part) => part.isNotEmpty).length;
+    // Single glyphs such as calendar weekday initials are not surface titles.
+    if (trimmed.length < 2) return 0;
     if (wordCount > 7) return 0;
     var score = 24;
     if (wordCount <= 4) score += 8;
@@ -745,6 +827,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         allowSurfaceSuffix: allowSurfaceSuffix,
       );
       if (rank > 0 &&
+          _isElementOnActiveHitPath(element) &&
           (rank > bestRank || rank == bestRank && depth > bestDepth)) {
         best = type;
         bestDepth = depth;
@@ -772,12 +855,12 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         type.endsWith('Panel') ||
         type.endsWith('Pane') ||
         type.endsWith('Flow') ||
+        type.endsWith('Hub') ||
         type.endsWith('Workspace')) {
       return 100;
     }
     if (allowSurfaceSuffix && type.endsWith('Surface')) return 90;
     if (type.endsWith('Surface')) return 0;
-    if (RegExp(r'^[A-Z][A-Za-z0-9]{3,}$').hasMatch(type)) return 20;
     return 0;
   }
 

@@ -733,6 +733,52 @@ void main() {
     expect((summary['visibleText'] as List).length, 12);
   });
 
+  test('compact held-drag output keeps position and path progress', () {
+    final cli = FlutterScoutCli();
+    final result = cli.debugCompactActionResult({
+      'ok': true,
+      'action': 'drag-move',
+      'active': true,
+      'position': [120, 420],
+      'pathLength': 3,
+      'snapshot': {
+        'screen': 'GestureLabScreen',
+        'visibleText': ['Drag lab'],
+      },
+    });
+
+    expect(result['active'], isTrue);
+    expect(result['position'], [120, 420]);
+    expect(result['pathLength'], 3);
+  });
+
+  test('compact wait output reports actual wait without full snapshot', () {
+    final cli = FlutterScoutCli();
+    final result = cli.debugCompactActionResult({
+      'ok': true,
+      'stable': true,
+      'waitedMs': 96,
+      'snapshot': {
+        'screen': 'HomeScreen',
+        'visualTree': List<int>.generate(100, (index) => index),
+      },
+    });
+
+    expect(result['stable'], isTrue);
+    expect(result['waitedMs'], 96);
+    expect(result.containsKey('snapshot'), isFalse);
+  });
+
+  test('Scout-owned tool URI wins over another app marker in mixed logs', () {
+    final cli = FlutterScoutCli();
+    final uri = cli.debugPreferredVmUriFromLogText('''
+A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
+[2026-07-21T14:00:00] [VM_LOG] [FLUTTER_SCOUT_VM_URI] http://127.0.0.1:52000/other=/
+''');
+
+    expect(uri, 'http://127.0.0.1:51000/owned=/');
+  });
+
   test('compact action output compacts failed expectation payloads', () {
     final cli = FlutterScoutCli();
     final result = cli.debugCompactActionResult({

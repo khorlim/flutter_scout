@@ -149,6 +149,10 @@ dart run bin/flutter_scout.dart tap btn.select_staff
 dart run bin/flutter_scout.dart tap-text GoodJob
 dart run bin/flutter_scout.dart tap-text --text "-Hair Dye - Plum"
 dart run bin/flutter_scout.dart scroll down --from 220,760 --distance 520
+dart run bin/flutter_scout.dart drag-start --target tap.dismiss_task_1
+dart run bin/flutter_scout.dart drag-move --by=-80,0 --screenshot /tmp/drag-midpoint.png
+dart run bin/flutter_scout.dart drag-move --by=30,0
+dart run bin/flutter_scout.dart drag-end
 ```
 
 Action commands return compact JSON by default: result, stability, delta, recent errors, and a small after summary. Add `--verbose` to action commands or `replay` when full before/after payloads are needed.
@@ -166,6 +170,12 @@ Target taps require a visible safe point. If a handle exists but is currently of
 When a submit action reveals field validation, action deltas include `newValidationMessages` and `validationCandidates` so agents can identify the missing field without guessing from raw text.
 
 Drag commands return `result:"navigated"` when the gesture changes screens. Verbose output includes `gestureStart`, `gestureEnd`, and the normal delta so agents can distinguish scrolling from a drag that triggered navigation.
+
+For interactions whose UI follows the finger, use the held-drag lifecycle. `drag-start` keeps one synthetic touch down, each `drag-move` advances that same pointer (including direction reversals), and `drag-end` releases it and waits for the settling animation. Add `--screenshot <path>` to any move to capture the exact intermediate frame. The final verbose response includes `gesturePath` samples with positions, elapsed time, screen, view signature, and text hash. Scout automatically cancels an abandoned held drag after two minutes.
+
+Brief inspect now includes compact stable scroll-region handles such as `scroll.appointments` for keyed lists. Use them with `scroll --target scroll.appointments` or as a `drag-start --target` rather than guessing coordinates. Request `inspect --sections scrollables` for full rect geometry.
+
+`inspect`, actions, and `health` hide log signals older than 30 seconds by default so a past startup failure does not pollute current verification. Use `inspect --include-stale`, `health --include-stale`, or `logs --summary` when investigating history. `wait stable` is compact by default; pass `--verbose` for its full snapshot.
 
 Coordinate taps accept either `tap --x <x> --y <y>` or the shorthand `tap <x> <y>`.
 

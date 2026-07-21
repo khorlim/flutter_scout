@@ -481,6 +481,178 @@ extension _RuntimeActions on FlutterScoutRuntime {
     }
   }
 
+  Future<developer.ServiceExtensionResponse> _handleDragStart(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      if (_heldDrag != null) {
+        return _fail(
+          'drag_already_active',
+          'A held drag is already active. Use drag-end or drag-cancel first.',
+        );
+      }
+      final before = _snapshot();
+      final start =
+          _pointForTarget(params['target'], params, snapshot: before) ??
+          _screenCenter();
+      if (!_viewportRect().contains(start)) {
+        return _fail('gesture_start_outside_viewport', '$start is offscreen.');
+      }
+      final state = await _beginHeldDrag(start, before);
+      _recordHeldDragSample(state, before);
+      return _ok({
+        'action': 'drag-start',
+        'active': true,
+        'position': [start.dx, start.dy],
+        'pathLength': state.path.length,
+        'snapshot': before.summaryJson(),
+      });
+    } catch (error) {
+      return _fail('drag_start_failed', error.toString());
+    }
+  }
+
+  Future<developer.ServiceExtensionResponse> _handleDragMove(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final state = _heldDrag;
+      if (state == null) {
+        return _fail('no_active_drag', 'Start one with drag-start first.');
+      }
+      final beforeMove = _snapshot();
+      final next = _heldDragDestination(state, params);
+      if (next == null) {
+        return _fail(
+          'missing_destination',
+          'Use --to x,y, --x/--y, or --by dx,dy.',
+        );
+      }
+      final clamped = Offset(
+        next.dx.clamp(0.0, _viewportRect().width),
+        next.dy.clamp(0.0, _viewportRect().height),
+      );
+      await _moveHeldDrag(clamped);
+      final after = _snapshot();
+      _recordHeldDragSample(state, after);
+      return _ok({
+        'action': 'drag-move',
+        'active': true,
+        'position': [clamped.dx, clamped.dy],
+        'pathLength': state.path.length,
+        'snapshot': after.summaryJson(),
+        'delta': _delta(beforeMove, after),
+      });
+    } catch (error) {
+      return _fail('drag_move_failed', error.toString());
+    }
+  }
+
+  Future<developer.ServiceExtensionResponse> _handleDragEnd(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final active = _heldDrag;
+      if (active == null) {
+        return _fail('no_active_drag', 'There is no held drag to end.');
+      }
+      final destination = _heldDragDestination(active, params);
+      if (destination != null) {
+        await _moveHeldDrag(destination);
+        _recordHeldDragSample(active, _snapshot());
+      }
+      final state = await _finishHeldDrag(cancel: false);
+      final stable = await _waitStableForAction(params);
+      final after = _snapshot();
+      _recordHeldDragSample(state, after, phase: 'end');
+      final changed = _changed(state.before, after);
+      return _ok({
+        'action': 'drag-end',
+        'active': false,
+        'stable': stable,
+        'result': changed ? 'changed' : 'unchanged',
+        'gestureStart': [state.start.dx, state.start.dy],
+        'gestureEnd': [state.position.dx, state.position.dy],
+        'gesturePath': state.path,
+        'before': state.before.summaryJson(),
+        'after': after.summaryJson(),
+        'delta': _delta(state.before, after),
+        'recentErrors': _recentErrors(),
+      });
+    } catch (error) {
+      return _fail('drag_end_failed', error.toString());
+    }
+  }
+
+  Future<developer.ServiceExtensionResponse> _handleDragCancel(
+    String method,
+    Map<String, String> params,
+  ) async {
+    try {
+      final state = await _finishHeldDrag(cancel: true);
+      return _ok({
+        'action': 'drag-cancel',
+        'active': false,
+        'gesturePath': state.path,
+      });
+    } catch (error) {
+      return _fail('no_active_drag', error.toString());
+    }
+  }
+
+  Future<developer.ServiceExtensionResponse> _handleDragStatus(
+    String method,
+    Map<String, String> params,
+  ) async {
+    final state = _heldDrag;
+    return _ok({
+      'action': 'drag-status',
+      'active': state != null,
+      if (state != null) ...{
+        'gestureStart': [state.start.dx, state.start.dy],
+        'position': [state.position.dx, state.position.dy],
+        'elapsedMs': DateTime.now().difference(state.startedAt).inMilliseconds,
+        'gesturePath': state.path,
+        'snapshot': _snapshot().summaryJson(),
+      },
+    });
+  }
+
+  Offset? _heldDragDestination(
+    _HeldDragState state,
+    Map<String, String> params,
+  ) {
+    final absolute =
+        _pointFromParams(params, prefix: 'to') ?? _pointFromParams(params);
+    if (absolute != null) return absolute;
+    final by = params['by'];
+    if (by == null || !by.contains(',')) return null;
+    final parts = by.split(',');
+    if (parts.length != 2) return null;
+    final dx = double.tryParse(parts[0].trim());
+    final dy = double.tryParse(parts[1].trim());
+    return dx == null || dy == null ? null : state.position + Offset(dx, dy);
+  }
+
+  void _recordHeldDragSample(
+    _HeldDragState state,
+    ScoutSnapshot snapshot, {
+    String phase = 'move',
+  }) {
+    state.path.add({
+      'index': state.path.length,
+      'phase': state.path.isEmpty ? 'start' : phase,
+      'elapsedMs': DateTime.now().difference(state.startedAt).inMilliseconds,
+      'position': [state.position.dx, state.position.dy],
+      'screen': snapshot.screen,
+      'viewSignature': snapshot.viewSignature,
+      'visibleTextHash': snapshot.visibleTextHash,
+    });
+  }
+
   Future<developer.ServiceExtensionResponse> _handleScrollTo(
     String method,
     Map<String, String> params,
@@ -836,13 +1008,14 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params,
   ) async {
     final timeoutMs = int.tryParse(params['timeoutMs'] ?? '') ?? 3000;
+    final startedAt = DateTime.now();
     final stable = await _waitStable(
       timeout: Duration(milliseconds: timeoutMs),
     );
     return _ok({
       'stable': stable,
       'reason': stable ? null : 'frames_still_changing',
-      'durationMs': timeoutMs,
+      'waitedMs': DateTime.now().difference(startedAt).inMilliseconds,
       'snapshot': _snapshot().summaryJson(),
       'recentErrors': _recentErrors(),
     });
