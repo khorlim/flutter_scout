@@ -18,6 +18,7 @@ part 'cli_actions.dart';
 part 'cli_capture.dart';
 part 'cli_evidence.dart';
 part 'cli_results.dart';
+part 'cli_record.dart';
 
 class FlutterScoutCli {
   /// Test-only override for the session registry path, so tests never touch
@@ -29,7 +30,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 11;
+  static const int expectedHelperProtocolVersion = 12;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -284,6 +285,7 @@ class FlutterScoutCli {
         'crop' => _crop(rest),
         'evidence' => _evidence(rest),
         'replay' => _replay(rest),
+        'record' => _record(rest),
         _ => _unknown(command),
       };
     } on ScoutCliException catch (error) {
@@ -1599,6 +1601,7 @@ Usage:
 /// macOS/desktop app be told apart on screen. Must match the key the helper
 /// reads with `String.fromEnvironment`.
 const String kScoutInstanceDefine = 'FLUTTER_SCOUT_INSTANCE';
+const String kScoutProjectDefine = 'FLUTTER_SCOUT_PROJECT';
 
 /// Global session registry: `--name <label>` at launch/ensure records
 /// label -> session directory here, and the global `--app <label>` option

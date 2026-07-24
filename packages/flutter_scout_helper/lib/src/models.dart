@@ -274,6 +274,7 @@ class ScoutNode {
     this.altIds = const [],
     this.textColor,
     this.enclosingTarget,
+    this.obscured = false,
   });
 
   final String id;
@@ -316,6 +317,11 @@ class ScoutNode {
   /// protects replays and cross-snapshot references.
   final List<String> altIds;
 
+  /// Whether this field's editable is `obscureText: true` (password-style).
+  /// The recorder redacts obscured values — `value` holds Flutter's raw
+  /// plaintext (obscuring is render-only), so this flag is the reliable signal.
+  final bool obscured;
+
   ScoutNode copyWith({
     String? id,
     String? baseId,
@@ -349,6 +355,7 @@ class ScoutNode {
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
+      obscured: obscured,
     );
   }
 
@@ -377,6 +384,7 @@ class ScoutNode {
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
+      obscured: obscured,
     );
   }
 
@@ -404,6 +412,7 @@ class ScoutNode {
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
+      obscured: obscured,
     );
   }
 
@@ -463,6 +472,7 @@ class ScoutNode {
       altIds: merged.toList(growable: false),
       textColor: textColor,
       enclosingTarget: enclosingTarget,
+      obscured: obscured,
     );
   }
 

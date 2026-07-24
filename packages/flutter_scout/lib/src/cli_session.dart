@@ -68,6 +68,11 @@ extension _CliSession on FlutterScoutCli {
         '--dart-define',
         '$kScoutInstanceDefine=${parsed.option('name')}',
       ],
+      // Tell the in-app helper the project root so it can write recordings
+      // straight to <project>/.flutter_scout/recordings/ (macOS/desktop; the
+      // iOS-sim sandbox can't reach it, so the CLI persists from the ext there).
+      '--dart-define',
+      '$kScoutProjectDefine=${Directory(project).absolute.path}',
       if (parsed.flag('verbose')) '--verbose',
     ];
 

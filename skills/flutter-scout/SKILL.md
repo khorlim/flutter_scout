@@ -335,6 +335,36 @@ flutter-scout replay .flutter_scout/session.json
 
 Replay should be the first check after changing code for a flow you already tested. Replay output includes a `transcript` array plus structured `results`; use the transcript for concise reporting and the results for evidence.
 
+## Recorded flows (`record`)
+
+Named, replayable flows grouped by feature, stored under `.flutter_scout/recordings/<feature>/<name>.json`. A tester (or you) records a sequence of real actions once; later you replay it to verify the flow still works. Each recorded step is a session-shaped record with an auto-captured `expect*` assertion (resulting screen / view signature / a changed label), so a replay actually **verifies** rather than just re-clicking.
+
+**How capture works.** Recording observes real pointer/text activity in the running app and maps each gesture to a stable Scout handle (the same ids `inspect`/`tap` use), with an `(x,y)` fallback when nothing resolves. It captures BOTH a human tapping the app AND your own agent-dispatched `tap`/`input`/`scroll` — so you can record a repetitive flow of your own CLI actions. Taps on Scout's own overlay chrome are excluded. Obscured (password) fields are redacted to a `VAR:<field>` placeholder; supply the value at replay with `--var <field>=<value>`.
+
+```bash
+# Tester or agent: capture a flow
+flutter-scout --app my-app record start add-member --feature members --title "Add a member"
+flutter-scout --app my-app tap btn.add_member         # your own actions are captured...
+flutter-scout --app my-app fill --json '{"field.name":"QA"}'
+flutter-scout --app my-app record status               # {recording, stepCount, lastStep}
+flutter-scout --app my-app record stop                 # writes recordings/members/add-member.json
+
+# Manage
+flutter-scout --app my-app record list [--feature members]
+flutter-scout --app my-app record show add-member --transcript [--steps]
+flutter-scout --app my-app record rename add-member add-team-member
+flutter-scout --app my-app record delete add-member
+flutter-scout --app my-app record pause | resume | undo   # while recording
+
+# Replay with pass/fail (the agent monitoring loop)
+flutter-scout --app my-app record run add-member [--keep-going] [--var password=secret]
+flutter-scout --app my-app record export add-member -o /tmp/add-member.json   # → `replay`-able array
+```
+
+`record run` re-dispatches the steps, gates each on its recorded `expect*` assertion, and returns a structured report plus an exit code: **0** all steps passed, **1** a step failed (unmet assertion or hard error — see each result's `failure.kind` ∈ `assertion`/`hard_error`/`changed_handle`), **2** could-not-start (app not attached, or the recording is missing/invalid). Use `--keep-going` to collect every failure instead of stopping at the first. When monitoring, an unmet **assertion** is a real regression — do NOT "fix" it by editing the recording; a **changed_handle** is drift you may re-resolve (`scroll-to`, `altIds`, then `record` the corrected step).
+
+**In-app toggle.** Testers can start/stop from the bottom-left Scout launcher menu → **Record** (a live REC HUD shows the step count + Stop/Pause). Persistence writes straight to `.flutter_scout/recordings/` when the app can reach the project dir; on a **sandboxed** app (most macOS apps, iOS simulator) the app can't write there, so persist by stopping via the CLI (`record stop`) or keep a `flutter-scout serve` running — the pure in-app Stop button alone won't persist on a sandboxed app yet.
+
 ## Useful Commands
 
 ```bash

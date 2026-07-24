@@ -209,6 +209,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       confidence: label == null ? 0.65 : 0.94,
       selected: kind == 'text' ? null : _selectedStateFor(element, widget),
       altIds: altIds.toList(growable: false),
+      obscured: kind == 'field' && _obscuredBelow(element),
       textColor: kind == 'btn' || kind == 'tap'
           ? _effectiveTextColor(element)
           : null,
@@ -2182,6 +2183,10 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   String? _editableValueBelow(Element element) {
     final editable = _editableStateBelow(element);
     return editable?.widget.controller.text;
+  }
+
+  bool _obscuredBelow(Element element) {
+    return _editableStateBelow(element)?.widget.obscureText ?? false;
   }
 
   NavigatorState? _findActiveNavigator(Element root) {

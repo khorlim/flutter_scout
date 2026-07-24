@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -20,6 +21,7 @@ part 'runtime_actions.dart';
 part 'runtime_snapshot.dart';
 part 'runtime_nodes.dart';
 part 'runtime_internals.dart';
+part 'runtime_recorder.dart';
 
 /// Protocol version reported in every helper response, so the CLI can tell
 /// when the RUNNING helper is older than the one it expects — the classic
@@ -27,7 +29,7 @@ part 'runtime_internals.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 11;
+const int scoutHelperProtocolVersion = 12;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -72,6 +74,37 @@ class FlutterScoutRuntime {
   // overlapping captures compose; entries are added/removed by _captureRegion.
   final List<Rect> _captureClearRects = <Rect>[];
   bool _annotationMode = false;
+  // ---- Flow recorder (see runtime_recorder.dart) -------------------------
+  // Whether a recording is in progress, and whether it is temporarily paused.
+  bool _recording = false;
+  bool _recordPaused = false;
+  // Buffered steps for the active recording. Each entry is a session.json-shaped
+  // record ({cmd, target/x/y, value, expect*}) plus `_`-prefixed metadata; all
+  // values are Strings, matching the CLI record invariant so the same
+  // replay/batch/export executors run human recordings unchanged.
+  final List<Map<String, String>> _recordSteps = <Map<String, String>>[];
+  final ValueNotifier<int> _recordRevision = ValueNotifier<int>(0);
+  // Active-recording metadata.
+  String? _recordName;
+  String? _recordFeature;
+  String? _recordTitle;
+  DateTime? _recordStartedAt;
+  String? _recordStartScreen;
+  // Per-pointer capture state, keyed by PointerEvent.pointer.
+  final Map<int, _RecordPointer> _recordPointers = <int, _RecordPointer>{};
+  // Baseline snapshot (last committed step's after-state, or the record-start
+  // state) used to diff field edits and derive per-step assertions.
+  ScoutSnapshot? _recordBaseline;
+  bool _recordRouteInstalled = false;
+  int _recordAutoNameSeq = 0;
+  // Absolute path to the app project (so the helper writes recordings straight
+  // to <project>/.flutter_scout/recordings/). Injected by the CLI at launch;
+  // falls back to the process cwd on desktop.
+  static const String _recordProjectDefine = String.fromEnvironment(
+    'FLUTTER_SCOUT_PROJECT',
+  );
+  // Test-only override for the recordings root (real runs use the project path).
+  String? _recordRootOverride;
   // True only while collecting annotation targets. The overlay's full-screen
   // absorber goes hit-test-transparent during this window so the global hit
   // test reaches the app and returns the real topmost (occlusion-aware) path,
@@ -128,6 +161,8 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.waitStable', _handleWaitStable);
     _registerExtension('ext.flutter_scout.waitFor', _handleWaitFor);
     _registerExtension('ext.flutter_scout.dismiss', _handleDismiss);
+    _registerExtension('ext.flutter_scout.record', _handleRecord);
+    _installRecorderRoute();
     _broadcastVmUri();
     _scheduleAnnotationOverlayInstall();
   }
@@ -172,6 +207,37 @@ class FlutterScoutRuntime {
 
   @visibleForTesting
   void debugSetAnnotationMode(bool enabled) => _setAnnotationMode(enabled);
+
+  /// In-app Record toggle entry point (used by the launcher menu) and test hooks
+  /// for the flow recorder; the implementation lives in runtime_recorder.dart.
+  Future<Map<String, Object?>> toggleRecording() => _toggleRecording();
+
+  @visibleForTesting
+  Map<String, Object?> debugStartRecording({String? name, String? feature}) =>
+      _startRecording(name: name, feature: feature);
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugStopRecording({bool discard = false}) =>
+      _stopRecording(discard: discard);
+
+  @visibleForTesting
+  List<Map<String, String>> get debugRecordSteps => [
+    for (final s in _recordSteps) Map<String, String>.from(s),
+  ];
+
+  @visibleForTesting
+  bool get debugIsRecording => _recording;
+
+  @visibleForTesting
+  void debugSetRecordingsRootOverride(String? path) =>
+      _recordRootOverride = path;
+
+  /// Test-only: (re)insert the overlay entry into the current tree's Overlay.
+  /// Real apps install once at startup into the app's persistent Overlay; tests
+  /// rebuild the tree per case, so the shared runtime's stale entry must be
+  /// re-homed before asserting on launcher/menu chrome.
+  @visibleForTesting
+  void debugEnsureOverlayInstalled() => _scheduleAnnotationOverlayInstall();
 
   @visibleForTesting
   List<ScoutAnnotationTarget> debugVisibleAnnotationTargets() =>

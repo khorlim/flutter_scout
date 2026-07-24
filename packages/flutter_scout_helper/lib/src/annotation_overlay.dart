@@ -64,34 +64,33 @@ _ScoutSessionPalette _deriveScoutSessionPalette(String label) {
   );
 }
 
-/// A small HUD badge pinned to the bottom-left that names the running Scout
-/// session. Renders nothing unless a `--name` label was passed, so it stays
-/// invisible for ordinary single-instance runs. Tapping toggles between the
-/// full label and a compact dot, so it never permanently blocks app UI.
-class _ScoutInstanceBadge extends StatefulWidget {
-  const _ScoutInstanceBadge();
+String get _scoutLauncherLabel =>
+    _scoutInstanceLabel.isEmpty ? 'SCOUT' : _scoutInstanceLabel.toUpperCase();
 
-  @override
-  State<_ScoutInstanceBadge> createState() => _ScoutInstanceBadgeState();
-}
+/// A small HUD launcher pinned to the bottom-left. It names the running Scout
+/// session (per-session colour so overlapping worktree runs are told apart) and
+/// is the entry point to the Scout menu — annotation toggle, flow recorder, ….
+/// Always present so the menu is reachable; with no `--name` label it falls back
+/// to a neutral "SCOUT" chip. Tapping opens/closes the menu.
+class _ScoutInstanceBadge extends StatelessWidget {
+  const _ScoutInstanceBadge({required this.menuOpen, required this.onTap});
 
-class _ScoutInstanceBadgeState extends State<_ScoutInstanceBadge> {
-  bool _collapsed = false;
+  final bool menuOpen;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    if (_scoutInstanceLabel.isEmpty) return const SizedBox.shrink();
     return Positioned(
       left: 0,
       bottom: 0,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => setState(() => _collapsed = !_collapsed),
+        onTap: onTap,
         child: AnimatedContainer(
           duration: ScoutMotion.base,
           curve: ScoutMotion.enter,
-          padding: EdgeInsets.symmetric(
-            horizontal: _collapsed ? ScoutSpace.xs : ScoutSpace.s,
+          padding: const EdgeInsets.symmetric(
+            horizontal: ScoutSpace.s,
             vertical: ScoutSpace.xs,
           ),
           decoration: BoxDecoration(
@@ -112,12 +111,18 @@ class _ScoutInstanceBadgeState extends State<_ScoutInstanceBadge> {
               bottomRight: Radius.circular(ScoutRadius.panel),
             ),
             border: Border.all(
-              color: _scoutSessionPalette.accent.withValues(alpha: 0.55),
+              // Brighten the rim while the menu is open so the launcher reads
+              // as the active/expanded control.
+              color: _scoutSessionPalette.accent.withValues(
+                alpha: menuOpen ? 0.95 : 0.55,
+              ),
               width: 1,
             ),
             boxShadow: [
               BoxShadow(
-                color: _scoutSessionPalette.accent.withValues(alpha: 0.30),
+                color: _scoutSessionPalette.accent.withValues(
+                  alpha: menuOpen ? 0.5 : 0.30,
+                ),
                 blurRadius: 16,
                 spreadRadius: -6,
               ),
@@ -131,25 +136,456 @@ class _ScoutInstanceBadgeState extends State<_ScoutInstanceBadge> {
                 size: 12,
                 color: _scoutSessionPalette.foreground,
               ),
-              AnimatedSize(
+              const SizedBox(width: ScoutSpace.xs),
+              Text(
+                _scoutLauncherLabel,
+                style: ScoutType.label.copyWith(
+                  fontSize: 9,
+                  letterSpacing: 0.6,
+                  color: _scoutSessionPalette.foreground,
+                ),
+              ),
+              const SizedBox(width: ScoutSpace.xs),
+              // Chevron flips up→down to signal the menu's open state.
+              AnimatedRotation(
+                turns: menuOpen ? 0.5 : 0.0,
                 duration: ScoutMotion.base,
                 curve: ScoutMotion.enter,
-                child: _collapsed
-                    ? const SizedBox.shrink()
-                    : Padding(
-                        padding: const EdgeInsets.only(left: ScoutSpace.xs),
-                        child: Text(
-                          _scoutInstanceLabel.toUpperCase(),
-                          style: ScoutType.label.copyWith(
-                            fontSize: 9,
-                            letterSpacing: 0.6,
-                            color: _scoutSessionPalette.foreground,
-                          ),
-                        ),
-                      ),
+                child: Icon(
+                  Icons.keyboard_arrow_up,
+                  size: 13,
+                  color: _scoutSessionPalette.foreground,
+                ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The Scout launcher menu: a HUD panel of overlay actions anchored just above
+/// the bottom-left launcher. Hosts the annotation toggle and the (scaffold)
+/// flow recorder; more Scout tools can slot in as rows here.
+class _ScoutMenu extends StatelessWidget {
+  const _ScoutMenu({
+    required this.annotationActive,
+    required this.annotationCount,
+    required this.recording,
+    required this.onToggleAnnotate,
+    required this.onToggleRecord,
+  });
+
+  final bool annotationActive;
+  final int annotationCount;
+  final bool recording;
+  final VoidCallback onToggleAnnotate;
+  final VoidCallback onToggleRecord;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: ScoutSpace.s,
+      bottom: 40,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: ScoutMotion.base,
+        curve: ScoutMotion.enter,
+        builder: (context, t, child) {
+          final v = t.clamp(0.0, 1.0);
+          return Opacity(
+            opacity: v,
+            child: Transform.translate(
+              offset: Offset(0, (1 - v) * 8),
+              child: Transform.scale(
+                scale: 0.96 + 0.04 * v,
+                alignment: Alignment.bottomLeft,
+                child: child,
+              ),
+            ),
+          );
+        },
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 224, maxWidth: 264),
+          child: ScoutPanel(
+            padding: const EdgeInsets.all(ScoutSpace.s),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    ScoutSpace.s,
+                    ScoutSpace.xs,
+                    ScoutSpace.s,
+                    ScoutSpace.s,
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.my_location,
+                        size: 12,
+                        color: ScoutColors.signal,
+                      ),
+                      const SizedBox(width: ScoutSpace.xs),
+                      Expanded(
+                        child: Text(
+                          'SCOUT · $_scoutLauncherLabel',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: ScoutType.meta,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _ScoutMenuItem(
+                  icon: annotationActive
+                      ? Icons.my_location
+                      : Icons.add_location_alt_outlined,
+                  label: 'Annotate',
+                  sublabel: annotationActive
+                      ? 'Tap a widget to pin a note'
+                      : 'Pin review notes on the app',
+                  active: annotationActive,
+                  trailing: annotationActive
+                      ? (annotationCount > 0 ? 'ON · $annotationCount' : 'ON')
+                      : 'OFF',
+                  onTap: onToggleAnnotate,
+                ),
+                const SizedBox(height: ScoutSpace.xs),
+                _ScoutMenuItem(
+                  icon: Icons.fiber_manual_record,
+                  label: 'Record',
+                  sublabel: recording
+                      ? 'Capturing this flow…'
+                      : 'Record a replayable flow',
+                  active: recording,
+                  accent: ScoutColors.rose,
+                  trailing: recording ? 'REC' : 'OFF',
+                  showPulse: recording,
+                  onTap: onToggleRecord,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One tappable row in the [_ScoutMenu]: icon + label/sublabel + a status chip.
+/// Tints to [accent] and raises its status chip when [active].
+class _ScoutMenuItem extends StatefulWidget {
+  const _ScoutMenuItem({
+    required this.icon,
+    required this.label,
+    required this.sublabel,
+    required this.active,
+    required this.trailing,
+    required this.onTap,
+    this.accent = ScoutColors.signal,
+    this.showPulse = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String sublabel;
+  final bool active;
+  final String trailing;
+  final VoidCallback onTap;
+  final Color accent;
+  final bool showPulse;
+
+  @override
+  State<_ScoutMenuItem> createState() => _ScoutMenuItemState();
+}
+
+class _ScoutMenuItemState extends State<_ScoutMenuItem> {
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = widget.accent;
+    final fill = widget.active
+        ? accent.withValues(alpha: 0.16)
+        : (_down ? ScoutColors.glassRaised : Colors.transparent);
+    final border = widget.active
+        ? accent.withValues(alpha: 0.55)
+        : ScoutColors.border;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) => setState(() => _down = true),
+      onTapUp: (_) => setState(() => _down = false),
+      onTapCancel: () => setState(() => _down = false),
+      onTap: widget.onTap,
+      child: AnimatedContainer(
+        duration: ScoutMotion.fast,
+        padding: const EdgeInsets.all(ScoutSpace.s),
+        decoration: BoxDecoration(
+          color: fill,
+          borderRadius: BorderRadius.circular(ScoutRadius.control),
+          border: Border.all(color: border, width: 1),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              widget.icon,
+              size: 16,
+              color: widget.active ? accent : ScoutColors.ink,
+            ),
+            const SizedBox(width: ScoutSpace.s),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.label.toUpperCase(),
+                    style: ScoutType.label.copyWith(fontSize: 11),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    widget.sublabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: ScoutType.meta.copyWith(fontSize: 10),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: ScoutSpace.s),
+            _ScoutStatusChip(
+              label: widget.trailing,
+              accent: accent,
+              active: widget.active,
+              pulse: widget.showPulse,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A compact ON/OFF/REC status chip; shows a pulsing dot when [pulse] is set.
+class _ScoutStatusChip extends StatelessWidget {
+  const _ScoutStatusChip({
+    required this.label,
+    required this.accent,
+    required this.active,
+    required this.pulse,
+  });
+
+  final String label;
+  final Color accent;
+  final bool active;
+  final bool pulse;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = active ? accent : ScoutColors.inkDim;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: active
+            ? accent.withValues(alpha: 0.16)
+            : ScoutColors.glassRaised,
+        borderRadius: BorderRadius.circular(ScoutRadius.pill),
+        border: Border.all(
+          color: active ? accent.withValues(alpha: 0.5) : ScoutColors.border,
+          width: 1,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (pulse) ...[_ScoutRecDot(color: accent), const SizedBox(width: 5)],
+          Text(
+            label,
+            style: ScoutType.numeral.copyWith(fontSize: 10, color: fg),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A softly pulsing dot used by the recorder status chip.
+class _ScoutRecDot extends StatefulWidget {
+  const _ScoutRecDot({required this.color});
+
+  final Color color;
+
+  @override
+  State<_ScoutRecDot> createState() => _ScoutRecDotState();
+}
+
+class _ScoutRecDotState extends State<_ScoutRecDot>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: ScoutMotion.slow,
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (context, _) {
+        final t = _c.value;
+        return Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(
+            color: widget.color.withValues(alpha: 0.55 + 0.45 * t),
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: widget.color.withValues(alpha: 0.5 * t),
+                blurRadius: 6,
+                spreadRadius: t,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// The live recorder HUD: a HUD panel pinned top-center while a recording is
+/// active, showing a pulsing REC dot, the step count, the last captured step,
+/// and inline Pause/Stop controls. Taps on it are excluded from the recording
+/// (it lives inside the Scout overlay subtree, which the recorder skips).
+class _ScoutRecHud extends StatelessWidget {
+  const _ScoutRecHud({
+    required this.paused,
+    required this.stepCount,
+    required this.lastStep,
+    required this.onStop,
+    required this.onTogglePause,
+  });
+
+  final bool paused;
+  final int stepCount;
+  final String? lastStep;
+  final VoidCallback onStop;
+  final VoidCallback onTogglePause;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = paused ? ScoutColors.amber : ScoutColors.rose;
+    return Positioned(
+      top: MediaQuery.paddingOf(context).top + ScoutSpace.s,
+      left: 0,
+      right: 0,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 320),
+          child: ScoutPanel(
+            accent: accent,
+            padding: const EdgeInsets.symmetric(
+              horizontal: ScoutSpace.m,
+              vertical: ScoutSpace.s,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (paused)
+                  Icon(Icons.pause, size: 12, color: accent)
+                else
+                  _ScoutRecDot(color: accent),
+                const SizedBox(width: ScoutSpace.s),
+                Text(
+                  paused ? 'PAUSED' : 'REC',
+                  style: ScoutType.label.copyWith(fontSize: 11, color: accent),
+                ),
+                const SizedBox(width: ScoutSpace.s),
+                Flexible(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$stepCount ${stepCount == 1 ? 'step' : 'steps'}',
+                        style: ScoutType.numeral.copyWith(fontSize: 11),
+                      ),
+                      if (lastStep != null)
+                        Text(
+                          lastStep!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: ScoutType.meta.copyWith(fontSize: 10),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: ScoutSpace.s),
+                _ScoutHudButton(
+                  icon: paused ? Icons.play_arrow : Icons.pause,
+                  onTap: onTogglePause,
+                ),
+                const SizedBox(width: ScoutSpace.xs),
+                _ScoutHudButton(
+                  icon: Icons.stop,
+                  accent: ScoutColors.rose,
+                  filled: true,
+                  onTap: onStop,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A small square icon button for the REC HUD (Recon-HUD styled, no Material).
+class _ScoutHudButton extends StatelessWidget {
+  const _ScoutHudButton({
+    required this.icon,
+    required this.onTap,
+    this.accent = ScoutColors.signal,
+    this.filled = false,
+  });
+
+  final IconData icon;
+  final VoidCallback onTap;
+  final Color accent;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Container(
+        width: 28,
+        height: 28,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: filled ? accent : Colors.transparent,
+          borderRadius: BorderRadius.circular(ScoutRadius.control),
+          border: Border.all(
+            color: filled ? Colors.transparent : ScoutColors.border,
+            width: 1,
+          ),
+        ),
+        child: Icon(
+          icon,
+          size: 16,
+          color: filled ? ScoutColors.onSignal : ScoutColors.ink,
         ),
       ),
     );
@@ -187,6 +623,9 @@ class _FlutterScoutAnnotationOverlayState
   _exitingPins = [];
   int _nextGhost = 0;
 
+  // Whether the bottom-left launcher menu is expanded. Pure UI state.
+  bool _menuOpen = false;
+
   // A pin reticle is centered this far in from its target's top-left corner;
   // taps within [_pinHitRadius] of that center open the pin's delete popup.
   static const double _pinAnchorInset = 10;
@@ -215,6 +654,28 @@ class _FlutterScoutAnnotationOverlayState
         _exitingPins.clear();
       });
     }
+  }
+
+  void _toggleMenu() => setState(() => _menuOpen = !_menuOpen);
+
+  void _closeMenu() {
+    if (_menuOpen) setState(() => _menuOpen = false);
+  }
+
+  // Menu → Annotate: flip annotation mode (revealing the draggable FAB) and
+  // close the menu so the app is free for pin placement.
+  void _onMenuAnnotate() {
+    _closeMenu();
+    _toggleAnnotationMode();
+  }
+
+  // Menu → Record: start capture (auto-named) or stop-and-save the active
+  // recording. The REC HUD (below) shows live progress + stop control.
+  void _onMenuRecord() {
+    _closeMenu();
+    // Fire-and-forget: start/stop bump the record revision, which repaints the
+    // overlay through the annotation revision listener.
+    unawaited(widget.runtime.toggleRecording());
   }
 
   /// Tap router: if the tap lands on an existing annotation pin, open its
@@ -436,16 +897,17 @@ class _FlutterScoutAnnotationOverlayState
         } else if (_visibleTargets.isNotEmpty) {
           _scheduleTargetRefresh(revision);
         }
-        // The gate wraps the WHOLE overlay (absorber, pins, panels, badge,
-        // toggle FAB): every piece of Scout chrome must be transparent to
+        // Hide all launcher/menu/FAB chrome for the frame(s) a region is being
+        // rasterised, so it never lands in a crop/screenshot.
+        final notCapturing = widget.runtime._captureClearRects.isEmpty;
+        // The gate wraps the WHOLE overlay (absorber, pins, panels, launcher,
+        // menu, toggle FAB): every piece of Scout chrome must be transparent to
         // synthetic agent gestures, or an agent tap aimed at an app control
         // underneath silently activates Scout's own UI instead.
         return _ScoutHitTestGate(
           runtime: widget.runtime,
           child: Stack(
             children: [
-              if (widget.runtime._captureClearRects.isEmpty)
-                const _ScoutInstanceBadge(),
               if (enabled)
                 Positioned.fill(
                   child: GestureDetector(
@@ -484,7 +946,48 @@ class _FlutterScoutAnnotationOverlayState
                   onDelete: _deleteSelectedPin,
                   onClose: () => setState(() => _selectedPin = null),
                 ),
-              if (widget.runtime._captureClearRects.isEmpty)
+              // Launcher + its menu. The launcher sits above a tap-to-dismiss
+              // barrier so it stays interactive (and reachable during
+              // annotation mode) while the menu is open.
+              if (notCapturing) ...[
+                if (_menuOpen)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: _closeMenu,
+                    ),
+                  ),
+                _ScoutInstanceBadge(menuOpen: _menuOpen, onTap: _toggleMenu),
+                if (_menuOpen)
+                  _ScoutMenu(
+                    annotationActive: enabled,
+                    annotationCount: widget.runtime._activeAnnotationCount,
+                    recording: widget.runtime._recording,
+                    onToggleAnnotate: _onMenuAnnotate,
+                    onToggleRecord: _onMenuRecord,
+                  ),
+                if (widget.runtime._recording)
+                  _ScoutRecHud(
+                    paused: widget.runtime._recordPaused,
+                    stepCount: widget.runtime._recordSteps.length,
+                    lastStep: widget.runtime._recordSteps.isEmpty
+                        ? null
+                        : widget.runtime._recordStepSummary(
+                            widget.runtime._recordSteps.last,
+                          ),
+                    onStop: () => unawaited(widget.runtime.toggleRecording()),
+                    onTogglePause: () {
+                      if (widget.runtime._recordPaused) {
+                        widget.runtime._resumeRecording();
+                      } else {
+                        widget.runtime._pauseRecording();
+                      }
+                    },
+                  ),
+              ],
+              // Annotation FAB — now revealed only while annotation mode is
+              // active (entered from the menu), not by default.
+              if (enabled && notCapturing)
                 Positioned(
                   left: toggleButtonOffset.dx,
                   top: toggleButtonOffset.dy,

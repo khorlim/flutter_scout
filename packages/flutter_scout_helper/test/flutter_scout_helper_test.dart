@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -426,6 +427,194 @@ void main() {
 
     runtime.debugSetAnnotationMode(false);
     await tester.pump();
+  });
+
+  testWidgets(
+    'launcher menu hides the FAB by default and toggles annotate/record',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      final runtime = FlutterScoutHelper.debugRuntime;
+      runtime.debugSetAnnotationMode(false);
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(body: Center(child: Text('app body'))),
+        ),
+      );
+      // The runtime is a shared singleton; earlier tests leave its overlay
+      // entry bound to a now-disposed Overlay. Re-home it into this tree, then
+      // let the post-frame install + build settle.
+      runtime.debugEnsureOverlayInstalled();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Never pumpAndSettle: the REC pulse repeats forever and would never
+      // settle. Advance a fixed span past the entrance animations instead.
+      Future<void> settle() async {
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+
+      // Default state: the launcher is present, the menu is closed, and the
+      // annotation FAB is NOT shown (it only appears while annotating).
+      expect(find.text('SCOUT'), findsOneWidget);
+      expect(find.text('ANNOTATE'), findsNothing);
+      expect(find.text('RECORD'), findsNothing);
+
+      // Open the menu from the launcher.
+      await tester.tap(find.text('SCOUT'));
+      await settle();
+      expect(find.text('ANNOTATE'), findsOneWidget);
+      expect(find.text('RECORD'), findsOneWidget);
+      expect(find.text('REC'), findsNothing);
+
+      // Record is a scaffold toggle: flips the flag + REC indicator, closes menu.
+      await tester.tap(find.text('RECORD'));
+      await settle();
+      expect(
+        find.text('RECORD'),
+        findsNothing,
+        reason: 'menu closes on select',
+      );
+      await tester.tap(find.text('SCOUT'));
+      await settle();
+      expect(
+        find.text('REC'),
+        // Two now: the menu Record row chip AND the live REC HUD (capture
+        // really starts), both legitimately showing REC.
+        findsWidgets,
+        reason: 'recorder now shows a REC status chip',
+      );
+
+      // Annotate enters annotation mode (revealing the FAB) and closes the menu.
+      await tester.tap(find.text('ANNOTATE'));
+      await settle();
+      expect(find.text('ANNOTATE'), findsNothing, reason: 'menu closes');
+
+      // Reopen: the Annotate row now reports ON.
+      await tester.tap(find.text('SCOUT'));
+      await settle();
+      expect(find.textContaining('ON'), findsWidgets);
+
+      // Tapping Record actually starts capture now; discard so the shared
+      // runtime singleton is left clean for the next test (no disk write).
+      await runtime.debugStopRecording(discard: true);
+      runtime.debugSetAnnotationMode(false);
+      await settle();
+    },
+  );
+
+  testWidgets('flow recorder captures taps + typed fields as handle-based steps, '
+      'redacts secrets, and writes the flow to disk', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    // Leave the shared singleton clean if a prior test left a recording open.
+    if (runtime.debugIsRecording) {
+      await runtime.debugStopRecording(discard: true);
+    }
+    final tmp = Directory.systemTemp.createTempSync('scout_rec_test');
+    addTearDown(() => tmp.deleteSync(recursive: true));
+    runtime.debugSetRecordingsRootOverride(tmp.path);
+
+    // Own the controllers so text can be set without tester.enterText, which
+    // waits for scheduler idle — the REC HUD's pulse animation never idles.
+    final nameController = TextEditingController();
+    final pwController = TextEditingController();
+    addTearDown(nameController.dispose);
+    addTearDown(pwController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              ElevatedButton(
+                key: const ValueKey('save'),
+                onPressed: () {},
+                child: const Text('Save'),
+              ),
+              TextField(
+                key: const ValueKey('name'),
+                controller: nameController,
+              ),
+              TextField(
+                key: const ValueKey('password'),
+                controller: pwController,
+                obscureText: true,
+              ),
+              ElevatedButton(
+                key: const ValueKey('submit'),
+                onPressed: () {},
+                child: const Text('Submit'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // Commit is async (settles two frames before snapshotting the after-state).
+    Future<void> commit() async {
+      for (var i = 0; i < 4; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+    }
+
+    runtime.debugStartRecording(name: 'add member', feature: 'members');
+    expect(runtime.debugIsRecording, isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('save')));
+    await commit();
+
+    // Set field values directly (no idle wait); the recorder captures these by
+    // diffing field values between committed snapshots.
+    nameController.text = 'QA Tester';
+    pwController.text = 'secret123';
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('submit')));
+    await commit();
+
+    final result = await tester.runAsync(() => runtime.debugStopRecording());
+    expect(runtime.debugIsRecording, isFalse);
+
+    final steps = (result!['flow'] as Map)['steps'] as List;
+    final taps = [
+      for (final s in steps)
+        if (s['cmd'] == 'tap') s['target'],
+    ];
+    expect(taps, containsAll(<String>['btn.save', 'btn.submit']));
+
+    final nameStep = steps.firstWhere(
+      (s) => s['cmd'] == 'input' && s['target'] == 'field.name',
+    );
+    expect(nameStep['value'], 'QA Tester');
+    expect(nameStep.containsKey('_redacted'), isFalse);
+
+    final pwStep = steps.firstWhere(
+      (s) => s['cmd'] == 'input' && s['target'] == 'field.password',
+    );
+    expect(pwStep['_redacted'], 'true');
+    expect((pwStep['value'] as String).contains('VAR:'), isTrue);
+    expect((pwStep['value'] as String).contains('secret123'), isFalse);
+
+    // The flow was written to disk under <root>/<feature>/<name>.json.
+    final written = File('${tmp.path}/members/add-member.json');
+    expect(written.existsSync(), isTrue);
+    final onDisk = jsonDecode(written.readAsStringSync()) as Map;
+    expect(onDisk['feature'], 'members');
+    expect(onDisk['name'], 'add-member');
+    expect(onDisk['startScreen'], isNotNull);
+
+    // Index is rebuilt and lists the flow.
+    final index =
+        jsonDecode(File('${tmp.path}/index.json').readAsStringSync()) as Map;
+    expect(
+      (index['recordings'] as List).any((r) => r['name'] == 'add-member'),
+      isTrue,
+    );
   });
 
   group('scoutAnnotationDialogPlacement', () {
