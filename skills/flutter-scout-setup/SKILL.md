@@ -125,11 +125,26 @@ Use `ensure` when you want Scout to reuse a running app if possible and launch o
 flutter-scout ensure --device <simulator-id> --project <flutter-app-path> --name add-member
 ```
 
+Named sessions use isolated runtime directories and per-run logs. Concurrent
+`ensure` calls for one name join the current build. A second direct `launch`
+does not replace a ready run unless you pass `--replace`.
+
 Launch through Flutter Scout when you intentionally need a new Scout-owned run:
 
 ```bash
 flutter-scout launch --device <simulator-id> --project <flutter-app-path> --name add-member
 ```
+
+If permanent integration is not appropriate yet, verify with a generated,
+zero-diff bootstrap:
+
+```bash
+flutter-scout ensure --temporary-helper --device <simulator-id> --project <flutter-app-path> --name add-member
+```
+
+Scout restores `pubspec.yaml` and `pubspec.lock` after dependency resolution,
+and removes the generated bootstrap on stop. Use `--helper-path <path>` if
+automatic helper discovery fails.
 
 Always pass `--name <feature>` when running the app — a short kebab-case slug of the feature/task in focus (`add-member`, `supplier-search`), or the current git branch when no single feature is. It registers the session so any later command can target it with `--app <feature>` from any directory, and labels the debug badge so concurrent runs stay distinguishable.
 
@@ -139,6 +154,7 @@ Confirm the bridge:
 flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
 flutter-scout status
 flutter-scout inspect
+flutter-scout version
 ```
 
 Successful setup means `status` reports running and `inspect` returns visible text, interactables, fields, field geometry, and no setup error.

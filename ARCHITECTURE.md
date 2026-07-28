@@ -31,7 +31,7 @@ accessible because all parts share one library).
 |------|----------------|
 | `flutter_scout_binding.dart` | Entry points (`FlutterScoutBinding`, `FlutterScoutHelper`), `FlutterScoutRuntime` shell: fields, `install()`, error hooks, extension registration, `@visibleForTesting` debug hooks, `_handleInspect`. |
 | `runtime_annotations.dart` | **Annotation workflow + in-app capture.** `_handleAnnotations` (list/wait/fixed/get-crop/signal-handoff), status transitions, `_captureRegion`/`_handleCapture`, overlay install, public `addAnnotation`/`annotationCandidatesAt`/`visibleAnnotationTargets`. |
-| `runtime_actions.dart` | Interaction handlers: tap, tap-text, input, long-press, fill, scroll, swipe, scroll-to, back, wait-stable, pointer dispatch. |
+| `runtime_actions.dart` | Interaction handlers: tap, tap-text, input, long-press, fill, scroll, swipe, scroll-to, back, wait-stable, pointer dispatch, same-call expectation + frame capture. |
 | `runtime_snapshot.dart` | `_snapshot` (reads the widget tree) + annotation target collection + hit testing. |
 | `runtime_nodes.dart` | Node post-processing: compaction, label inference, id disambiguation, visual tree, geometry helpers. *(largest part; a future split candidate.)* |
 | `runtime_internals.dart` | Low-level pointer dispatch, tree walk, snapshot delta, `_ok`/`_fail` JSON responses. |
@@ -48,11 +48,12 @@ the shell; command groups are `extension`s.
 | File | Responsibility |
 |------|----------------|
 | `flutter_scout_cli.dart` | `run()` dispatch, `_call`/`_connect`, device resolution, VM-uri discovery, session-file IO, process inspection, usage. Top-level `_sessionDir` getters. |
-| `cli_session.dart` | launch / attach / ensure / status / doctor / stop. |
+| `cli_session.dart` | Transactional launch / attach / ensure / status / doctor / stop: isolated named runtime directories, per-run logs, launch locks/joining, atomic metadata, and temporary-helper bootstrap lifecycle. |
 | `cli_annotations.dart` | `bounds`, `annotations` command + crop materialization (cache keyed by capture identity, native fallback). |
-| `cli_actions.dart` | tap, input, tap-text, long-press, fill, wait, reload/restart, scroll/swipe/scroll-to, back, deeplink, logs. |
+| `cli_actions.dart` | tap, input, tap-text, long-press, fill, wait, reload/restart, scroll/swipe/scroll-to, back, deeplink, logs, guarded capture/error options. |
 | `cli_capture.dart` | screenshot / crop, `_inAppCapture`, `_cropPngBytes`. |
 | `cli_evidence.dart` | evidence bundle, replay, transcript formatting. |
+| `cli_serve.dart` | Persistent HTTP bridge: legacy `/run`, typed `/v1/schema` + `/v1/call`, health, and shutdown. |
 | `cli_results.dart` | VM response printing, protocol diagnostics, result compaction. |
 | `cli_models.dart` | CLI value types (exception, discovery/ready results, device + macOS window descriptors). |
 

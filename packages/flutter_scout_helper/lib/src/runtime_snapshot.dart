@@ -548,44 +548,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
   };
 
   int _surfaceLabelRank(String label) {
-    final slug = _scoutSlug(label);
-    if (slug.isEmpty) return 0;
-    if (const {
-      'pending_order',
-      'pending_orders',
-      'select_member',
-      'payment',
-      'sales',
-      'sale',
-      'orders',
-      'order',
-      'appointment',
-      'appointments',
-      'announcement',
-      'announcements',
-    }.contains(slug)) {
-      return 100;
-    }
-    if (slug.startsWith('pending_order') ||
-        slug.startsWith('payment') ||
-        slug.startsWith('select_member')) {
-      return 95;
-    }
-    if (slug.contains('order') ||
-        slug.contains('payment') ||
-        slug.contains('member') ||
-        slug.contains('sales')) {
-      return 80;
-    }
-    if (const {
-      'deedee_shop',
-      'operation',
-      'dark_mode',
-      'showtest',
-      'search',
-    }.contains(slug)) {
-      return 0;
-    }
+    // Surface detection must stay app-agnostic. Product-specific words used
+    // to outrank the actual topmost modal header (for example an underlying
+    // "Appointment" label beating a "Select Shop" sheet title).
     return 0;
   }
 

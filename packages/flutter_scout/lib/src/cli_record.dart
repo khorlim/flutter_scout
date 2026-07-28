@@ -300,6 +300,17 @@ extension _CliRecord on FlutterScoutCli {
       final cmd = step['cmd']?.toString() ?? '';
       final method = _recordMethodForCmd(cmd);
       final line = _recordStepLine(step);
+      // Pacing floor: if the PREVIOUS step carried no assertion gate (its
+      // result wasn't verifiable — e.g. a silent async load), reproduce the
+      // human's recorded pause before this step so replay doesn't outrun it.
+      // A gated predecessor already waited for readiness, so skip it there.
+      if (i > 0 && !_recordStepHasGate(steps[i - 1] as Map)) {
+        final dwellMs = int.tryParse('${step['_dwellMs'] ?? ''}') ?? 0;
+        final wait = dwellMs.clamp(0, 8000);
+        if (wait > 0) {
+          await Future<void>.delayed(Duration(milliseconds: wait));
+        }
+      }
       if (method == null) {
         results.add({
           'step': i + 1,
@@ -411,6 +422,11 @@ extension _CliRecord on FlutterScoutCli {
   }
 
   // ---- helpers ----------------------------------------------------------
+
+  /// Whether a recorded step carries an assertion gate (an `expect*` key), so
+  /// its replay waits for readiness rather than needing a dwell floor.
+  bool _recordStepHasGate(Map step) =>
+      step.keys.any((k) => k.toString().startsWith('expect'));
 
   String? _recordMethodForCmd(String cmd) => switch (cmd) {
     'tap' => 'ext.flutter_scout.tap',

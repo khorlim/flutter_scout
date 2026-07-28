@@ -58,6 +58,11 @@ flutter-scout ensure --device <simulator-id> --project <flutter-app-path> --name
 
 `ensure` is the default for agent loops: it reuses a ready Scout-owned VM service for that named session when possible and launches only when needed. Always pass `--name` (see below).
 
+Named sessions are isolated under their own runtime directories. If an
+`ensure` arrives while that name is building, it joins the active launch; it
+must not start a competing `flutter run`. A direct `launch` refuses to replace
+a ready session unless `--replace` is explicit.
+
 2. Launch directly when you intentionally need a fresh Scout-owned Flutter run:
 
 ```bash
@@ -78,6 +83,17 @@ flutter-scout attach --debug-url <vm-service-url>
 
 `--name` works on both `launch` and `ensure`; Scout injects it as a `--dart-define`.
 
+When verifying an app that has not been integrated, prefer the zero-diff
+bootstrap before editing its tracked setup:
+
+```bash
+flutter-scout ensure --temporary-helper --device <simulator-id> --project <flutter-app-path> --name add-member
+```
+
+Scout temporarily resolves `flutter_scout_helper`, launches through a generated
+bootstrap, and restores `pubspec.yaml`/`pubspec.lock`. Pass `--helper-path` only
+when `doctor` cannot discover the helper checkout.
+
 Launch validates the exact requested device and emits compact progress events. If launch was interrupted or you need to stop a Scout-owned run:
 
 ```bash
@@ -97,7 +113,7 @@ flutter-scout inspect
 flutter-scout inspect --sections textTargets,scrollables
 ```
 
-Prefer `inspect --brief` for orientation: it returns the screen name, bounded visible/hit-testable/offscreen text, compact interactables (id, kind, label, `selected` state), field values, row previews, suggested actions, semantic quality, perception provenance, and errors. Its default is capped at 20 items per list; read `omitted`, use `--max-items <1-100>` when a slightly larger digest is justified, or request a named full section instead of dumping the tree. Brief output omits anonymous generic gesture targets and reports `interactablesOmitted`; when many are omitted it adds an `inspectWarnings` item so you know semantics are weak without reading hundreds of `tap.gesturedetector_*` handles. Use `inspect --surface` when a modal, picker, dialog, or sheet is active and you want only the top surface's reachable text/actions. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,rows,annotations,semantics` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier`, `field.supplier_name`, and `row.customer_name.more_actions` over coordinates.
+Prefer `inspect --brief` for orientation: it returns `snapshotId`, screen, compact text/interactables/fields/rows, suggestions, semantic quality, perception provenance, and errors. When a modal, picker, dialog, or sheet is active, brief inspection automatically scopes every one of those sections to the top reachable surface and reports `surfaceOnly.automatic:true`; background controls must not influence semantic quality or actions. Its default is capped at 20 items per list; read `omitted`, use `--max-items <1-100>` when justified, or request a named full section. Use `inspect --surface` when explicit surface-only intent improves readability. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,rows,annotations,semantics` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier`, `field.supplier_name`, and `row.customer_name.more_actions` over coordinates.
 
 Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it. For CUSTOM segments/chips with no semantics, Scout infers selection heuristically: in a run of 3+ adjacent same-kind tappables where exactly one label color differs, that outlier is marked selected — treat inferred values as strong hints, not ground truth.
 
@@ -259,10 +275,15 @@ flutter-scout --app my-app explore --port-file /tmp/scout.port &
 flutter-scout --app my-app serve --port-file /tmp/scout.port &
 curl "localhost:$(cat /tmp/scout.port)/run?cmd=inspect%20--brief"
 curl "localhost:$(cat /tmp/scout.port)/run" --data 'tap btn.save --expect-text Saved'
+curl "localhost:$(cat /tmp/scout.port)/v1/schema"
+curl "localhost:$(cat /tmp/scout.port)/v1/call" -H 'content-type: application/json' --data '{"method":"tap","args":["btn.save"],"params":{"expectText":"Saved","capture":"/tmp/saved.png","assertNoErrors":true}}'
 curl "localhost:$(cat /tmp/scout.port)/stop"
 ```
 
-Each `/run` response is `{"exitCode": N, "result": {...}}` — the command's JSON is nested as a parsed object under `result` (raw text under `output` only when the command didn't print JSON), so parse the response once. Always `/stop` the daemon when the loop ends — a leaked daemon holds a VM connection open, and a later `stop`/relaunch orphans it. Don't spin up `serve` for a single command or a 2–3 step known sequence; the daemon lifecycle costs more than it saves there.
+Prefer typed `/v1/call` for programmatic agents; camelCase `params` map to the
+documented CLI flags and `/v1/schema` is the discoverable contract. Keep `/run`
+for shell-compatible scripts. Each response is `{"exitCode": N, "result":
+{...}}`. Always `/stop` the daemon when the loop ends.
 
 If compact action output includes `workflowHints` with `code:"consider_serve"`,
 switch to `explore`/`serve` for the rest of that exploratory loop.

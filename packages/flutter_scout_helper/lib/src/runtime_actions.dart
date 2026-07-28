@@ -1148,7 +1148,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params,
     Map<String, Object?> payload,
   ) async {
-    if (!_hasWaitConditions(params, prefix: 'expect')) return _ok(payload);
+    if (!_hasWaitConditions(params, prefix: 'expect')) {
+      return _ok(await _withActionCapture(params, payload));
+    }
     final conditions = _describeWaitConditions(params, prefix: 'expect');
     final outcome = await _awaitConditions(
       params,
@@ -1162,7 +1164,12 @@ extension _RuntimeActions on FlutterScoutRuntime {
       'conditions': conditions,
     };
     if (outcome.met) {
-      return _ok({...payload, 'expectation': expectation});
+      return _ok(
+        await _withActionCapture(params, {
+          ...payload,
+          'expectation': expectation,
+        }),
+      );
     }
     return _fail(
       outcome.blocked ? 'blocking_error_during_wait' : 'expectation_not_met',
@@ -1175,6 +1182,37 @@ extension _RuntimeActions on FlutterScoutRuntime {
         'visibleText': outcome.visibleText,
       },
     );
+  }
+
+  Future<Map<String, Object?>> _withActionCapture(
+    Map<String, String> params,
+    Map<String, Object?> payload,
+  ) async {
+    if (params['capture'] != 'true') return payload;
+    final capture = await _captureRegion();
+    final bytes = capture.bytes;
+    if (bytes == null) {
+      return {
+        ...payload,
+        'capture': {
+          'ok': false,
+          'error': capture.error ?? 'capture_failed',
+          'needsNative': capture.needsNative,
+        },
+      };
+    }
+    return {
+      ...payload,
+      'capture': {
+        'ok': true,
+        'backend': 'in_app_capture',
+        'bytes': base64Encode(bytes),
+        'width': capture.width,
+        'height': capture.height,
+        'pixelRatio': capture.pixelRatio,
+        'needsNative': capture.needsNative,
+      },
+    };
   }
 
   /// Whether any wait/expect condition is present in [params].

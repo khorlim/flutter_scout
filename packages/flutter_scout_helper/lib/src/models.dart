@@ -121,6 +121,11 @@ class ScoutSnapshot {
     return hash.toRadixString(16).padLeft(8, '0');
   }
 
+  /// Compact identity for querying or correlating one observed UI state
+  /// without repeating its full widget-derived payload.
+  String get snapshotId =>
+      '$visibleTextHash-${interactables.length}-${fields.length}';
+
   ScoutNode? findNode(String target) {
     final normalized = target.trim();
     if (normalized.startsWith('row.')) {
@@ -175,6 +180,7 @@ class ScoutSnapshot {
       if (activeSurface != null) 'activeSurface': activeSurface,
       'routeGuess': routeGuess,
       'viewSignature': viewSignature,
+      'snapshotId': snapshotId,
       'visibleTextHash': visibleTextHash,
       'idle': idle,
       'devicePixelRatio': devicePixelRatio,

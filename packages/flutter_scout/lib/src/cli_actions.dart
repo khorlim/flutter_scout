@@ -43,6 +43,18 @@ extension _CliActions on FlutterScoutCli {
         'expect-timeout',
         defaultsTo: '5000',
         help: 'Expectation timeout in ms.',
+      )
+      ..addOption(
+        'capture',
+        help:
+            'Write an in-app screenshot at the exact post-action expectation '
+            'frame.',
+      )
+      ..addFlag(
+        'assert-no-errors',
+        defaultsTo: false,
+        negatable: false,
+        help: 'Fail when fresh blocking runtime or log errors are observed.',
       );
   }
 
@@ -65,6 +77,7 @@ extension _CliActions on FlutterScoutCli {
     if (params.isNotEmpty) {
       params['expectTimeoutMs'] = opt('expect-timeout') ?? '5000';
     }
+    if (opt('capture') != null) params['capture'] = 'true';
     return params;
   }
 
@@ -317,6 +330,8 @@ extension _CliActions on FlutterScoutCli {
       record: {'cmd': 'tap', ...params},
       compact: !parsed.flag('verbose'),
       callTimeout: _actionCallTimeout(parsed, params),
+      captureOutput: parsed.option('capture'),
+      assertNoErrors: parsed.flag('assert-no-errors'),
     );
   }
 
@@ -362,6 +377,8 @@ extension _CliActions on FlutterScoutCli {
       record: {'cmd': 'input', ...params},
       compact: !parsed.flag('verbose'),
       callTimeout: _actionCallTimeout(parsed, params),
+      captureOutput: parsed.option('capture'),
+      assertNoErrors: parsed.flag('assert-no-errors'),
     );
   }
 
@@ -417,7 +434,12 @@ extension _CliActions on FlutterScoutCli {
     );
     result = await _tapTextFallbackIfNeeded(result, params);
     result = _withProtocolDiagnostics('ext.flutter_scout.tapText', result);
+    result = _materializeActionCapture(result, parsed.option('capture'));
     result = await _withRecentLogSignals(result);
+    result = _assertActionHasNoErrors(
+      result,
+      enabled: parsed.flag('assert-no-errors'),
+    );
     _emitActionOutput(
       Map<String, dynamic>.from(
         parsed.flag('verbose') ? result : _compactActionResult(result),
@@ -485,6 +507,8 @@ extension _CliActions on FlutterScoutCli {
       record: {'cmd': 'fill', ...params},
       compact: !parsed.flag('verbose'),
       callTimeout: _actionCallTimeout(parsed, params),
+      captureOutput: parsed.option('capture'),
+      assertNoErrors: parsed.flag('assert-no-errors'),
     );
   }
 

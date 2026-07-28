@@ -9,6 +9,48 @@ class ScoutCliException implements Exception {
   final String message;
 }
 
+class _LaunchLease {
+  const _LaunchLease({
+    required this.file,
+    required this.runId,
+    required this.startedAt,
+  });
+
+  final File file;
+  final String runId;
+  final DateTime startedAt;
+
+  void release() {
+    try {
+      if (file.existsSync()) file.deleteSync();
+    } catch (_) {
+      // A stale lock is recoverable by the next launch.
+    }
+  }
+}
+
+class _TemporaryHelperSetup {
+  const _TemporaryHelperSetup({
+    required this.project,
+    required this.targetPath,
+    required this.lockExisted,
+    required this.lockBackupPath,
+  });
+
+  final String project;
+  final String targetPath;
+  final bool lockExisted;
+  final String? lockBackupPath;
+
+  Map<String, Object?> toJson() => {
+    'mode': 'temporary_helper',
+    'project': project,
+    'targetPath': targetPath,
+    'lockExisted': lockExisted,
+    'lockBackupPath': ?lockBackupPath,
+  };
+}
+
 class _AttachDiscovery {
   const _AttachDiscovery({
     this.uri,
@@ -90,11 +132,15 @@ class _LaunchTiming {
 
   Map<String, Object?> toJson({DateTime? completedAt}) {
     final completed = completedAt ?? readyAt ?? DateTime.now();
+    final validBuildWindow =
+        buildStartedAt != null &&
+        buildDoneAt != null &&
+        !buildDoneAt!.isBefore(buildStartedAt!);
     return {
       'totalMs': completed.difference(startedAt).inMilliseconds,
       if (buildStartedAt != null)
         'buildStartMs': buildStartedAt!.difference(startedAt).inMilliseconds,
-      if (buildStartedAt != null && buildDoneAt != null)
+      if (validBuildWindow)
         'buildDurationMs': buildDoneAt!
             .difference(buildStartedAt!)
             .inMilliseconds,

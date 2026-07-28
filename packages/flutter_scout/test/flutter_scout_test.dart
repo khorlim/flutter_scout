@@ -99,6 +99,15 @@ void main() {
     });
   });
 
+  test('launch timing never reports a negative build duration', () {
+    final timing = FlutterScoutCli().debugLaunchTimingFromLines([
+      'Xcode build done.',
+      'Running Xcode build...',
+    ]);
+
+    expect(timing['buildDurationMs'], isNull);
+  });
+
   test('stop succeeds without a stored pid', () async {
     await _withTempCwd(() async {
       final exitCode = await FlutterScoutCli().run(['stop']);
@@ -445,6 +454,21 @@ void main() {
   });
 
   group('session registry', () {
+    test('named sessions use isolated runtime directories', () {
+      final first = FlutterScoutCli.debugNamedSessionDirectory(
+        '/workspace',
+        'feature A',
+      );
+      final second = FlutterScoutCli.debugNamedSessionDirectory(
+        '/workspace',
+        'feature B',
+      );
+
+      expect(first, '/workspace/.flutter_scout/sessions/feature-a');
+      expect(second, '/workspace/.flutter_scout/sessions/feature-b');
+      expect(first, isNot(second));
+    });
+
     test('--app resolves a registered session directory', () async {
       final temp = await Directory.systemTemp.createTemp('scout_registry_');
       addTearDown(() => temp.delete(recursive: true));
@@ -462,13 +486,12 @@ void main() {
 
       final previous = Directory.current;
       addTearDown(() => Directory.current = previous);
-      // status against the registered (empty) session: runs from that dir
-      // and reports not-running rather than session_not_registered.
+      // Status targets that session without changing the caller's cwd.
       final cli = FlutterScoutCli();
       expect(await cli.run(['--app', 'my-app', 'status']), 0);
       expect(
         Directory.current.resolveSymbolicLinksSync(),
-        sessionDir.resolveSymbolicLinksSync(),
+        previous.resolveSymbolicLinksSync(),
       );
 
       // Unknown name fails with the registered names listed.
@@ -597,6 +620,22 @@ void main() {
 
       final health = await get('/health');
       expect(health['ok'], isTrue);
+
+      final schema = await get('/v1/schema');
+      expect(schema['protocol'], 'flutter-scout-agent');
+      expect(schema['methods'], contains('tap'));
+
+      final typedRequest = await client.postUrl(
+        Uri.parse('http://127.0.0.1:$port/v1/call'),
+      );
+      typedRequest.headers.contentType = ContentType.json;
+      typedRequest.write(jsonEncode({'method': 'apps'}));
+      final typedResponse = await typedRequest.close();
+      final typedBody =
+          jsonDecode(await utf8.decoder.bind(typedResponse).join())
+              as Map<String, dynamic>;
+      expect(typedBody['exitCode'], 0);
+      expect(typedBody['result'], containsPair('ok', true));
 
       final apps = await get('/run?cmd=apps');
       expect(apps['exitCode'], 0);
@@ -729,9 +768,108 @@ void main() {
     expect(summary.containsKey('controlGroups'), isFalse);
     expect(summary.containsKey('fieldsById'), isFalse);
     expect(summary.containsKey('structuredRows'), isFalse);
-    expect(summary['structuredRowCount'], 1);
-    expect((summary['visibleText'] as List).length, 12);
+    expect(summary.containsKey('structuredRowCount'), isFalse);
+    expect(summary.containsKey('visibleText'), isFalse);
+    expect(summary.containsKey('hitTestableText'), isFalse);
   });
+
+  test(
+    'post-action capture is materialized without base64 in output',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('scout_capture_');
+      addTearDown(() => temp.delete(recursive: true));
+      final output = p.join(temp.path, 'capture.png');
+      final result = FlutterScoutCli().debugMaterializeActionCapture({
+        'ok': true,
+        'capture': {
+          'ok': true,
+          'bytes': base64Encode([1, 2, 3, 4]),
+          'backend': 'in_app_capture',
+        },
+      }, output);
+
+      expect(File(output).readAsBytesSync(), [1, 2, 3, 4]);
+      expect(
+        result['capture'],
+        allOf(
+          isNot(contains('bytes')),
+          containsPair('path', File(output).absolute.path),
+        ),
+      );
+    },
+  );
+
+  test('assert-no-errors converts fresh blocking signals into failure', () {
+    final result = FlutterScoutCli().debugAssertActionHasNoErrors({
+      'ok': true,
+      'recentLogSignals': [
+        {'blocking': true, 'stale': false, 'message': 'build failed'},
+      ],
+    });
+
+    expect(result['ok'], isFalse);
+    expect(result['error'], containsPair('code', 'blocking_errors_observed'));
+  });
+
+  test(
+    'temporary helper setup leaves tracked inputs unchanged',
+    () async {
+      final temp = await Directory.systemTemp.createTemp(
+        'scout_temporary_helper_',
+      );
+      addTearDown(() => temp.delete(recursive: true));
+      final pubspec = File(p.join(temp.path, 'pubspec.yaml'))
+        ..writeAsStringSync('''
+name: temporary_scout_app
+environment:
+  sdk: ^3.12.0
+dependencies:
+  flutter:
+    sdk: flutter
+''');
+      final mainFile = File(p.join(temp.path, 'lib', 'main.dart'));
+      mainFile.parent.createSync(recursive: true);
+      mainFile.writeAsStringSync('''
+import 'package:flutter/widgets.dart';
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const SizedBox());
+}
+''');
+      final originalPubspec = pubspec.readAsBytesSync();
+      final helperPath = p.normalize(
+        p.join(Directory.current.path, '..', 'flutter_scout_helper'),
+      );
+
+      final cli = FlutterScoutCli();
+      final setup = await cli.debugPrepareTemporaryHelper(
+        project: temp.path,
+        helperPath: helperPath,
+      );
+
+      expect(pubspec.readAsBytesSync(), originalPubspec);
+      expect(File(p.join(temp.path, 'pubspec.lock')).existsSync(), isFalse);
+      expect(File(setup['targetPath']!.toString()).existsSync(), isTrue);
+      expect(
+        File(
+          p.join(temp.path, '.dart_tool', 'package_config.json'),
+        ).readAsStringSync(),
+        contains('flutter_scout_helper'),
+      );
+
+      final cleanup = await cli.debugCleanupTemporaryHelper(setup);
+      expect(cleanup['targetRemoved'], isTrue);
+      expect(cleanup['packageConfigRestored'], isTrue);
+      expect(File(p.join(temp.path, 'pubspec.lock')).existsSync(), isFalse);
+      expect(
+        File(
+          p.join(temp.path, '.dart_tool', 'package_config.json'),
+        ).readAsStringSync(),
+        isNot(contains('flutter_scout_helper')),
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
 
   test('compact held-drag output keeps position and path progress', () {
     final cli = FlutterScoutCli();
@@ -826,7 +964,7 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
     final after = result['afterSummary'] as Map<String, Object?>;
     expect(before.containsKey('textTargets'), isFalse);
     expect(after.containsKey('visualTree'), isFalse);
-    expect((before['visibleText'] as List).length, 12);
+    expect(before.containsKey('visibleText'), isFalse);
     expect((result['recentErrors'] as List).length, 3);
   });
 

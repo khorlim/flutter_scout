@@ -8,6 +8,9 @@ part of 'flutter_scout_cli.dart';
 //
 //   flutter-scout serve --port-file /tmp/scout.port &
 //   curl "localhost:$(cat /tmp/scout.port)/run?cmd=inspect%20--brief"
+//   curl -X POST -H 'content-type: application/json' \
+//     -d '{"method":"tap","args":["btn.save"],"params":{"expectText":"Saved"}}' \
+//     "localhost:$(cat /tmp/scout.port)/v1/call"
 //   curl "localhost:$(cat /tmp/scout.port)/stop"
 
 extension _CliServe on FlutterScoutCli {
@@ -36,7 +39,13 @@ extension _CliServe on FlutterScoutCli {
           'command':
               'flutter-scout explore --port ${parsed.option('port')} --port-file $portFile',
           'portFile': portFile,
-          'endpoints': ['/run?cmd=<command line>', '/health', '/stop'],
+          'endpoints': [
+            '/v1/schema',
+            '/v1/call',
+            '/run?cmd=<command line>',
+            '/health',
+            '/stop',
+          ],
           'reason':
               'Use one persistent VM connection for exploratory agent loops.',
         }),
@@ -68,7 +77,13 @@ extension _CliServe on FlutterScoutCli {
       jsonEncode({
         'serving': true,
         'port': server.port,
-        'endpoints': ['/run?cmd=<command line>', '/health', '/stop'],
+        'endpoints': [
+          '/v1/schema',
+          '/v1/call',
+          '/run?cmd=<command line>',
+          '/health',
+          '/stop',
+        ],
       }),
     );
     try {
@@ -105,6 +120,29 @@ extension _CliServe on FlutterScoutCli {
         response.write(jsonEncode({'ok': true, 'stopping': true}));
         await response.close();
         return true;
+      case '/v1/schema':
+        response.write(jsonEncode(_agentProtocolSchema(port)));
+        await response.close();
+        return false;
+      case '/v1/call':
+        if (request.method != 'POST') {
+          response.statusCode = HttpStatus.methodNotAllowed;
+          response.write(
+            jsonEncode({
+              'ok': false,
+              'error': {
+                'code': 'method_not_allowed',
+                'message': 'POST a JSON request to /v1/call.',
+              },
+            }),
+          );
+          await response.close();
+          return false;
+        }
+        final body = await utf8.decoder.bind(request).join();
+        response.write(jsonEncode(await _runTypedCall(body)));
+        await response.close();
+        return false;
       case '/run':
         var command = request.uri.queryParameters['cmd'] ?? '';
         if (command.isEmpty && request.method == 'POST') {
@@ -120,7 +158,8 @@ extension _CliServe on FlutterScoutCli {
             'ok': false,
             'error': {
               'code': 'unknown_endpoint',
-              'message': 'Use /run?cmd=<command>, /health, or /stop.',
+              'message':
+                  'Use /v1/schema, /v1/call, /run?cmd=<command>, /health, or /stop.',
             },
           }),
         );
@@ -131,6 +170,113 @@ extension _CliServe on FlutterScoutCli {
 
   Future<Map<String, Object?>> _runCaptured(String command) async {
     final argv = FlutterScoutCli.splitCommandLine(command);
+    return _runCapturedArgs(argv);
+  }
+
+  Future<Map<String, Object?>> _runTypedCall(String body) async {
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) {
+        return {
+          'exitCode': 1,
+          'error': {
+            'code': 'invalid_request',
+            'message': 'Expected a JSON object.',
+          },
+        };
+      }
+      final method = decoded['method']?.toString();
+      if (method == null || method.isEmpty) {
+        return {
+          'exitCode': 1,
+          'error': {
+            'code': 'missing_method',
+            'message': 'The typed request requires `method`.',
+          },
+        };
+      }
+      if (!FlutterScoutCli._commands.contains(method)) {
+        return {
+          'exitCode': 1,
+          'error': {
+            'code': 'unknown_method',
+            'message': 'Unknown Flutter Scout method `$method`.',
+          },
+        };
+      }
+      final argv = <String>[
+        if (decoded['app']?.toString().isNotEmpty == true) ...[
+          '--app',
+          decoded['app'].toString(),
+        ],
+        method,
+        if (decoded['args'] is List)
+          for (final value in decoded['args'] as List) value.toString(),
+        ..._typedParamsToArgs(decoded['params']),
+      ];
+      return _runCapturedArgs(argv);
+    } catch (error) {
+      return {
+        'exitCode': 1,
+        'error': {'code': 'invalid_json', 'message': error.toString()},
+      };
+    }
+  }
+
+  List<String> _typedParamsToArgs(Object? raw) {
+    if (raw is! Map) return const [];
+    final args = <String>[];
+    for (final entry in raw.entries) {
+      final name = entry.key.toString().replaceAllMapped(
+        RegExp(r'[A-Z]'),
+        (match) => '-${match.group(0)!.toLowerCase()}',
+      );
+      final value = entry.value;
+      if (value == null || value == false) continue;
+      if (value == true) {
+        args.add('--$name');
+      } else if (value is List) {
+        for (final item in value) {
+          args
+            ..add('--$name')
+            ..add(item.toString());
+        }
+      } else if (value is Map || (name == 'json' && value is! String)) {
+        args
+          ..add('--$name')
+          ..add(jsonEncode(value));
+      } else {
+        args
+          ..add('--$name')
+          ..add(value.toString());
+      }
+    }
+    return args;
+  }
+
+  Map<String, Object?> _agentProtocolSchema(int port) => {
+    'ok': true,
+    'protocol': 'flutter-scout-agent',
+    'version': 1,
+    'port': port,
+    'call': {
+      'method': 'POST',
+      'path': '/v1/call',
+      'shape': {
+        'method': 'tap',
+        'app': 'optional-session-name',
+        'args': ['btn.save'],
+        'params': {
+          'expectText': 'Saved',
+          'capture': '/tmp/saved.png',
+          'assertNoErrors': true,
+        },
+      },
+    },
+    'methods': FlutterScoutCli._commands.toList()..sort(),
+  };
+
+  Future<Map<String, Object?>> _runCapturedArgs(List<String> argv) async {
     if (argv.isEmpty) {
       return {'exitCode': 1, 'error': 'empty command'};
     }

@@ -29,7 +29,7 @@ part 'runtime_recorder.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 12;
+const int scoutHelperProtocolVersion = 13;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -97,6 +97,18 @@ class FlutterScoutRuntime {
   ScoutSnapshot? _recordBaseline;
   bool _recordRouteInstalled = false;
   int _recordAutoNameSeq = 0;
+  // Gesture commits run one at a time on this tail so their settle waits (which
+  // can span a load) never interleave and race the shared baseline.
+  Future<void> _recordCommitTail = Future<void>.value();
+  // Wall-clock of the last recorded action, used to stamp per-step dwell (the
+  // human's pause before this action) as a replay pacing floor.
+  DateTime? _recordLastActionAt;
+  int _recordPendingDwellMs = 0;
+  // How long each step's after-state may take to settle before its assertion is
+  // captured: [_recordSettleMs] waits for the tree to go quiet, [_recordLateMs]
+  // then polls for a late-arriving change (async load). Tests set these to 0.
+  int _recordSettleMs = 1500;
+  int _recordLateMs = 1200;
   // Absolute path to the app project (so the helper writes recordings straight
   // to <project>/.flutter_scout/recordings/). Injected by the CLI at launch;
   // falls back to the process cwd on desktop.
@@ -232,6 +244,15 @@ class FlutterScoutRuntime {
   void debugSetRecordingsRootOverride(String? path) =>
       _recordRootOverride = path;
 
+  /// Test-only: collapse the per-step settle waits (fake-async can't advance the
+  /// wall-clock deadlines in `_waitStable`), so the recorder captures the
+  /// current frame without real delays.
+  @visibleForTesting
+  void debugSetRecordSettleMs(int settle, int late) {
+    _recordSettleMs = settle;
+    _recordLateMs = late;
+  }
+
   /// Test-only: (re)insert the overlay entry into the current tree's Overlay.
   /// Real apps install once at startup into the app's persistent Overlay; tests
   /// rebuild the tree per case, so the shared runtime's stale entry must be
@@ -250,6 +271,12 @@ class FlutterScoutRuntime {
   /// including the chrome-transparency window.
   @visibleForTesting
   Future<void> debugDispatchTap(Offset point) => _dispatchTap(point);
+
+  Future<Map<String, Object?>> debugActionCapturePayload() =>
+      _withActionCapture(
+        const {'capture': 'true'},
+        const {'action': 'debug-capture'},
+      );
 
   /// Test-app primitive matching the service-extension held-drag lifecycle.
   @visibleForTesting
@@ -497,12 +524,14 @@ class FlutterScoutRuntime {
     bool surfaceOnly = false,
   }) {
     final snapshot = _snapshot();
-    final surfaceRect = surfaceOnly ? _surfaceRectFor(snapshot) : null;
-    final surfaceAnchorOrdinal = surfaceOnly
+    final focusSurface =
+        surfaceOnly || (brief && snapshot.activeSurface != null);
+    final surfaceRect = focusSurface ? _surfaceRectFor(snapshot) : null;
+    final surfaceAnchorOrdinal = focusSurface
         ? _surfaceAnchorOrdinal(snapshot)
         : null;
     final surfaceApplied =
-        surfaceOnly && (surfaceRect != null || surfaceAnchorOrdinal != null);
+        focusSurface && (surfaceRect != null || surfaceAnchorOrdinal != null);
     final interactables = _nodesForSurface(
       snapshot.interactables,
       surfaceRect,
@@ -519,16 +548,16 @@ class FlutterScoutRuntime {
       surfaceAnchorOrdinal,
     );
     final fullScreenSurface =
-        surfaceOnly &&
+        focusSurface &&
         surfaceRect != null &&
         surfaceRect.width >= snapshot.logicalSize.width * 0.90 &&
         surfaceRect.height >= snapshot.logicalSize.height * 0.90;
-    final visibleText = surfaceRect == null
+    final visibleText = !focusSurface
         ? snapshot.visibleText
         : fullScreenSurface
         ? _surfaceVisibleLabels(snapshot, interactables, fields)
         : _labelsFrom(textTargets);
-    final hitTestableText = surfaceRect == null
+    final hitTestableText = !focusSurface
         ? snapshot.hitTestableText
         : fullScreenSurface
         ? _surfaceVisibleLabels(snapshot, interactables, fields)
@@ -546,9 +575,10 @@ class FlutterScoutRuntime {
       'routeGuess': snapshot.routeGuess,
       if (snapshot.activeSurface != null)
         'activeSurface': snapshot.activeSurface,
-      if (surfaceOnly)
+      if (focusSurface)
         'surfaceOnly': {
           'applied': surfaceApplied,
+          if (!surfaceOnly) 'automatic': true,
           if (!surfaceApplied)
             'reason': snapshot.activeSurface == null
                 ? 'no_active_surface'
@@ -563,13 +593,18 @@ class FlutterScoutRuntime {
           'anchorOrdinal': ?surfaceAnchorOrdinal,
         },
       'viewSignature': snapshot.viewSignature,
+      'snapshotId': snapshot.snapshotId,
       'visibleTextHash': snapshot.visibleTextHash,
       'idle': snapshot.idle,
       'devicePixelRatio': snapshot.devicePixelRatio,
       'logicalSize': [snapshot.logicalSize.width, snapshot.logicalSize.height],
       'perception': snapshot.perceptionJson(),
       if (snapshot.degradedNodes > 0) 'degradedNodes': snapshot.degradedNodes,
-      'semanticQuality': _semanticQuality(snapshot),
+      'semanticQuality': _semanticQuality(
+        snapshot,
+        scopedInteractables: interactables,
+        scopedFields: fields,
+      ),
       'recentErrors': snapshot.recentErrors,
       'annotationMode': _annotationMode,
     };
@@ -595,7 +630,18 @@ class FlutterScoutRuntime {
         snapshot.offscreenText,
         (maxItems ~/ 2).clamp(4, 20).toInt(),
       );
-      final briefRows = snapshot.structuredRows
+      final surfaceTargetIds = {
+        for (final node in interactables) node.id,
+        for (final node in interactables) node.baseId,
+        for (final node in interactables) ...node.altIds,
+      };
+      final scopedRows = focusSurface
+          ? [
+              for (final row in snapshot.structuredRows)
+                if (surfaceTargetIds.contains(row['primaryTarget'])) row,
+            ]
+          : snapshot.structuredRows;
+      final briefRows = scopedRows
           .take((maxItems ~/ 4).clamp(2, 6).toInt())
           .map(_compactStructuredRow)
           .toList(growable: false);
@@ -622,8 +668,10 @@ class FlutterScoutRuntime {
         'semanticQuality': _semanticQuality(
           snapshot,
           anonymousGenericTargetsOmitted: omitted,
+          scopedInteractables: interactables,
+          scopedFields: fields,
         ),
-        if (snapshot.structuredRows.isNotEmpty) 'structuredRows': briefRows,
+        if (scopedRows.isNotEmpty) 'structuredRows': briefRows,
         if (snapshot.scrollables.isNotEmpty)
           'scrollables': [
             for (final scrollable in snapshot.scrollables.take(6))
@@ -638,7 +686,7 @@ class FlutterScoutRuntime {
             hitTestableText.length > briefHitTestableText.length ||
             snapshot.offscreenText.length > briefOffscreenText.length ||
             briefInteractables.length > maxItems ||
-            snapshot.structuredRows.length > briefRows.length ||
+            scopedRows.length > briefRows.length ||
             fields.length > maxItems)
           'omitted': {
             if (visibleText.length > briefVisibleText.length)
@@ -651,9 +699,8 @@ class FlutterScoutRuntime {
                   snapshot.offscreenText.length - briefOffscreenText.length,
             if (briefInteractables.length > maxItems)
               'interactables': briefInteractables.length - maxItems,
-            if (snapshot.structuredRows.length > briefRows.length)
-              'structuredRows':
-                  snapshot.structuredRows.length - briefRows.length,
+            if (scopedRows.length > briefRows.length)
+              'structuredRows': scopedRows.length - briefRows.length,
             if (fields.length > maxItems) 'fields': fields.length - maxItems,
             'hint': 'Use inspect --sections <name> for full detail.',
           },
@@ -708,8 +755,10 @@ class FlutterScoutRuntime {
   Map<String, Object?> _semanticQuality(
     ScoutSnapshot snapshot, {
     int anonymousGenericTargetsOmitted = 0,
+    List<ScoutNode>? scopedInteractables,
+    List<ScoutNode>? scopedFields,
   }) {
-    final interactables = snapshot.interactables
+    final interactables = (scopedInteractables ?? snapshot.interactables)
         .where((node) => node.visibleFraction > 0)
         .toList(growable: false);
     final unlabeled = [
@@ -806,7 +855,7 @@ class FlutterScoutRuntime {
         'duplicateLabelInstances': duplicates,
         'nonHitTestableActions': disabledHitTargets.length,
         'lowConfidenceTargets': lowConfidence.length,
-        'fields': snapshot.fields.length,
+        'fields': (scopedFields ?? snapshot.fields).length,
         'structuredRows': snapshot.structuredRows.length,
       },
       if (issues.isNotEmpty) 'issues': issues,

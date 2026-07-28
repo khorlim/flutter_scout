@@ -21,9 +21,9 @@ Start here based on what you need:
 
 ## Capabilities
 
-- **Sessions & lifecycle** — named Scout-owned `ensure`/`launch`, explicit `attach`, exact device resolution, stale-session validation, extension-readiness preflight, `doctor`/`status`/`stop`, and launch timing metrics.
-- **Perception** — compact `inspect` snapshots with stable handles (keys, semantics, tooltips, Material icons/glyphs, inferred button labels), split text visibility (`visibleText`/`hitTestableText`/`offscreenText`), modal-focused `inspect --surface`, viewport metadata, and duplicate-safe field handles.
-- **Acting** — tap, tap-text, long-press, input, fill, coordinate-aware scroll/swipe, scroll-to, back; compact action output with per-field fill results and before/after deltas (`--verbose` for full payloads).
+- **Sessions & lifecycle** — isolated named sessions and run logs, launch locking/joining, explicit replacement, optional zero-diff temporary helper injection, exact device resolution, `doctor`/`status`/`stop`, and launch timing metrics.
+- **Perception** — compact `inspect` snapshots with stable handles and snapshot identities, automatic top-modal scoping, split text visibility (`visibleText`/`hitTestableText`/`offscreenText`), viewport metadata, and duplicate-safe field handles.
+- **Acting** — tap, tap-text, long-press, input, fill, coordinate-aware scroll/swipe, scroll-to, back; same-call expectations and exact post-action capture, optional fresh-error assertions, and compact before/after deltas (`--verbose` for full payloads).
 - **Hot update** — reload/restart with capability hints and reload diagnostics that separate rejected VM reloads from apps still running old code.
 - **Visual & log evidence** — in-app and native screenshots/crops, attach-aware log capture, and shareable `evidence` / `evidence --audit` bundles.
 - **Runtime signals** — hard Flutter/platform error capture with `severity`, `blocking`, `phase`, `ageMs`, and `stale` facts.
@@ -74,11 +74,28 @@ cd packages/flutter_scout
 dart run bin/flutter_scout.dart ensure --device <simulator-id> --project ../../apps/scout_test_app --name smoke-test
 ```
 
+Each name owns a separate runtime directory and every launch owns a unique run
+log. Concurrent `ensure` calls for the same name join the active build instead
+of starting a second `flutter run`. A direct second `launch` fails clearly; use
+`launch --replace` only when replacing the ready run is intentional.
+
 Use `launch` when you explicitly need Scout to start a fresh Flutter run:
 
 ```bash
 dart run bin/flutter_scout.dart launch --device <simulator-id> --project ../../apps/scout_test_app --name smoke-test
 ```
+
+For a project that is not permanently integrated yet, Scout can prepare a
+generated bootstrap and helper dependency without leaving changes in
+`pubspec.yaml` or `pubspec.lock`:
+
+```bash
+dart run bin/flutter_scout.dart ensure --temporary-helper --device <simulator-id> --project <flutter-app-path> --name smoke-test
+```
+
+Scout restores tracked inputs immediately and removes the generated bootstrap
+when the session stops. Use `--helper-path <path>` when local discovery cannot
+find `flutter_scout_helper`.
 
 Use `attach` only when you intentionally need to preserve or inspect a human-started app state:
 
@@ -120,6 +137,7 @@ Drive the sample flow:
 dart run bin/flutter_scout.dart inspect
 dart run bin/flutter_scout.dart inspect --surface
 dart run bin/flutter_scout.dart tap btn.add_supplier
+dart run bin/flutter_scout.dart tap btn.add_supplier --expect-text "Supplier name" --capture /tmp/add-supplier.png --assert-no-errors
 dart run bin/flutter_scout.dart fill --json '{"Supplier name":"Replay Supplier","Phone":"555"}'
 dart run bin/flutter_scout.dart tap btn.save_supplier
 dart run bin/flutter_scout.dart bounds btn.add_supplier
@@ -155,11 +173,25 @@ dart run bin/flutter_scout.dart drag-move --by=30,0
 dart run bin/flutter_scout.dart drag-end
 ```
 
-Action commands return compact JSON by default: result, stability, delta, recent errors, and a small after summary. Add `--verbose` to action commands or `replay` when full before/after payloads are needed.
+Action commands return compact JSON by default: result, stability, delta, recent errors, a snapshot id, and a small after summary. Guard `tap`, `tap-text`, `input`, and `fill` with `--expect-*`; add `--capture <path>` to save the exact frame that satisfied the expectation in the same VM call, and `--assert-no-errors` to fail on fresh blocking runtime or owned-log signals. Add `--verbose` only when full before/after payloads are needed.
 
 Scout-owned `launch` and `ensure` responses include a `timing` object when they start Flutter, for example `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`. Use this to tell rebuild cost from app startup or VM-service wait time.
 
-`inspect` includes `fieldsById`, `textTargets`, `visibleText`, `hitTestableText`, `offscreenText`, `visibleRect`, `visibleFraction`, `offscreen`, `partiallyOffscreen`, `suggestedTapPoint`, `hitTestable`, `scrollables`, `overlays`, `visualTree`, and `controlGroups` so agents can avoid stale, hidden, modal-blocked, or unsafe targets while still visualizing the UI hierarchy. `inspect --brief` has a bounded default payload (20 items per list); use `--max-items <1-100>` to tune it and `omitted` tells you when to request a named full section. `inspect --surface` focuses on the reachable text/actions on the active modal, picker, dialog, or sheet. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Icon-only controls should use keys, tooltips, or semantics when possible; Scout also derives handles for common Material icon widgets and glyph text, for example `btn.duplicate` from `Icons.copy`, and can expose a unique nearby-text alias such as `btn.account_settings`. Use `inspect --sections semantics` for factual handle-level evidence behind unlabeled, duplicate, low-confidence, or non-hit-testable controls.
+`inspect` includes a `snapshotId`, `fieldsById`, `textTargets`, `visibleText`, `hitTestableText`, `offscreenText`, geometry, scrollables, overlays, visual tree, and control groups. `inspect --brief` is bounded and automatically scopes its text, controls, rows, and semantic-quality calculation to the active top modal, picker, dialog, or sheet; the response marks this as `surfaceOnly.automatic:true`. Use `--max-items <1-100>` to tune the digest, `omitted` to decide when more is needed, and `inspect --surface` to request modal-only behavior explicitly. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Use `inspect --sections semantics` for factual handle-level evidence behind unlabeled, duplicate, low-confidence, or non-hit-testable controls.
+
+For a persistent agent integration, `serve` exposes both the compatible
+command-line endpoint and a typed JSON protocol:
+
+```bash
+curl "localhost:$(cat /tmp/scout.port)/v1/schema"
+curl "localhost:$(cat /tmp/scout.port)/v1/call" \
+  -H 'content-type: application/json' \
+  --data '{"method":"tap","args":["btn.save"],"params":{"expectText":"Saved","capture":"/tmp/saved.png","assertNoErrors":true}}'
+```
+
+Use `flutter-scout version`, `flutter-scout help <command>`, and
+`flutter-scout doctor` to verify the CLI identity, protocol compatibility, and
+resolved helper package before debugging an app.
 
 `fill` and `input` are for real editable text fields only. Custom controls such as numeric keypads are exposed in `visualTree` and `controlGroups`, for example a dialog region with title, display text, a `numeric_keypad` control group, key children like `key.1`, and commit actions like `btn.save`. Agents should operate those controls with explicit `tap` commands, the same way a human would press visible buttons.
 

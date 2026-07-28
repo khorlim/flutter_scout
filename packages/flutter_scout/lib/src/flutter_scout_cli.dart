@@ -21,6 +21,9 @@ part 'cli_results.dart';
 part 'cli_record.dart';
 
 class FlutterScoutCli {
+  static const String packageVersion = '1.1.0';
+  static String? _sessionDirectoryOverride;
+
   /// Test-only override for the session registry path, so tests never touch
   /// the real `~/.flutter_scout/registry.json`.
   static String? debugRegistryPathOverride;
@@ -30,7 +33,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 12;
+  static const int expectedHelperProtocolVersion = 13;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -41,6 +44,50 @@ class FlutterScoutCli {
   /// Test-only view of default compact action output.
   Map<String, dynamic> debugCompactActionResult(Map<String, dynamic> result) =>
       _compactActionResult(result);
+
+  Map<String, dynamic> debugMaterializeActionCapture(
+    Map<String, dynamic> result,
+    String output,
+  ) => _materializeActionCapture(result, output);
+
+  Map<String, dynamic> debugAssertActionHasNoErrors(
+    Map<String, dynamic> result,
+  ) => _assertActionHasNoErrors(result, enabled: true);
+
+  Map<String, Object?> debugLaunchTimingFromLines(List<String> lines) {
+    final timing = _LaunchTiming(startedAt: DateTime.now());
+    for (final line in lines) {
+      timing.observeLine(line);
+    }
+    return timing.toJson();
+  }
+
+  static String debugNamedSessionDirectory(String base, String name) =>
+      p.join(base, '.flutter_scout', 'sessions', _safeSessionName(name));
+
+  Future<Map<String, Object?>> debugPrepareTemporaryHelper({
+    required String project,
+    required String helperPath,
+  }) async {
+    final setup = await _prepareTemporaryHelper(
+      project: project,
+      originalTarget: 'lib/main.dart',
+      helperPath: helperPath,
+      runId: 'test',
+    );
+    return setup.toJson();
+  }
+
+  Future<Map<String, Object?>> debugCleanupTemporaryHelper(
+    Map<String, Object?> setup,
+  ) => _cleanupTemporaryHelper(
+    _TemporaryHelperSetup(
+      project: setup['project']!.toString(),
+      targetPath: setup['targetPath']!.toString(),
+      lockExisted: setup['lockExisted'] == true,
+      lockBackupPath: setup['lockBackupPath']?.toString(),
+    ),
+  );
 
   /// Test-only session-safe VM URI selection from mixed log output.
   String? debugPreferredVmUriFromLogText(String text) =>
@@ -194,6 +241,8 @@ class FlutterScoutCli {
       return 0;
     }
 
+    final previousSessionDirectory = _sessionDirectoryOverride;
+
     // Global `--app <name>`: run this command against the named session
     // (registered by launch/ensure --name) from anywhere — no cd dance.
     var effectiveArgs = args;
@@ -236,11 +285,29 @@ class FlutterScoutCli {
         );
         return 1;
       }
-      Directory.current = directory;
+      final registered = p.normalize(p.absolute(directory));
+      _sessionDirectoryOverride =
+          p.basename(registered) == '.flutter_scout' ||
+              p.basename(p.dirname(registered)) == 'sessions'
+          ? registered
+          : p.join(registered, '.flutter_scout');
     }
 
     final command = effectiveArgs.first;
     final rest = effectiveArgs.skip(1).toList(growable: false);
+    final requestedName = _optionValue(rest, 'name');
+    if (appName == null &&
+        (command == 'launch' || command == 'ensure') &&
+        requestedName != null &&
+        requestedName.isNotEmpty) {
+      _sessionDirectoryOverride = p.join(
+        Directory.current.path,
+        '.flutter_scout',
+        'sessions',
+        _safeSessionName(requestedName),
+      );
+      _registerScoutSession(requestedName, _sessionDirectoryOverride!);
+    }
     try {
       return await switch (command) {
         'launch' => _launch(rest),
@@ -286,6 +353,8 @@ class FlutterScoutCli {
         'evidence' => _evidence(rest),
         'replay' => _replay(rest),
         'record' => _record(rest),
+        'version' => _version(),
+        'help' => _help(rest),
         _ => _unknown(command),
       };
     } on ScoutCliException catch (error) {
@@ -304,7 +373,22 @@ class FlutterScoutCli {
         }),
       );
       return 1;
+    } finally {
+      _sessionDirectoryOverride = previousSessionDirectory;
     }
+  }
+
+  String? _optionValue(List<String> args, String name) {
+    for (var index = 0; index < args.length; index++) {
+      final value = args[index];
+      if (value == '--$name' && index + 1 < args.length) {
+        return args[index + 1];
+      }
+      if (value.startsWith('--$name=')) {
+        return value.substring(name.length + 3);
+      }
+    }
+    return null;
   }
 
   bool _inspectChanged(
@@ -1366,9 +1450,13 @@ print(String(data: data, encoding: .utf8)!)
 
   void _writeSessionMeta(Map<String, Object?> meta) {
     _ensureSessionDir();
-    File(
-      _sessionMetaFile,
-    ).writeAsStringSync(const JsonEncoder.withIndent('  ').convert(meta));
+    final file = File(_sessionMetaFile);
+    final temporary = File('${file.path}.$pid.tmp');
+    temporary.writeAsStringSync(
+      const JsonEncoder.withIndent('  ').convert(meta),
+      flush: true,
+    );
+    temporary.renameSync(file.path);
   }
 
   Map<String, dynamic>? _readSessionMeta() {
@@ -1389,9 +1477,13 @@ print(String(data: data, encoding: .utf8)!)
     final pid = _readPid();
     return {
       'mode': meta?['mode'] ?? (pid == null ? 'unknown' : 'legacy'),
+      'state': ?meta?['state'],
+      'runId': ?meta?['runId'],
+      'name': ?meta?['name'],
       'pid': ?pid,
       'vmLogListenerPid': ?_readVmLogListenerPid(),
       'createdAt': ?meta?['createdAt'],
+      'updatedAt': ?meta?['updatedAt'],
       'logFile': ?meta?['logFile'],
     };
   }
@@ -1545,19 +1637,121 @@ print(String(data: data, encoding: .utf8)!)
 
   int _unknown(String command) {
     stderr.writeln('Unknown command: $command');
+    if (command == 'action') {
+      stderr.writeln(
+        'Actions are direct commands. For example: '
+        '`flutter-scout tap btn.save --expect-text Saved`.',
+      );
+    } else if (_closestCommand(command) case final suggestion?) {
+      stderr.writeln('Did you mean `flutter-scout $suggestion`?');
+    }
     _printUsage();
     return 64;
   }
 
-  void _printUsage() {
+  Future<int> _version() async {
+    stdout.writeln(
+      const JsonEncoder.withIndent('  ').convert({
+        'ok': true,
+        'package': 'flutter_scout',
+        'version': packageVersion,
+        'helperProtocolExpected': expectedHelperProtocolVersion,
+        'executable': Platform.resolvedExecutable,
+        'script': Platform.script.toString(),
+      }),
+    );
+    return 0;
+  }
+
+  Future<int> _help(List<String> args) async {
+    _printUsage(command: args.isEmpty ? null : args.first);
+    return 0;
+  }
+
+  String? _closestCommand(String input) {
+    const aliases = {
+      'screenshots': 'screenshot',
+      'annotation': 'annotations',
+      'app': 'apps',
+      'relaunch': 'launch',
+    };
+    if (aliases[input] case final alias?) return alias;
+    for (final command in _commands) {
+      if (command.startsWith(input) || input.startsWith(command)) {
+        return command;
+      }
+    }
+    return null;
+  }
+
+  static const Set<String> _commands = {
+    'attach',
+    'launch',
+    'ensure',
+    'status',
+    'doctor',
+    'stop',
+    'inspect',
+    'annotations',
+    'bounds',
+    'tap',
+    'tap-text',
+    'long-press',
+    'input',
+    'fill',
+    'scroll',
+    'scroll-to',
+    'swipe',
+    'drag-start',
+    'drag-move',
+    'drag-end',
+    'back',
+    'wait',
+    'wait-for',
+    'health',
+    'batch',
+    'serve',
+    'apps',
+    'reload',
+    'restart',
+    'logs',
+    'screenshot',
+    'crop',
+    'evidence',
+    'replay',
+    'record',
+    'version',
+  };
+
+  void _printUsage({String? command}) {
+    if (command != null &&
+        const {'tap', 'tap-text', 'input', 'fill'}.contains(command)) {
+      stdout.writeln('''
+Flutter Scout: $command
+
+Guarded action options:
+  --expect-text <text>       Wait for visible text.
+  --expect-gone <text>       Wait for text to disappear.
+  --expect-target <handle>   Wait for a visible target.
+  --expect-screen <screen>   Wait for a screen name.
+  --expect-timeout <ms>      Expectation timeout (default 5000).
+  --capture <path>           Capture the exact successful expectation frame.
+  --assert-no-errors         Fail on fresh blocking runtime/log errors.
+
+Run `flutter-scout help` for the complete command list.
+''');
+      return;
+    }
     stdout.writeln('''
 Flutter Scout
 
 Usage:
   flutter-scout attach [--debug-url <url>] [--device <simulator-id>]
-  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>]
-  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>]
+  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper]
+  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper]
   flutter-scout status
+  flutter-scout apps
+  flutter-scout version
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
   flutter-scout inspect [--brief] [--surface] [--max-items <n>] [--sections <list>]
@@ -1565,7 +1759,8 @@ Usage:
   flutter-scout annotations wait [--timeout <seconds>] [--poll <ms>]
   flutter-scout annotations fixed <annotation-id> [--note <text>]
   flutter-scout bounds [target]
-  flutter-scout tap <target> | tap <x> <y> | --x <x> --y <y> [--verbose]
+  flutter-scout tap <target> [--expect-text <text>] [--capture <path>] [--assert-no-errors] [--verbose]
+  flutter-scout tap <x> <y> | tap --x <x> --y <y>
   flutter-scout tap-text <visible text> | tap-text --text <visible text> [--allow-mismatch] [--verbose]
   flutter-scout long-press <target> [--verbose]
   flutter-scout input [--target <field>] <value> [--verbose]
@@ -1579,9 +1774,13 @@ Usage:
   flutter-scout drag-status | drag-cancel
   flutter-scout back [--verbose]
   flutter-scout wait stable [--timeout <ms>] [--verbose]
+  flutter-scout wait-for [--text <text>] [--gone <text>] [--target <handle>]
+  flutter-scout health [--include-stale]
   flutter-scout batch '<command>; <command>' [--keep-going] [--verbose]
   flutter-scout export-batch [-o <path>]
+  flutter-scout serve [--port <port>] [--port-file <path>]
   flutter-scout explore [--port <port>] [--port-file <path>] [--once]
+  flutter-scout record start|stop|run|list|show|pause|resume|undo
   flutter-scout reload [--verbose]
   flutter-scout restart [--verbose]
   flutter-scout deeplink <url>
@@ -1590,6 +1789,7 @@ Usage:
   flutter-scout crop <target> | crop --text <visible text> | crop --rect x,y,w,h [-o <path>] [--native]
   flutter-scout evidence [-o <dir>] [--last <n>] [--audit]
   flutter-scout replay [session.json] [--verbose]
+  flutter-scout help [command]
 ''');
   }
 
@@ -1634,13 +1834,21 @@ void _registerScoutSession(String name, String directory) {
   try {
     final registry = _readScoutRegistry();
     registry[name] = directory;
-    _scoutRegistryFile.parent.createSync(recursive: true);
-    _scoutRegistryFile.writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert(registry),
-    );
+    _writeScoutRegistry(registry);
   } catch (_) {
     // Registration is best-effort; the session still works from its own cwd.
   }
+}
+
+void _writeScoutRegistry(Map<String, String> registry) {
+  final file = _scoutRegistryFile;
+  file.parent.createSync(recursive: true);
+  final temporary = File('${file.path}.$pid.tmp');
+  temporary.writeAsStringSync(
+    const JsonEncoder.withIndent('  ').convert(registry),
+    flush: true,
+  );
+  temporary.renameSync(file.path);
 }
 
 /// Drops registry names pointing at [directory] (a cleared session). Returns
@@ -1658,24 +1866,42 @@ List<String> _pruneScoutRegistryFor(String directory) {
     }
 
     final target = resolved(directory);
+    final legacyProjectTarget = p.basename(directory) == '.flutter_scout'
+        ? resolved(p.dirname(directory))
+        : null;
     final registry = _readScoutRegistry();
     final pruned = [
       for (final entry in registry.entries)
-        if (resolved(entry.value) == target) entry.key,
+        if (resolved(entry.value) == target ||
+            (legacyProjectTarget != null &&
+                resolved(entry.value) == legacyProjectTarget) ||
+            resolved(p.join(entry.value, '.flutter_scout')) == target)
+          entry.key,
     ];
     if (pruned.isEmpty) return const [];
     pruned.forEach(registry.remove);
-    _scoutRegistryFile.writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert(registry),
-    );
+    _writeScoutRegistry(registry);
     return pruned;
   } catch (_) {
     return const [];
   }
 }
 
-Directory get _sessionDir =>
-    Directory(p.join(Directory.current.path, '.flutter_scout'));
+Directory get _sessionDir => Directory(
+  FlutterScoutCli._sessionDirectoryOverride ??
+      p.join(Directory.current.path, '.flutter_scout'),
+);
+
+String _safeSessionName(String value) {
+  final safe = value
+      .trim()
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9._-]+'), '-')
+      .replaceAll(RegExp(r'-+'), '-')
+      .replaceAll(RegExp(r'^[-.]+|[-.]+$'), '');
+  return safe.isEmpty ? 'session' : safe;
+}
+
 String get _vmUriFile => p.join(_sessionDir.path, 'vm_uri.txt');
 String get _deviceFile => p.join(_sessionDir.path, 'device.txt');
 String get _deviceInfoFile => p.join(_sessionDir.path, 'device_info.json');
@@ -1683,7 +1909,25 @@ String get _sessionFile => p.join(_sessionDir.path, 'session.json');
 String get _pidFile => p.join(_sessionDir.path, 'flutter.pid');
 String get _vmLogListenerPidFile =>
     p.join(_sessionDir.path, 'vm_log_listener.pid');
-String get _logFile => p.join(_sessionDir.path, 'logs.txt');
+String get _legacyLogFile => p.join(_sessionDir.path, 'logs.txt');
+String get _launchLockFile => p.join(_sessionDir.path, 'launch.lock');
+
+/// The active run owns its own log. This prevents overlapping launches from
+/// truncating or parsing each other's Flutter output while retaining the
+/// legacy path for old and attach-only sessions.
+String get _logFile {
+  try {
+    final meta = File(_sessionMetaFile);
+    if (meta.existsSync()) {
+      final decoded = jsonDecode(meta.readAsStringSync());
+      final configured = decoded is Map ? decoded['logFile']?.toString() : null;
+      if (configured != null && configured.isNotEmpty) return configured;
+    }
+  } catch (_) {
+    // Fall through to the backwards-compatible path.
+  }
+  return _legacyLogFile;
+}
 
 List<String> _readLogLinesSync(File file) {
   try {

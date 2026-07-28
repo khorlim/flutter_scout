@@ -9,12 +9,19 @@ extension _CliResults on FlutterScoutCli {
     Map<String, Object?>? record,
     bool compact = false,
     Duration? callTimeout,
+    String? captureOutput,
+    bool assertNoErrors = false,
   }) async {
-    final result = _withProtocolDiagnostics(
+    var result = _withProtocolDiagnostics(
       method,
       await _call(method, params, callTimeout),
     );
-    final enrichedResult = await _withRecentLogSignals(result);
+    result = _materializeActionCapture(result, captureOutput);
+    var enrichedResult = await _withRecentLogSignals(result);
+    enrichedResult = _assertActionHasNoErrors(
+      enrichedResult,
+      enabled: assertNoErrors,
+    );
     final output = compact
         ? _compactActionResult(enrichedResult)
         : enrichedResult;
@@ -23,6 +30,66 @@ extension _CliResults on FlutterScoutCli {
       _recordAction(record);
     }
     return enrichedResult['ok'] == false ? 1 : 0;
+  }
+
+  Map<String, dynamic> _materializeActionCapture(
+    Map<String, dynamic> result,
+    String? output,
+  ) {
+    if (output == null || output.isEmpty) return result;
+    final capture = result['capture'];
+    if (capture is! Map) return result;
+    final encoded = capture['bytes'];
+    if (encoded is! String || encoded.isEmpty) return result;
+    try {
+      final file = File(output).absolute;
+      file.parent.createSync(recursive: true);
+      file.writeAsBytesSync(base64Decode(encoded));
+      return {
+        ...result,
+        'capture': {
+          for (final entry in capture.entries)
+            if (entry.key != 'bytes') entry.key.toString(): entry.value,
+          'path': file.path,
+        },
+      };
+    } catch (error) {
+      return {
+        ...result,
+        'warnings': [
+          ..._objectList(result['warnings']),
+          'The post-action frame was captured, but could not be written to '
+              '`$output`: $error',
+        ],
+      };
+    }
+  }
+
+  Map<String, dynamic> _assertActionHasNoErrors(
+    Map<String, dynamic> result, {
+    required bool enabled,
+  }) {
+    if (!enabled || result['ok'] == false) return result;
+    bool blocking(Object? value) =>
+        value is Map && value['blocking'] == true && value['stale'] != true;
+    final runtime = _objectList(
+      result['recentErrors'],
+    ).where(blocking).toList();
+    final logs = _objectList(
+      result['recentLogSignals'],
+    ).where(blocking).toList();
+    if (runtime.isEmpty && logs.isEmpty) return result;
+    return {
+      ...result,
+      'ok': false,
+      'error': {
+        'code': 'blocking_errors_observed',
+        'message':
+            'The action completed, but fresh blocking runtime errors were observed.',
+      },
+      'blockingErrors': runtime,
+      'blockingLogSignals': logs,
+    };
   }
 
   void _emitActionOutput(Map<String, dynamic> output) {
@@ -225,6 +292,7 @@ extension _CliResults on FlutterScoutCli {
           ),
         if (result['activation'] != null) 'activation': result['activation'],
         if (result['expectation'] != null) 'expectation': result['expectation'],
+        if (result['capture'] != null) 'capture': result['capture'],
         if (result['warnings'] != null) 'warnings': result['warnings'],
         if (result['didYouMean'] != null) 'didYouMean': result['didYouMean'],
         if (result['reachHint'] != null) 'reachHint': result['reachHint'],
@@ -271,6 +339,7 @@ extension _CliResults on FlutterScoutCli {
         'gestureStart': result['gestureStart'],
       if (result['gestureEnd'] != null) 'gestureEnd': result['gestureEnd'],
       if (result['screenshot'] != null) 'screenshot': result['screenshot'],
+      if (result['capture'] != null) 'capture': result['capture'],
       if (result['message'] != null) 'message': result['message'],
       if (result['fullRebuildRequired'] != null)
         'fullRebuildRequired': result['fullRebuildRequired'],
@@ -362,45 +431,15 @@ extension _CliResults on FlutterScoutCli {
       if (summary['routeGuess'] != null) 'routeGuess': summary['routeGuess'],
       if (summary['viewSignature'] != null)
         'viewSignature': summary['viewSignature'],
+      if (summary['snapshotId'] != null) 'snapshotId': summary['snapshotId'],
       if (summary['visibleTextHash'] != null)
         'visibleTextHash': summary['visibleTextHash'],
       if (summary['idle'] != null) 'idle': summary['idle'],
       if (summary['perception'] is Map)
         'perception': _compactPerception(summary['perception'] as Map),
-      if (summary['visibleText'] is List)
-        'visibleText': _lastItems(summary['visibleText'] as List, 12),
-      if (summary['hitTestableText'] is List)
-        'hitTestableText': _lastItems(summary['hitTestableText'] as List, 12),
-      if (summary['offscreenText'] is List)
-        'offscreenText': _lastItems(summary['offscreenText'] as List, 8),
-      if (summary['scrollables'] is List)
-        'scrollables': _firstItems(summary['scrollables'] as List, 6),
       if (summary['fieldValues'] != null) 'fieldValues': summary['fieldValues'],
       if (summary['degradedNodes'] != null)
         'degradedNodes': summary['degradedNodes'],
-      if (summary['suggestedActions'] is List)
-        'suggestedActions': [
-          for (final action in _firstItems(
-            summary['suggestedActions'] as List,
-            6,
-          ))
-            if (action is Map) _compactSuggestedAction(action),
-        ],
-      if (summary['structuredRows'] is List) ...{
-        'structuredRowCount': (summary['structuredRows'] as List).length,
-        'rowPreview': [
-          for (final row in _firstItems(summary['structuredRows'] as List, 2))
-            if (row is Map)
-              {
-                if (row['id'] != null) 'id': row['id'],
-                if (row['label'] != null) 'label': row['label'],
-                if (row['primaryTarget'] != null)
-                  'primaryTarget': row['primaryTarget'],
-                if (row['text'] is List)
-                  'text': _firstItems(row['text'] as List, 4),
-              },
-        ],
-      },
     };
   }
 
@@ -419,24 +458,6 @@ extension _CliResults on FlutterScoutCli {
     if (surface['label'] != null) 'label': surface['label'],
     if (surface['screen'] != null) 'screen': surface['screen'],
   };
-
-  Map<String, Object?> _compactSuggestedAction(Map action) {
-    return {
-      if (action['intent'] != null) 'intent': action['intent'],
-      if (action['method'] != null) 'method': action['method'],
-      if (action['target'] != null) 'target': action['target'],
-      if (action['label'] != null) 'label': action['label'],
-      if (action['fields'] is List)
-        'fields': [
-          for (final field in _firstItems(action['fields'] as List, 4))
-            if (field is Map)
-              {
-                if (field['target'] != null) 'target': field['target'],
-                if (field['label'] != null) 'label': field['label'],
-              },
-        ],
-    };
-  }
 
   Map<String, Object?> _compactDelta(Map delta) {
     const listKeys = {

@@ -515,6 +515,9 @@ void main() {
     final tmp = Directory.systemTemp.createTempSync('scout_rec_test');
     addTearDown(() => tmp.deleteSync(recursive: true));
     runtime.debugSetRecordingsRootOverride(tmp.path);
+    // Collapse the settle waits: fake-async can't advance _waitStable's
+    // wall-clock deadlines, so capture the current frame with no real delay.
+    runtime.debugSetRecordSettleMs(0, 0);
 
     // Own the controllers so text can be set without tester.enterText, which
     // waits for scheduler idle — the REC HUD's pulse animation never idles.
@@ -909,6 +912,72 @@ void main() {
     );
   });
 
+  testWidgets(
+    'topmost modal header wins over product-specific background text',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Column(
+                children: [
+                  const SizedBox(height: 130),
+                  const Text('Appointment'),
+                  ElevatedButton(
+                    onPressed: () => showGeneralDialog<void>(
+                      context: context,
+                      barrierDismissible: true,
+                      barrierLabel: 'close',
+                      pageBuilder: (_, _, _) => Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Material(
+                          child: SizedBox(
+                            width: double.infinity,
+                            height: 700,
+                            child: Column(
+                              children: [
+                                const Text('Select Shop'),
+                                const Spacer(),
+                                ElevatedButton(
+                                  onPressed: () {},
+                                  child: const Text('Contact Support'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    child: const Text('Open shops'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open shops'));
+      await tester.pumpAndSettle();
+
+      final runtime = FlutterScoutHelper.debugRuntime;
+      final snapshot = runtime.debugSnapshot();
+      expect(snapshot.activeSurface?['label'], 'Select Shop');
+      expect(snapshot.screen, 'SelectShopSurface');
+
+      final brief = runtime.debugInspectPayload(brief: true);
+      expect(
+        brief['surfaceOnly'],
+        allOf(containsPair('applied', true), containsPair('automatic', true)),
+      );
+      expect(brief['visibleText'], contains('Select Shop'));
+      expect(brief['visibleText'], isNot(contains('Appointment')));
+      final quality = brief['semanticQuality']! as Map<String, Object?>;
+      final metrics = quality['metrics']! as Map<String, Object?>;
+      expect(metrics['nonHitTestableActions'], 0);
+    },
+  );
+
   testWidgets('nested navigator barriers do not create a false modal surface', (
     tester,
   ) async {
@@ -1064,6 +1133,27 @@ void main() {
       isNot(contains('tap.add_location_alt')),
     );
     expect(snapshot.visibleText, contains('app text'));
+  });
+
+  testWidgets('action capture returns the exact in-app frame payload', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: Center(child: Text('Captured state'))),
+      ),
+    );
+    await tester.pump();
+
+    final result = await tester.runAsync(
+      FlutterScoutHelper.debugRuntime.debugActionCapturePayload,
+    );
+    final capture = result!['capture']! as Map<String, Object?>;
+    expect(capture['ok'], isTrue);
+    expect(capture['backend'], 'in_app_capture');
+    expect(capture['bytes'], isA<String>());
+    expect((capture['bytes']! as String), isNotEmpty);
   });
 
   testWidgets('synthetic agent taps pass through Scout chrome', (tester) async {
