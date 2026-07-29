@@ -307,9 +307,16 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     return false;
   }
 
-  bool _changed(ScoutSnapshot before, ScoutSnapshot after) =>
-      jsonEncode(before.summaryJson()) != jsonEncode(after.summaryJson()) ||
-      _geometryChanged(before, after);
+  bool _changed(ScoutSnapshot before, ScoutSnapshot after) {
+    Map<String, Object?> comparable(ScoutSnapshot snapshot) {
+      final summary = Map<String, Object?>.from(snapshot.summaryJson())
+        ..remove('idle');
+      return summary;
+    }
+
+    return jsonEncode(comparable(before)) != jsonEncode(comparable(after)) ||
+        _geometryChanged(before, after);
+  }
 
   bool _geometryChanged(ScoutSnapshot before, ScoutSnapshot after) {
     return _changedGeometryIds(before, after).isNotEmpty;
@@ -449,6 +456,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
       jsonEncode({
         'ok': true,
         'helperProtocolVersion': scoutHelperProtocolVersion,
+        'runtimeInstanceId': _runtimeInstanceId,
         ...value,
       }),
     );
@@ -462,6 +470,8 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     return developer.ServiceExtensionResponse.result(
       jsonEncode({
         'ok': false,
+        'helperProtocolVersion': scoutHelperProtocolVersion,
+        'runtimeInstanceId': _runtimeInstanceId,
         'error': {'code': code, 'message': message},
         ...extra,
         'recentErrors': _recentErrors(),

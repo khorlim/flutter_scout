@@ -47,23 +47,36 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final stable = actionSnapshot.stable;
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
+      final activityObserved = changed || actionSnapshot.activityObserved;
       return _respondWithExpectation(params, {
         'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
         'stable': stable,
-        'result': _tapResult(changed: changed, node: node),
+        'result': _tapResult(
+          changed: changed,
+          activityObserved: activityObserved,
+          node: node,
+        ),
         if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
+        if (actionSnapshot.activityObserved) ...{
+          'activityObserved': true,
+          if (actionSnapshot.transientViewSignatures.isNotEmpty)
+            'transientViewSignatures': actionSnapshot.transientViewSignatures,
+        },
         if (actionSnapshot.waitTimedOut) 'waitTimedOut': true,
         'target': node?.toJson(),
         'activation': {
           'dispatched': true,
           'observedChange': changed,
+          'activityObserved': activityObserved,
           'note': changed
               ? null
+              : actionSnapshot.activityObserved
+              ? 'Transient UI activity was observed and the app settled back to the original final state.'
               : (node?.selected == true
                     ? 'Target was already selected before the tap; no change is expected.'
                     : 'Tap was dispatched, but no synchronous Flutter tree, field, text, or geometry change was observed before the wait timeout.'),
         },
-        if (!changed && node?.selected != true)
+        if (!activityObserved && node?.selected != true)
           'warnings': const [
             'Tap dispatched without an observed synchronous UI change; check recentErrors, overlays, logs, or increase --wait-ms if the action is async.',
           ],
@@ -132,24 +145,35 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final stable = actionSnapshot.stable;
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
+      final activityObserved = changed || actionSnapshot.activityObserved;
       return _respondWithExpectation(params, {
         'action': 'tap-text $text',
         'stable': stable,
-        'result': _tapResult(changed: changed, node: targetNode),
+        'result': _tapResult(
+          changed: changed,
+          activityObserved: activityObserved,
+          node: targetNode,
+        ),
         if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
+        if (actionSnapshot.activityObserved) ...{
+          'activityObserved': true,
+          if (actionSnapshot.transientViewSignatures.isNotEmpty)
+            'transientViewSignatures': actionSnapshot.transientViewSignatures,
+        },
         if (actionSnapshot.waitTimedOut) 'waitTimedOut': true,
         'target': targetNode.toJson(),
         'textTarget': match.text.toJson(),
         'activation': {
           'dispatched': true,
           'observedChange': changed,
+          'activityObserved': activityObserved,
           'strategy': _tapTextStrategy(match),
           'risk': activationRisk,
         },
-        if ((!changed && targetNode.selected != true) ||
+        if ((!activityObserved && targetNode.selected != true) ||
             activationRisk['level'] != 'low')
           'warnings': [
-            if (!changed && targetNode.selected != true)
+            if (!activityObserved && targetNode.selected != true)
               'tap-text activated the nearest actionable target, but no synchronous UI change was observed before the wait timeout.',
             if (activationRisk['level'] != 'low')
               'tap-text used a higher-risk activation path; prefer a concrete handle from inspect when repeating this action.',
@@ -191,8 +215,13 @@ extension _RuntimeActions on FlutterScoutRuntime {
   /// A no-change tap on an already-selected target (active tab, checked
   /// toggle) is expected behavior, not a failed activation — report it as
   /// `already_selected` so agents don't retry or escalate.
-  String _tapResult({required bool changed, required ScoutNode? node}) {
+  String _tapResult({
+    required bool changed,
+    required bool activityObserved,
+    required ScoutNode? node,
+  }) {
     if (changed) return 'changed';
+    if (activityObserved) return 'completed_same_state';
     if (node?.selected == true) return 'already_selected';
     return 'activated_no_observed_change';
   }
@@ -950,6 +979,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final actionSnapshot = await _snapshotAfterAction(before, params);
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
+      final activityObserved = changed || actionSnapshot.activityObserved;
       return _ok({
         'action': 'dismiss',
         'stable': actionSnapshot.stable,
@@ -958,9 +988,16 @@ extension _RuntimeActions on FlutterScoutRuntime {
         'tappedClose': ?tappedId,
         'result': changed
             ? 'changed'
+            : activityObserved
+            ? 'completed_same_state'
             : (strategy == 'none'
                   ? 'nothing_to_dismiss'
                   : 'activated_no_observed_change'),
+        if (actionSnapshot.activityObserved) ...{
+          'activityObserved': true,
+          if (actionSnapshot.transientViewSignatures.isNotEmpty)
+            'transientViewSignatures': actionSnapshot.transientViewSignatures,
+        },
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
@@ -1431,15 +1468,67 @@ extension _RuntimeActions on FlutterScoutRuntime {
     ScoutSnapshot before,
     Map<String, String> params,
   ) async {
+    var sampling = false;
+    var activityObserved = false;
+    final transientViewSignatures = <String>[];
+    Future<void> sample() async {
+      if (sampling) return;
+      sampling = true;
+      try {
+        final current = _snapshot();
+        if (_changed(before, current)) {
+          activityObserved = true;
+          final signature = current.viewSignature;
+          if (signature.isNotEmpty &&
+              signature != before.viewSignature &&
+              !transientViewSignatures.contains(signature) &&
+              transientViewSignatures.length < 4) {
+            transientViewSignatures.add(signature);
+          }
+        }
+      } finally {
+        sampling = false;
+      }
+    }
+
+    await _waitForFrame();
+    await sample();
+    final sampler = Timer.periodic(
+      const Duration(milliseconds: 60),
+      (_) => unawaited(sample()),
+    );
     final stable = await _waitStableForAction(params);
+    await sample();
     var after = _snapshot();
-    if (_changed(before, after)) {
-      return _ActionSnapshotResult(snapshot: after, stable: stable);
+    final changedAfterStable = _changed(before, after);
+    if (changedAfterStable) {
+      activityObserved = true;
+      final signature = after.viewSignature;
+      if (signature.isNotEmpty &&
+          signature != before.viewSignature &&
+          !transientViewSignatures.contains(signature)) {
+        transientViewSignatures.add(signature);
+      }
+    }
+    if (changedAfterStable && !_looksTransientActionState(before, after)) {
+      sampler.cancel();
+      return _ActionSnapshotResult(
+        snapshot: after,
+        stable: stable,
+        activityObserved: activityObserved,
+        transientViewSignatures: transientViewSignatures,
+      );
     }
 
     final lateWaitMs = int.tryParse(params['lateWaitMs'] ?? '') ?? 1000;
     if (lateWaitMs <= 0) {
-      return _ActionSnapshotResult(snapshot: after, stable: stable);
+      sampler.cancel();
+      return _ActionSnapshotResult(
+        snapshot: after,
+        stable: stable,
+        activityObserved: activityObserved,
+        transientViewSignatures: transientViewSignatures,
+      );
     }
 
     final deadline = DateTime.now().add(Duration(milliseconds: lateWaitMs));
@@ -1448,18 +1537,49 @@ extension _RuntimeActions on FlutterScoutRuntime {
       await _waitStable(timeout: const Duration(milliseconds: 250));
       after = _snapshot();
       if (_changed(before, after)) {
+        activityObserved = true;
+        if (!_looksTransientActionState(before, after)) {
+          sampler.cancel();
+          return _ActionSnapshotResult(
+            snapshot: after,
+            stable: !WidgetsBinding.instance.hasScheduledFrame,
+            lateChangeObserved: true,
+            activityObserved: true,
+            transientViewSignatures: transientViewSignatures,
+          );
+        }
+      } else if (activityObserved) {
+        sampler.cancel();
         return _ActionSnapshotResult(
           snapshot: after,
           stable: !WidgetsBinding.instance.hasScheduledFrame,
           lateChangeObserved: true,
+          activityObserved: true,
+          transientViewSignatures: transientViewSignatures,
         );
       }
     }
 
+    sampler.cancel();
     return _ActionSnapshotResult(
       snapshot: after,
       stable: stable,
+      activityObserved: activityObserved,
+      transientViewSignatures: transientViewSignatures,
       waitTimedOut: !stable || WidgetsBinding.instance.hasScheduledFrame,
+    );
+  }
+
+  bool _looksTransientActionState(ScoutSnapshot before, ScoutSnapshot current) {
+    final beforeText = before.visibleText.toSet();
+    final added = current.visibleText.where(
+      (text) => !beforeText.contains(text),
+    );
+    return added.any(
+      (text) => RegExp(
+        r'\b(loading|please wait|refreshing|retrying|saving|processing|submitting)\b',
+        caseSensitive: false,
+      ).hasMatch(text),
     );
   }
 

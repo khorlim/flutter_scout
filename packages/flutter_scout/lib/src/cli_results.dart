@@ -12,12 +12,16 @@ extension _CliResults on FlutterScoutCli {
     String? captureOutput,
     bool assertNoErrors = false,
   }) async {
+    final logCursor = _currentLogCursor();
     var result = _withProtocolDiagnostics(
       method,
       await _call(method, params, callTimeout),
     );
     result = _materializeActionCapture(result, captureOutput);
-    var enrichedResult = await _withRecentLogSignals(result);
+    var enrichedResult = await _withRecentLogSignals(
+      result,
+      sinceCursor: logCursor,
+    );
     enrichedResult = _assertActionHasNoErrors(
       enrichedResult,
       enabled: assertNoErrors,
@@ -103,16 +107,19 @@ extension _CliResults on FlutterScoutCli {
   Future<Map<String, dynamic>> _withRecentLogSignals(
     Map<String, dynamic> result, {
     Duration settleDelay = const Duration(milliseconds: 150),
+    int? sinceCursor,
   }) async {
     if (settleDelay > Duration.zero && File(_logFile).existsSync()) {
       await Future<void>.delayed(settleDelay);
     }
-    final signals = _freshRecentLogSignals();
-    if (signals.isEmpty) return result;
+    final signals = sinceCursor == null
+        ? _freshRecentLogSignals()
+        : _recentLogSignals(sinceCursor: sinceCursor);
     return {
       ...result,
-      'recentLogSignals': _logSignalMaps(signals),
-      'recentLogErrors': [for (final signal in signals) signal.line],
+      'logCursor': _currentLogCursor(),
+      'runId': ?_currentRunIdFromSession(),
+      if (signals.isNotEmpty) 'recentLogSignals': _logSignalMaps(signals),
     };
   }
 
@@ -205,22 +212,28 @@ extension _CliResults on FlutterScoutCli {
       // guessing from missing fields (which brief/sectioned payloads omit on
       // purpose).
       if (version < FlutterScoutCli.expectedHelperProtocolVersion) {
-        warnings.add(
-          'Running flutter_scout_helper protocol v$version is older than this '
-          'CLI expects (v${FlutterScoutCli.expectedHelperProtocolVersion}). '
-          'Hot reload cannot refresh a git/pub-cache dependency: bump the '
-          'dependency (or edit the resolved pub-cache checkout) and fully '
-          'relaunch the app.',
-        );
-        result['helperProtocol'] = {
-          'status': 'older_than_cli',
-          'helperProtocolVersion': version,
-          'cliExpects': FlutterScoutCli.expectedHelperProtocolVersion,
-          'nextBestActions': [
-            'flutter-scout stop --clear-session',
-            'flutter-scout launch --device <device> --project <path>',
-          ],
-        };
+        result['protocolMismatch'] =
+            '$version<${FlutterScoutCli.expectedHelperProtocolVersion}';
+        if (_claimSessionNotice(
+          'protocol-$version-${FlutterScoutCli.expectedHelperProtocolVersion}',
+        )) {
+          warnings.add(
+            'Running flutter_scout_helper protocol v$version is older than this '
+            'CLI expects (v${FlutterScoutCli.expectedHelperProtocolVersion}). '
+            'Hot reload cannot refresh a git/pub-cache dependency: bump the '
+            'dependency (or edit the resolved pub-cache checkout) and fully '
+            'relaunch the app.',
+          );
+          result['helperProtocol'] = {
+            'status': 'older_than_cli',
+            'helperProtocolVersion': version,
+            'cliExpects': FlutterScoutCli.expectedHelperProtocolVersion,
+            'nextBestActions': [
+              'flutter-scout stop --clear-session',
+              'flutter-scout launch --device <device> --project <path>',
+            ],
+          };
+        }
       }
       if (warnings.isNotEmpty) {
         result['warnings'] = warnings;
@@ -241,17 +254,20 @@ extension _CliResults on FlutterScoutCli {
       }
     }
     if (missing.isNotEmpty) {
-      warnings.add(
-        'Attached app appears to be running an older flutter_scout_helper protocol; hot restart or relaunch the app so helper output includes ${missing.join(', ')}.',
-      );
-      result['helperProtocol'] = {
-        'status': 'stale_or_old_helper',
-        'missing': missing,
-        'nextBestActions': [
-          'Run flutter-scout reload',
-          'If reload does not update helper behavior, hot restart from the owning Flutter terminal or relaunch the app',
-        ],
-      };
+      result['protocolMismatch'] = 'legacy';
+      if (_claimSessionNotice('protocol-legacy')) {
+        warnings.add(
+          'Attached app appears to be running an older flutter_scout_helper protocol; hot restart or relaunch the app so helper output includes ${missing.join(', ')}.',
+        );
+        result['helperProtocol'] = {
+          'status': 'stale_or_old_helper',
+          'missing': missing,
+          'nextBestActions': [
+            'Run flutter-scout reload',
+            'If reload does not update helper behavior, hot restart from the owning Flutter terminal or relaunch the app',
+          ],
+        };
+      }
     }
     if (warnings.isNotEmpty) {
       result['warnings'] = warnings;
@@ -263,6 +279,10 @@ extension _CliResults on FlutterScoutCli {
     if (result['ok'] == false) {
       final before = result['before'];
       final after = result['after'];
+      final sameSnapshot =
+          before is Map<String, dynamic> &&
+          after is Map<String, dynamic> &&
+          !_inspectChanged(before, after);
       return {
         'ok': false,
         if (result['error'] != null) 'error': result['error'],
@@ -273,11 +293,18 @@ extension _CliResults on FlutterScoutCli {
           'lateChangeObserved': result['lateChangeObserved'],
         if (result['waitTimedOut'] != null)
           'waitTimedOut': result['waitTimedOut'],
+        if (result['activityObserved'] == true) 'activityObserved': true,
+        if (result['transientViewSignatures'] is List &&
+            (result['transientViewSignatures'] as List).isNotEmpty)
+          'transientViewSignatures': result['transientViewSignatures'],
         if (result['method'] != null) 'method': result['method'],
         if (result['state'] != null) 'state': result['state'],
         if (result['appReachable'] != null)
           'appReachable': result['appReachable'],
         if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
+        if (result['timing'] != null) 'timing': result['timing'],
+        if (result['acknowledgement'] != null)
+          'acknowledgement': result['acknowledgement'],
         if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
         if (result['active'] != null) 'active': result['active'],
         if (result['position'] != null) 'position': result['position'],
@@ -301,21 +328,27 @@ extension _CliResults on FlutterScoutCli {
         if (result['fallback'] != null) 'fallback': result['fallback'],
         if (result['helperProtocol'] != null)
           'helperProtocol': result['helperProtocol'],
-        if (before is Map<String, dynamic>)
+        if (result['protocolMismatch'] != null)
+          'protocolMismatch': result['protocolMismatch'],
+        if (!sameSnapshot && before is Map<String, dynamic>)
           'beforeSummary': _compactSummary(before),
-        if (after is Map<String, dynamic>)
+        if (!sameSnapshot && after is Map<String, dynamic>)
           'afterSummary': _compactSummary(after),
+        if (sameSnapshot) 'sameSnapshot': true,
         if (result['delta'] is Map)
           'delta': _compactDelta(result['delta'] as Map),
-        if (result['recentErrors'] is List)
+        if (_isNonEmptyList(result['recentErrors']))
           'recentErrors': _lastItems(result['recentErrors'] as List, 3),
-        if (result['recentLogSignals'] is List)
+        if (_isNonEmptyList(result['recentLogSignals']))
           'recentLogSignals': _lastItems(result['recentLogSignals'] as List, 3),
-        if (result['recentLogErrors'] is List)
-          'recentLogErrors': _lastItems(result['recentLogErrors'] as List, 3),
+        if (result['logCursor'] != null) 'logCursor': result['logCursor'],
+        if (result['runId'] != null) 'runId': result['runId'],
       };
     }
     final after = result['after'];
+    final compactDelta = result['delta'] is Map
+        ? _compactDelta(result['delta'] as Map)
+        : const <String, Object?>{};
     final workflowHints = _workflowHints();
     return {
       'ok': result['ok'],
@@ -326,11 +359,18 @@ extension _CliResults on FlutterScoutCli {
         'lateChangeObserved': result['lateChangeObserved'],
       if (result['waitTimedOut'] != null)
         'waitTimedOut': result['waitTimedOut'],
+      if (result['activityObserved'] == true) 'activityObserved': true,
+      if (result['transientViewSignatures'] is List &&
+          (result['transientViewSignatures'] as List).isNotEmpty)
+        'transientViewSignatures': result['transientViewSignatures'],
       if (result['method'] != null) 'method': result['method'],
       if (result['state'] != null) 'state': result['state'],
       if (result['appReachable'] != null)
         'appReachable': result['appReachable'],
       if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
+      if (result['timing'] != null) 'timing': result['timing'],
+      if (result['acknowledgement'] != null)
+        'acknowledgement': result['acknowledgement'],
       if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
       if (result['active'] != null) 'active': result['active'],
       if (result['position'] != null) 'position': result['position'],
@@ -376,16 +416,55 @@ extension _CliResults on FlutterScoutCli {
       if (result['fallback'] != null) 'fallback': result['fallback'],
       if (result['helperProtocol'] != null)
         'helperProtocol': result['helperProtocol'],
-      if (after is Map<String, dynamic>) 'afterSummary': _compactSummary(after),
-      if (result['delta'] is Map)
-        'delta': _compactDelta(result['delta'] as Map),
-      if (result['recentErrors'] is List)
+      if (result['protocolMismatch'] != null)
+        'protocolMismatch': result['protocolMismatch'],
+      if (after is Map<String, dynamic> && after['screen'] != null)
+        'screen': after['screen'],
+      if (after is Map<String, dynamic> && after['snapshotId'] != null)
+        'snapshotId': after['snapshotId'],
+      if (after is Map<String, dynamic> && after['activeSurface'] is Map)
+        'activeSurface': _compactActiveSurface(after['activeSurface'] as Map),
+      if (compactDelta.isNotEmpty) 'delta': compactDelta,
+      if (compactDelta.isEmpty && after is Map<String, dynamic>)
+        'sameSnapshot': true,
+      if (_isNonEmptyList(result['recentErrors']))
         'recentErrors': _lastItems(result['recentErrors'] as List, 3),
-      if (result['recentLogSignals'] is List)
+      if (_isNonEmptyList(result['recentLogSignals']))
         'recentLogSignals': _lastItems(result['recentLogSignals'] as List, 3),
-      if (result['recentLogErrors'] is List)
-        'recentLogErrors': _lastItems(result['recentLogErrors'] as List, 3),
+      if (result['logCursor'] != null) 'logCursor': result['logCursor'],
+      if (result['runId'] != null) 'runId': result['runId'],
     };
+  }
+
+  Map<String, dynamic> _compactBriefInspect(Map<String, dynamic> result) {
+    final compact = Map<String, dynamic>.from(result);
+    if (compact['protocolMismatch'] == null) {
+      compact.remove('helperProtocolVersion');
+    }
+    compact
+      ..remove('runtimeInstanceId')
+      ..removeWhere(
+        (_, value) =>
+            value == null ||
+            (value is List && value.isEmpty) ||
+            (value is Map && value.isEmpty),
+      );
+    final visible = compact['visibleText'];
+    final hitTestable = compact['hitTestableText'];
+    if (visible is List && hitTestable is List) {
+      final hitSet = hitTestable.map((value) => value.toString()).toSet();
+      final nonHitTestable = [
+        for (final value in visible)
+          if (!hitSet.contains(value.toString())) value,
+      ];
+      if (nonHitTestable.length <= 4) {
+        compact.remove('hitTestableText');
+        if (nonHitTestable.isNotEmpty) {
+          compact['nonHitTestableText'] = nonHitTestable;
+        }
+      }
+    }
+    return compact;
   }
 
   List<Map<String, Object?>> _workflowHints() {
@@ -413,6 +492,19 @@ extension _CliResults on FlutterScoutCli {
     _writeSessionMeta({...meta, 'emittedWorkflowHints': emitted});
     return true;
   }
+
+  bool _claimSessionNotice(String code) {
+    final meta = _readSessionMeta() ?? <String, dynamic>{};
+    final emitted = (meta['emittedNotices'] is List)
+        ? List<String>.from(meta['emittedNotices'] as List)
+        : <String>[];
+    if (emitted.contains(code)) return false;
+    emitted.add(code);
+    _writeSessionMeta({...meta, 'emittedNotices': emitted});
+    return true;
+  }
+
+  bool _isNonEmptyList(Object? value) => value is List && value.isNotEmpty;
 
   Map<String, Object?> _compactNode(Map<String, dynamic> node) {
     return {
@@ -576,6 +668,8 @@ extension _CliResults on FlutterScoutCli {
   }) async {
     final started = DateTime.now();
     final before = await _tryInspect();
+    final beforeRuntimeInstanceId = before?['runtimeInstanceId']?.toString();
+    final logCursor = _currentLogCursor();
     final pid = _readPid();
     if (pid != null && await _looksLikeScoutFlutterRun(pid)) {
       final sent = Process.killPid(pid, signal);
@@ -591,10 +685,37 @@ extension _CliResults on FlutterScoutCli {
           'appReachable': before != null,
         };
       }
+      final acknowledgement = await _waitForHotUpdateAcknowledgement(
+        action: action,
+        sinceCursor: logCursor,
+        timeout: fullRestart
+            ? const Duration(seconds: 30)
+            : const Duration(seconds: 20),
+      );
+      if (acknowledgement['ok'] != true) {
+        return {
+          'ok': false,
+          'action': action,
+          'method': fullRestart ? 'sigusr2_hot_restart' : 'sigusr1_hot_reload',
+          'pid': pid,
+          'appReachable': await _tryInspect() != null,
+          'elapsedMs': DateTime.now().difference(started).inMilliseconds,
+          'acknowledgement': acknowledgement,
+          'error': {
+            'code': acknowledgement['rejected'] == true
+                ? '${action}_rejected'
+                : '${action}_ack_timeout',
+            'message': acknowledgement['message'],
+          },
+        };
+      }
+      final acknowledgedAt = DateTime.now();
       final after = await _waitForInspectAfterHotUpdate(
         timeout: fullRestart
             ? const Duration(seconds: 15)
             : const Duration(seconds: 8),
+        previousRuntimeInstanceId: beforeRuntimeInstanceId,
+        requireNewRuntime: fullRestart,
       );
       final elapsedMs = DateTime.now().difference(started).inMilliseconds;
       return {
@@ -605,6 +726,14 @@ extension _CliResults on FlutterScoutCli {
         'stable': after?['idle'],
         'result': _inspectChanged(before, after) ? 'changed' : 'unchanged',
         'elapsedMs': elapsedMs,
+        'timing': {
+          'ackMs': acknowledgedAt.difference(started).inMilliseconds,
+          'postAckStableMs': DateTime.now()
+              .difference(acknowledgedAt)
+              .inMilliseconds,
+          'totalMs': elapsedMs,
+        },
+        'acknowledgement': acknowledgement,
         'before': before,
         'after': after,
         'delta': _inspectDelta(before, after),
@@ -750,6 +879,8 @@ extension _CliResults on FlutterScoutCli {
 
   Future<Map<String, dynamic>?> _waitForInspectAfterHotUpdate({
     required Duration timeout,
+    String? previousRuntimeInstanceId,
+    bool requireNewRuntime = false,
   }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
@@ -761,6 +892,13 @@ extension _CliResults on FlutterScoutCli {
         callTimeout: const Duration(seconds: 1),
       );
       if (inspect != null && inspect['ok'] == true) {
+        final runtimeInstanceId = inspect['runtimeInstanceId']?.toString();
+        if (requireNewRuntime &&
+            previousRuntimeInstanceId != null &&
+            runtimeInstanceId == previousRuntimeInstanceId) {
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          continue;
+        }
         // Reassembly can make inspect reachable slightly before Flutter has
         // unlocked pointer dispatch. Let the helper observe a stable frame so
         // the next tap/drag is safe immediately after this command returns.
@@ -777,5 +915,59 @@ extension _CliResults on FlutterScoutCli {
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
     return null;
+  }
+
+  Future<Map<String, Object?>> _waitForHotUpdateAcknowledgement({
+    required String action,
+    required int sinceCursor,
+    required Duration timeout,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    final successPattern = action == 'restart'
+        ? RegExp(
+            r'(restarted application in|hot restart performed|performing hot restart.*done)',
+            caseSensitive: false,
+          )
+        : RegExp(
+            r'(reloaded \d+(?: of \d+)? libraries|hot reload performed|performing hot reload.*done)',
+            caseSensitive: false,
+          );
+    final rejectionPattern = RegExp(
+      r'(hot reload was rejected|hot restart was rejected|could not hot reload|could not hot restart|try again after fixing the above error)',
+      caseSensitive: false,
+    );
+    while (DateTime.now().isBefore(deadline)) {
+      final file = File(_logFile);
+      if (file.existsSync()) {
+        final chunk = _readLogChunk(file, sinceCursor: sinceCursor);
+        var cursor = chunk.startCursor;
+        for (final rawLine in chunk.lines) {
+          cursor += utf8.encode(rawLine).length + 1;
+          final line = _redactSensitiveLogText(rawLine);
+          if (rejectionPattern.hasMatch(line)) {
+            return {
+              'ok': false,
+              'rejected': true,
+              'cursor': cursor,
+              'message': _stripLogMetadata(line),
+            };
+          }
+          if (successPattern.hasMatch(line)) {
+            return {
+              'ok': true,
+              'cursor': cursor,
+              'message': _stripLogMetadata(line),
+            };
+          }
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return {
+      'ok': false,
+      'timedOut': true,
+      'message':
+          'Timed out waiting for the Flutter tool to acknowledge $action. The previous runtime was not accepted as updated.',
+    };
   }
 }

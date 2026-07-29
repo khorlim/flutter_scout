@@ -156,7 +156,7 @@ dart run bin/flutter_scout.dart reload
 dart run bin/flutter_scout.dart restart
 ```
 
-`reload` preserves app state. `restart` resets Dart state without reinstalling, and requires a Scout-owned `launch`/`ensure` process so Scout can signal the Flutter tool. Native, plugin, asset, or `pubspec.yaml` changes can still require a full relaunch/rebuild.
+`reload` preserves app state. `restart` resets Dart state without reinstalling, and requires a Scout-owned `launch`/`ensure` process so Scout can signal the Flutter tool. Both commands wait for an explicit Flutter-tool acknowledgement; restart additionally requires a newly registered helper runtime, so an inspectable old isolate can no longer produce a false early success. Native, plugin, asset, or `pubspec.yaml` changes can still require a full relaunch/rebuild.
 
 Drive the smoke-regression screen when changing form, text, row, or scroll behavior:
 
@@ -173,11 +173,11 @@ dart run bin/flutter_scout.dart drag-move --by=30,0
 dart run bin/flutter_scout.dart drag-end
 ```
 
-Action commands return compact JSON by default: result, stability, delta, recent errors, a snapshot id, and a small after summary. Guard `tap`, `tap-text`, `input`, and `fill` with `--expect-*`; add `--capture <path>` to save the exact frame that satisfied the expectation in the same VM call, and `--assert-no-errors` to fail on fresh blocking runtime or owned-log signals. Add `--verbose` only when full before/after payloads are needed.
+Action commands return compact JSON by default: result, stability, non-empty delta, screen/snapshot identity, a log cursor, and only new runtime/log errors observed during that action. Identical final state is represented as `sameSnapshot:true` instead of repeated summaries. An async operation that visibly works and settles back to its starting state returns `completed_same_state` with `activityObserved:true`. Guard `tap`, `tap-text`, `input`, and `fill` with `--expect-*`; add `--capture <path>` to save the exact frame that satisfied the expectation in the same VM call, and `--assert-no-errors` to fail on fresh blocking runtime or owned-log signals. Add `--verbose` only when full before/after payloads are needed.
 
-Scout-owned `launch` and `ensure` responses include a `timing` object when they start Flutter, for example `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`. Use this to tell rebuild cost from app startup or VM-service wait time.
+Scout-owned `launch` and `ensure` responses include a `timing` object when they start Flutter, for example `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`. During long builds they emit a compact `launch_heartbeat` every 15 seconds with elapsed time and the latest sanitized build line.
 
-`inspect` includes a `snapshotId`, `fieldsById`, `textTargets`, `visibleText`, `hitTestableText`, `offscreenText`, geometry, scrollables, overlays, visual tree, and control groups. `inspect --brief` is bounded and automatically scopes its text, controls, rows, and semantic-quality calculation to the active top modal, picker, dialog, or sheet; the response marks this as `surfaceOnly.automatic:true`. Use `--max-items <1-100>` to tune the digest, `omitted` to decide when more is needed, and `inspect --surface` to request modal-only behavior explicitly. Duplicate unkeyed fields are disambiguated by suffix, for example `field.enter_duplicate_note` and `field.enter_duplicate_note_2`. Use `inspect --sections semantics` for factual handle-level evidence behind unlabeled, duplicate, low-confidence, or non-hit-testable controls.
+`inspect` includes a `snapshotId`, `fieldsById`, `textTargets`, geometry, overlays, visual tree, and control groups. `inspect --brief` is a bounded operational digest and automatically scopes text, controls, and rows to the active top modal, picker, dialog, or sheet. Empty sections are omitted, as are duplicate hit-testable text and static geometry/provenance metadata. Use `--max-items <1-100>` to tune the digest, `omitted` to decide when more is needed, and `inspect --surface` to request modal-only behavior explicitly. Request `--sections semantics`, `perception`, or `geometry` only when that evidence is relevant.
 
 For a persistent agent integration, `serve` exposes both the compatible
 command-line endpoint and a typed JSON protocol:
@@ -188,6 +188,8 @@ curl "localhost:$(cat /tmp/scout.port)/v1/call" \
   -H 'content-type: application/json' \
   --data '{"method":"tap","args":["btn.save"],"params":{"expectText":"Saved","capture":"/tmp/saved.png","assertNoErrors":true}}'
 ```
+
+While a session’s daemon is active, ordinary `flutter-scout inspect` and action commands automatically proxy through it. Agents can keep using the normal CLI syntax without paying a new VM/WebSocket connection cost for each command.
 
 Use `flutter-scout version`, `flutter-scout help <command>`, and
 `flutter-scout doctor` to verify the CLI identity, protocol compatibility, and
@@ -211,7 +213,7 @@ Brief inspect now includes compact stable scroll-region handles such as `scroll.
 
 Coordinate taps accept either `tap --x <x> --y <y>` or the shorthand `tap <x> <y>`.
 
-When an action transition lands after the initial stability wait, action output can include `lateChangeObserved:true` so agents know the returned `afterSummary` includes a delayed route, modal, or overlay change.
+When an action transition lands after the initial stability wait, action output can include `lateChangeObserved:true`. Transient loading/saving/refreshing states are sampled during the wait, allowing Scout to distinguish a true no-op from an operation that settles back to the original UI.
 
 Use compact logs for triage:
 
@@ -225,8 +227,7 @@ dart run bin/flutter_scout.dart logs --last 20
 RenderFlex overflows, native Flutter errors, high-severity app logs, and
 permission/request failures. Fresh blocking signals also appear as
 `blockingLogSignals`, so agents can stop on hard facts without grepping
-`logs.txt` manually. The legacy `recentLogErrors` field in `inspect`, `health`,
-and compact action output remains a line-only compatibility view.
+`logs.txt` manually. Every Scout-owned line is timestamped, assigned a byte cursor, and redacted for common credentials before it is written. Action output includes only signals after its starting cursor; legacy untimestamped history is treated as stale rather than permanently fresh.
 
 When `logs --contains <text>` finds no matching lines in a non-empty Scout-owned log, the command keeps `available:true`, reports `matched:0`, and says no lines matched the filter.
 

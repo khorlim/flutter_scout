@@ -127,7 +127,8 @@ flutter-scout ensure --device <simulator-id> --project <flutter-app-path> --name
 
 Named sessions use isolated runtime directories and per-run logs. Concurrent
 `ensure` calls for one name join the current build. A second direct `launch`
-does not replace a ready run unless you pass `--replace`.
+does not replace a ready run unless you pass `--replace`. Long launches emit a
+sanitized heartbeat every 15 seconds so build progress never goes silent.
 
 Launch through Flutter Scout when you intentionally need a new Scout-owned run:
 
@@ -158,11 +159,11 @@ flutter-scout version
 ```
 
 Successful setup means `status` reports running and `inspect` returns visible text, interactables, fields, field geometry, and no setup error.
-For exploratory agent loops after setup, `flutter-scout explore --once` prints the persistent daemon command/endpoints without starting it; `flutter-scout explore --port-file /tmp/scout.port` starts the fast loop.
+For exploratory agent loops after setup, `flutter-scout explore --once` prints the persistent daemon command/endpoints without starting it; `flutter-scout explore --port-file /tmp/scout.port` starts the fast loop. While that daemon is active, normal inspect/action CLI commands automatically reuse it.
 
 `ensure`, `launch`, and `attach` report `ready` when they connect to or start a VM service. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
 
-After setup, run `flutter-scout status` when session ownership is unclear. The `hotUpdate` object reports whether reload can use the VM service and whether restart can signal a Scout-owned Flutter run. If Flutter moves the VM service after hot restart, `status` can refresh the stale saved URI from Scout logs or simulator log markers and reports `staleRefreshed:true`. Use `flutter-scout reload` for Dart-only edits and `flutter-scout restart` when Dart state must reset. If `reload` returns `reload_rejected`, the app is still reachable but is likely running previous code. `restart` requires a Scout-owned `ensure` or `launch` process; attach-only sessions can still inspect and act, but cannot signal the Flutter tool for restart. Use the owning Flutter terminal or IDE hot restart when attached to a human-started session.
+After setup, run `flutter-scout status` when session ownership is unclear. The `hotUpdate` object reports whether reload can use the VM service and whether restart can signal a Scout-owned Flutter run. Scout-owned reload/restart wait for Flutter-tool acknowledgement, and restart requires a new helper runtime before returning. If Flutter moves the VM service after hot restart, `status` refreshes the saved URI. Attach-only sessions can inspect and act but must use VM reload or the owning Flutter terminal/IDE for restart.
 
 ## Troubleshooting
 
