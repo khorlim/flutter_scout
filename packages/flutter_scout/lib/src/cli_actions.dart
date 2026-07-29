@@ -137,7 +137,7 @@ extension _CliActions on FlutterScoutCli {
         '--max-items must be an integer from 1 to 100.',
       );
     }
-    final result = _withProtocolDiagnostics(
+    var result = _withProtocolDiagnostics(
       'ext.flutter_scout.inspect',
       await _call('ext.flutter_scout.inspect', {
         if (parsed.flag('brief') || parsed.flag('surface')) 'brief': 'true',
@@ -146,6 +146,9 @@ extension _CliActions on FlutterScoutCli {
         'maxItems': ?maxItems,
       }),
     );
+    if (parsed.flag('brief') || parsed.flag('surface')) {
+      result = _compactBriefInspect(result);
+    }
     // Surface swallowed app-log errors (location denied, failed API calls…)
     // that the in-isolate error handlers never see, so a QA sweep notices
     // them without a separate `logs` call.
@@ -154,9 +157,10 @@ extension _CliActions on FlutterScoutCli {
         : _freshRecentLogSignals();
     if (logSignals.isNotEmpty && result['ok'] != false) {
       result['recentLogSignals'] = _logSignalMaps(logSignals);
-      result['recentLogErrors'] = [
-        for (final signal in logSignals) signal.line,
-      ];
+    }
+    result['logCursor'] = _currentLogCursor();
+    if (_currentRunIdFromSession() case final runId?) {
+      result['runId'] = runId;
     }
     stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
     return result['ok'] == false ? 1 : 0;
@@ -191,15 +195,17 @@ extension _CliActions on FlutterScoutCli {
       'screen': result['screen'],
       'viewSignature': result['viewSignature'],
       'idle': result['idle'],
-      'degradedNodes': result['degradedNodes'] ?? 0,
+      if ((result['degradedNodes'] ?? 0) != 0)
+        'degradedNodes': result['degradedNodes'],
       'interactableCount': interactables is List ? interactables.length : 0,
-      if (result['semanticQuality'] != null)
-        'semanticQuality': result['semanticQuality'],
-      'blockingErrors': blocking,
-      'blockingLogSignals': _logSignalMaps(blockingLogSignals, now: now),
-      'recentErrorCount': errorList.length,
-      'recentLogSignals': _logSignalMaps(logSignals, now: now),
-      'recentLogErrors': [for (final signal in logSignals) signal.line],
+      if (blocking.isNotEmpty) 'blockingErrors': blocking,
+      if (blockingLogSignals.isNotEmpty)
+        'blockingLogSignals': _logSignalMaps(blockingLogSignals, now: now),
+      if (errorList.isNotEmpty) 'recentErrorCount': errorList.length,
+      if (logSignals.isNotEmpty)
+        'recentLogSignals': _logSignalMaps(logSignals, now: now),
+      'logCursor': _currentLogCursor(),
+      'runId': ?_currentRunIdFromSession(),
       'healthy':
           blocking.isEmpty &&
           blockingLogSignals.isEmpty &&
@@ -536,12 +542,16 @@ extension _CliActions on FlutterScoutCli {
   Future<int> _reload(List<String> args) async {
     final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
+    final logCursor = _currentLogCursor();
     final result = await _hotUpdate(
       action: 'reload',
       signal: ProcessSignal.sigusr1,
       fullRestart: false,
     );
-    final enrichedResult = await _withRecentLogSignals(result);
+    final enrichedResult = await _withRecentLogSignals(
+      result,
+      sinceCursor: logCursor,
+    );
     stdout.writeln(
       const JsonEncoder.withIndent('  ').convert(
         parsed.flag('verbose')
@@ -558,12 +568,16 @@ extension _CliActions on FlutterScoutCli {
   Future<int> _restart(List<String> args) async {
     final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
+    final logCursor = _currentLogCursor();
     final result = await _hotUpdate(
       action: 'restart',
       signal: ProcessSignal.sigusr2,
       fullRestart: true,
     );
-    final enrichedResult = await _withRecentLogSignals(result);
+    final enrichedResult = await _withRecentLogSignals(
+      result,
+      sinceCursor: logCursor,
+    );
     stdout.writeln(
       const JsonEncoder.withIndent('  ').convert(
         parsed.flag('verbose')
@@ -910,7 +924,9 @@ extension _CliActions on FlutterScoutCli {
           'lines': const <String>[],
       };
     }
-    final allLines = _dedupeVmStdoutEcho(_readLogLinesSync(file));
+    final allLines = _dedupeVmStdoutEcho(
+      _readLogLinesSync(file).map(_redactSensitiveLogText).toList(),
+    );
     if (summary) {
       final summary = _summarizeLogLines(allLines, last: last);
       return {
@@ -975,18 +991,17 @@ extension _CliActions on FlutterScoutCli {
     required String vmUri,
     required String logFile,
   }) async {
-    IOSink? sink;
+    _LockedLogWriter? writer;
     try {
       Directory(p.dirname(logFile)).createSync(recursive: true);
-      sink = File(logFile).openWrite(mode: FileMode.append);
-      var writeChain = Future<void>.value();
+      writer = _LockedLogWriter(logFile);
 
       Future<void> writeLine(String line) {
-        writeChain = writeChain.then((_) async {
-          sink?.writeln(line);
-          await sink?.flush();
-        });
-        return writeChain;
+        final sanitized = _redactSensitiveLogText(line);
+        final timestamped = _extractLogTimestamp(sanitized) == null
+            ? '[${DateTime.now().toUtc().toIso8601String()}] $sanitized'
+            : sanitized;
+        return writer!.write(timestamped);
       }
 
       while (true) {
@@ -1050,18 +1065,20 @@ extension _CliActions on FlutterScoutCli {
             await subscription.cancel();
           }
           await service?.dispose();
-          await writeChain;
+          await writer.flush();
         }
 
         await Future<void>.delayed(const Duration(seconds: 1));
       }
     } catch (error) {
-      sink ??= File(logFile).openWrite(mode: FileMode.append);
-      sink.writeln('[flutter_scout] VM logging listener failed: $error');
-      await sink.flush();
+      writer ??= _LockedLogWriter(logFile);
+      await writer.write(
+        '[flutter_scout] VM logging listener failed: '
+        '${_redactSensitiveLogText(error.toString())}',
+      );
       return 1;
     } finally {
-      await sink?.close();
+      await writer?.close();
     }
   }
 

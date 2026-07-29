@@ -139,9 +139,31 @@ extension _CliSession on FlutterScoutCli {
         'project': project,
       });
       final launchTiming = _LaunchTiming(startedAt: DateTime.now());
-      final process = await Process.start('/bin/bash', [
-        '-lc',
-        'cd ${_shellQuote(project)} && exec flutter ${flutterArgs.map(_shellQuote).join(' ')} >> ${_shellQuote(runLogFile)} 2>&1',
+      if (!Platform.script.isScheme('file')) {
+        throw const ScoutCliException(
+          'flutter_worker_unavailable',
+          'Flutter Scout could not resolve its executable for the detached Flutter log worker.',
+        );
+      }
+      final workerConfigFile = p.join(
+        _sessionDir.path,
+        'runs',
+        launchLease.runId,
+        'flutter_worker.json',
+      );
+      File(workerConfigFile).writeAsStringSync(
+        jsonEncode({
+          'project': project,
+          'flutterArgs': flutterArgs,
+          'logFile': runLogFile,
+          'runId': launchLease.runId,
+        }),
+      );
+      final process = await Process.start(Platform.resolvedExecutable, [
+        Platform.script.toFilePath(),
+        'flutter-run-worker',
+        '--config',
+        workerConfigFile,
       ], mode: ProcessStartMode.detached);
       File(_deviceFile).writeAsStringSync(resolvedDevice.id);
       _writeDeviceInfo(resolvedDevice);
@@ -160,6 +182,7 @@ extension _CliSession on FlutterScoutCli {
 
       String? vmUri;
       var readLineCount = 0;
+      var lastHeartbeat = DateTime.now();
       final deadline = DateTime.now().add(const Duration(minutes: 5));
       while (DateTime.now().isBefore(deadline)) {
         final logFile = File(runLogFile);
@@ -171,6 +194,15 @@ extension _CliSession on FlutterScoutCli {
           }
           readLineCount = currentLines.length;
           if (vmUri != null) break;
+        }
+        final now = DateTime.now();
+        if (now.difference(lastHeartbeat) >= const Duration(seconds: 15)) {
+          lastHeartbeat = now;
+          _writeProgress('launch_heartbeat', {
+            'elapsedMs': now.difference(launchTiming.startedAt).inMilliseconds,
+            'logLines': readLineCount,
+            if (lines.isNotEmpty) 'lastLine': _compactProgressLine(lines.last),
+          });
         }
         if (!await _processExists(process.pid)) break;
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -362,6 +394,96 @@ Future<void> main() async {
         lockFile.deleteSync();
       }
     }
+  }
+
+  Future<int> _flutterRunWorker(List<String> args) async {
+    final parser = ArgParser()..addOption('config');
+    final parsed = parser.parse(args);
+    final configPath = parsed.option('config');
+    if (configPath == null || configPath.isEmpty) {
+      throw const ScoutCliException(
+        'usage',
+        'flutter-run-worker requires --config <path>.',
+      );
+    }
+    final configFile = File(configPath);
+    final decoded = jsonDecode(configFile.readAsStringSync());
+    if (decoded is! Map) {
+      throw const ScoutCliException(
+        'invalid_worker_config',
+        'The Flutter worker configuration is not a JSON object.',
+      );
+    }
+    final config = Map<String, dynamic>.from(decoded);
+    final project = config['project']?.toString();
+    final logFile = config['logFile']?.toString();
+    final flutterArgs = config['flutterArgs'];
+    if (project == null ||
+        project.isEmpty ||
+        logFile == null ||
+        logFile.isEmpty ||
+        flutterArgs is! List) {
+      throw const ScoutCliException(
+        'invalid_worker_config',
+        'The Flutter worker configuration is incomplete.',
+      );
+    }
+
+    Directory(p.dirname(logFile)).createSync(recursive: true);
+    final writer = _LockedLogWriter(logFile);
+    Future<void> writeLine(String stream, String line) {
+      final timestamp = DateTime.now().toUtc().toIso8601String();
+      final sanitized = _redactSensitiveLogText(_stripLogAnsi(line));
+      return writer.write('[$timestamp] [FLUTTER_$stream] $sanitized');
+    }
+
+    final child = await Process.start(
+      'flutter',
+      flutterArgs.map((value) => value.toString()).toList(growable: false),
+      workingDirectory: project,
+    );
+    final outputDrains = <Future<void>>[
+      child.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .asyncMap((line) => writeLine('STDOUT', line))
+          .drain<void>(),
+      child.stderr
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .asyncMap((line) => writeLine('STDERR', line))
+          .drain<void>(),
+    ];
+    final signalSubscriptions = <StreamSubscription<ProcessSignal>>[
+      ProcessSignal.sigusr1.watch().listen(
+        (_) => child.kill(ProcessSignal.sigusr1),
+      ),
+      ProcessSignal.sigusr2.watch().listen(
+        (_) => child.kill(ProcessSignal.sigusr2),
+      ),
+      ProcessSignal.sigterm.watch().listen((_) => child.kill()),
+      ProcessSignal.sigint.watch().listen((_) => child.kill()),
+    ];
+    try {
+      final exitCode = await child.exitCode;
+      await Future.wait(outputDrains);
+      return exitCode;
+    } finally {
+      for (final subscription in signalSubscriptions) {
+        await subscription.cancel();
+      }
+      await writer.close();
+      try {
+        configFile.deleteSync();
+      } catch (_) {}
+    }
+  }
+
+  String _compactProgressLine(String line) {
+    final sanitized = _redactSensitiveLogText(_stripLogMetadata(line));
+    return sanitized.length <= 180
+        ? sanitized
+        : '${sanitized.substring(0, 177)}...';
   }
 
   Future<String?> _discoverBundledHelperPath() async {

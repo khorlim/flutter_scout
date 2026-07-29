@@ -67,16 +67,26 @@ extension _CliServe on FlutterScoutCli {
       InternetAddress.loopbackIPv4,
       int.tryParse(parsed.option('port') ?? '') ?? 0,
     );
+    final boundPort = server.port;
     final hadReuse = _reuseVmConnection;
     _reuseVmConnection = true;
+    final existingMeta = _readSessionMeta() ?? <String, dynamic>{};
+    _writeSessionMeta({
+      ...existingMeta,
+      'serve': {
+        'pid': pid,
+        'port': boundPort,
+        'startedAt': DateTime.now().toIso8601String(),
+      },
+    });
     final portFile = parsed.option('port-file');
     if (portFile != null && portFile.isNotEmpty) {
-      File(portFile).writeAsStringSync('${server.port}');
+      File(portFile).writeAsStringSync('$boundPort');
     }
     stdout.writeln(
       jsonEncode({
         'serving': true,
-        'port': server.port,
+        'port': boundPort,
         'endpoints': [
           '/v1/schema',
           '/v1/call',
@@ -89,7 +99,7 @@ extension _CliServe on FlutterScoutCli {
     try {
       await for (final request in server) {
         try {
-          final done = await _handleServeRequest(request, server.port);
+          final done = await _handleServeRequest(request, boundPort);
           if (done) break;
         } catch (_) {
           // One broken request must not take the daemon down.
@@ -102,9 +112,66 @@ extension _CliServe on FlutterScoutCli {
       _reuseVmConnection = hadReuse;
       if (!hadReuse) await _disposeCachedVmService();
       await server.close(force: true);
+      final meta = _readSessionMeta();
+      final serve = meta?['serve'];
+      if (meta != null &&
+          serve is Map &&
+          serve['pid'] == pid &&
+          serve['port'] == boundPort) {
+        final updated = Map<String, dynamic>.from(meta)..remove('serve');
+        _writeSessionMeta(updated);
+      }
     }
     stdout.writeln(jsonEncode({'serving': false}));
     return 0;
+  }
+
+  Future<int?> _tryProxyToActiveServe(List<String> args) async {
+    final meta = _readSessionMeta();
+    final serve = meta?['serve'];
+    if (serve is! Map) return null;
+    final port = int.tryParse('${serve['port'] ?? ''}');
+    final servePid = int.tryParse('${serve['pid'] ?? ''}');
+    if (port == null || servePid == null || !await _processExists(servePid)) {
+      if (meta != null) {
+        final updated = Map<String, dynamic>.from(meta)..remove('serve');
+        _writeSessionMeta(updated);
+      }
+      return null;
+    }
+    final command = args.map(_shellQuote).join(' ');
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 1);
+    try {
+      final request = await client
+          .postUrl(Uri.parse('http://127.0.0.1:$port/run'))
+          .timeout(const Duration(seconds: 2));
+      request.headers.contentType = ContentType.text;
+      request.write(command);
+      final response = await request.close().timeout(
+        const Duration(seconds: 30),
+      );
+      final body = await utf8.decoder.bind(response).join();
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) return null;
+      final result = decoded['result'];
+      stdout.writeln(
+        const JsonEncoder.withIndent('  ').convert(result ?? decoded),
+      );
+      return int.tryParse('${decoded['exitCode'] ?? ''}') ?? 1;
+    } catch (_) {
+      final current = _readSessionMeta();
+      final currentServe = current?['serve'];
+      if (current != null &&
+          currentServe is Map &&
+          currentServe['pid'] == servePid &&
+          currentServe['port'] == port) {
+        final updated = Map<String, dynamic>.from(current)..remove('serve');
+        _writeSessionMeta(updated);
+      }
+      return null;
+    } finally {
+      client.close(force: true);
+    }
   }
 
   /// Handles one request; returns true when the daemon should stop.

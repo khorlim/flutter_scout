@@ -29,7 +29,7 @@ part 'runtime_recorder.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 13;
+const int scoutHelperProtocolVersion = 14;
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
@@ -65,6 +65,8 @@ class FlutterScoutRuntime {
   final List<ScoutAnnotation> _annotations = <ScoutAnnotation>[];
   final ValueNotifier<int> _annotationRevision = ValueNotifier<int>(0);
   final DateTime _installedAt = DateTime.now();
+  late final String _runtimeInstanceId =
+      '${_installedAt.microsecondsSinceEpoch}-${identityHashCode(this)}';
   int _nextSyntheticPointer = 1000000;
   int _nextAnnotationId = 1;
   int _annotationHandoffSeq = 0;
@@ -277,6 +279,31 @@ class FlutterScoutRuntime {
         const {'capture': 'true'},
         const {'action': 'debug-capture'},
       );
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugTrackAction(
+    Future<void> Function() action, {
+    int waitMs = 600,
+    int lateWaitMs = 600,
+  }) async {
+    final before = _snapshot();
+    await action();
+    final tracked = await _snapshotAfterAction(before, {
+      'waitMs': '$waitMs',
+      'lateWaitMs': '$lateWaitMs',
+    });
+    final changed = _changed(before, tracked.snapshot);
+    return {
+      'changed': changed,
+      'activityObserved': tracked.activityObserved,
+      'result': changed
+          ? 'changed'
+          : tracked.activityObserved
+          ? 'completed_same_state'
+          : 'activated_no_observed_change',
+      'transientViewSignatures': tracked.transientViewSignatures,
+    };
+  }
 
   /// Test-app primitive matching the service-extension held-drag lifecycle.
   @visibleForTesting
@@ -574,7 +601,9 @@ class FlutterScoutRuntime {
       'screen': snapshot.screen,
       'routeGuess': snapshot.routeGuess,
       if (snapshot.activeSurface != null)
-        'activeSurface': snapshot.activeSurface,
+        'activeSurface': brief
+            ? _compactActiveSurface(snapshot.activeSurface!)
+            : snapshot.activeSurface,
       if (focusSurface)
         'surfaceOnly': {
           'applied': surfaceApplied,
@@ -596,17 +625,10 @@ class FlutterScoutRuntime {
       'snapshotId': snapshot.snapshotId,
       'visibleTextHash': snapshot.visibleTextHash,
       'idle': snapshot.idle,
-      'devicePixelRatio': snapshot.devicePixelRatio,
-      'logicalSize': [snapshot.logicalSize.width, snapshot.logicalSize.height],
-      'perception': snapshot.perceptionJson(),
       if (snapshot.degradedNodes > 0) 'degradedNodes': snapshot.degradedNodes,
-      'semanticQuality': _semanticQuality(
-        snapshot,
-        scopedInteractables: interactables,
-        scopedFields: fields,
-      ),
-      'recentErrors': snapshot.recentErrors,
-      'annotationMode': _annotationMode,
+      if (snapshot.recentErrors.isNotEmpty)
+        'recentErrors': snapshot.recentErrors,
+      if (_annotationMode) 'annotationMode': true,
     };
     if (brief) {
       final briefInteractables = [
@@ -647,9 +669,12 @@ class FlutterScoutRuntime {
           .toList(growable: false);
       final briefFields = fields.take(maxItems);
       payload.addAll({
-        'visibleText': briefVisibleText,
-        'hitTestableText': briefHitTestableText,
-        if (!surfaceOnly) 'offscreenText': briefOffscreenText,
+        if (briefVisibleText.isNotEmpty) 'visibleText': briefVisibleText,
+        if (briefHitTestableText.isNotEmpty &&
+            !_sameStringLists(briefVisibleText, briefHitTestableText))
+          'hitTestableText': briefHitTestableText,
+        if (!surfaceOnly && briefOffscreenText.isNotEmpty)
+          'offscreenText': briefOffscreenText,
         'interactables': [
           for (final node in briefInteractables.take(maxItems))
             _compactNodeJson(
@@ -665,12 +690,6 @@ class FlutterScoutRuntime {
                 'Use inspect --sections interactables when these low-label controls matter.',
           },
         if (inspectWarnings.isNotEmpty) 'inspectWarnings': inspectWarnings,
-        'semanticQuality': _semanticQuality(
-          snapshot,
-          anonymousGenericTargetsOmitted: omitted,
-          scopedInteractables: interactables,
-          scopedFields: fields,
-        ),
         if (scopedRows.isNotEmpty) 'structuredRows': briefRows,
         if (snapshot.scrollables.isNotEmpty)
           'scrollables': [
@@ -704,7 +723,10 @@ class FlutterScoutRuntime {
             if (fields.length > maxItems) 'fields': fields.length - maxItems,
             'hint': 'Use inspect --sections <name> for full detail.',
           },
-        'fieldValues': {for (final field in briefFields) field.id: field.value},
+        if (briefFields.isNotEmpty)
+          'fieldValues': {
+            for (final field in briefFields) field.id: field.value,
+          },
       });
     }
     for (final section in sections) {
@@ -732,11 +754,40 @@ class FlutterScoutRuntime {
         'annotations' => {
           'annotations': _annotationJsonList(liveTargets: _annotationTargets()),
         },
-        'semantics' => {'semanticDiagnostics': _semanticDiagnostics(snapshot)},
+        'semantics' => {
+          'semanticQuality': _semanticQuality(
+            snapshot,
+            scopedInteractables: interactables,
+            scopedFields: fields,
+          ),
+          'semanticDiagnostics': _semanticDiagnostics(snapshot),
+        },
+        'geometry' => {
+          'devicePixelRatio': snapshot.devicePixelRatio,
+          'logicalSize': [
+            snapshot.logicalSize.width,
+            snapshot.logicalSize.height,
+          ],
+        },
+        'perception' => {'perception': snapshot.perceptionJson()},
         _ => {'unknownSections': '$section (ignored)'},
       });
     }
     return payload;
+  }
+
+  Map<String, Object?> _compactActiveSurface(Map<String, Object?> surface) => {
+    if (surface['kind'] != null) 'kind': surface['kind'],
+    if (surface['label'] != null) 'label': surface['label'],
+    if (surface['screen'] != null) 'screen': surface['screen'],
+  };
+
+  bool _sameStringLists(List<String> first, List<String> second) {
+    if (first.length != second.length) return false;
+    for (var index = 0; index < first.length; index++) {
+      if (first[index] != second[index]) return false;
+    }
+    return true;
   }
 
   List<T> _takeItems<T>(List<T> items, int maxItems) =>

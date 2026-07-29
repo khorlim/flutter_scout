@@ -33,7 +33,7 @@ class FlutterScoutCli {
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 13;
+  static const int expectedHelperProtocolVersion = 14;
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -44,6 +44,9 @@ class FlutterScoutCli {
   /// Test-only view of default compact action output.
   Map<String, dynamic> debugCompactActionResult(Map<String, dynamic> result) =>
       _compactActionResult(result);
+
+  Map<String, dynamic> debugCompactBriefInspect(Map<String, dynamic> result) =>
+      _compactBriefInspect(result);
 
   Map<String, dynamic> debugMaterializeActionCapture(
     Map<String, dynamic> result,
@@ -105,6 +108,8 @@ class FlutterScoutCli {
   /// Test-only view of `logs --summary` classification.
   Map<String, Object?> debugLogSummary(List<String> lines, {int last = 20}) =>
       _summarizeLogLines(lines, last: last);
+
+  String debugRedactLogText(String value) => _redactSensitiveLogText(value);
 
   // Batch-mode connection cache: one WebSocket serves every step of a batch
   // instead of connect/dispose per command. See cli_batch.dart.
@@ -309,6 +314,11 @@ class FlutterScoutCli {
       _registerScoutSession(requestedName, _sessionDirectoryOverride!);
     }
     try {
+      if (!_reuseVmConnection &&
+          _commandsEligibleForServeProxy.contains(command)) {
+        final proxied = await _tryProxyToActiveServe(effectiveArgs);
+        if (proxied != null) return proxied;
+      }
       return await switch (command) {
         'launch' => _launch(rest),
         'ensure' => _ensure(rest),
@@ -348,6 +358,7 @@ class FlutterScoutCli {
         'deeplink' => _deeplink(rest),
         'logs' => _logs(rest),
         'vm-log-listener' => _vmLogListener(rest),
+        'flutter-run-worker' => _flutterRunWorker(rest),
         'screenshot' => _screenshot(rest),
         'crop' => _crop(rest),
         'evidence' => _evidence(rest),
@@ -794,16 +805,19 @@ print(String(data: data, encoding: .utf8)!)
     List<String> lines, {
     required int last,
   }) {
+    final sanitizedLines = lines
+        .map(_redactSensitiveLogText)
+        .toList(growable: false);
     final important = <String>[];
     final signals = _logSignalsFromLines(
-      lines,
-      scanLines: lines.length,
-      max: lines.length,
+      sanitizedLines,
+      scanLines: sanitizedLines.length,
+      max: sanitizedLines.length,
     );
     final signalLines = {for (final signal in signals) signal.line};
     var warnings = 0;
     String? vmServiceUri;
-    for (final line in lines) {
+    for (final line in sanitizedLines) {
       final lower = line.toLowerCase();
       final isSignal = signalLines.contains(line.trim());
       final isWarning =
@@ -1385,10 +1399,13 @@ print(String(data: data, encoding: .utf8)!)
       File(_vmLogListenerPidFile).writeAsStringSync(process.pid.toString());
       return process.pid;
     } catch (error) {
-      File(logFile).writeAsStringSync(
-        '[flutter_scout] VM logging listener start failed: $error\n',
-        mode: FileMode.append,
+      final writer = _LockedLogWriter(logFile);
+      await writer.write(
+        '[${DateTime.now().toUtc().toIso8601String()}] '
+        '[flutter_scout] VM logging listener start failed: '
+        '${_redactSensitiveLogText(error.toString())}',
       );
+      await writer.close();
       return null;
     }
   }
@@ -1589,6 +1606,10 @@ print(String(data: data, encoding: .utf8)!)
     final command = await _processCommand(pid);
     if (command == null) return false;
     final lower = command.toLowerCase();
+    if ((lower.contains('flutter_scout') || lower.contains('flutter-scout')) &&
+        lower.contains('flutter-run-worker')) {
+      return true;
+    }
     final hasFlutterTool =
         lower.contains('flutter_tools') ||
         RegExp(r'(^|[/\s])flutter(\s|$)').hasMatch(lower);
@@ -1721,6 +1742,32 @@ print(String(data: data, encoding: .utf8)!)
     'replay',
     'record',
     'version',
+  };
+
+  static const Set<String> _commandsEligibleForServeProxy = {
+    'inspect',
+    'annotations',
+    'bounds',
+    'tap',
+    'tap-text',
+    'long-press',
+    'input',
+    'fill',
+    'scroll',
+    'scroll-to',
+    'swipe',
+    'drag-start',
+    'drag-move',
+    'drag-end',
+    'back',
+    'wait',
+    'wait-for',
+    'health',
+    'reload',
+    'restart',
+    'logs',
+    'screenshot',
+    'crop',
   };
 
   void _printUsage({String? command}) {
@@ -1941,14 +1988,21 @@ List<String> _readLogLinesSync(File file) {
 /// Recent hard runtime signals from the Scout-owned log — app logs and Flutter
 /// console lines that the in-isolate error hooks can miss. Empty for attach
 /// sessions with no Scout-owned log.
-List<_LogSignal> _recentLogSignals({int scanLines = 300, int max = 8}) {
+List<_LogSignal> _recentLogSignals({
+  int scanLines = 300,
+  int max = 8,
+  int? sinceCursor,
+}) {
   final file = File(_logFile);
   if (!file.existsSync()) return const [];
   try {
+    final chunk = _readLogChunk(file, sinceCursor: sinceCursor);
     return _logSignalsFromLines(
-      _readLogLinesSync(file),
+      chunk.lines,
       scanLines: scanLines,
       max: max,
+      baseCursor: chunk.startCursor,
+      runId: _currentRunIdFromSession(),
     );
   } catch (_) {
     return const [];
@@ -1967,27 +2021,43 @@ List<_LogSignal> _logSignalsFromLines(
   List<String> lines, {
   int scanLines = 300,
   int max = 8,
+  int baseCursor = 0,
+  String? runId,
 }) {
   if (lines.isEmpty || scanLines <= 0 || max <= 0) return const [];
   final tail = lines.length <= scanLines
       ? lines
       : lines.sublist(lines.length - scanLines);
+  final skipped = lines.length - tail.length;
+  var tailCursor = baseCursor;
+  for (var index = 0; index < skipped; index++) {
+    tailCursor += utf8.encode(lines[index]).length + 1;
+  }
   final signals = <_LogSignal>[];
+  final sanitizedTail = tail
+      .map(_redactSensitiveLogText)
+      .toList(growable: false);
   for (var i = 0; i < tail.length; i++) {
-    final line = tail[i].trim();
+    final rawLine = tail[i];
+    final line = sanitizedTail[i].trim();
+    final lineEndCursor = tailCursor + utf8.encode(rawLine).length + 1;
     final classification = _classifyLogLine(line);
-    if (classification == null) continue;
-    signals.add(
-      _LogSignal(
-        kind: classification.kind,
-        severity: classification.severity,
-        blocking: classification.blocking,
-        message: classification.message,
-        line: line,
-        timestamp: _extractLogTimestamp(line),
-        context: _logSignalContext(tail, i),
-      ),
-    );
+    if (classification != null) {
+      signals.add(
+        _LogSignal(
+          kind: classification.kind,
+          severity: classification.severity,
+          blocking: classification.blocking,
+          message: classification.message,
+          line: line,
+          timestamp: _extractLogTimestamp(line),
+          context: _logSignalContext(sanitizedTail, i),
+          cursor: lineEndCursor,
+          runId: runId,
+        ),
+      );
+    }
+    tailCursor = lineEndCursor;
   }
   return signals.length <= max
       ? signals
@@ -2213,6 +2283,8 @@ class _LogSignal {
     required this.message,
     required this.line,
     required this.context,
+    required this.cursor,
+    this.runId,
     this.timestamp,
   });
 
@@ -2222,11 +2294,13 @@ class _LogSignal {
   final String message;
   final String line;
   final List<String> context;
+  final int cursor;
+  final String? runId;
   final DateTime? timestamp;
 
   bool isStale(DateTime now) {
     final parsed = timestamp;
-    if (parsed == null) return false;
+    if (parsed == null) return true;
     return now.difference(parsed) > const Duration(seconds: 30);
   }
 
@@ -2241,11 +2315,127 @@ class _LogSignal {
       'blocking': blocking,
       'message': message,
       'line': line,
+      'cursor': cursor,
+      if (runId != null) 'runId': runId,
       if (context.isNotEmpty) 'context': context,
       if (parsed != null) 'timestamp': parsed.toIso8601String(),
+      if (parsed == null) ...{'freshness': 'unknown', 'stale': true},
       if (ageMs case final value?) ...{'ageMs': value, 'stale': value > 30000},
     };
   }
+}
+
+int _currentLogCursor() {
+  final file = File(_logFile);
+  if (!file.existsSync()) return 0;
+  try {
+    return file.lengthSync();
+  } catch (_) {
+    return 0;
+  }
+}
+
+_LogChunk _readLogChunk(File file, {int? sinceCursor, int maxBytes = 262144}) {
+  final length = file.lengthSync();
+  final requestedStart = sinceCursor == null
+      ? (length - maxBytes).clamp(0, length)
+      : sinceCursor.clamp(0, length);
+  final handle = file.openSync();
+  try {
+    handle.setPositionSync(requestedStart);
+    final bytes = handle.readSync(length - requestedStart);
+    var text = utf8.decode(bytes, allowMalformed: true);
+    var startCursor = requestedStart;
+    if (sinceCursor == null && requestedStart > 0) {
+      final firstNewline = text.indexOf('\n');
+      if (firstNewline >= 0) {
+        startCursor += utf8.encode(text.substring(0, firstNewline + 1)).length;
+        text = text.substring(firstNewline + 1);
+      }
+    }
+    return _LogChunk(
+      const LineSplitter().convert(text),
+      startCursor: startCursor,
+    );
+  } finally {
+    handle.closeSync();
+  }
+}
+
+class _LogChunk {
+  const _LogChunk(this.lines, {required this.startCursor});
+
+  final List<String> lines;
+  final int startCursor;
+}
+
+class _LockedLogWriter {
+  _LockedLogWriter(String path)
+    : _file = File(path).openSync(mode: FileMode.append);
+
+  final RandomAccessFile _file;
+  Future<void> _chain = Future<void>.value();
+  bool _closed = false;
+
+  Future<void> write(String line) {
+    if (_closed) return Future<void>.value();
+    _chain = _chain.then((_) async {
+      await _file.lock(FileLock.exclusive);
+      try {
+        await _file.setPosition(await _file.length());
+        await _file.writeString('$line\n');
+        await _file.flush();
+      } finally {
+        await _file.unlock();
+      }
+    });
+    return _chain;
+  }
+
+  Future<void> flush() => _chain;
+
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    await _chain;
+    await _file.close();
+  }
+}
+
+String? _currentRunIdFromSession() {
+  final file = File(_sessionMetaFile);
+  if (!file.existsSync()) return null;
+  try {
+    final decoded = jsonDecode(file.readAsStringSync());
+    return decoded is Map ? decoded['runId']?.toString() : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+String _redactSensitiveLogText(String value) {
+  var redacted = value;
+  const names =
+      r'authorization|token|access[_-]?token|refresh[_-]?token|session|cookie|api[_-]?key|mobile[_-]?id';
+  redacted = redacted.replaceAllMapped(
+    RegExp('("(?:$names)"\\s*:\\s*")[^"]*(")', caseSensitive: false),
+    (match) => '${match.group(1)}<redacted>${match.group(2)}',
+  );
+  redacted = redacted.replaceAllMapped(
+    RegExp("('(?:$names)'\\s*:\\s*')[^']*(')", caseSensitive: false),
+    (match) => '${match.group(1)}<redacted>${match.group(2)}',
+  );
+  redacted = redacted.replaceAllMapped(
+    RegExp(
+      '((?:$names)\\s*[:=]\\s*)(?:Bearer\\s+)?[^\\s,}\\]]+',
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1)}<redacted>',
+  );
+  return redacted.replaceAllMapped(
+    RegExp(r'(Bearer\s+)[A-Za-z0-9._~+/=-]+', caseSensitive: false),
+    (match) => '${match.group(1)}<redacted>',
+  );
 }
 
 class _LogClassification {

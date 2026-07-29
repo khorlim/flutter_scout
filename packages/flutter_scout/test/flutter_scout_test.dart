@@ -700,27 +700,39 @@ void main() {
       expect(result.containsKey('warnings'), isFalse);
     });
 
-    test('older helper version is flagged with relaunch guidance', () {
-      final cli = FlutterScoutCli();
-      final result = cli.debugProtocolDiagnostics('ext.flutter_scout.inspect', {
-        'ok': true,
-        'helperProtocolVersion': 1,
-        'screen': 'HomeScreen',
+    test('older helper version warns once per session', () async {
+      await _withTempCwd(() async {
+        final cli = FlutterScoutCli();
+        final result = cli.debugProtocolDiagnostics(
+          'ext.flutter_scout.inspect',
+          {'ok': true, 'helperProtocolVersion': 1, 'screen': 'HomeScreen'},
+        );
+        final protocol = result['helperProtocol'] as Map<String, dynamic>;
+        expect(protocol['status'], 'older_than_cli');
+        expect(protocol['helperProtocolVersion'], 1);
+        expect(result['warnings'], isNotEmpty);
+        expect(result['protocolMismatch'], '1<14');
+
+        final repeated = cli.debugProtocolDiagnostics(
+          'ext.flutter_scout.inspect',
+          {'ok': true, 'helperProtocolVersion': 1, 'screen': 'HomeScreen'},
+        );
+        expect(repeated['protocolMismatch'], '1<14');
+        expect(repeated.containsKey('helperProtocol'), isFalse);
+        expect(repeated.containsKey('warnings'), isFalse);
       });
-      final protocol = result['helperProtocol'] as Map<String, dynamic>;
-      expect(protocol['status'], 'older_than_cli');
-      expect(protocol['helperProtocolVersion'], 1);
-      expect(result['warnings'], isNotEmpty);
     });
 
-    test('version-less helper falls back to field heuristics', () {
-      final cli = FlutterScoutCli();
-      final result = cli.debugProtocolDiagnostics('ext.flutter_scout.inspect', {
-        'ok': true,
-        'screen': 'HomeScreen',
+    test('version-less helper falls back to field heuristics', () async {
+      await _withTempCwd(() async {
+        final cli = FlutterScoutCli();
+        final result = cli.debugProtocolDiagnostics(
+          'ext.flutter_scout.inspect',
+          {'ok': true, 'screen': 'HomeScreen'},
+        );
+        final protocol = result['helperProtocol'] as Map<String, dynamic>;
+        expect(protocol['status'], 'stale_or_old_helper');
       });
-      final protocol = result['helperProtocol'] as Map<String, dynamic>;
-      expect(protocol['status'], 'stale_or_old_helper');
     });
   });
 
@@ -761,16 +773,35 @@ void main() {
       },
     });
 
-    final summary = result['afterSummary'] as Map<String, Object?>;
-    expect(summary['screen'], 'Payment');
-    expect(summary['viewSignature'], 'Payment | Cash | Confirm');
-    expect(summary.containsKey('visualTree'), isFalse);
-    expect(summary.containsKey('controlGroups'), isFalse);
-    expect(summary.containsKey('fieldsById'), isFalse);
-    expect(summary.containsKey('structuredRows'), isFalse);
-    expect(summary.containsKey('structuredRowCount'), isFalse);
-    expect(summary.containsKey('visibleText'), isFalse);
-    expect(summary.containsKey('hitTestableText'), isFalse);
+    expect(result['screen'], 'Payment');
+    expect(result['sameSnapshot'], isTrue);
+    expect(result.containsKey('afterSummary'), isFalse);
+    expect(result.containsKey('visualTree'), isFalse);
+    expect(result.containsKey('controlGroups'), isFalse);
+    expect(result.containsKey('fieldsById'), isFalse);
+    expect(result.containsKey('structuredRows'), isFalse);
+    expect(result.containsKey('visibleText'), isFalse);
+  });
+
+  test('brief inspect omits stable protocol and compresses text overlap', () {
+    final result = FlutterScoutCli().debugCompactBriefInspect({
+      'ok': true,
+      'helperProtocolVersion': FlutterScoutCli.expectedHelperProtocolVersion,
+      'runtimeInstanceId': 'runtime-secret-for-lifecycle-only',
+      'routeGuess': null,
+      'visibleText': ['Search', 'Save', 'Cancel'],
+      'hitTestableText': ['Save', 'Cancel'],
+      'offscreenText': <String>[],
+      'fieldValues': <String, Object?>{},
+    });
+
+    expect(result.containsKey('helperProtocolVersion'), isFalse);
+    expect(result.containsKey('runtimeInstanceId'), isFalse);
+    expect(result.containsKey('routeGuess'), isFalse);
+    expect(result.containsKey('hitTestableText'), isFalse);
+    expect(result['nonHitTestableText'], ['Search']);
+    expect(result.containsKey('offscreenText'), isFalse);
+    expect(result.containsKey('fieldValues'), isFalse);
   });
 
   test(
@@ -938,12 +969,14 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
       'before': {
         'screen': 'EditScreen',
         'viewSignature': 'Edit | Save',
+        'visibleTextHash': 'before-hash',
         'visibleText': List<String>.generate(25, (index) => 'before $index'),
         'textTargets': List<int>.generate(100, (index) => index),
       },
       'after': {
         'screen': 'EditScreen',
         'viewSignature': 'Edit | Save',
+        'visibleTextHash': 'after-hash',
         'visibleText': List<String>.generate(25, (index) => 'after $index'),
         'visualTree': {'children': List<int>.generate(100, (index) => index)},
       },
@@ -966,6 +999,50 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
     expect(after.containsKey('visualTree'), isFalse);
     expect(before.containsKey('visibleText'), isFalse);
     expect((result['recentErrors'] as List).length, 3);
+  });
+
+  test('compact same-state async action preserves activity facts', () {
+    final result = FlutterScoutCli().debugCompactActionResult({
+      'ok': true,
+      'action': 'tap btn.retry',
+      'result': 'completed_same_state',
+      'activityObserved': true,
+      'transientViewSignatures': ['Error | Loading'],
+      'after': {'screen': 'ErrorScreen', 'snapshotId': 'same'},
+      'delta': <String, Object?>{},
+      'recentLogErrors': ['legacy duplicate'],
+    });
+
+    expect(result['activityObserved'], isTrue);
+    expect(result['result'], 'completed_same_state');
+    expect(result['sameSnapshot'], isTrue);
+    expect(result['transientViewSignatures'], ['Error | Loading']);
+    expect(result.containsKey('recentLogErrors'), isFalse);
+  });
+
+  test('log redaction covers headers, JSON, and bearer credentials', () {
+    final cli = FlutterScoutCli();
+    final redacted = cli.debugRedactLogText(
+      '{"token":"secret","mobileID":"abc"} '
+      'Authorization: Bearer xyz.123 session=raw',
+    );
+
+    expect(redacted, isNot(contains('secret')));
+    expect(redacted, isNot(contains('abc')));
+    expect(redacted, isNot(contains('xyz.123')));
+    expect(redacted, isNot(contains('session=raw')));
+    expect('<redacted>'.allMatches(redacted).length, greaterThanOrEqualTo(4));
+  });
+
+  test('untimestamped historical log signals are stale by default', () {
+    final signals = FlutterScoutCli().debugRecentLogSignalsFromLines([
+      'Build Error: old failure without a timestamp',
+    ]);
+
+    expect(signals, hasLength(1));
+    expect(signals.single['cursor'], greaterThan(0));
+    expect(signals.single['freshness'], 'unknown');
+    expect(signals.single['stale'], isTrue);
   });
 
   test('log signals classify Flutter build errors without failed-text noise', () {

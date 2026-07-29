@@ -843,12 +843,16 @@ class _ActionSnapshotResult {
     required this.snapshot,
     required this.stable,
     this.lateChangeObserved = false,
+    this.activityObserved = false,
+    this.transientViewSignatures = const [],
     this.waitTimedOut = false,
   });
 
   final ScoutSnapshot snapshot;
   final bool stable;
   final bool lateChangeObserved;
+  final bool activityObserved;
+  final List<String> transientViewSignatures;
   final bool waitTimedOut;
 }
 

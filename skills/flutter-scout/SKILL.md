@@ -113,7 +113,7 @@ flutter-scout inspect
 flutter-scout inspect --sections textTargets,scrollables
 ```
 
-Prefer `inspect --brief` for orientation: it returns `snapshotId`, screen, compact text/interactables/fields/rows, suggestions, semantic quality, perception provenance, and errors. When a modal, picker, dialog, or sheet is active, brief inspection automatically scopes every one of those sections to the top reachable surface and reports `surfaceOnly.automatic:true`; background controls must not influence semantic quality or actions. Its default is capped at 20 items per list; read `omitted`, use `--max-items <1-100>` when justified, or request a named full section. Use `inspect --surface` when explicit surface-only intent improves readability. Use plain `inspect` or `--sections text,interactables,fields,textTargets,scrollables,overlays,visualTree,controlGroups,rows,annotations,semantics` when you need full geometry or a specific section. Prefer handles like `btn.save_supplier`, `field.supplier_name`, and `row.customer_name.more_actions` over coordinates.
+Prefer `inspect --brief` for orientation: it returns a bounded operational digest with `snapshotId`, screen, compact text/interactables/fields/rows, and errors. It omits empty sections, duplicate hit-testable text, semantic scoring, perception provenance, and static geometry. When a modal, picker, dialog, or sheet is active, brief inspection automatically scopes controls and text to the top reachable surface and reports `surfaceOnly.automatic:true`. Request `--sections semantics`, `perception`, or `geometry` only when needed. Prefer handles like `btn.save_supplier`, `field.supplier_name`, and `row.customer_name.more_actions` over coordinates.
 
 Icon-only buttons are named from tooltips, `Semantics` labels, and the full Material/Cupertino icon tables, so an unlabeled admin icon surfaces as `btn.person_badge_plus` rather than `btn.cupertinobutton_2`. Interactables also expose `selected` (tab selected, switch on, checkbox checked) when determinable; tapping an already-selected control returns `result:"already_selected"` instead of `activated_no_observed_change`, so do not retry it. For CUSTOM segments/chips with no semantics, Scout infers selection heuristically: in a run of 3+ adjacent same-kind tappables where exactly one label color differs, that outlier is marked selected — treat inferred values as strong hints, not ground truth.
 
@@ -123,7 +123,7 @@ Snapshots include `viewSignature` (most prominent visible texts) and `visibleTex
 
 If `tap-text` fails with `text_not_found`, the error includes `didYouMean` near-matches — try one of those before re-inspecting. For labels the UI truncates with an ellipsis, pass `tap-text --contains "<full label>"` to match a shortened prefix.
 
-`inspect` output includes fresh `recentLogSignals` when Scout-owned logs contain factual runtime signals that the in-isolate crash handlers never saw — for example Flutter build errors, uncaught exceptions, RenderFlex overflows, high-severity app logs, denied permissions, or failed API/network requests. Signals older than 30 seconds are hidden by default; use `inspect --include-stale`, `health --include-stale`, or `logs --summary` only when historical context matters. `recentLogErrors` remains as a line-only compatibility view. For a one-shot readout run `flutter-scout health`: it returns `{screen, viewSignature, degradedNodes, interactableCount, semanticQuality, blockingErrors, blockingLogSignals, recentLogSignals, healthy}` and marks `healthy:false` for fresh blocking log signals.
+`inspect` output includes fresh structured `recentLogSignals` when Scout-owned logs contain factual runtime signals that the in-isolate crash handlers never saw. Scout timestamps and redacts owned logs before writing them; commands use byte cursors so actions return only signals produced after that action began. Legacy untimestamped lines are historical (`freshness:"unknown", stale:true`) instead of permanently fresh. Use `--include-stale` or `logs --summary` only when investigating history. `health` omits empty error lists and reports `healthy:false` for fresh blocking signals.
 
 To close a screen without guessing between a system back and an in-app close button, use `flutter-scout dismiss`: it pops the top route (handles `showDialog`/`showModalBottomSheet`/pushed screens) and, if nothing pops, taps a close-like control (xmark/close/cancel) for custom overlay modals. It reports `strategy` (`popped_route` / `tapped_close` / `none`).
 
@@ -140,7 +140,7 @@ A small keyed handle (an avatar or icon inside a whole tappable row/card) can be
 
 `structuredRows` groups list/table/card content into compact row objects with `text`, `primaryTarget`, row-scoped `actions`, and `handles`. Use `row.<label>` when the whole row is tappable, and `row.<label>.<action>` for row-local trailing actions such as menus. Row handles resolve through normal `tap`, `scroll-to`, and `wait-for --target` lookup, so prefer `row.acme_supplies.more_actions` over brittle coordinates when repeated row labels make generic handles ambiguous.
 
-`semanticQuality` summarizes how agent-readable the current UI is: score, grade, counts for unlabeled or duplicate actions, non-hit-testable controls, low-confidence targets, fields, and structured rows. Low quality is not automatically a product bug, but it tells you to prefer keys/explicit handles and to be cautious with ambiguous gestures. `perception` states where Scout's evidence came from (`flutter_widget_tree`, widget/semantics labels, render-box geometry) and explicitly notes that screenshots/OCR are not in the inspect payload; request `screenshot`/`crop` when pixel-level visual confirmation matters.
+`inspect --sections semantics` returns opt-in factual semantic diagnostics and quality metrics for handle ambiguity. `inspect --sections perception` reports evidence provenance, while `--sections geometry` reports device/logical dimensions. These are intentionally outside brief orientation so the core loop stays compact and factual.
 
 `screen` names the topmost modal surface (`Dialog`, `BottomSheet`, or the content widget) instead of a useless `RootWidget` when no `*Screen`/`*Page` widget exists — including custom modals detected via their blocking `ModalBarrier` scrim, which also appears in `overlays` as `kind:"modalBarrier"`. Generic transparent route barriers are ignored. Content that is visible and tappable is always inspectable even when its `TickerMode` is paused (backgrounded windows, inactive tab pages) — Scout no longer treats a disabled `TickerMode` as hidden.
 
@@ -240,9 +240,9 @@ After every action, read `result`, `delta`, `fieldValues`, `recentErrors`, and `
 
 Action output is compact by default, including failures; failed expectations include compact before/after summaries, target, expectation, delta, warnings, and recent errors instead of dumping full inspect trees. Add `--verbose` only when full before/after summaries are needed.
 
-When an action reports `activated_no_observed_change`, Scout dispatched the gesture but did not observe a synchronous Flutter tree, field, text, or geometry change before the wait timeout. Check `activation`, `warnings`, `recentErrors`, overlays, and logs before retrying. A tap on an already-selected tab/toggle instead reports `result:"already_selected"` — that is expected behavior, not a failure; do not retry it.
+When an action reports `activated_no_observed_change`, Scout dispatched the gesture but observed neither a final UI delta nor transient activity. Check `activation`, warnings, errors, overlays, and logs before retrying. `completed_same_state` means Scout observed a loading/saving/refreshing transition that settled back to the original final snapshot; read new log signals before deciding whether that represents success or a handled failure. A tap on an already-selected tab/toggle reports `already_selected`.
 
-If action output includes `lateChangeObserved:true`, trust the returned `afterSummary`; Scout waited past the first stable check and observed a delayed route, modal, or overlay change.
+If action output includes `lateChangeObserved:true`, trust its final `screen`, `snapshotId`, and delta; Scout waited past the first stable check and observed a delayed or transient transition.
 
 **Prefer act+gate in one command.** Every action (`tap`, `tap-text`, `input`, `fill`) accepts `--expect-text/--expect-gone/--expect-target/--expect-selected/--expect-screen/--expect-field` (+ `--expect-timeout`): the action dispatches and then waits — in the same VM call — for the expected UI state. This removes the inter-command gap where timing-sensitive UI (auto-reverting views, short toasts) drifts away:
 
@@ -279,6 +279,8 @@ curl "localhost:$(cat /tmp/scout.port)/v1/schema"
 curl "localhost:$(cat /tmp/scout.port)/v1/call" -H 'content-type: application/json' --data '{"method":"tap","args":["btn.save"],"params":{"expectText":"Saved","capture":"/tmp/saved.png","assertNoErrors":true}}'
 curl "localhost:$(cat /tmp/scout.port)/stop"
 ```
+
+Once the daemon is active for a named session, ordinary CLI inspect/action commands automatically proxy through it. Continue using normal command syntax; direct curl is only necessary for integrations that want the typed protocol.
 
 Prefer typed `/v1/call` for programmatic agents; camelCase `params` map to the
 documented CLI flags and `/v1/schema` is the discoverable contract. Keep `/run`
@@ -321,7 +323,7 @@ flutter-scout reload
 flutter-scout restart
 ```
 
-Prefer `reload` first because it preserves app state. Use `restart` when reload is rejected or state must reset. If `reload` returns `reload_rejected`, treat the app as still running previous code unless the owning Flutter tool reports otherwise. `restart` requires a Scout-owned `launch`/`ensure` process; attach-only sessions should use `reload`, use the owning Flutter terminal or IDE hot restart, or run `ensure` to launch when needed. Native, plugin, asset, and `pubspec.yaml` changes can still require a full rebuild.
+Prefer `reload` first because it preserves app state. Scout-owned reload/restart now return only after the Flutter tool acknowledges completion; restart also requires a newly registered helper runtime, so the old inspectable isolate is never accepted as success. Read `acknowledgement` and `timing` when diagnosing an update. Attach-only sessions use VM `reloadSources` or the owning terminal/IDE.
 
 6. Use targeted visual evidence when layout matters:
 

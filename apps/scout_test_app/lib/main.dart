@@ -38,6 +38,7 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
   int _glyphDuplicateActions = 0;
   String _customPhone = 'Not set';
   String _intentAliasStatus = 'Idle';
+  String _asyncStatus = 'Idle';
   int _testAnnotationsCreated = 0;
 
   void _createTestAnnotation() {
@@ -103,6 +104,13 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
       '#0      _ScoutSyntheticHeader._collapsedOpacity '
       '(package:scout_test_app/main.dart:123:45)',
     );
+  }
+
+  Future<void> _runAsyncSameState() async {
+    setState(() => _asyncStatus = 'Loading');
+    await Future<void>.delayed(const Duration(milliseconds: 700));
+    if (!mounted) return;
+    setState(() => _asyncStatus = 'Idle');
   }
 
   @override
@@ -202,6 +210,10 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                       // ignore: avoid_print
                       print('SCOUT_LOG_PRINT hello-from-print');
                       debugPrint('SCOUT_LOG_DEBUGPRINT hello-from-debugprint');
+                      debugPrint(
+                        'token=SCOUT_FAKE_SECRET '
+                        'Authorization: Bearer SCOUT_FAKE_BEARER',
+                      );
                       developer.log(
                         'SCOUT_LOG_DEVLOG hello-from-devlog',
                         name: 'scout.test',
@@ -213,6 +225,11 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                     key: const ValueKey('emit_log_signal'),
                     onPressed: _emitLogSignal,
                     child: const Text('Emit log signal'),
+                  ),
+                  TextButton(
+                    key: const ValueKey('async_same_state'),
+                    onPressed: _runAsyncSameState,
+                    child: const Text('Async same state'),
                   ),
                   TextButton(
                     key: const ValueKey('show_ok_dialog'),
@@ -243,6 +260,7 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
             Text('Glyph duplicate actions: $_glyphDuplicateActions'),
             Text('Custom phone: $_customPhone'),
             Text('Intent alias: $_intentAliasStatus'),
+            Text('Async status: $_asyncStatus'),
             Text('Test annotations: $_testAnnotationsCreated'),
             const SizedBox(height: 16),
             Expanded(

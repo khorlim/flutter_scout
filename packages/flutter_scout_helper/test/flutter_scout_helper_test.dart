@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -972,7 +973,12 @@ void main() {
       );
       expect(brief['visibleText'], contains('Select Shop'));
       expect(brief['visibleText'], isNot(contains('Appointment')));
-      final quality = brief['semanticQuality']! as Map<String, Object?>;
+      final semanticInspect = runtime.debugInspectPayload(
+        sections: {'semantics'},
+        surfaceOnly: true,
+      );
+      final quality =
+          semanticInspect['semanticQuality']! as Map<String, Object?>;
       final metrics = quality['metrics']! as Map<String, Object?>;
       expect(metrics['nonHitTestableActions'], 0);
     },
@@ -1218,6 +1224,10 @@ void main() {
     expect(brief['visibleText'], contains('Save'));
     expect(brief.containsKey('textTargets'), isFalse);
     expect(brief.containsKey('visualTree'), isFalse);
+    expect(brief.containsKey('semanticQuality'), isFalse);
+    expect(brief.containsKey('devicePixelRatio'), isFalse);
+    expect(brief.containsKey('logicalSize'), isFalse);
+    expect(brief.containsKey('perception'), isFalse);
     expect(brief['scrollables'], isA<List<Object?>>());
     final interactables = brief['interactables']! as List<Object?>;
     final save = interactables.cast<Map<String, Object?>>().firstWhere(
@@ -1373,10 +1383,10 @@ void main() {
     expect((perception['text']! as Map)['source'], 'flutter_widget_tree');
     expect((perception['visual']! as Map)['ocrInPayload'], isFalse);
 
-    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
-      brief: true,
+    final sectioned = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      sections: {'perception'},
     );
-    expect(brief['perception'], isA<Map<String, Object?>>());
+    expect(sectioned['perception'], isA<Map<String, Object?>>());
   });
 
   testWidgets('tap-text --contains matches a truncated label', (tester) async {
@@ -1524,7 +1534,7 @@ void main() {
     expect(warnings.single, containsPair('code', 'many_anonymous_targets'));
   });
 
-  testWidgets('semantic quality reports UI instrumentation issues', (
+  testWidgets('semantic quality is opt-in and reports instrumentation facts', (
     tester,
   ) async {
     FlutterScoutHelper.ensureRegistered();
@@ -1550,19 +1560,59 @@ void main() {
     final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
       brief: true,
     );
-    final quality = brief['semanticQuality']! as Map<String, Object?>;
+    expect(brief.containsKey('semanticQuality'), isFalse);
+    final diagnostics = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      sections: {'semantics'},
+    );
+    final quality = diagnostics['semanticQuality']! as Map<String, Object?>;
     expect(quality['score'], lessThan(100));
     final issues = (quality['issues']! as List).cast<Map<String, Object?>>();
     expect(
       issues.map((issue) => issue['code']),
       containsAll(['unlabeled_interactables', 'duplicate_action_labels']),
     );
-    final diagnostics = FlutterScoutHelper.debugRuntime.debugInspectPayload(
-      sections: {'semantics'},
-    );
     final detail = diagnostics['semanticDiagnostics']! as Map<String, Object?>;
     expect(detail['unlabeledControls'], isA<List<Object?>>());
     expect(detail['duplicateLabels'], isA<List<Object?>>());
+  });
+
+  testWidgets('action tracking observes async activity that settles back', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    var label = 'Idle';
+    late StateSetter update;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            update = setState;
+            return Scaffold(body: Center(child: Text(label)));
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final result = await tester.runAsync(
+      () => FlutterScoutHelper.debugRuntime.debugTrackAction(
+        () async {
+          update(() => label = 'Loading');
+          await tester.pump();
+          Timer(const Duration(milliseconds: 900), () {
+            update(() => label = 'Idle');
+            unawaited(tester.pump());
+          });
+        },
+        waitMs: 1400,
+        lateWaitMs: 1200,
+      ),
+    );
+
+    expect(result!['changed'], isFalse);
+    expect(result['activityObserved'], isTrue);
+    expect(result['result'], 'completed_same_state');
+    expect(result['transientViewSignatures'], isNotEmpty);
   });
 
   testWidgets('wait-for conditions match visible text case-insensitively', (

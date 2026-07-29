@@ -153,6 +153,11 @@ extension _CliBatch on FlutterScoutCli {
       if (result['filled'] != null) 'filled': result['filled'],
       if (result['failed'] != null) 'failed': result['failed'],
       if (result['activation'] != null) 'activation': result['activation'],
+      if (result['screen'] != null) 'screen': result['screen'],
+      if (result['activeSurface'] != null)
+        'activeSurface': result['activeSurface'],
+      if (result['snapshotId'] != null) 'snapshotId': result['snapshotId'],
+      if (result['sameSnapshot'] == true) 'sameSnapshot': true,
       if (afterSummary != null && afterSummary.isNotEmpty)
         'after': afterSummary,
       if (result['delta'] != null) 'delta': result['delta'],
@@ -160,6 +165,8 @@ extension _CliBatch on FlutterScoutCli {
       if (result['expectation'] != null) 'expectation': result['expectation'],
       if (result['recentErrors'] != null)
         'recentErrors': result['recentErrors'],
+      if (result['recentLogSignals'] != null)
+        'recentLogSignals': result['recentLogSignals'],
     };
   }
 
