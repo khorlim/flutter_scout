@@ -59,10 +59,19 @@ extension _CliServe on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('port', defaultsTo: '0', help: '0 picks a free port.')
       ..addOption(
+        'idle-timeout',
+        defaultsTo: '0',
+        help: 'Stop after this many idle seconds (0 disables timeout).',
+      )
+      ..addFlag('auto', defaultsTo: false, negatable: false, hide: true)
+      ..addOption(
         'port-file',
         help: 'Write the bound port here so callers can discover it.',
       );
     final parsed = parser.parse(args);
+    final idleTimeout = Duration(
+      seconds: int.tryParse(parsed.option('idle-timeout') ?? '') ?? 0,
+    );
     final server = await HttpServer.bind(
       InternetAddress.loopbackIPv4,
       int.tryParse(parsed.option('port') ?? '') ?? 0,
@@ -77,6 +86,9 @@ extension _CliServe on FlutterScoutCli {
         'pid': pid,
         'port': boundPort,
         'startedAt': DateTime.now().toIso8601String(),
+        if (parsed.flag('auto')) 'automatic': true,
+        if (idleTimeout > Duration.zero)
+          'idleTimeoutSeconds': idleTimeout.inSeconds,
       },
     });
     final portFile = parsed.option('port-file');
@@ -96,8 +108,18 @@ extension _CliServe on FlutterScoutCli {
         ],
       }),
     );
+    var lastRequestAt = DateTime.now();
+    Timer? idleTimer;
+    if (idleTimeout > Duration.zero) {
+      idleTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+        if (DateTime.now().difference(lastRequestAt) >= idleTimeout) {
+          unawaited(server.close(force: true));
+        }
+      });
+    }
     try {
       await for (final request in server) {
+        lastRequestAt = DateTime.now();
         try {
           final done = await _handleServeRequest(request, boundPort);
           if (done) break;
@@ -109,6 +131,7 @@ extension _CliServe on FlutterScoutCli {
         }
       }
     } finally {
+      idleTimer?.cancel();
       _reuseVmConnection = hadReuse;
       if (!hadReuse) await _disposeCachedVmService();
       await server.close(force: true);
@@ -124,6 +147,44 @@ extension _CliServe on FlutterScoutCli {
     }
     stdout.writeln(jsonEncode({'serving': false}));
     return 0;
+  }
+
+  Future<void> _maybeStartAutoServe() async {
+    if (_reuseVmConnection || _readSessionActions().length < 3) return;
+    final meta = _readSessionMeta();
+    final name = meta?['name']?.toString();
+    if (name == null || name.isEmpty || meta?['serve'] is Map) return;
+    if (Platform.script.scheme != 'file') return;
+    try {
+      await Process.start(Platform.resolvedExecutable, [
+        Platform.script.toFilePath(),
+        '--app',
+        name,
+        'serve',
+        '--idle-timeout',
+        '600',
+        '--auto',
+      ], mode: ProcessStartMode.detached);
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final serve = _readSessionMeta()?['serve'];
+        if (serve is Map && serve['automatic'] == true) {
+          _appendEvent({
+            'schemaVersion': 1,
+            'type': 'transport',
+            'commandId': ?_activeCommandId,
+            'transport': 'persistent',
+            'automatic': true,
+            'pid': serve['pid'],
+            'port': serve['port'],
+          });
+          return;
+        }
+      }
+    } catch (_) {
+      // Optimization failure must not fail the user action.
+    }
   }
 
   Future<int?> _tryProxyToActiveServe(List<String> args) async {

@@ -71,6 +71,7 @@ extension _CliEvidence on FlutterScoutCli {
     }
 
     final sessionActions = _readSessionActions();
+    final events = File(_eventsFile);
     final transcript = [
       for (final item in sessionActions)
         if (item is Map<String, dynamic>) _actionLine(item),
@@ -131,6 +132,7 @@ extension _CliEvidence on FlutterScoutCli {
         'status': p.join(dir.path, 'status.json'),
         if (sessionActions.isNotEmpty)
           'session': p.join(dir.path, 'session.json'),
+        if (events.existsSync()) 'events': p.join(dir.path, 'events.jsonl'),
         if (transcript.isNotEmpty)
           'transcript': p.join(dir.path, 'transcript.txt'),
         if (parsed.flag('audit')) 'audit': p.join(dir.path, 'audit.md'),
@@ -148,6 +150,9 @@ extension _CliEvidence on FlutterScoutCli {
       File(p.join(dir.path, 'session.json')).writeAsStringSync(
         const JsonEncoder.withIndent('  ').convert(sessionActions),
       );
+    }
+    if (events.existsSync()) {
+      events.copySync(p.join(dir.path, 'events.jsonl'));
     }
     File(
       p.join(dir.path, 'summary.json'),

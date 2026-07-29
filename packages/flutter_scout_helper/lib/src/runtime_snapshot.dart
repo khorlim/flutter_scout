@@ -101,7 +101,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     List<ScoutNode> compactNodes;
     try {
       compactNodes = _disambiguateIds(
-        _inferIntentAliases(_inferActionableLabels(_compactNodes(nodes))),
+        _inferIntentAliases(
+          _inferActionableLabels(_inferFieldLabels(_compactNodes(nodes))),
+        ),
       );
     } catch (_) {
       // Post-processing failed as a batch; fall back to the raw nodes so the

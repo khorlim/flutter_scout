@@ -40,7 +40,8 @@ This is a project-scoped workflow skill. Keep it in `skills/ship-sync/`; do not 
 Run from the repo root after a successful push:
 
 ```bash
-cp skills/flutter-scout/SKILL.md /Users/han/.codex/skills/flutter-scout/SKILL.md
+mkdir -p /Users/han/.codex/skills/flutter-scout
+rsync -a --delete skills/flutter-scout/ /Users/han/.codex/skills/flutter-scout/
 cp skills/flutter-scout-setup/SKILL.md /Users/han/.codex/skills/flutter-scout-setup/SKILL.md
 mkdir -p /Users/han/.codex/skills/flutter-scout-annotations
 cp skills/flutter-scout-annotations/SKILL.md /Users/han/.codex/skills/flutter-scout-annotations/SKILL.md
@@ -51,6 +52,7 @@ Verify the refresh:
 
 ```bash
 diff -u skills/flutter-scout/SKILL.md /Users/han/.codex/skills/flutter-scout/SKILL.md
+diff -ru skills/flutter-scout/references /Users/han/.codex/skills/flutter-scout/references
 diff -u skills/flutter-scout-setup/SKILL.md /Users/han/.codex/skills/flutter-scout-setup/SKILL.md
 diff -u skills/flutter-scout-annotations/SKILL.md /Users/han/.codex/skills/flutter-scout-annotations/SKILL.md
 test ! -e /Users/han/.codex/skills/ship-sync

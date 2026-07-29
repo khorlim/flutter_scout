@@ -10,30 +10,136 @@ extension _CliResults on FlutterScoutCli {
     bool compact = false,
     Duration? callTimeout,
     String? captureOutput,
-    bool assertNoErrors = false,
+    bool assertNoErrors = true,
+    String? expectLog,
+    String? rejectLog,
+    Duration logExpectationTimeout = const Duration(seconds: 5),
   }) async {
+    final totalStopwatch = Stopwatch()..start();
     final logCursor = _currentLogCursor();
+    final vmStopwatch = Stopwatch()..start();
     var result = _withProtocolDiagnostics(
       method,
       await _call(method, params, callTimeout),
     );
+    vmStopwatch.stop();
     result = _materializeActionCapture(result, captureOutput);
+    final logStopwatch = Stopwatch()..start();
     var enrichedResult = await _withRecentLogSignals(
       result,
       sinceCursor: logCursor,
     );
+    enrichedResult = await _applyLogExpectations(
+      enrichedResult,
+      sinceCursor: logCursor,
+      expectLog: expectLog,
+      rejectLog: rejectLog,
+      timeout: logExpectationTimeout,
+    );
+    logStopwatch.stop();
     enrichedResult = _assertActionHasNoErrors(
       enrichedResult,
       enabled: assertNoErrors,
     );
+    totalStopwatch.stop();
+    enrichedResult = {
+      ...enrichedResult,
+      'timings': {
+        'vmCallMs': vmStopwatch.elapsedMilliseconds,
+        'logSettleAndExpectationMs': logStopwatch.elapsedMilliseconds,
+        'totalMs': totalStopwatch.elapsedMilliseconds,
+      },
+    };
     final output = compact
         ? _compactActionResult(enrichedResult)
         : enrichedResult;
     _emitActionOutput(output);
     if (record != null && enrichedResult['ok'] == true) {
       _recordAction(record);
+      await _maybeStartAutoServe();
     }
+    _appendEvent({
+      'schemaVersion': 1,
+      'type': 'action_result',
+      'commandId': ?_activeCommandId,
+      'method': method,
+      'ok': enrichedResult['ok'] == true,
+      'runId': ?enrichedResult['runId'],
+      'runtimeInstanceId': ?enrichedResult['runtimeInstanceId'],
+      'snapshotId': ?enrichedResult['snapshotId'],
+      'timings': enrichedResult['timings'],
+      if (enrichedResult['error'] != null) 'error': enrichedResult['error'],
+      'blockingRuntimeErrors': _objectList(
+        enrichedResult['blockingErrors'],
+      ).length,
+      'blockingLogSignals': _objectList(
+        enrichedResult['blockingLogSignals'],
+      ).length,
+    });
     return enrichedResult['ok'] == false ? 1 : 0;
+  }
+
+  Future<Map<String, dynamic>> _applyLogExpectations(
+    Map<String, dynamic> result, {
+    required int sinceCursor,
+    String? expectLog,
+    String? rejectLog,
+    required Duration timeout,
+  }) async {
+    if ((expectLog == null || expectLog.isEmpty) &&
+        (rejectLog == null || rejectLog.isEmpty)) {
+      return result;
+    }
+    final file = File(_logFile);
+    if (!file.existsSync()) {
+      return {
+        ...result,
+        'ok': false,
+        'error': {
+          'code': 'log_expectation_unavailable',
+          'message': 'Scout-owned logs are unavailable for this session.',
+        },
+      };
+    }
+    final deadline = DateTime.now().add(timeout);
+    String text = '';
+    do {
+      text = _readLogChunk(file, sinceCursor: sinceCursor).lines.join('\n');
+      if (rejectLog != null &&
+          rejectLog.isNotEmpty &&
+          text.toLowerCase().contains(rejectLog.toLowerCase())) {
+        return {
+          ...result,
+          'ok': false,
+          'error': {
+            'code': 'rejected_log_observed',
+            'message': 'Fresh logs contained rejected text `$rejectLog`.',
+          },
+          'rejectedLog': rejectLog,
+        };
+      }
+      if (expectLog == null ||
+          expectLog.isEmpty ||
+          text.toLowerCase().contains(expectLog.toLowerCase())) {
+        return {
+          ...result,
+          if (expectLog != null && expectLog.isNotEmpty)
+            'expectedLogMatched': expectLog,
+        };
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    } while (DateTime.now().isBefore(deadline));
+    return {
+      ...result,
+      'ok': false,
+      'error': {
+        'code': 'expected_log_timeout',
+        'message':
+            'Fresh logs did not contain `$expectLog` within '
+            '${timeout.inMilliseconds} ms.',
+      },
+      'expectedLog': expectLog,
+    };
   }
 
   Map<String, dynamic> _materializeActionCapture(
@@ -303,6 +409,9 @@ extension _CliResults on FlutterScoutCli {
           'appReachable': result['appReachable'],
         if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
         if (result['timing'] != null) 'timing': result['timing'],
+        if (result['timings'] != null) 'timings': result['timings'],
+        if (result['sourceVerification'] != null)
+          'sourceVerification': result['sourceVerification'],
         if (result['acknowledgement'] != null)
           'acknowledgement': result['acknowledgement'],
         if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
@@ -319,6 +428,8 @@ extension _CliResults on FlutterScoutCli {
           ),
         if (result['activation'] != null) 'activation': result['activation'],
         if (result['expectation'] != null) 'expectation': result['expectation'],
+        if (result['expectedLogMatched'] != null)
+          'expectedLogMatched': result['expectedLogMatched'],
         if (result['capture'] != null) 'capture': result['capture'],
         if (result['warnings'] != null) 'warnings': result['warnings'],
         if (result['didYouMean'] != null) 'didYouMean': result['didYouMean'],
@@ -369,6 +480,9 @@ extension _CliResults on FlutterScoutCli {
         'appReachable': result['appReachable'],
       if (result['elapsedMs'] != null) 'elapsedMs': result['elapsedMs'],
       if (result['timing'] != null) 'timing': result['timing'],
+      if (result['timings'] != null) 'timings': result['timings'],
+      if (result['sourceVerification'] != null)
+        'sourceVerification': result['sourceVerification'],
       if (result['acknowledgement'] != null)
         'acknowledgement': result['acknowledgement'],
       if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
@@ -380,6 +494,8 @@ extension _CliResults on FlutterScoutCli {
       if (result['gestureEnd'] != null) 'gestureEnd': result['gestureEnd'],
       if (result['screenshot'] != null) 'screenshot': result['screenshot'],
       if (result['capture'] != null) 'capture': result['capture'],
+      if (result['expectedLogMatched'] != null)
+        'expectedLogMatched': result['expectedLogMatched'],
       if (result['message'] != null) 'message': result['message'],
       if (result['fullRebuildRequired'] != null)
         'fullRebuildRequired': result['fullRebuildRequired'],
@@ -471,13 +587,13 @@ extension _CliResults on FlutterScoutCli {
     if (_reuseVmConnection) return const [];
     final actionCount = _readSessionActions().length;
     if (actionCount < 3) return const [];
-    if (!_claimWorkflowHint('consider_serve')) return const [];
+    if (!_claimWorkflowHint('automatic_persistent_transport')) return const [];
     return [
       {
-        'code': 'consider_serve',
+        'code': 'automatic_persistent_transport',
         'actionCount': actionCount,
         'message':
-            'This exploratory session has several plain CLI actions. Start `flutter-scout serve` for one persistent VM connection and faster follow-up commands.',
+            'Scout is automatically starting an expiring persistent transport for faster follow-up commands.',
       },
     ];
   }
@@ -717,9 +833,11 @@ extension _CliResults on FlutterScoutCli {
         previousRuntimeInstanceId: beforeRuntimeInstanceId,
         requireNewRuntime: fullRestart,
       );
+      final sourceVerification = await _verifyLoadedDartSources();
+      final sourceMismatch = sourceVerification['status'] == 'mismatch';
       final elapsedMs = DateTime.now().difference(started).inMilliseconds;
       return {
-        'ok': after != null,
+        'ok': after != null && !sourceMismatch,
         'action': action,
         'method': fullRestart ? 'sigusr2_hot_restart' : 'sigusr1_hot_reload',
         'pid': pid,
@@ -734,6 +852,7 @@ extension _CliResults on FlutterScoutCli {
           'totalMs': elapsedMs,
         },
         'acknowledgement': acknowledgement,
+        'sourceVerification': sourceVerification,
         'before': before,
         'after': after,
         'delta': _inspectDelta(before, after),
@@ -742,6 +861,12 @@ extension _CliResults on FlutterScoutCli {
           'error': {
             'code': '${action}_timeout',
             'message': 'Timed out waiting for Flutter Scout after $action.',
+          },
+        if (sourceMismatch)
+          'error': {
+            'code': '${action}_source_mismatch',
+            'message':
+                'The VM is still running different source for one or more changed Dart files.',
           },
         if (after == null)
           'nextBestActions': [
@@ -816,12 +941,20 @@ extension _CliResults on FlutterScoutCli {
         final after = await _waitForInspectAfterHotUpdate(
           timeout: const Duration(seconds: 8),
         );
+        final sourceVerification = reloadSucceeded
+            ? await _verifyLoadedDartSources(
+                service: service,
+                isolateId: isolateId,
+              )
+            : const <String, Object?>{'status': 'not_checked'};
+        final sourceMismatch = sourceVerification['status'] == 'mismatch';
         final elapsedMs = DateTime.now().difference(started).inMilliseconds;
         return {
-          'ok': reloadSucceeded && after != null,
+          'ok': reloadSucceeded && after != null && !sourceMismatch,
           'action': 'reload',
           'method': 'vm_service_reload_sources',
           'reloadReport': report.toJson(),
+          'sourceVerification': sourceVerification,
           'appReachable': after != null,
           if (!reloadSucceeded)
             'state':
@@ -848,6 +981,12 @@ extension _CliResults on FlutterScoutCli {
               'code': 'reload_inspect_timeout',
               'message': 'Reload completed but Flutter Scout did not respond.',
             },
+          if (sourceMismatch)
+            'error': {
+              'code': 'reload_source_mismatch',
+              'message':
+                  'Reload acknowledged, but the VM source differs from changed Dart files on disk.',
+            },
         };
       } finally {
         await service.dispose();
@@ -868,6 +1007,146 @@ extension _CliResults on FlutterScoutCli {
       };
     }
   }
+
+  Future<Map<String, Object?>> _verifyLoadedDartSources({
+    VmService? service,
+    String? isolateId,
+  }) async {
+    final project = _readSessionMeta()?['project']?.toString();
+    if (project == null ||
+        project.isEmpty ||
+        !Directory(project).existsSync()) {
+      return const {'status': 'unavailable', 'reason': 'project_unknown'};
+    }
+    final changed = await _changedDartFiles(project);
+    if (changed.isEmpty) {
+      return const {'status': 'no_changes', 'files': <Object?>[]};
+    }
+    VmService? ownedService;
+    try {
+      final activeService = service ?? await _connect(_readVmUri()!);
+      if (service == null) ownedService = activeService;
+      final activeIsolateId =
+          isolateId ?? await _findMainIsolate(activeService);
+      final refs =
+          (await activeService.getScripts(activeIsolateId)).scripts ??
+          const <ScriptRef>[];
+      final byUri = <String, ScriptRef>{
+        for (final ref in refs)
+          if (ref.uri != null) ref.uri!: ref,
+      };
+      final verified = <String>[];
+      final mismatched = <String>[];
+      final notLoaded = <String>[];
+      for (final path in changed) {
+        final relative = p.relative(path, from: project).replaceAll('\\', '/');
+        final candidates = <String>{
+          Uri.file(path).toString(),
+          ?_packageUriForDartPath(path),
+        };
+        ScriptRef? ref;
+        for (final candidate in candidates) {
+          ref ??= byUri[candidate];
+        }
+        if (ref == null) {
+          notLoaded.add(relative);
+          continue;
+        }
+        final object = await activeService.getObject(activeIsolateId, ref.id!);
+        final vmSource = object is Script ? object.source : null;
+        if (vmSource == null) {
+          notLoaded.add(relative);
+        } else if (_normalizeSource(vmSource) ==
+            _normalizeSource(File(path).readAsStringSync())) {
+          verified.add(relative);
+        } else {
+          mismatched.add(relative);
+        }
+      }
+      return {
+        'status': mismatched.isNotEmpty
+            ? 'mismatch'
+            : notLoaded.isNotEmpty
+            ? 'partially_verified'
+            : 'verified',
+        'verified': verified,
+        'mismatched': mismatched,
+        'notLoaded': notLoaded,
+      };
+    } catch (error) {
+      return {'status': 'unavailable', 'reason': error.toString()};
+    } finally {
+      await ownedService?.dispose();
+    }
+  }
+
+  Future<List<String>> _changedDartFiles(String project) async {
+    try {
+      final rootResult = await Process.run('git', [
+        '-C',
+        project,
+        'rev-parse',
+        '--show-toplevel',
+      ]);
+      if (rootResult.exitCode != 0) return const [];
+      final repositoryRoot = '${rootResult.stdout}'.trim();
+      if (repositoryRoot.isEmpty) return const [];
+      final result = await Process.run('git', [
+        '-C',
+        project,
+        'status',
+        '--porcelain',
+        '--untracked-files=all',
+      ]);
+      if (result.exitCode != 0) return const [];
+      final files = <String>[];
+      for (final line in const LineSplitter().convert('${result.stdout}')) {
+        if (line.length < 4) continue;
+        var relative = line.substring(3).trim();
+        if (relative.contains(' -> ')) {
+          relative = relative.split(' -> ').last.trim();
+        }
+        if (!relative.endsWith('.dart')) continue;
+        final path = p.normalize(p.join(repositoryRoot, relative));
+        if (File(path).existsSync()) files.add(path);
+      }
+      return files;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  String? _projectPackageName(String project) {
+    final pubspec = File(p.join(project, 'pubspec.yaml'));
+    if (!pubspec.existsSync()) return null;
+    final match = RegExp(
+      r'^name:\s*([a-zA-Z0-9_]+)\s*$',
+      multiLine: true,
+    ).firstMatch(pubspec.readAsStringSync());
+    return match?.group(1);
+  }
+
+  String? _packageUriForDartPath(String path) {
+    var directory = File(path).parent;
+    while (directory.parent.path != directory.path) {
+      final pubspec = File(p.join(directory.path, 'pubspec.yaml'));
+      if (pubspec.existsSync()) {
+        final packageName = _projectPackageName(directory.path);
+        final relative = p
+            .relative(path, from: directory.path)
+            .replaceAll('\\', '/');
+        if (packageName != null && relative.startsWith('lib/')) {
+          return 'package:$packageName/${relative.substring(4)}';
+        }
+        return null;
+      }
+      directory = directory.parent;
+    }
+    return null;
+  }
+
+  String _normalizeSource(String value) =>
+      value.replaceAll('\r\n', '\n').trimRight();
 
   Future<Map<String, dynamic>?> _tryInspect({Duration? callTimeout}) async {
     try {

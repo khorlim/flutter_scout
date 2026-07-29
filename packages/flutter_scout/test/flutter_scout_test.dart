@@ -91,6 +91,65 @@ void main() {
     });
   });
 
+  test('command journal redacts sensitive arguments', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run([
+        'launch',
+        '--dart-define',
+        'API_KEY=super-secret',
+      ]);
+      expect(exitCode, 1);
+      final events = File('.flutter_scout/events.jsonl');
+      expect(events.existsSync(), isTrue);
+      final text = events.readAsStringSync();
+      expect(text, contains('[REDACTED]'));
+      expect(text, isNot(contains('super-secret')));
+      final event = jsonDecode(text.trim()) as Map<String, dynamic>;
+      expect(event['type'], 'command');
+      expect(event['durationMs'], isA<int>());
+      expect(event['exitCode'], 1);
+    });
+  });
+
+  test(
+    'record save-last creates a flow from successful session actions',
+    () async {
+      await _withTempCwd(() async {
+        Directory('.flutter_scout').createSync();
+        File('.flutter_scout/session.json').writeAsStringSync(
+          jsonEncode([
+            {'cmd': 'tap', 'target': 'btn.open'},
+            {'cmd': 'input', 'target': 'field.name', 'value': 'Template'},
+            {'cmd': 'tap', 'target': 'btn.save'},
+          ]),
+        );
+
+        expect(
+          await FlutterScoutCli().run([
+            'record',
+            'save-last',
+            'template-create',
+            '--last',
+            '2',
+            '--feature',
+            'forms',
+          ]),
+          0,
+        );
+        final flow =
+            jsonDecode(
+                  File(
+                    '.flutter_scout/recordings/forms/template-create.json',
+                  ).readAsStringSync(),
+                )
+                as Map<String, dynamic>;
+        expect(flow['source'], 'session_journal');
+        expect((flow['steps'] as List), hasLength(2));
+        expect((flow['steps'] as List).last['target'], 'btn.save');
+      });
+    },
+  );
+
   test('launch requires a device id', () async {
     await _withTempCwd(() async {
       final exitCode = await FlutterScoutCli().run(['launch']);
@@ -498,6 +557,34 @@ void main() {
       expect(await cli.run(['--app', 'nope', 'status']), 1);
     });
 
+    test('apps hides missing sessions and can prune them', () async {
+      final temp = await Directory.systemTemp.createTemp('scout_apps_');
+      addTearDown(() => temp.delete(recursive: true));
+      FlutterScoutCli.debugRegistryPathOverride = p.join(
+        temp.path,
+        'registry.json',
+      );
+      addTearDown(() => FlutterScoutCli.debugRegistryPathOverride = null);
+      final live = Directory(p.join(temp.path, 'live'))..createSync();
+      File(FlutterScoutCli.debugRegistryPathOverride!).writeAsStringSync(
+        jsonEncode({
+          'live': live.path,
+          'missing': p.join(temp.path, 'missing'),
+        }),
+      );
+
+      expect(await FlutterScoutCli().run(['apps']), 0);
+      expect(await FlutterScoutCli().run(['apps', '--prune']), 0);
+      final registry =
+          jsonDecode(
+                File(
+                  FlutterScoutCli.debugRegistryPathOverride!,
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      expect(registry.keys, ['live']);
+    });
+
     test(
       'stop --clear-session prunes registry entries for the session',
       () async {
@@ -656,7 +743,7 @@ void main() {
 
   group('helper protocol diagnostics', () {
     test(
-      'compact action output suggests serve after several plain actions',
+      'compact action output announces automatic persistent transport',
       () async {
         await _withTempCwd(() async {
           final sessionDir = Directory('.flutter_scout')..createSync();
@@ -676,7 +763,10 @@ void main() {
           });
 
           final hints = result['workflowHints'] as List<Object?>;
-          expect(hints.single, containsPair('code', 'consider_serve'));
+          expect(
+            hints.single,
+            containsPair('code', 'automatic_persistent_transport'),
+          );
           final repeated = cli.debugCompactActionResult({
             'ok': true,
             'action': 'tap btn.five',

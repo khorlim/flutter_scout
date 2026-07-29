@@ -983,6 +983,63 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     ];
   }
 
+  List<ScoutNode> _inferFieldLabels(List<ScoutNode> nodes) {
+    final textNodes = nodes
+        .where(
+          (node) =>
+              node.kind == 'text' &&
+              node.label != null &&
+              node.rect != null &&
+              _hasWord(node.label!),
+        )
+        .toList(growable: false);
+    return [
+      for (final node in nodes)
+        if (node.kind == 'field' &&
+            node.rect != null &&
+            (node.label == null ||
+                node.id == 'field.${_slug(node.widgetType)}'))
+          _inferFieldLabel(node, textNodes)
+        else
+          node,
+    ];
+  }
+
+  ScoutNode _inferFieldLabel(ScoutNode field, List<ScoutNode> texts) {
+    final rect = field.rect!;
+    ScoutNode? best;
+    var bestScore = double.infinity;
+    for (final text in texts) {
+      final textRect = text.rect!;
+      final aboveGap = rect.top - textRect.bottom;
+      final sameColumn =
+          textRect.right >= rect.left - 16 && textRect.left <= rect.right + 16;
+      final leftGap = rect.left - textRect.right;
+      final sameLine = (textRect.center.dy - rect.center.dy).abs() <= 18;
+      if (!((aboveGap >= -4 && aboveGap <= 48 && sameColumn) ||
+          (leftGap >= 0 && leftGap <= 32 && sameLine))) {
+        continue;
+      }
+      final score = aboveGap >= -4
+          ? aboveGap.abs() + (textRect.left - rect.left).abs() * 0.2
+          : leftGap + (textRect.center.dy - rect.center.dy).abs();
+      if (score < bestScore) {
+        bestScore = score;
+        best = text;
+      }
+    }
+    final label = best?.label?.trim();
+    if (label == null || label.isEmpty) return field;
+    if (field.key != null && field.key!.isNotEmpty) {
+      return field.copyWith(label: label, confidence: 0.84);
+    }
+    return field.copyWith(
+      id: 'field.${_slug(label)}',
+      label: label,
+      confidence: 0.84,
+    );
+  }
+
   ScoutNode _inferActionableLabel(ScoutNode node, List<ScoutNode> textNodes) {
     final rect = node.rect;
     if (rect == null || rect.width <= 0 || rect.height <= 0) return node;
@@ -1917,9 +1974,21 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
   String _rowActionSlug(ScoutNode action) {
     final label = action.label?.trim();
-    if (label != null && label.isNotEmpty) return _slug(label);
+    if (label != null && label.isNotEmpty) {
+      final slug = _slug(label);
+      if (slug.startsWith('chevron_right') ||
+          slug == 'arrow_forward_ios' ||
+          slug == 'arrow_forward') {
+        return 'open';
+      }
+      if (slug == 'more' || slug.startsWith('more_')) return 'more_actions';
+      return slug;
+    }
     final parts = action.id.split('.');
-    return parts.isEmpty ? '' : _slug(parts.last);
+    final slug = parts.isEmpty ? '' : _slug(parts.last);
+    if (slug.startsWith('chevron_right')) return 'open';
+    if (slug.startsWith('gesturedetector')) return 'open';
+    return slug;
   }
 
   Map<String, Object?> _visualNode(ScoutNode node, {String? role}) {

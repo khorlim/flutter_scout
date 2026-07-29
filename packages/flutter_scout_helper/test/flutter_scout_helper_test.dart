@@ -2282,6 +2282,45 @@ void main() {
     expect(sectioned['structuredRows'], isA<List<Object?>>());
   });
 
+  testWidgets('fields and generic row actions gain contextual handles', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              const Text('Member name'),
+              TextFormField(),
+              ListTile(
+                key: const ValueKey('details_row'),
+                title: const Text('Member details'),
+                trailing: IconButton(
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: () {},
+                ),
+                onTap: () {},
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    expect(
+      snapshot.fields.any((field) => field.id == 'field.member_name'),
+      isTrue,
+    );
+    final row = snapshot.structuredRows.firstWhere(
+      (value) => (value['text']! as List).contains('Member details'),
+    );
+    final handles = (row['handles']! as Map).cast<String, String>();
+    expect(handles.keys.any((key) => key.endsWith('.open')), isTrue);
+  });
+
   testWidgets('suggested actions model forms and picker presets', (
     tester,
   ) async {

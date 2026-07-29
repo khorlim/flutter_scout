@@ -51,11 +51,35 @@ extension _CliActions on FlutterScoutCli {
             'frame.',
       )
       ..addFlag(
-        'assert-no-errors',
+        'allow-errors',
         defaultsTo: false,
         negatable: false,
-        help: 'Fail when fresh blocking runtime or log errors are observed.',
+        help:
+            'Allow fresh blocking runtime/log errors (actions fail on them by default).',
+      )
+      ..addFlag(
+        'assert-no-errors',
+        defaultsTo: true,
+        negatable: false,
+        hide: true,
+      )
+      ..addOption(
+        'expect-log',
+        help: 'Wait for this text in fresh Scout-owned logs after the action.',
+      )
+      ..addOption(
+        'reject-log',
+        help: 'Fail if this text appears in fresh Scout-owned action logs.',
       );
+  }
+
+  static void _addAllowErrorsOption(ArgParser parser) {
+    parser.addFlag(
+      'allow-errors',
+      defaultsTo: false,
+      negatable: false,
+      help: 'Allow fresh blocking runtime/log errors (failed by default).',
+    );
   }
 
   Map<String, String> _expectParams(ArgResults parsed) {
@@ -337,7 +361,13 @@ extension _CliActions on FlutterScoutCli {
       compact: !parsed.flag('verbose'),
       callTimeout: _actionCallTimeout(parsed, params),
       captureOutput: parsed.option('capture'),
-      assertNoErrors: parsed.flag('assert-no-errors'),
+      assertNoErrors: !parsed.flag('allow-errors'),
+      expectLog: parsed.option('expect-log'),
+      rejectLog: parsed.option('reject-log'),
+      logExpectationTimeout: Duration(
+        milliseconds:
+            int.tryParse(parsed.option('expect-timeout') ?? '') ?? 5000,
+      ),
     );
   }
 
@@ -384,7 +414,13 @@ extension _CliActions on FlutterScoutCli {
       compact: !parsed.flag('verbose'),
       callTimeout: _actionCallTimeout(parsed, params),
       captureOutput: parsed.option('capture'),
-      assertNoErrors: parsed.flag('assert-no-errors'),
+      assertNoErrors: !parsed.flag('allow-errors'),
+      expectLog: parsed.option('expect-log'),
+      rejectLog: parsed.option('reject-log'),
+      logExpectationTimeout: Duration(
+        milliseconds:
+            int.tryParse(parsed.option('expect-timeout') ?? '') ?? 5000,
+      ),
     );
   }
 
@@ -433,19 +469,41 @@ extension _CliActions on FlutterScoutCli {
       if (parsed.flag('contains')) 'contains': 'true',
       ..._expectParams(parsed),
     };
+    final totalStopwatch = Stopwatch()..start();
+    final actionLogCursor = _currentLogCursor();
+    final vmStopwatch = Stopwatch()..start();
     var result = await _call(
       'ext.flutter_scout.tapText',
       params,
       _actionCallTimeout(parsed, params),
     );
     result = await _tapTextFallbackIfNeeded(result, params);
+    vmStopwatch.stop();
     result = _withProtocolDiagnostics('ext.flutter_scout.tapText', result);
     result = _materializeActionCapture(result, parsed.option('capture'));
-    result = await _withRecentLogSignals(result);
+    result = await _withRecentLogSignals(result, sinceCursor: actionLogCursor);
+    result = await _applyLogExpectations(
+      result,
+      sinceCursor: actionLogCursor,
+      expectLog: parsed.option('expect-log'),
+      rejectLog: parsed.option('reject-log'),
+      timeout: Duration(
+        milliseconds:
+            int.tryParse(parsed.option('expect-timeout') ?? '') ?? 5000,
+      ),
+    );
     result = _assertActionHasNoErrors(
       result,
-      enabled: parsed.flag('assert-no-errors'),
+      enabled: !parsed.flag('allow-errors'),
     );
+    totalStopwatch.stop();
+    result = {
+      ...result,
+      'timings': {
+        'vmCallMs': vmStopwatch.elapsedMilliseconds,
+        'totalMs': totalStopwatch.elapsedMilliseconds,
+      },
+    };
     _emitActionOutput(
       Map<String, dynamic>.from(
         parsed.flag('verbose') ? result : _compactActionResult(result),
@@ -453,7 +511,20 @@ extension _CliActions on FlutterScoutCli {
     );
     if (result['ok'] == true) {
       _recordAction({'cmd': 'tap-text', ...params});
+      await _maybeStartAutoServe();
     }
+    _appendEvent({
+      'schemaVersion': 1,
+      'type': 'action_result',
+      'commandId': ?_activeCommandId,
+      'method': 'ext.flutter_scout.tapText',
+      'ok': result['ok'] == true,
+      'runId': ?result['runId'],
+      'runtimeInstanceId': ?result['runtimeInstanceId'],
+      'snapshotId': ?result['snapshotId'],
+      'timings': result['timings'],
+      if (result['error'] != null) 'error': result['error'],
+    });
     return result['ok'] == false ? 1 : 0;
   }
 
@@ -463,6 +534,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('x')
       ..addOption('y')
       ..addFlag('verbose', defaultsTo: false);
+    _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
     final target = parsed.rest.isEmpty ? null : parsed.rest.first;
     if (target == null &&
@@ -489,6 +561,7 @@ extension _CliActions on FlutterScoutCli {
       params: params,
       record: {'cmd': 'long-press', ...params},
       compact: !parsed.flag('verbose'),
+      assertNoErrors: !parsed.flag('allow-errors'),
     );
   }
 
@@ -514,7 +587,13 @@ extension _CliActions on FlutterScoutCli {
       compact: !parsed.flag('verbose'),
       callTimeout: _actionCallTimeout(parsed, params),
       captureOutput: parsed.option('capture'),
-      assertNoErrors: parsed.flag('assert-no-errors'),
+      assertNoErrors: !parsed.flag('allow-errors'),
+      expectLog: parsed.option('expect-log'),
+      rejectLog: parsed.option('reject-log'),
+      logExpectationTimeout: Duration(
+        milliseconds:
+            int.tryParse(parsed.option('expect-timeout') ?? '') ?? 5000,
+      ),
     );
   }
 
@@ -616,6 +695,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('x')
       ..addOption('y')
       ..addFlag('verbose', defaultsTo: false);
+    _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
     final params = <String, String>{
       if (parsed.option('target') != null) 'target': parsed.option('target')!,
@@ -628,6 +708,7 @@ extension _CliActions on FlutterScoutCli {
       params: params,
       record: {'cmd': 'drag-start', ...params},
       compact: !parsed.flag('verbose'),
+      assertNoErrors: !parsed.flag('allow-errors'),
     );
   }
 
@@ -639,7 +720,9 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('y')
       ..addOption('screenshot')
       ..addFlag('verbose', defaultsTo: false);
+    _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
+    final logCursor = _currentLogCursor();
     final params = _heldDragPointParams(parsed);
     if (params.isEmpty) {
       throw const ScoutCliException(
@@ -669,7 +752,11 @@ extension _CliActions on FlutterScoutCli {
         };
       }
     }
-    result = await _withRecentLogSignals(result);
+    result = await _withRecentLogSignals(result, sinceCursor: logCursor);
+    result = _assertActionHasNoErrors(
+      result,
+      enabled: !parsed.flag('allow-errors'),
+    );
     _emitActionOutput(
       parsed.flag('verbose') ? result : _compactActionResult(result),
     );
@@ -686,6 +773,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('x')
       ..addOption('y')
       ..addFlag('verbose', defaultsTo: false);
+    _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
     final params = _heldDragPointParams(parsed);
     return _callAndPrint(
@@ -693,6 +781,7 @@ extension _CliActions on FlutterScoutCli {
       params: params,
       record: {'cmd': 'drag-end', ...params},
       compact: !parsed.flag('verbose'),
+      assertNoErrors: !parsed.flag('allow-errors'),
     );
   }
 
@@ -717,7 +806,9 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('direction')
       ..addOption('distance')
       ..addFlag('verbose', defaultsTo: false);
+    _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
+    final logCursor = _currentLogCursor();
     final target = parsed.rest.isEmpty ? null : parsed.rest.first;
     if (target == null || target.isEmpty) {
       throw const ScoutCliException(
@@ -770,7 +861,11 @@ extension _CliActions on FlutterScoutCli {
       };
       result = retry;
     }
-    result = await _withRecentLogSignals(result);
+    result = await _withRecentLogSignals(result, sinceCursor: logCursor);
+    result = _assertActionHasNoErrors(
+      result,
+      enabled: !parsed.flag('allow-errors'),
+    );
     final output = parsed.flag('verbose')
         ? result
         : _compactActionResult(result);
@@ -816,6 +911,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('from')
       ..addOption('to')
       ..addFlag('verbose', defaultsTo: false);
+    _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
     final direction = parsed.rest.isEmpty
         ? defaultDirection
@@ -835,16 +931,19 @@ extension _CliActions on FlutterScoutCli {
       params: params,
       record: {'cmd': command, ...params},
       compact: !parsed.flag('verbose'),
+      assertNoErrors: !parsed.flag('allow-errors'),
     );
   }
 
   Future<int> _back(List<String> args) async {
     final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
+    _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
     return _callAndPrint(
       'ext.flutter_scout.back',
       record: const {'cmd': 'back'},
       compact: !parsed.flag('verbose'),
+      assertNoErrors: !parsed.flag('allow-errors'),
     );
   }
 
@@ -852,12 +951,14 @@ extension _CliActions on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('verbose', defaultsTo: false);
+    _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
     return _callAndPrint(
       'ext.flutter_scout.dismiss',
       params: {'waitMs': parsed.option('wait-ms') ?? '1500'},
       record: const {'cmd': 'dismiss'},
       compact: !parsed.flag('verbose'),
+      assertNoErrors: !parsed.flag('allow-errors'),
     );
   }
 
@@ -974,24 +1075,38 @@ extension _CliActions on FlutterScoutCli {
   Future<int> _vmLogListener(List<String> args) async {
     final parser = ArgParser()
       ..addOption('vm-uri')
-      ..addOption('log-file');
+      ..addOption('log-file')
+      ..addOption('session-dir')
+      ..addOption('owner-pid');
     final parsed = parser.parse(args);
     final vmUri = parsed.option('vm-uri');
     final logFile = parsed.option('log-file');
-    if (vmUri == null || vmUri.isEmpty || logFile == null || logFile.isEmpty) {
+    final sessionDir = parsed.option('session-dir');
+    final ownerPid = int.tryParse(parsed.option('owner-pid') ?? '');
+    if (vmUri == null ||
+        vmUri.isEmpty ||
+        logFile == null ||
+        logFile.isEmpty ||
+        sessionDir == null ||
+        sessionDir.isEmpty ||
+        ownerPid == null) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout vm-log-listener --vm-uri <uri> --log-file <path>',
+        'Usage: flutter-scout vm-log-listener --vm-uri <uri> '
+            '--log-file <path> --session-dir <path> --owner-pid <pid>',
       );
     }
-    return _listenToVmLogs(vmUri: vmUri, logFile: logFile);
+    FlutterScoutCli._sessionDirectoryOverride = sessionDir;
+    return _listenToVmLogs(vmUri: vmUri, logFile: logFile, ownerPid: ownerPid);
   }
 
   Future<int> _listenToVmLogs({
     required String vmUri,
     required String logFile,
+    required int ownerPid,
   }) async {
     _LockedLogWriter? writer;
+    var consecutiveFailures = 0;
     try {
       Directory(p.dirname(logFile)).createSync(recursive: true);
       writer = _LockedLogWriter(logFile);
@@ -1005,11 +1120,11 @@ extension _CliActions on FlutterScoutCli {
       }
 
       while (true) {
-        final appPid = _readPid();
-        if (appPid != null && !await _processExists(appPid)) {
+        if (!await _processExists(ownerPid)) {
           await writeLine(
             '[flutter_scout] VM logging listener stopped: Flutter run process exited ${DateTime.now().toIso8601String()}',
           );
+          _deleteFileIfExists(_vmLogListenerPidFile);
           return 0;
         }
 
@@ -1051,6 +1166,13 @@ extension _CliActions on FlutterScoutCli {
           await connected.streamListen(EventStreams.kLogging);
           await _tryStreamListen(connected, EventStreams.kStdout);
           await _tryStreamListen(connected, EventStreams.kStderr);
+          if (consecutiveFailures > 0) {
+            await writeLine(
+              '[flutter_scout] VM logging listener recovered after '
+              '$consecutiveFailures connection failure(s)',
+            );
+            consecutiveFailures = 0;
+          }
           await writeLine(
             '[flutter_scout] VM logging listener attached ${DateTime.now().toIso8601String()}',
           );
@@ -1059,7 +1181,13 @@ extension _CliActions on FlutterScoutCli {
             '[flutter_scout] VM logging listener disconnected ${DateTime.now().toIso8601String()}; reconnecting',
           );
         } catch (error) {
-          await writeLine('[flutter_scout] VM logging listener failed: $error');
+          consecutiveFailures += 1;
+          if (consecutiveFailures == 1 || consecutiveFailures % 30 == 0) {
+            await writeLine(
+              '[flutter_scout] VM logging listener connection failed '
+              '($consecutiveFailures attempt(s)): $error',
+            );
+          }
         } finally {
           for (final subscription in subscriptions) {
             await subscription.cancel();
@@ -1068,7 +1196,8 @@ extension _CliActions on FlutterScoutCli {
           await writer.flush();
         }
 
-        await Future<void>.delayed(const Duration(seconds: 1));
+        final backoffSeconds = min(30, 1 << min(5, consecutiveFailures));
+        await Future<void>.delayed(Duration(seconds: backoffSeconds));
       }
     } catch (error) {
       writer ??= _LockedLogWriter(logFile);

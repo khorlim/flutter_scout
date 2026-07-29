@@ -22,7 +22,7 @@ extension _CliRecord on FlutterScoutCli {
 
   static const _recordUsage =
       'Usage: flutter-scout record '
-      '[start|stop|pause|resume|undo|status|list|show|rename|delete|run|export]';
+      '[start|stop|pause|resume|undo|status|list|show|rename|delete|run|export|save-last]';
 
   Future<int> _record(List<String> args) async {
     final action = args.isEmpty ? 'status' : args.first;
@@ -52,9 +52,72 @@ extension _CliRecord on FlutterScoutCli {
         return _recordRun(rest);
       case 'export':
         return _recordExport(rest);
+      case 'save-last':
+        return _recordSaveLast(rest);
       default:
         throw const ScoutCliException('usage', _recordUsage);
     }
+  }
+
+  Future<int> _recordSaveLast(List<String> args) async {
+    final parser = ArgParser()
+      ..addOption('last', defaultsTo: '5')
+      ..addOption('feature', defaultsTo: 'unsorted')
+      ..addOption('title');
+    final parsed = parser.parse(args);
+    if (parsed.rest.isEmpty) {
+      throw const ScoutCliException(
+        'usage',
+        'Usage: record save-last <name> [--last <count>] [--feature <name>]',
+      );
+    }
+    final count = int.tryParse(parsed.option('last') ?? '') ?? 5;
+    if (count < 1) {
+      throw const ScoutCliException('usage', '--last must be greater than 0.');
+    }
+    final actions = _readSessionActions()
+        .whereType<Map>()
+        .map((item) => Map<String, Object?>.from(item))
+        .toList(growable: false);
+    if (actions.isEmpty) {
+      throw const ScoutCliException(
+        'no_actions',
+        'No successful session actions are available to save.',
+      );
+    }
+    final selected = actions.length > count
+        ? actions.sublist(actions.length - count)
+        : actions;
+    final now = _isoNow();
+    final flow = <String, Object?>{
+      'schemaVersion': 1,
+      'name': _recordSlug(parsed.rest.first),
+      'feature': _recordSlug(parsed.option('feature') ?? 'unsorted'),
+      'title': parsed.option('title') ?? parsed.rest.first,
+      'createdAt': now,
+      'updatedAt': now,
+      'source': 'session_journal',
+      'steps': selected,
+    };
+    final path = _writeFlowToStore(flow);
+    _appendEvent({
+      'schemaVersion': 1,
+      'type': 'recording_saved',
+      'commandId': ?_activeCommandId,
+      'name': flow['name'],
+      'feature': flow['feature'],
+      'stepCount': selected.length,
+      'source': 'session_journal',
+      'path': path,
+    });
+    _printJson({
+      'ok': true,
+      'name': flow['name'],
+      'feature': flow['feature'],
+      'stepCount': selected.length,
+      'path': path,
+    });
+    return 0;
   }
 
   // ---- recorder control (over the VM service) ---------------------------

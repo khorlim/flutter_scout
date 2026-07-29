@@ -236,16 +236,24 @@ extension _CliSession on FlutterScoutCli {
 
       final wsUri = _normalizeVmUri(vmUri);
       File(_vmUriFile).writeAsStringSync(wsUri);
+      final flutterToolPid =
+          await _findScoutFlutterToolPid(
+            project: project,
+            instanceName: instanceName,
+          ) ??
+          process.pid;
+      File(_pidFile).writeAsStringSync('$flutterToolPid');
       final vmLogListenerPid = await _startVmLogListener(
         vmUri: wsUri,
         logFile: runLogFile,
+        ownerPid: flutterToolPid,
       );
       _writeSessionMeta({
         'mode': 'scout_owned_flutter_run',
         'state': 'ready',
         'runId': launchLease.runId,
         'name': ?instanceName,
-        'pid': process.pid,
+        'pid': flutterToolPid,
         'vmLogListenerPid': ?vmLogListenerPid,
         'logFile': runLogFile,
         'project': project,
@@ -267,7 +275,7 @@ extension _CliSession on FlutterScoutCli {
           'deviceName': resolvedDevice.name,
           'deviceCategory': resolvedDevice.category,
           'project': project,
-          'pid': process.pid,
+          'pid': flutterToolPid,
           'vmLogListenerPid': ?vmLogListenerPid,
           'vmServiceUri': wsUri,
           'logFile': runLogFile,
@@ -830,20 +838,88 @@ Future<void> main() async {
     return 0;
   }
 
-  /// Lists sessions registered via launch/ensure `--name`, addressable with
-  /// the global `--app <name>` option.
-  Future<int> _apps() async {
-    final registry = _readScoutRegistry();
+  Future<int> _devices(List<String> args) async {
+    if (args.isNotEmpty) {
+      throw const ScoutCliException('usage', 'Usage: flutter-scout devices');
+    }
+    final result = await Process.run('flutter', ['devices', '--machine'])
+        .timeout(
+          const Duration(seconds: 20),
+          onTimeout: () => ProcessResult(0, 1, '', 'flutter devices timed out'),
+        );
+    if (result.exitCode != 0) {
+      throw ScoutCliException(
+        'device_discovery_failed',
+        '${result.stderr}'.trim(),
+      );
+    }
+    final decoded = jsonDecode('${result.stdout}');
+    if (decoded is! List) {
+      throw const ScoutCliException(
+        'device_discovery_failed',
+        'flutter devices --machine returned an unexpected payload.',
+      );
+    }
     stdout.writeln(
       jsonEncode({
         'ok': true,
+        'devices': [
+          for (final item in decoded)
+            if (item is Map && item['isSupported'] != false)
+              {
+                'id': item['id'],
+                'name': item['name'],
+                'platform': item['targetPlatform'],
+                'emulator': item['emulator'] == true,
+                'screenshot': item['capabilities'] is Map
+                    ? (item['capabilities'] as Map)['screenshot'] == true
+                    : false,
+              },
+        ],
+      }),
+    );
+    return 0;
+  }
+
+  /// Lists sessions registered via launch/ensure `--name`, addressable with
+  /// the global `--app <name>` option.
+  Future<int> _apps(List<String> args) async {
+    final parser = ArgParser()
+      ..addFlag(
+        'all',
+        defaultsTo: false,
+        negatable: false,
+        help: 'Include registry entries whose session directory is missing.',
+      )
+      ..addFlag(
+        'prune',
+        defaultsTo: false,
+        negatable: false,
+        help: 'Remove missing session directories from the registry.',
+      );
+    final parsed = parser.parse(args);
+    final registry = _readScoutRegistry();
+    final missing = registry.entries
+        .where((entry) => !Directory(entry.value).existsSync())
+        .toList(growable: false);
+    if (parsed.flag('prune') && missing.isNotEmpty) {
+      for (final entry in missing) {
+        registry.remove(entry.key);
+      }
+      _writeScoutRegistry(registry);
+    }
+    stdout.writeln(
+      jsonEncode({
+        'ok': true,
+        if (parsed.flag('prune')) 'pruned': missing.length,
         'sessions': [
           for (final entry in registry.entries)
-            {
-              'name': entry.key,
-              'directory': entry.value,
-              'exists': Directory(entry.value).existsSync(),
-            },
+            if (parsed.flag('all') || Directory(entry.value).existsSync())
+              {
+                'name': entry.key,
+                'directory': entry.value,
+                'exists': Directory(entry.value).existsSync(),
+              },
         ],
       }),
     );
@@ -853,6 +929,13 @@ Future<void> main() async {
   Future<Map<String, Object?>> _statusPayload() async {
     final vmUri = _readVmUri();
     if (vmUri == null) {
+      final meta = _readSessionMeta();
+      final recordedOwner = int.tryParse('${meta?['pid'] ?? ''}');
+      if (meta?['mode'] == 'scout_owned_flutter_run' &&
+          meta?['state'] == 'ready' &&
+          (recordedOwner == null || !await _processExists(recordedOwner))) {
+        await _markSessionStopped('owner_process_exited');
+      }
       final launch = _readLaunchInfo();
       final ownerPid = int.tryParse('${launch?['ownerPid'] ?? ''}');
       final launching = ownerPid != null && await _processExists(ownerPid);
@@ -890,6 +973,7 @@ Future<void> main() async {
       };
     }
     _clearVmUriFile();
+    await _markSessionStopped('stale_vm_service');
     return {
       'running': false,
       'staleVmServiceUri': vmUri,
@@ -897,6 +981,26 @@ Future<void> main() async {
       'session': _sessionModeInfo(),
       if (stale.error != null) 'reason': stale.error,
     };
+  }
+
+  Future<void> _markSessionStopped(String reason) async {
+    final listenerPid = _readVmLogListenerPid();
+    if (listenerPid != null) {
+      final command = await _processCommand(listenerPid);
+      if (command != null && _commandLooksLikeScoutVmLogListener(command)) {
+        Process.killPid(listenerPid);
+      }
+      _deleteFileIfExists(_vmLogListenerPidFile);
+    }
+    final meta = _readSessionMeta();
+    if (meta != null) {
+      _writeSessionMeta({
+        ...meta,
+        'state': 'stopped',
+        'stopReason': reason,
+        'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      });
+    }
   }
 
   Future<int> _doctor(List<String> args) async {
@@ -1022,6 +1126,10 @@ Future<void> main() async {
       ..addFlag('clear-session', defaultsTo: false, negatable: false)
       ..addFlag('quiet', defaultsTo: false, negatable: false, hide: true);
     final parsed = parser.parse(args);
+    final serve = _readSessionMeta()?['serve'];
+    final servePid = serve is Map
+        ? int.tryParse('${serve['pid'] ?? ''}')
+        : null;
     final temporarySetup = _temporarySetupFromMeta();
     final pid = _readPid();
     final vmUri = _readVmUri();
@@ -1067,6 +1175,19 @@ Future<void> main() async {
         }
       }
     }
+    var serveExisted = false;
+    if (servePid != null &&
+        servePid != pid &&
+        servePid != listenerPid &&
+        servePid != vmLogListenerPid) {
+      final command = await _processCommand(servePid);
+      if (command != null &&
+          _commandLooksLikeScoutCli(command) &&
+          RegExp(r'(?:^|\s)serve(?:\s|$)').hasMatch(command)) {
+        serveExisted = Process.killPid(servePid);
+        stopped = stopped || serveExisted;
+      }
+    }
     _deleteFileIfExists(_pidFile);
     _deleteFileIfExists(_vmLogListenerPidFile);
     var registryPruned = const <String>[];
@@ -1075,6 +1196,7 @@ Future<void> main() async {
       _deleteFileIfExists(_deviceFile);
       _deleteFileIfExists(_deviceInfoFile);
       _deleteFileIfExists(_sessionFile);
+      _deleteFileIfExists(_eventsFile);
       _deleteFileIfExists(_sessionMetaFile);
       registryPruned = _pruneScoutRegistryFor(_sessionDir.path);
     }
@@ -1091,6 +1213,8 @@ Future<void> main() async {
           'processExisted': processExisted,
           'vmServiceListenerExisted': listenerExisted,
           'vmLogListenerExisted': vmLogListenerExisted,
+          'servePid': ?servePid,
+          'serveExisted': serveExisted,
           'stopped': stopped,
           'pidKillSkippedReason': ?pidKillSkippedReason,
           ...vmLogListenerKillSkippedReason,

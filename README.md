@@ -137,7 +137,7 @@ Drive the sample flow:
 dart run bin/flutter_scout.dart inspect
 dart run bin/flutter_scout.dart inspect --surface
 dart run bin/flutter_scout.dart tap btn.add_supplier
-dart run bin/flutter_scout.dart tap btn.add_supplier --expect-text "Supplier name" --capture /tmp/add-supplier.png --assert-no-errors
+dart run bin/flutter_scout.dart tap btn.add_supplier --expect-text "Supplier name" --capture /tmp/add-supplier.png
 dart run bin/flutter_scout.dart fill --json '{"Supplier name":"Replay Supplier","Phone":"555"}'
 dart run bin/flutter_scout.dart tap btn.save_supplier
 dart run bin/flutter_scout.dart bounds btn.add_supplier
@@ -173,7 +173,7 @@ dart run bin/flutter_scout.dart drag-move --by=30,0
 dart run bin/flutter_scout.dart drag-end
 ```
 
-Action commands return compact JSON by default: result, stability, non-empty delta, screen/snapshot identity, a log cursor, and only new runtime/log errors observed during that action. Identical final state is represented as `sameSnapshot:true` instead of repeated summaries. An async operation that visibly works and settles back to its starting state returns `completed_same_state` with `activityObserved:true`. Guard `tap`, `tap-text`, `input`, and `fill` with `--expect-*`; add `--capture <path>` to save the exact frame that satisfied the expectation in the same VM call, and `--assert-no-errors` to fail on fresh blocking runtime or owned-log signals. Add `--verbose` only when full before/after payloads are needed.
+Action commands return compact JSON by default: result, stability, non-empty delta, screen/snapshot identity, actual timing, a log cursor, and only new runtime/log errors observed during that action. Identical final state is represented as `sameSnapshot:true` instead of repeated summaries. An async operation that visibly works and settles back to its starting state returns `completed_same_state` with `activityObserved:true`. Guard `tap`, `tap-text`, `input`, and `fill` with `--expect-*`, `--expect-log`, or `--reject-log`; add `--capture <path>` to save the exact frame that satisfied the expectation in the same VM call. Fresh blocking errors fail actions by default; use `--allow-errors` only for deliberate error scenarios. Add `--verbose` only when full before/after payloads are needed.
 
 Scout-owned `launch` and `ensure` responses include a `timing` object when they start Flutter, for example `totalMs`, `buildDurationMs`, `firstSyncMs`, `vmServiceFoundMs`, and `readyMs`. During long builds they emit a compact `launch_heartbeat` every 15 seconds with elapsed time and the latest sanitized build line.
 

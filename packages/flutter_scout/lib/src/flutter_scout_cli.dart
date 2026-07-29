@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
@@ -21,8 +22,9 @@ part 'cli_results.dart';
 part 'cli_record.dart';
 
 class FlutterScoutCli {
-  static const String packageVersion = '1.1.0';
+  static const String packageVersion = '1.2.0';
   static String? _sessionDirectoryOverride;
+  String? _activeCommandId;
 
   /// Test-only override for the session registry path, so tests never touch
   /// the real `~/.flutter_scout/registry.json`.
@@ -245,8 +247,19 @@ class FlutterScoutCli {
       _printUsage();
       return 0;
     }
+    if (args.first == '--version' || args.first == '-V') {
+      return _version();
+    }
 
     final previousSessionDirectory = _sessionDirectoryOverride;
+    final previousCommandId = _activeCommandId;
+    final commandStartedAt = DateTime.now().toUtc();
+    final commandStopwatch = Stopwatch()..start();
+    final commandId =
+        '${commandStartedAt.microsecondsSinceEpoch.toRadixString(36)}-$pid';
+    _activeCommandId = commandId;
+    int? exitCode;
+    var handledByProxy = false;
 
     // Global `--app <name>`: run this command against the named session
     // (registered by launch/ensure --name) from anywhere — no cd dance.
@@ -317,9 +330,13 @@ class FlutterScoutCli {
       if (!_reuseVmConnection &&
           _commandsEligibleForServeProxy.contains(command)) {
         final proxied = await _tryProxyToActiveServe(effectiveArgs);
-        if (proxied != null) return proxied;
+        if (proxied != null) {
+          handledByProxy = true;
+          exitCode = proxied;
+          return proxied;
+        }
       }
-      return await switch (command) {
+      exitCode = await switch (command) {
         'launch' => _launch(rest),
         'ensure' => _ensure(rest),
         'attach' => _attach(rest),
@@ -352,7 +369,8 @@ class FlutterScoutCli {
         'export-batch' => _exportBatch(rest),
         'serve' => _serve(rest),
         'explore' => _explore(rest),
-        'apps' => _apps(),
+        'devices' => _devices(rest),
+        'apps' => _apps(rest),
         'reload' => _reload(rest),
         'restart' => _restart(rest),
         'deeplink' => _deeplink(rest),
@@ -368,7 +386,9 @@ class FlutterScoutCli {
         'help' => _help(rest),
         _ => _unknown(command),
       };
+      return exitCode!;
     } on ScoutCliException catch (error) {
+      exitCode = 1;
       stderr.writeln(
         jsonEncode({
           'ok': false,
@@ -377,6 +397,7 @@ class FlutterScoutCli {
       );
       return 1;
     } catch (error) {
+      exitCode = 1;
       stderr.writeln(
         jsonEncode({
           'ok': false,
@@ -385,7 +406,104 @@ class FlutterScoutCli {
       );
       return 1;
     } finally {
+      commandStopwatch.stop();
+      final clearsSession =
+          command == 'stop' && rest.contains('--clear-session');
+      if (!_infrastructureCommands.contains(command) &&
+          !handledByProxy &&
+          !clearsSession) {
+        _appendEvent({
+          'schemaVersion': 1,
+          'type': 'command',
+          'commandId': commandId,
+          'startedAt': commandStartedAt.toIso8601String(),
+          'finishedAt': DateTime.now().toUtc().toIso8601String(),
+          'durationMs': commandStopwatch.elapsedMilliseconds,
+          'command': command,
+          'args': _redactedCommandArgs(command, rest),
+          'exitCode': exitCode ?? 1,
+          'runId': ?_currentRunIdFromSession(),
+          'session': ?_readSessionMeta()?['name'],
+          'transport': _reuseVmConnection ? 'persistent' : 'process',
+        });
+      }
+      _activeCommandId = previousCommandId;
       _sessionDirectoryOverride = previousSessionDirectory;
+    }
+  }
+
+  static const Set<String> _infrastructureCommands = {
+    'vm-log-listener',
+    'flutter-run-worker',
+  };
+
+  List<String> _redactedCommandArgs(String command, List<String> args) {
+    final redacted = <String>[];
+    var redactNext = false;
+    for (final arg in args) {
+      if (redactNext) {
+        redacted.add('[REDACTED]');
+        redactNext = false;
+        continue;
+      }
+      final lower = arg.toLowerCase();
+      if (lower == '--json' ||
+          lower == '--file' ||
+          lower == '--var' ||
+          lower == '--dart-define' ||
+          lower == '--dart-define-from-file') {
+        redacted.add(arg);
+        redactNext = true;
+        continue;
+      }
+      if (lower.startsWith('--json=') ||
+          lower.startsWith('--var=') ||
+          lower.startsWith('--dart-define=')) {
+        redacted.add('${arg.split('=').first}=[REDACTED]');
+        continue;
+      }
+      redacted.add(_redactSensitiveLogText(arg));
+    }
+    if (command == 'input') {
+      const optionValues = {
+        '--target',
+        '--file',
+        '--expect-text',
+        '--expect-gone',
+        '--expect-target',
+        '--expect-selected',
+        '--expect-screen',
+        '--expect-view',
+        '--expect-field',
+        '--expect-timeout',
+        '--capture',
+        '--expect-log',
+        '--reject-log',
+      };
+      for (var index = 0; index < redacted.length; index++) {
+        final isOptionValue =
+            index > 0 && optionValues.contains(args[index - 1].toLowerCase());
+        if (!redacted[index].startsWith('-') && !isOptionValue) {
+          redacted[index] = '[REDACTED]';
+        }
+      }
+    }
+    return redacted;
+  }
+
+  void _appendEvent(Map<String, Object?> event) {
+    try {
+      _ensureSessionDir();
+      final file = File(_eventsFile);
+      final handle = file.openSync(mode: FileMode.append);
+      try {
+        handle.writeStringSync('${jsonEncode(event)}\n');
+        handle.flushSync();
+      } finally {
+        handle.closeSync();
+      }
+    } catch (_) {
+      // Runtime evidence must never prevent the requested Scout command.
     }
   }
 
@@ -1383,11 +1501,14 @@ print(String(data: data, encoding: .utf8)!)
   Future<int?> _startVmLogListener({
     required String vmUri,
     required String logFile,
+    int? ownerPid,
   }) async {
     if (Platform.script.scheme != 'file') {
       return null;
     }
     try {
+      final effectiveOwnerPid = ownerPid ?? _readPid();
+      if (effectiveOwnerPid == null) return null;
       final process = await Process.start(Platform.resolvedExecutable, [
         Platform.script.toFilePath(),
         'vm-log-listener',
@@ -1395,6 +1516,10 @@ print(String(data: data, encoding: .utf8)!)
         vmUri,
         '--log-file',
         logFile,
+        '--session-dir',
+        _sessionDir.path,
+        '--owner-pid',
+        '$effectiveOwnerPid',
       ], mode: ProcessStartMode.detached);
       File(_vmLogListenerPidFile).writeAsStringSync(process.pid.toString());
       return process.pid;
@@ -1406,6 +1531,34 @@ print(String(data: data, encoding: .utf8)!)
         '${_redactSensitiveLogText(error.toString())}',
       );
       await writer.close();
+      return null;
+    }
+  }
+
+  Future<int?> _findScoutFlutterToolPid({
+    required String project,
+    String? instanceName,
+  }) async {
+    try {
+      final result = await Process.run('ps', ['ax', '-o', 'pid=,command=']);
+      if (result.exitCode != 0) return null;
+      final candidates = <int>[];
+      for (final line in const LineSplitter().convert('${result.stdout}')) {
+        if (!line.contains('flutter_tools.snapshot run')) continue;
+        final matchesInstance =
+            instanceName == null ||
+            instanceName.isEmpty ||
+            line.contains('FLUTTER_SCOUT_INSTANCE=$instanceName');
+        final matchesProject = line.contains('FLUTTER_SCOUT_PROJECT=$project');
+        if (!matchesInstance || !matchesProject) continue;
+        final match = RegExp(r'^\s*(\d+)\s+').firstMatch(line);
+        final candidate = int.tryParse(match?.group(1) ?? '');
+        if (candidate != null) candidates.add(candidate);
+      }
+      if (candidates.isEmpty) return null;
+      candidates.sort();
+      return candidates.last;
+    } catch (_) {
       return null;
     }
   }
@@ -1625,9 +1778,13 @@ print(String(data: data, encoding: .utf8)!)
 
   bool _commandLooksLikeScoutVmLogListener(String command) {
     final lower = command.toLowerCase();
-    final hasScoutCommand =
-        lower.contains('flutter_scout') || lower.contains('flutter-scout');
-    return hasScoutCommand && lower.contains('vm-log-listener');
+    return _commandLooksLikeScoutCli(command) &&
+        lower.contains('vm-log-listener');
+  }
+
+  bool _commandLooksLikeScoutCli(String command) {
+    final lower = command.toLowerCase();
+    return lower.contains('flutter_scout') || lower.contains('flutter-scout');
   }
 
   Future<bool> _processExists(int pid) async {
@@ -1783,7 +1940,9 @@ Guarded action options:
   --expect-screen <screen>   Wait for a screen name.
   --expect-timeout <ms>      Expectation timeout (default 5000).
   --capture <path>           Capture the exact successful expectation frame.
-  --assert-no-errors         Fail on fresh blocking runtime/log errors.
+  --expect-log <text>        Wait for fresh Scout-owned log text.
+  --reject-log <text>        Fail if fresh logs contain this text.
+  --allow-errors             Permit fresh blocking errors (failed by default).
 
 Run `flutter-scout help` for the complete command list.
 ''');
@@ -1797,8 +1956,9 @@ Usage:
   flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper]
   flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper]
   flutter-scout status
-  flutter-scout apps
-  flutter-scout version
+  flutter-scout devices
+  flutter-scout apps [--all] [--prune]
+  flutter-scout version | --version | -V
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
   flutter-scout inspect [--brief] [--surface] [--max-items <n>] [--sections <list>]
@@ -1806,7 +1966,7 @@ Usage:
   flutter-scout annotations wait [--timeout <seconds>] [--poll <ms>]
   flutter-scout annotations fixed <annotation-id> [--note <text>]
   flutter-scout bounds [target]
-  flutter-scout tap <target> [--expect-text <text>] [--capture <path>] [--assert-no-errors] [--verbose]
+  flutter-scout tap <target> [--expect-text <text>] [--expect-log <text>] [--reject-log <text>] [--allow-errors] [--verbose]
   flutter-scout tap <x> <y> | tap --x <x> --y <y>
   flutter-scout tap-text <visible text> | tap-text --text <visible text> [--allow-mismatch] [--verbose]
   flutter-scout long-press <target> [--verbose]
@@ -1825,9 +1985,9 @@ Usage:
   flutter-scout health [--include-stale]
   flutter-scout batch '<command>; <command>' [--keep-going] [--verbose]
   flutter-scout export-batch [-o <path>]
-  flutter-scout serve [--port <port>] [--port-file <path>]
+  flutter-scout serve [--port <port>] [--port-file <path>] [--idle-timeout <seconds>]
   flutter-scout explore [--port <port>] [--port-file <path>] [--once]
-  flutter-scout record start|stop|run|list|show|pause|resume|undo
+  flutter-scout record start|stop|run|list|show|pause|resume|undo|save-last
   flutter-scout reload [--verbose]
   flutter-scout restart [--verbose]
   flutter-scout deeplink <url>
@@ -1953,6 +2113,7 @@ String get _vmUriFile => p.join(_sessionDir.path, 'vm_uri.txt');
 String get _deviceFile => p.join(_sessionDir.path, 'device.txt');
 String get _deviceInfoFile => p.join(_sessionDir.path, 'device_info.json');
 String get _sessionFile => p.join(_sessionDir.path, 'session.json');
+String get _eventsFile => p.join(_sessionDir.path, 'events.jsonl');
 String get _pidFile => p.join(_sessionDir.path, 'flutter.pid');
 String get _vmLogListenerPidFile =>
     p.join(_sessionDir.path, 'vm_log_listener.pid');
