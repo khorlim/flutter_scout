@@ -250,6 +250,25 @@ class FlutterScoutCli {
     if (args.first == '--version' || args.first == '-V') {
       return _version();
     }
+    if (args.any((arg) => arg == '--help' || arg == '-h')) {
+      String? command;
+      for (var i = 0; i < args.length; i++) {
+        final arg = args[i];
+        if (arg == '--app') {
+          i++;
+          continue;
+        }
+        if (arg.startsWith('--app=') || arg == '--help' || arg == '-h') {
+          continue;
+        }
+        if (!arg.startsWith('-')) {
+          command = arg;
+          break;
+        }
+      }
+      _printUsage(command: command);
+      return 0;
+    }
 
     final previousSessionDirectory = _sessionDirectoryOverride;
     final previousCommandId = _activeCommandId;

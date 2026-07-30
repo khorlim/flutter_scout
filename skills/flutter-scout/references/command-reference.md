@@ -17,6 +17,8 @@ Update: `reload`, `restart`.
 
 Automation: `batch`, `serve`, `explore`, `record`, `export-batch`, `replay`.
 
-Use `flutter-scout help <command>` for the installed build's exact options.
+Use `flutter-scout help <command>` or `flutter-scout <command> --help` for the
+installed build's exact options. Command-scoped help never requires or contacts
+an app session.
 JSON is the source of truth. Nonzero exits mean the requested assertion or
 operation failed; record replay uses exit code 2 when it could not start.
