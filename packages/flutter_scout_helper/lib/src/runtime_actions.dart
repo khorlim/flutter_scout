@@ -1427,10 +1427,14 @@ extension _RuntimeActions on FlutterScoutRuntime {
 
   Future<bool> _waitStable({
     Duration timeout = const Duration(seconds: 3),
+    bool Function()? stopWhen,
   }) async {
     final deadline = DateTime.now().add(timeout);
     var quietFrames = 0;
     while (DateTime.now().isBefore(deadline)) {
+      if (stopWhen?.call() == true) {
+        return !WidgetsBinding.instance.hasScheduledFrame;
+      }
       final remaining = deadline.difference(DateTime.now());
       final frameTimeout = remaining < const Duration(milliseconds: 200)
           ? remaining
@@ -1453,15 +1457,24 @@ extension _RuntimeActions on FlutterScoutRuntime {
       } else {
         quietFrames = 0;
       }
+      if (stopWhen?.call() == true) {
+        return !WidgetsBinding.instance.hasScheduledFrame;
+      }
       await Future<void>.delayed(const Duration(milliseconds: 40));
     }
     return !WidgetsBinding.instance.hasScheduledFrame;
   }
 
-  Future<bool> _waitStableForAction(Map<String, String> params) {
+  Future<bool> _waitStableForAction(
+    Map<String, String> params, {
+    bool Function()? stopWhen,
+  }) {
     final waitMs = int.tryParse(params['waitMs'] ?? '') ?? 1500;
     if (waitMs <= 0) return Future.value(false);
-    return _waitStable(timeout: Duration(milliseconds: waitMs));
+    return _waitStable(
+      timeout: Duration(milliseconds: waitMs),
+      stopWhen: stopWhen,
+    );
   }
 
   Future<_ActionSnapshotResult> _snapshotAfterAction(
@@ -1470,7 +1483,14 @@ extension _RuntimeActions on FlutterScoutRuntime {
   ) async {
     var sampling = false;
     var activityObserved = false;
+    ScoutSnapshot? expectationSnapshot;
+    final expectationMetBefore = _actionExpectationMet(before, params);
     final transientViewSignatures = <String>[];
+    bool completesExpectation(ScoutSnapshot snapshot) {
+      return _actionExpectationMet(snapshot, params) &&
+          (!expectationMetBefore || activityObserved);
+    }
+
     Future<void> sample() async {
       if (sampling) return;
       sampling = true;
@@ -1486,6 +1506,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
             transientViewSignatures.add(signature);
           }
         }
+        if (completesExpectation(current)) {
+          expectationSnapshot ??= current;
+        }
       } finally {
         sampling = false;
       }
@@ -1493,12 +1516,32 @@ extension _RuntimeActions on FlutterScoutRuntime {
 
     await _waitForFrame();
     await sample();
+    if (expectationSnapshot case final expected?) {
+      return _ActionSnapshotResult(
+        snapshot: expected,
+        stable: !WidgetsBinding.instance.hasScheduledFrame,
+        activityObserved: activityObserved,
+        transientViewSignatures: transientViewSignatures,
+      );
+    }
     final sampler = Timer.periodic(
       const Duration(milliseconds: 60),
       (_) => unawaited(sample()),
     );
-    final stable = await _waitStableForAction(params);
+    final stable = await _waitStableForAction(
+      params,
+      stopWhen: () => expectationSnapshot != null,
+    );
     await sample();
+    if (expectationSnapshot case final expected?) {
+      sampler.cancel();
+      return _ActionSnapshotResult(
+        snapshot: expected,
+        stable: stable,
+        activityObserved: activityObserved,
+        transientViewSignatures: transientViewSignatures,
+      );
+    }
     var after = _snapshot();
     final changedAfterStable = _changed(before, after);
     if (changedAfterStable) {
@@ -1510,7 +1553,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
         transientViewSignatures.add(signature);
       }
     }
-    if (changedAfterStable && !_looksTransientActionState(before, after)) {
+    if (completesExpectation(after) ||
+        (changedAfterStable && !_looksTransientActionState(before, after))) {
       sampler.cancel();
       return _ActionSnapshotResult(
         snapshot: after,
@@ -1538,7 +1582,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
       after = _snapshot();
       if (_changed(before, after)) {
         activityObserved = true;
-        if (!_looksTransientActionState(before, after)) {
+        if (completesExpectation(after) ||
+            !_looksTransientActionState(before, after)) {
           sampler.cancel();
           return _ActionSnapshotResult(
             snapshot: after,
@@ -1568,6 +1613,18 @@ extension _RuntimeActions on FlutterScoutRuntime {
       transientViewSignatures: transientViewSignatures,
       waitTimedOut: !stable || WidgetsBinding.instance.hasScheduledFrame,
     );
+  }
+
+  bool _actionExpectationMet(
+    ScoutSnapshot snapshot,
+    Map<String, String> params,
+  ) {
+    return _hasWaitConditions(params, prefix: 'expect') &&
+        _waitForConditionsMet(
+          snapshot: snapshot,
+          params: params,
+          prefix: 'expect',
+        );
   }
 
   bool _looksTransientActionState(ScoutSnapshot before, ScoutSnapshot current) {
