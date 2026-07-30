@@ -128,22 +128,38 @@ class ScoutSnapshot {
 
   ScoutNode? findNode(String target) {
     final normalized = target.trim();
+    final nodes = [...interactables, ...fields, ...textTargets];
     if (normalized.startsWith('row.')) {
       final rowTarget = _rowHandleTarget(normalized);
       if (rowTarget != null && rowTarget != normalized) {
-        for (final node in [...interactables, ...fields, ...textTargets]) {
-          if (node.matches(rowTarget)) return node;
-        }
+        final rowNode = _findBestNode(nodes, rowTarget);
+        if (rowNode != null) return rowNode;
       }
     }
-    for (final node in [...interactables, ...fields, ...textTargets]) {
-      if (node.matches(target)) return node;
-    }
+    final directNode = _findBestNode(nodes, normalized);
+    if (directNode != null) return directNode;
     final rowTarget = _rowHandleTarget(target);
     if (rowTarget != null && rowTarget != target) {
-      for (final node in [...interactables, ...fields, ...textTargets]) {
-        if (node.matches(rowTarget)) return node;
-      }
+      return _findBestNode(nodes, rowTarget);
+    }
+    return null;
+  }
+
+  /// Strong selectors must win globally before aliases or fuzzy suffixes are
+  /// considered, even when the exact node appears later in tree order.
+  ScoutNode? _findBestNode(List<ScoutNode> nodes, String target) {
+    final normalized = target.trim();
+    for (final node in nodes) {
+      if (node.id == normalized) return node;
+    }
+    for (final node in nodes) {
+      if (node.fallbackId == normalized) return node;
+    }
+    for (final node in nodes) {
+      if (node.key == normalized) return node;
+    }
+    for (final node in nodes) {
+      if (node.matches(normalized)) return node;
     }
     return null;
   }
@@ -168,10 +184,7 @@ class ScoutSnapshot {
   }
 
   ScoutNode? findField(String target) {
-    for (final node in fields) {
-      if (node.matches(target)) return node;
-    }
-    return null;
+    return _findBestNode(fields, target);
   }
 
   Map<String, Object?> summaryJson() {
