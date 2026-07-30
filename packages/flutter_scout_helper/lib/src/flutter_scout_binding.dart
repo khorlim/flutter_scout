@@ -286,6 +286,18 @@ class FlutterScoutRuntime {
   @visibleForTesting
   Future<void> debugDispatchTap(Offset point) => _dispatchTap(point);
 
+  /// Test-only: resolve and dispatch a handle-targeted tap through the same
+  /// service-extension handler used by the CLI.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugTapTarget(String target) async {
+    final response = await _handleTap('debugTapTarget', {
+      'target': target,
+      'waitMs': '0',
+      'lateWaitMs': '0',
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
   Future<Map<String, Object?>> debugActionCapturePayload() =>
       _withActionCapture(
         const {'capture': 'true'},
