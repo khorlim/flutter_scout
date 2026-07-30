@@ -741,7 +741,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
             target: target,
           );
         }
-        final start = _scrollStartFor(current, direction);
+        final start = _scrollStartFor(current, direction, target: node);
         if (start == null) {
           final after = _snapshot();
           return _scrollToFailure(
@@ -838,12 +838,18 @@ extension _RuntimeActions on FlutterScoutRuntime {
     _ => 'up',
   };
 
-  /// Center of the largest visible scrollable whose major axis matches the
-  /// scroll direction, used as the drag origin for [_handleScrollTo].
-  Offset? _scrollStartFor(ScoutSnapshot snapshot, String direction) {
+  /// Center of the visible scrollable most likely to contain [target], used as
+  /// the drag origin for [_handleScrollTo]. When the target is already built
+  /// but clipped, its cross-axis geometry disambiguates side-by-side and nested
+  /// scrollables. Lazy targets without geometry retain the largest-scrollable
+  /// fallback.
+  Offset? _scrollStartFor(
+    ScoutSnapshot snapshot,
+    String direction, {
+    ScoutNode? target,
+  }) {
     final vertical = direction == 'down' || direction == 'up';
-    Rect? best;
-    var bestArea = 0.0;
+    final candidates = <({Rect rect, bool axisMatch, double area})>[];
     for (final scrollable in snapshot.scrollables) {
       final visible = scrollable['visibleRect'];
       final raw = visible is List ? visible : scrollable['rect'];
@@ -855,19 +861,70 @@ extension _RuntimeActions on FlutterScoutRuntime {
         (raw[3] as num).toDouble(),
       );
       if (rect.width <= 0 || rect.height <= 0) continue;
-      // Prefer a scrollable oriented along the requested axis when its shape
-      // makes the axis obvious; otherwise fall back to largest visible area.
-      final axisMatch = vertical
-          ? rect.height >= rect.width * 0.6
-          : rect.width >= rect.height * 0.6;
-      final area = rect.width * rect.height * (axisMatch ? 1.0 : 0.25);
-      if (area > bestArea) {
-        bestArea = area;
-        best = rect;
-      }
+      final declaredAxis = scrollable['axis']?.toString();
+      final axisMatch = declaredAxis == null
+          ? (vertical
+                ? rect.height >= rect.width * 0.6
+                : rect.width >= rect.height * 0.6)
+          : vertical
+          ? declaredAxis == 'vertical'
+          : declaredAxis == 'horizontal';
+      candidates.add((
+        rect: rect,
+        axisMatch: axisMatch,
+        area: rect.width * rect.height,
+      ));
     }
-    if (best == null) return null;
-    return best.center;
+    if (candidates.isEmpty) return null;
+
+    final axisCandidates = candidates
+        .where((candidate) => candidate.axisMatch)
+        .toList(growable: false);
+    final pool = axisCandidates.isEmpty ? candidates : axisCandidates;
+    final targetRect = target?.rect;
+    if (targetRect != null) {
+      ({Rect rect, bool axisMatch, double area})? bestAligned;
+      var bestContainsCenter = false;
+      var bestOverlapRatio = -1.0;
+      for (final candidate in pool) {
+        final scrollStart = vertical ? candidate.rect.left : candidate.rect.top;
+        final scrollEnd = vertical
+            ? candidate.rect.right
+            : candidate.rect.bottom;
+        final targetStart = vertical ? targetRect.left : targetRect.top;
+        final targetEnd = vertical ? targetRect.right : targetRect.bottom;
+        final overlap =
+            math.min(scrollEnd, targetEnd) - math.max(scrollStart, targetStart);
+        if (overlap <= 0) continue;
+        final targetSpan = math.max(1.0, targetEnd - targetStart);
+        final overlapRatio = overlap / targetSpan;
+        final targetCenter = vertical
+            ? targetRect.center.dx
+            : targetRect.center.dy;
+        final containsCenter =
+            targetCenter >= scrollStart && targetCenter <= scrollEnd;
+        final isBetter =
+            bestAligned == null ||
+            (containsCenter && !bestContainsCenter) ||
+            (containsCenter == bestContainsCenter &&
+                overlapRatio > bestOverlapRatio + 0.001) ||
+            (containsCenter == bestContainsCenter &&
+                (overlapRatio - bestOverlapRatio).abs() <= 0.001 &&
+                candidate.area < bestAligned.area);
+        if (isBetter) {
+          bestAligned = candidate;
+          bestContainsCenter = containsCenter;
+          bestOverlapRatio = overlapRatio;
+        }
+      }
+      if (bestAligned != null) return bestAligned.rect.center;
+    }
+
+    final best = pool.reduce(
+      (current, candidate) =>
+          candidate.area > current.area ? candidate : current,
+    );
+    return best.rect.center;
   }
 
   developer.ServiceExtensionResponse _scrollToResult({
