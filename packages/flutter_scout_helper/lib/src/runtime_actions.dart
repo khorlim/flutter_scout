@@ -24,6 +24,21 @@ extension _RuntimeActions on FlutterScoutRuntime {
         point = Offset(x, y);
       }
 
+      if (node != null && node.visibleFraction > 0 && !node.hitTestable) {
+        return _fail(
+          'target_not_found',
+          'Target `$target` matched `${node.id}` but is not hit-testable at its suggested tap point. It may be obscured by an overlay or blocked by another widget.',
+          extra: {
+            'reason': 'target_not_hit_testable',
+            'target': node.toJson(),
+            if (before.activeSurface != null)
+              'activeSurface': before.activeSurface,
+            'hint':
+                'Inspect the active surface and tap one of its hit-testable controls, or dismiss it before retrying `$target`.',
+          },
+        );
+      }
+
       if (point == null) {
         if (node != null && node.visibleFraction == 0) {
           return _fail(

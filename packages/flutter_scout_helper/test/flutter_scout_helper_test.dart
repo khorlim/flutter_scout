@@ -1122,6 +1122,71 @@ void main() {
     expect(ids, isNot(contains('btn.open_payment')));
   });
 
+  testWidgets('tap rejects a background target blocked by a modal barrier', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    var saveCount = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              Center(
+                child: ElevatedButton(
+                  onPressed: () => saveCount++,
+                  child: const Text('Save'),
+                ),
+              ),
+              const Positioned.fill(
+                child: ModalBarrier(dismissible: true, color: Colors.black26),
+              ),
+              const Center(
+                child: Material(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text('Confirm change'),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final backgroundSave = runtime.debugSnapshot().findNode('btn.save');
+    expect(backgroundSave, isNotNull);
+    expect(backgroundSave!.hitTestable, isFalse);
+
+    final result = (await tester.runAsync(
+      () => runtime.debugTapTarget('btn.save'),
+    ))!;
+    expect(result, containsPair('ok', false));
+    expect(
+      result['error'],
+      allOf(
+        isA<Map<String, Object?>>(),
+        containsPair('code', 'target_not_found'),
+      ),
+    );
+    expect(result, containsPair('reason', 'target_not_hit_testable'));
+    expect(
+      result['target'],
+      allOf(isA<Map<String, Object?>>(), containsPair('hitTestable', false)),
+    );
+    expect(
+      result['activeSurface'],
+      allOf(
+        isA<Map<String, Object?>>(),
+        containsPair('label', 'Confirm change'),
+      ),
+    );
+    expect(saveCount, 0);
+  });
+
   testWidgets('Scout chrome is excluded from inspect output', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(
