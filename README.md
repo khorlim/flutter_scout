@@ -191,7 +191,8 @@ curl "localhost:$(cat /tmp/scout.port)/v1/call" \
 
 While a session’s daemon is active, ordinary `flutter-scout inspect` and action commands automatically proxy through it. Agents can keep using the normal CLI syntax without paying a new VM/WebSocket connection cost for each command.
 
-Use `flutter-scout version`, `flutter-scout help <command>`, and
+Use `flutter-scout version`, `flutter-scout help <command>` (or
+`flutter-scout <command> --help`), and
 `flutter-scout doctor` to verify the CLI identity, protocol compatibility, and
 resolved helper package before debugging an app.
 

@@ -406,6 +406,26 @@ void main() {
     expect(exitCode, 0);
   });
 
+  test('command-scoped help does not dispatch the command', () async {
+    await _withTempCwd(() async {
+      final exitCode = await FlutterScoutCli().run(['reload', '--help']);
+
+      expect(exitCode, 0);
+      expect(File('.flutter_scout/events.jsonl').existsSync(), isFalse);
+    });
+  });
+
+  test('command-scoped help does not require a named session', () async {
+    final exitCode = await FlutterScoutCli().run([
+      '--app',
+      'missing-session',
+      'reload',
+      '-h',
+    ]);
+
+    expect(exitCode, 0);
+  });
+
   test(
     'explore once prints persistent-mode setup without serving forever',
     () async {
