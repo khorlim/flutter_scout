@@ -1615,6 +1615,96 @@ void main() {
     expect(result['transientViewSignatures'], isNotEmpty);
   });
 
+  testWidgets(
+    'met action expectation ends transient-state tracking without a timeout',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      var status = 'Idle';
+      late StateSetter update;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return Scaffold(
+                body: Column(
+                  children: [
+                    Text(status),
+                    if (status == 'Ready') ...[
+                      const Text('Loading'),
+                      const CircularProgressIndicator(),
+                    ],
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      late Timer resetTimer;
+      final result = await tester.runAsync(
+        () => FlutterScoutHelper.debugRuntime.debugTrackAction(
+          () async {
+            Timer(const Duration(milliseconds: 80), () {
+              update(() => status = 'Ready');
+              unawaited(tester.pump());
+            });
+            resetTimer = Timer(const Duration(seconds: 2), () {
+              update(() => status = 'Idle');
+              unawaited(tester.pump());
+            });
+          },
+          waitMs: 600,
+          lateWaitMs: 600,
+          params: const {'expectText': 'Ready'},
+        ),
+      );
+      resetTimer.cancel();
+
+      expect(result!['changed'], isTrue);
+      expect(result['stable'], isFalse);
+      expect(result['waitTimedOut'], isFalse);
+    },
+  );
+
+  testWidgets('pre-existing expectation waits for action activity', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    var status = 'Ready';
+    late StateSetter update;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            update = setState;
+            return Scaffold(body: Text(status));
+          },
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final result = await tester.runAsync(
+      () => FlutterScoutHelper.debugRuntime.debugTrackAction(
+        () async {
+          Timer(const Duration(milliseconds: 80), () {
+            update(() => status = 'Done');
+            unawaited(tester.pump());
+          });
+        },
+        waitMs: 200,
+        lateWaitMs: 400,
+        params: const {'expectText': 'Ready'},
+      ),
+    );
+
+    expect(result!['changed'], isTrue);
+    expect(result['waitTimedOut'], isFalse);
+  });
+
   testWidgets('wait-for conditions match visible text case-insensitively', (
     tester,
   ) async {

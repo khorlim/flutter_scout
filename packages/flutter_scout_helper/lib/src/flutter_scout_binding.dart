@@ -285,10 +285,12 @@ class FlutterScoutRuntime {
     Future<void> Function() action, {
     int waitMs = 600,
     int lateWaitMs = 600,
+    Map<String, String> params = const {},
   }) async {
     final before = _snapshot();
     await action();
     final tracked = await _snapshotAfterAction(before, {
+      ...params,
       'waitMs': '$waitMs',
       'lateWaitMs': '$lateWaitMs',
     });
@@ -301,6 +303,8 @@ class FlutterScoutRuntime {
           : tracked.activityObserved
           ? 'completed_same_state'
           : 'activated_no_observed_change',
+      'stable': tracked.stable,
+      'waitTimedOut': tracked.waitTimedOut,
       'transientViewSignatures': tracked.transientViewSignatures,
     };
   }
