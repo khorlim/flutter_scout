@@ -1274,6 +1274,61 @@ void main() {
     expect(scrollables.first['axis'], 'vertical');
   });
 
+  testWidgets('scroll-to starts in the scrollable aligned with its target', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 300,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 400,
+                  child: SingleChildScrollView(
+                    key: const ValueKey('large_background'),
+                    child: const SizedBox(height: 1000),
+                  ),
+                ),
+                const Spacer(),
+                SizedBox(
+                  width: 240,
+                  child: SingleChildScrollView(
+                    key: const ValueKey('target_panel'),
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 700),
+                        ElevatedButton(
+                          onPressed: () {},
+                          child: const Text('Deep target'),
+                        ),
+                        const SizedBox(height: 300),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final targetPanel = tester.getRect(
+      find.byKey(const ValueKey('target_panel')),
+    );
+    final origin = FlutterScoutHelper.debugRuntime.debugScrollStartFor(
+      'down',
+      target: 'btn.deep_target',
+    );
+
+    expect(origin, isNotNull);
+    expect(targetPanel.contains(origin!), isTrue);
+  });
+
   testWidgets(
     'held drag supports reversal before pointer-up and records path',
     (tester) async {

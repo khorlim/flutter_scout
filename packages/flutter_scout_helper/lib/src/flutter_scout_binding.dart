@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -268,6 +269,17 @@ class FlutterScoutRuntime {
 
   @visibleForTesting
   ScoutSnapshot debugSnapshot() => _snapshot();
+
+  /// Test-only: resolve the drag origin that `scroll-to` would use.
+  @visibleForTesting
+  Offset? debugScrollStartFor(String direction, {String? target}) {
+    final snapshot = _snapshot();
+    return _scrollStartFor(
+      snapshot,
+      direction,
+      target: target == null ? null : snapshot.findNode(target),
+    );
+  }
 
   /// Test-only: dispatch a synthetic tap exactly as agent actions do,
   /// including the chrome-transparency window.
