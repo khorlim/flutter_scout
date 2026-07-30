@@ -2391,6 +2391,38 @@ void main() {
     expect(snapshot.findNode('settings')?.id, node.id);
   });
 
+  testWidgets('exact handles take precedence over another node alternate id', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              CupertinoButton(
+                onPressed: () {},
+                child: Semantics(
+                  label: 'Account',
+                  child: const Icon(Icons.settings),
+                ),
+              ),
+              CupertinoButton(onPressed: () {}, child: const Text('Settings')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    final account = snapshot.interactables.firstWhere(
+      (node) => node.id == 'btn.account',
+    );
+    expect(account.altIds, contains('btn.settings'));
+    expect(snapshot.findNode('btn.settings')?.id, 'btn.settings');
+  });
+
   testWidgets('set-of-marks suppresses overlapping badges and filters', (
     tester,
   ) async {
