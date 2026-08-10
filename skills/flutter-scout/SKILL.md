@@ -57,6 +57,10 @@ Address named sessions from any directory with `--app <name>`. Use
 `flutter-scout apps` for live entries, `apps --all` for missing entries, and
 `apps --prune` to remove stale registry entries.
 
+Inside an app project, commands reuse its sole current named session when there
+is no default session. If several named sessions exist, Scout refuses to guess;
+use `--app <name>` consistently.
+
 Check `status` when ownership is unclear. Stop every Scout-owned run when done:
 
 ```bash
@@ -116,14 +120,30 @@ coordinates only after handle/text targeting cannot express the action.
 ## After code edits
 
 ```bash
-flutter-scout reload
-flutter-scout restart
+flutter-scout --app <task-slug> reload
+flutter-scout --app <task-slug> restart
 ```
 
 Read `sourceVerification`: `verified` compares changed Dart files on disk with
 the VM's loaded source; `mismatch` is a hard failure; `partially_verified`
 lists scripts the VM did not expose. Native/plugin/pubspec changes require a
 fresh launch.
+
+If reload is rejected, do not clear the session or relaunch immediately. Use
+this recovery ladder:
+
+1. Run `flutter-scout --app <task-slug> status`.
+2. If `appReachable:true` or `running:true`, keep the existing app and inspect
+   the reload error; it is still running the previous code.
+3. Run the same named `ensure` to repair/reuse the session when ownership or the
+   saved VM URI is unclear.
+4. If the VM URI is known, reattach that same named session explicitly. Scout
+   preserves ownership only when the URI matches its verified owned run.
+5. Use restart when Scout still owns the Flutter tool and Dart state must reset.
+6. Use a fresh launch only when the app is dead or native/plugin/pubspec changes
+   require rebuilding.
+
+Never use `stop --clear-session` solely because a Dart reload was rejected.
 
 ## Fast exploratory loops
 
