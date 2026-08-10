@@ -577,6 +577,42 @@ void main() {
       expect(await cli.run(['--app', 'nope', 'status']), 1);
     });
 
+    test('commands reuse the sole named session from its project', () async {
+      await _withTempCwd(() async {
+        final named = Directory(
+          p.join('.flutter_scout', 'sessions', 'feature-a'),
+        )..createSync(recursive: true);
+        File(p.join(named.path, 'session_meta.json')).writeAsStringSync(
+          jsonEncode({
+            'mode': 'attach_only',
+            'state': 'ready',
+            'name': 'feature-a',
+          }),
+        );
+
+        expect(await FlutterScoutCli().run(['status']), 0);
+        expect(File(p.join(named.path, 'events.jsonl')).existsSync(), isTrue);
+        expect(
+          File(p.join('.flutter_scout', 'events.jsonl')).existsSync(),
+          isFalse,
+        );
+      });
+    });
+
+    test('commands refuse to guess between named sessions', () async {
+      await _withTempCwd(() async {
+        for (final name in const ['feature-a', 'feature-b']) {
+          final named = Directory(p.join('.flutter_scout', 'sessions', name))
+            ..createSync(recursive: true);
+          File(p.join(named.path, 'session_meta.json')).writeAsStringSync(
+            jsonEncode({'mode': 'attach_only', 'state': 'ready', 'name': name}),
+          );
+        }
+
+        expect(await FlutterScoutCli().run(['status']), 1);
+      });
+    });
+
     test('apps hides missing sessions and can prune them', () async {
       final temp = await Directory.systemTemp.createTemp('scout_apps_');
       addTearDown(() => temp.delete(recursive: true));

@@ -642,17 +642,46 @@ Future<void> main() async {
     final wsUri = discovered.uri!;
     _ensureSessionDir();
     File(_vmUriFile).writeAsStringSync(wsUri);
-    _writeSessionMeta({
-      'mode': 'attach_only',
-      'vmServiceUri': wsUri,
-      if (parsed.option('device') != null) 'device': parsed.option('device'),
-      'createdAt': DateTime.now().toIso8601String(),
-    });
+    final previousMeta = _readSessionMeta();
+    final previousPid =
+        _readPid() ?? int.tryParse('${previousMeta?['pid'] ?? ''}');
+    final ownedLogUri = _discoverVmUriFromScoutLog();
+    final preservesOwnedRun =
+        previousPid != null &&
+        await _looksLikeScoutFlutterRun(previousPid) &&
+        ownedLogUri != null &&
+        _normalizeVmUri(ownedLogUri) == _normalizeVmUri(wsUri);
+    final now = DateTime.now().toIso8601String();
+    if (preservesOwnedRun) {
+      File(_pidFile).writeAsStringSync('$previousPid');
+      _writeSessionMeta({
+        ...?previousMeta,
+        'mode': 'scout_owned_flutter_run',
+        'state': 'ready',
+        'vmServiceUri': wsUri,
+        'pid': previousPid,
+        if (parsed.option('device') != null) 'device': parsed.option('device'),
+        'createdAt': previousMeta?['createdAt'] ?? now,
+        'updatedAt': now,
+      });
+      await _ensureVmLogListenerForCurrentSession(wsUri);
+    } else {
+      _writeSessionMeta({
+        'mode': 'attach_only',
+        'state': 'ready',
+        'vmServiceUri': wsUri,
+        if (parsed.option('device') != null) 'device': parsed.option('device'),
+        'createdAt': now,
+        'updatedAt': now,
+      });
+    }
     final output = <String, Object?>{
       'attached': true,
       'reusedRunningApp': true,
       'vmServiceUri': wsUri,
       'appStatePreserved': true,
+      'attachOnly': !preservesOwnedRun,
+      if (preservesOwnedRun) 'sessionOwnershipPreserved': true,
     };
     final device = parsed.option('device');
     if (device != null && device.isNotEmpty) {
@@ -929,6 +958,19 @@ Future<void> main() async {
   Future<Map<String, Object?>> _statusPayload() async {
     final vmUri = _readVmUri();
     if (vmUri == null) {
+      final recovered = await _recoverMissingOwnedVmUri();
+      if (recovered != null) {
+        return {
+          'running': true,
+          'vmServiceUri': recovered.uri,
+          'missingVmServiceUriRestored': true,
+          'refreshSource': recovered.source,
+          if (_readDevice() != null) 'device': _readDevice(),
+          if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
+          'session': _sessionModeInfo(),
+          'hotUpdate': await _hotUpdateCapability(recovered.uri),
+        };
+      }
       final meta = _readSessionMeta();
       final recordedOwner = int.tryParse('${meta?['pid'] ?? ''}');
       if (meta?['mode'] == 'scout_owned_flutter_run' &&

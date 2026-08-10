@@ -164,6 +164,9 @@ For exploratory agent loops after setup, `flutter-scout explore --once` prints t
 `ensure`, `launch`, and `attach` report `ready` when they connect to or start a VM service. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
 
 After setup, run `flutter-scout status` when session ownership is unclear. The `hotUpdate` object reports whether reload can use the VM service and whether restart can signal a Scout-owned Flutter run. Scout-owned reload/restart wait for Flutter-tool acknowledgement, and restart requires a new helper runtime before returning. If Flutter moves the VM service after hot restart, `status` refreshes the saved URI. Attach-only sessions can inspect and act but must use VM reload or the owning Flutter terminal/IDE for restart.
+From the app project, Scout automatically selects the sole current named
+session when no default session exists. If multiple names are current, pass
+`--app <name>` so Scout never targets the wrong app.
 
 ## Troubleshooting
 
@@ -172,12 +175,14 @@ After setup, run `flutter-scout status` when session ownership is unclear. The `
 - `helper_extension_missing`: the VM service is reachable but Flutter Scout was not registered; add the helper initializer shown in `expected`.
 - `helper_extension_check_failed`: retry `status` and `inspect`; if `inspect` works, the app is reachable and the readiness check likely raced startup. If `inspect` fails, relaunch or fix the reported helper initializer.
 - `hot_restart_unavailable`: start or reconnect through `flutter-scout ensure --device <simulator-id> --project <path>` so Scout owns the Flutter tool process, or perform a normal relaunch.
-- `reload_sources_failed` or `reload_rejected`: VM reload was rejected and the app is likely still running previous code; use the owning Flutter terminal/IDE hot reload, or relaunch/start a Scout-owned `ensure`/`launch` session.
+- `reload_sources_failed` or `reload_rejected`: VM reload was rejected and the app is likely still running previous code. Check the same named session with `status`; if it remains reachable, preserve it and retry through its Scout-owned Flutter tool or owning terminal. Relaunch only when the app is dead or the change requires rebuilding.
 - `vm_reload_unavailable`: the attached session cannot hot reload through VM service; use the owning Flutter terminal/IDE, use a Scout-owned `ensure`/`launch` session, or relaunch after non-Dart changes.
 - `helperProtocol.status:"stale_or_old_helper"`: the CLI is newer than the helper extension running inside the attached app. Package/global CLI updates do not change code already loaded in a human-started Flutter process; hot reload/restart or relaunch the app from the owning Flutter terminal or IDE so it loads the updated `flutter_scout_helper`.
 - `logs` returns `source:"attach_only_session"` and `available:false`: Scout is attached to a VS Code/Cursor/terminal-owned Flutter run. Scout can inspect and act, but cannot read the owner console logs. Use the owning console, run `flutter logs` separately, or start through `flutter-scout ensure`/`launch` when Scout should own log capture.
 - `logs --contains` returns `matched:0`: Scout read a non-empty Scout-owned log, but no line matched the filter. Use a broader filter or add app-side logging for the event you need.
 - `staleRefreshed:true`: the saved VM service URL was stale, but Scout discovered and saved the current URI; continue with `inspect` or actions.
+- `missingVmServiceUriRestored:true`: the URI file was missing, but Scout recovered it from the verified owned run log and kept the existing app.
+- `session_selection_required`: more than one named session exists in this project; rerun with `--app <name>`.
 - `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable and Scout could not discover a replacement; run `attach` or `launch` again.
 - `device_not_found`: pass an exact device ID or name from `flutter devices`.
 - `flutter_scout_helper_not_registered`: add `flutter_scout_helper` and call `FlutterScoutBinding.ensureInitialized()` before `runApp`, or `FlutterScoutHelper.ensureRegistered()` after an existing debug binding.

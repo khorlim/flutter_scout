@@ -49,6 +49,7 @@ the shell; command groups are `extension`s.
 |------|----------------|
 | `flutter_scout_cli.dart` | `run()` dispatch, `_call`/`_connect`, device resolution, VM-uri discovery, session-file IO, process inspection, usage. Top-level `_sessionDir` getters. |
 | `cli_session.dart` | Transactional launch / attach / ensure / status / doctor / stop: isolated named runtime directories, per-run logs, launch locks/joining, atomic metadata, and temporary-helper bootstrap lifecycle. |
+| `cli_session_recovery.dart` | Safe implicit selection of a sole named session plus recovery of missing owned-run process/VM metadata. |
 | `cli_annotations.dart` | `bounds`, `annotations` command + crop materialization (cache keyed by capture identity, native fallback). |
 | `cli_actions.dart` | tap, input, tap-text, long-press, fill, wait, reload/restart, scroll/swipe/scroll-to, back, deeplink, logs, guarded capture/error options. |
 | `cli_capture.dart` | screenshot / crop, `_inAppCapture`, `_cropPngBytes`. |

@@ -78,6 +78,9 @@ Each name owns a separate runtime directory and every launch owns a unique run
 log. Concurrent `ensure` calls for the same name join the active build instead
 of starting a second `flutter run`. A direct second `launch` fails clearly; use
 `launch --replace` only when replacing the ready run is intentional.
+From the app project, session commands automatically reuse the sole current
+named session when no default session exists. When several named sessions are
+available, Scout refuses to guess and asks for `--app <name>`.
 
 Use `launch` when you explicitly need Scout to start a fresh Flutter run:
 
@@ -235,6 +238,10 @@ When `logs --contains <text>` finds no matching lines in a non-empty Scout-owned
 For attach-only sessions started by VS Code, Cursor, or another terminal, `logs` reports `source:"attach_only_session"` with `available:false`; Scout can still inspect and act through the VM service, but the owning process keeps the console logs. Start with `flutter-scout ensure` or `flutter-scout launch` when Scout should own log capture.
 
 Use `status` before hot updates when the session origin is unclear. It reports `hotUpdate.reload` and `hotUpdate.restart` capability, including whether restart requires the owning Flutter terminal/IDE or a Scout-owned run. If a hot restart moves the VM service to a new port, `status` tries to refresh a stale saved URI from the latest Scout-owned log or simulator log marker and reports `staleRefreshed:true` when it rewrites the session.
+If a Scout-owned run is still alive but its saved VM URI was removed, `status`
+recovers the URI and ownership from that run's scoped log instead of reporting
+an unattached session. An explicit reattach to the URI recorded by the same
+owned run also preserves restart and log-capture ownership.
 
 Collect a shareable run bundle:
 

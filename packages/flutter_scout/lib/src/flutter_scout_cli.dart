@@ -14,6 +14,7 @@ part 'cli_batch.dart';
 part 'cli_serve.dart';
 part 'cli_models.dart';
 part 'cli_session.dart';
+part 'cli_session_recovery.dart';
 part 'cli_annotations.dart';
 part 'cli_actions.dart';
 part 'cli_capture.dart';
@@ -25,6 +26,7 @@ class FlutterScoutCli {
   static const String packageVersion = '1.2.0';
   static String? _sessionDirectoryOverride;
   String? _activeCommandId;
+  String? _implicitlySelectedSessionName;
 
   /// Test-only override for the session registry path, so tests never touch
   /// the real `~/.flutter_scout/registry.json`.
@@ -272,6 +274,7 @@ class FlutterScoutCli {
 
     final previousSessionDirectory = _sessionDirectoryOverride;
     final previousCommandId = _activeCommandId;
+    final previousImplicitSessionName = _implicitlySelectedSessionName;
     final commandStartedAt = DateTime.now().toUtc();
     final commandStopwatch = Stopwatch()..start();
     final commandId =
@@ -346,6 +349,7 @@ class FlutterScoutCli {
       _registerScoutSession(requestedName, _sessionDirectoryOverride!);
     }
     try {
+      _selectImplicitNamedSession(command);
       if (!_reuseVmConnection &&
           _commandsEligibleForServeProxy.contains(command)) {
         final proxied = await _tryProxyToActiveServe(effectiveArgs);
@@ -447,6 +451,7 @@ class FlutterScoutCli {
         });
       }
       _activeCommandId = previousCommandId;
+      _implicitlySelectedSessionName = previousImplicitSessionName;
       _sessionDirectoryOverride = previousSessionDirectory;
     }
   }
@@ -1674,6 +1679,8 @@ print(String(data: data, encoding: .utf8)!)
       'createdAt': ?meta?['createdAt'],
       'updatedAt': ?meta?['updatedAt'],
       'logFile': ?meta?['logFile'],
+      if (_implicitlySelectedSessionName != null)
+        'implicitlySelectedName': _implicitlySelectedSessionName,
     };
   }
 
