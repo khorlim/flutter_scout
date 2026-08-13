@@ -1958,8 +1958,6 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   bool _sameRowText(List<ScoutNode> a, List<ScoutNode> b) {
     final aLabels = {for (final node in a) ?node.label?.trim().toLowerCase()};
     final bLabels = {for (final node in b) ?node.label?.trim().toLowerCase()};
-    aLabels.remove(null);
-    bLabels.remove(null);
     return aLabels.isNotEmpty &&
         aLabels.length == bLabels.length &&
         aLabels.containsAll(bLabels);
