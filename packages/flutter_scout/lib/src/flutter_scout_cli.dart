@@ -15,6 +15,7 @@ part 'cli_serve.dart';
 part 'cli_models.dart';
 part 'cli_session.dart';
 part 'cli_session_recovery.dart';
+part 'cli_supervisor.dart';
 part 'cli_annotations.dart';
 part 'cli_actions.dart';
 part 'cli_capture.dart';
@@ -103,6 +104,17 @@ class FlutterScoutCli {
   /// Test-only view of hot-update availability for the current session.
   Future<Map<String, Object?>> debugHotUpdateCapability(String vmUri) =>
       _hotUpdateCapability(vmUri);
+
+  /// Test-only launchd configuration for a supervised Flutter worker.
+  String debugLaunchdRunnerPlist({
+    required String label,
+    required String configFile,
+    required String outputFile,
+  }) => _launchdRunnerPlist(
+    label: label,
+    configFile: configFile,
+    outputFile: outputFile,
+  );
 
   /// Test-only session-safe VM URI selection from mixed log output.
   String? debugPreferredVmUriFromLogText(String text) =>
@@ -1477,24 +1489,6 @@ print(String(data: data, encoding: .utf8)!)
     return const <Object?>[];
   }
 
-  List<StreamSubscription<ProcessSignal>> _installLaunchSignalHandlers(
-    Process process,
-  ) {
-    void stopProcess(ProcessSignal signal) {
-      process.kill();
-      _deleteFileIfExists(_pidFile);
-      _writeProgress('stopped_child_process', {
-        'signal': signal.toString(),
-        'pid': process.pid,
-      });
-    }
-
-    return [
-      ProcessSignal.sigint.watch().listen(stopProcess),
-      ProcessSignal.sigterm.watch().listen(stopProcess),
-    ];
-  }
-
   void _writeProgress(String phase, [Map<String, Object?> data = const {}]) {
     stderr.writeln(
       jsonEncode({
@@ -1674,6 +1668,23 @@ print(String(data: data, encoding: .utf8)!)
     return null;
   }
 
+  Map<String, dynamic>? _readSessionConfiguredJson(String key) {
+    final configured = _readSessionMeta()?[key]?.toString();
+    if (configured == null ||
+        configured.isEmpty ||
+        !p.isWithin(_sessionDir.path, configured)) {
+      return null;
+    }
+    final file = File(configured);
+    if (!file.existsSync()) return null;
+    try {
+      final decoded = jsonDecode(file.readAsStringSync());
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Map<String, Object?> _sessionModeInfo() {
     final meta = _readSessionMeta();
     final pid = _readPid();
@@ -1687,6 +1698,9 @@ print(String(data: data, encoding: .utf8)!)
       'createdAt': ?meta?['createdAt'],
       'updatedAt': ?meta?['updatedAt'],
       'logFile': ?meta?['logFile'],
+      'supervisor': ?meta?['supervisor'],
+      'supervisorState': ?_readSessionConfiguredJson('supervisorStateFile'),
+      'lastRunnerExit': ?_readSessionConfiguredJson('exitFile'),
       'previousMode': ?meta?['previousMode'],
       'ownershipLossReason': ?meta?['ownershipLossReason'],
       'ownershipLostAt': ?meta?['ownershipLostAt'],
