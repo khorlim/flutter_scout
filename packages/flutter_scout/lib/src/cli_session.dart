@@ -768,6 +768,8 @@ Future<void> main() async {
       if (ready.ready) {
         _ensureSessionDir();
         File(_vmUriFile).writeAsStringSync(discovered.uri!);
+        await _reconcileReachableSessionOwnership(discovered.uri!);
+        final ownershipLost = _sessionOwnershipWasLost();
         final pid = _readPid();
         final scoutOwned = pid != null && await _looksLikeScoutFlutterRun(pid);
         final previousMeta = _readSessionMeta();
@@ -785,6 +787,15 @@ Future<void> main() async {
                   'logFile': _logFile,
                   'device': ?device,
                   'createdAt': previousMeta?['createdAt'] ?? now,
+                  'updatedAt': now,
+                }
+              : ownershipLost
+              ? {
+                  ...?previousMeta,
+                  'mode': 'attach_only',
+                  'state': 'ready',
+                  'vmServiceUri': discovered.uri,
+                  'device': ?device,
                   'updatedAt': now,
                 }
               : {
@@ -813,6 +824,9 @@ Future<void> main() async {
             'ready': true,
             'vmServiceUri': discovered.uri,
             'device': ?device,
+            'attachOnly': !scoutOwned,
+            if (ownershipLost) 'sessionOwnershipLost': true,
+            'hotUpdate': await _hotUpdateCapability(discovered.uri!),
           }),
         );
         return 0;
@@ -990,10 +1004,14 @@ Future<void> main() async {
     }
     final stale = await _validateVmUri(vmUri);
     if (stale.ok) {
+      await _reconcileReachableSessionOwnership(vmUri);
+      final ownershipLost = _sessionOwnershipWasLost();
       await _ensureVmLogListenerForCurrentSession(vmUri);
       return {
         'running': true,
+        'appReachable': true,
         'vmServiceUri': vmUri,
+        if (ownershipLost) 'sessionOwnershipLost': true,
         if (_readDevice() != null) 'device': _readDevice(),
         if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
         'session': _sessionModeInfo(),
@@ -1002,12 +1020,16 @@ Future<void> main() async {
     }
     final refreshed = await _refreshStaleVmUri(staleUri: vmUri);
     if (refreshed != null) {
+      await _reconcileReachableSessionOwnership(refreshed.uri);
+      final ownershipLost = _sessionOwnershipWasLost();
       return {
         'running': true,
+        'appReachable': true,
         'vmServiceUri': refreshed.uri,
         'staleVmServiceUri': vmUri,
         'staleRefreshed': true,
         'refreshSource': refreshed.source,
+        if (ownershipLost) 'sessionOwnershipLost': true,
         if (_readDevice() != null) 'device': _readDevice(),
         if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
         'session': _sessionModeInfo(),

@@ -63,7 +63,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
-      return _respondWithExpectation(params, {
+      return await _respondWithExpectation(params, {
         'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
         'stable': stable,
         'result': _tapResult(
@@ -161,7 +161,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
-      return _respondWithExpectation(params, {
+      return await _respondWithExpectation(params, {
         'action': 'tap-text $text',
         'stable': stable,
         'result': _tapResult(
@@ -354,7 +354,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       _setEditableText(editable, value);
       final stable = await _waitStableForAction(params);
       final after = _snapshot();
-      return _respondWithExpectation(params, {
+      return await _respondWithExpectation(params, {
         'action': 'input ${target ?? 'focused'}',
         'stable': stable,
         'result': _changed(before, after) ? 'changed' : 'unchanged',
@@ -469,7 +469,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
 
       final stable = await _waitStableForAction(params);
       final after = _snapshot();
-      return _respondWithExpectation(params, {
+      return await _respondWithExpectation(params, {
         'action': 'fill',
         'stable': stable,
         'filled': filled,
@@ -494,7 +494,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     try {
       final direction = params['direction'] ?? 'down';
       final distance = double.tryParse(params['distance'] ?? '') ?? 280;
-      return _drag(
+      return await _drag(
         action: 'scroll $direction',
         direction: direction,
         distance: distance,
@@ -513,7 +513,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     try {
       final direction = params['direction'] ?? 'left';
       final distance = double.tryParse(params['distance'] ?? '') ?? 320;
-      return _drag(
+      return await _drag(
         action: 'swipe $direction',
         direction: direction,
         distance: distance,

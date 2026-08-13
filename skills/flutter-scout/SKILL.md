@@ -135,13 +135,16 @@ this recovery ladder:
 1. Run `flutter-scout --app <task-slug> status`.
 2. If `appReachable:true` or `running:true`, keep the existing app and inspect
    the reload error; it is still running the previous code.
+   If `sessionOwnershipLost:true` or
+   `ownershipLossReason:owner_process_exited`, the app is inspectable but the
+   original Flutter compiler process is gone, so Dart edits cannot be reloaded.
 3. Run the same named `ensure` to repair/reuse the session when ownership or the
    saved VM URI is unclear.
 4. If the VM URI is known, reattach that same named session explicitly. Scout
    preserves ownership only when the URI matches its verified owned run.
 5. Use restart when Scout still owns the Flutter tool and Dart state must reset.
-6. Use a fresh launch only when the app is dead or native/plugin/pubspec changes
-   require rebuilding.
+6. Use a fresh launch only when the app is dead, ownership was lost, or
+   native/plugin/pubspec changes require rebuilding.
 
 Never use `stop --clear-session` solely because a Dart reload was rejected.
 

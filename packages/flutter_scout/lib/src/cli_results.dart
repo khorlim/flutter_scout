@@ -878,6 +878,27 @@ extension _CliResults on FlutterScoutCli {
     }
 
     if (!fullRestart) {
+      final ownershipLossReason = _readSessionMeta()?['ownershipLossReason']
+          ?.toString();
+      if (ownershipLossReason == 'owner_process_exited') {
+        return {
+          'ok': false,
+          'action': action,
+          'method': 'unavailable_after_owner_process_exit',
+          'freshLaunchRequired': true,
+          'appReachable': before != null,
+          'state': 'running_app_without_flutter_tool_owner',
+          'error': {
+            'code': 'hot_reload_unavailable_owner_exited',
+            'message':
+                'The original Scout-owned Flutter runner exited. The app is still inspectable, but it can no longer compile Dart edits for hot reload.',
+          },
+          'nextBestActions': [
+            'Keep using inspect and actions against the currently running app when previous code is sufficient',
+            'Use flutter-scout launch --replace --device <sim-id> --project <path> when a fresh Scout-owned run is acceptable',
+          ],
+        };
+      }
       return _vmServiceReload(started: started, before: before);
     }
 

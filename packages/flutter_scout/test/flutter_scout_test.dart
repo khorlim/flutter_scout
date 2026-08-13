@@ -91,6 +91,71 @@ void main() {
     });
   });
 
+  test(
+    'reachable session records when its Scout owner process exited',
+    () async {
+      await _withTempCwd(() async {
+        final sessionDir = Directory('.flutter_scout')..createSync();
+        File(
+          p.join(sessionDir.path, 'flutter.pid'),
+        ).writeAsStringSync('2147483646');
+        File(p.join(sessionDir.path, 'session_meta.json')).writeAsStringSync(
+          jsonEncode({
+            'mode': 'scout_owned_flutter_run',
+            'state': 'ready',
+            'pid': 2147483646,
+            'name': 'receipt-layout',
+          }),
+        );
+
+        final cli = FlutterScoutCli();
+        expect(
+          await cli.debugReconcileReachableSessionOwnership(
+            'ws://127.0.0.1:1/test/ws',
+          ),
+          isTrue,
+        );
+
+        final meta =
+            jsonDecode(
+                  File(
+                    p.join(sessionDir.path, 'session_meta.json'),
+                  ).readAsStringSync(),
+                )
+                as Map<String, dynamic>;
+        expect(meta['mode'], 'attach_only');
+        expect(meta['previousMode'], 'scout_owned_flutter_run');
+        expect(meta['ownershipLossReason'], 'owner_process_exited');
+        expect(meta.containsKey('pid'), isFalse);
+        expect(
+          File(p.join(sessionDir.path, 'flutter.pid')).existsSync(),
+          isFalse,
+        );
+
+        final hotUpdate = await cli.debugHotUpdateCapability(
+          'ws://127.0.0.1:1/test/ws',
+        );
+        expect(hotUpdate['ownershipLost'], isTrue);
+        expect((hotUpdate['reload'] as Map)['available'], isFalse);
+        expect((hotUpdate['reload'] as Map)['preservesState'], isFalse);
+        expect(
+          (hotUpdate['reload'] as Map)['method'],
+          'unavailable_after_owner_process_exit',
+        );
+
+        expect(
+          await cli.debugReconcileReachableSessionOwnership(
+            'ws://127.0.0.1:1/test/ws',
+          ),
+          isFalse,
+          reason: 'subsequent status checks should keep the recorded diagnosis',
+        );
+
+        expect(await cli.run(['reload']), 1);
+      });
+    },
+  );
+
   test('command journal redacts sensitive arguments', () async {
     await _withTempCwd(() async {
       final exitCode = await FlutterScoutCli().run([
@@ -437,51 +502,47 @@ void main() {
     },
   );
 
-  test(
-    'attach fails fast against an unresponsive vm service',
-    () async {
-      // A socket that completes the WebSocket handshake but never answers a
-      // VM-service RPC reproduces the dead-DDS state that used to make
-      // launch/ensure/attach hang indefinitely at 0% CPU. Attach must give up
-      // quickly instead of blocking forever.
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      final sockets = <WebSocket>[];
-      server.listen((request) async {
-        if (WebSocketTransformer.isUpgradeRequest(request)) {
-          sockets.add(await WebSocketTransformer.upgrade(request));
-          // Intentionally never respond to any RPC.
-        } else {
-          request.response.statusCode = HttpStatus.badRequest;
-          await request.response.close();
-        }
-      });
-      addTearDown(() async {
-        for (final socket in sockets) {
-          await socket.close();
-        }
-        await server.close(force: true);
-      });
+  test('attach fails fast against an unresponsive vm service', () async {
+    // A socket that completes the WebSocket handshake but never answers a
+    // VM-service RPC reproduces the dead-DDS state that used to make
+    // launch/ensure/attach hang indefinitely at 0% CPU. Attach must give up
+    // quickly instead of blocking forever.
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final sockets = <WebSocket>[];
+    server.listen((request) async {
+      if (WebSocketTransformer.isUpgradeRequest(request)) {
+        sockets.add(await WebSocketTransformer.upgrade(request));
+        // Intentionally never respond to any RPC.
+      } else {
+        request.response.statusCode = HttpStatus.badRequest;
+        await request.response.close();
+      }
+    });
+    addTearDown(() async {
+      for (final socket in sockets) {
+        await socket.close();
+      }
+      await server.close(force: true);
+    });
 
-      await _withTempCwd(() async {
-        final uri = 'ws://127.0.0.1:${server.port}/zombie/ws';
-        final stopwatch = Stopwatch()..start();
-        final exitCode = await FlutterScoutCli().run([
-          'attach',
-          '--debug-url',
-          uri,
-        ]);
-        stopwatch.stop();
+    await _withTempCwd(() async {
+      final uri = 'ws://127.0.0.1:${server.port}/zombie/ws';
+      final stopwatch = Stopwatch()..start();
+      final exitCode = await FlutterScoutCli().run([
+        'attach',
+        '--debug-url',
+        uri,
+      ]);
+      stopwatch.stop();
 
-        expect(exitCode, 1);
-        expect(
-          stopwatch.elapsed,
-          lessThan(const Duration(seconds: 30)),
-          reason: 'attach should fail fast, not hang, on a dead vm service',
-        );
-      });
-    },
-    timeout: const Timeout(Duration(seconds: 45)),
-  );
+      expect(exitCode, 1);
+      expect(
+        stopwatch.elapsed,
+        lessThan(const Duration(seconds: 30)),
+        reason: 'attach should fail fast, not hang, on a dead vm service',
+      );
+    });
+  }, timeout: const Timeout(Duration(seconds: 45)));
 
   group('batch script parsing', () {
     test('splitBatchScript splits on ; and newlines outside quotes', () {
@@ -988,15 +1049,13 @@ void main() {
     expect(result['error'], containsPair('code', 'blocking_errors_observed'));
   });
 
-  test(
-    'temporary helper setup leaves tracked inputs unchanged',
-    () async {
-      final temp = await Directory.systemTemp.createTemp(
-        'scout_temporary_helper_',
-      );
-      addTearDown(() => temp.delete(recursive: true));
-      final pubspec = File(p.join(temp.path, 'pubspec.yaml'))
-        ..writeAsStringSync('''
+  test('temporary helper setup leaves tracked inputs unchanged', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'scout_temporary_helper_',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+    final pubspec = File(p.join(temp.path, 'pubspec.yaml'))
+      ..writeAsStringSync('''
 name: temporary_scout_app
 environment:
   sdk: ^3.12.0
@@ -1004,49 +1063,47 @@ dependencies:
   flutter:
     sdk: flutter
 ''');
-      final mainFile = File(p.join(temp.path, 'lib', 'main.dart'));
-      mainFile.parent.createSync(recursive: true);
-      mainFile.writeAsStringSync('''
+    final mainFile = File(p.join(temp.path, 'lib', 'main.dart'));
+    mainFile.parent.createSync(recursive: true);
+    mainFile.writeAsStringSync('''
 import 'package:flutter/widgets.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const SizedBox());
 }
 ''');
-      final originalPubspec = pubspec.readAsBytesSync();
-      final helperPath = p.normalize(
-        p.join(Directory.current.path, '..', 'flutter_scout_helper'),
-      );
+    final originalPubspec = pubspec.readAsBytesSync();
+    final helperPath = p.normalize(
+      p.join(Directory.current.path, '..', 'flutter_scout_helper'),
+    );
 
-      final cli = FlutterScoutCli();
-      final setup = await cli.debugPrepareTemporaryHelper(
-        project: temp.path,
-        helperPath: helperPath,
-      );
+    final cli = FlutterScoutCli();
+    final setup = await cli.debugPrepareTemporaryHelper(
+      project: temp.path,
+      helperPath: helperPath,
+    );
 
-      expect(pubspec.readAsBytesSync(), originalPubspec);
-      expect(File(p.join(temp.path, 'pubspec.lock')).existsSync(), isFalse);
-      expect(File(setup['targetPath']!.toString()).existsSync(), isTrue);
-      expect(
-        File(
-          p.join(temp.path, '.dart_tool', 'package_config.json'),
-        ).readAsStringSync(),
-        contains('flutter_scout_helper'),
-      );
+    expect(pubspec.readAsBytesSync(), originalPubspec);
+    expect(File(p.join(temp.path, 'pubspec.lock')).existsSync(), isFalse);
+    expect(File(setup['targetPath']!.toString()).existsSync(), isTrue);
+    expect(
+      File(
+        p.join(temp.path, '.dart_tool', 'package_config.json'),
+      ).readAsStringSync(),
+      contains('flutter_scout_helper'),
+    );
 
-      final cleanup = await cli.debugCleanupTemporaryHelper(setup);
-      expect(cleanup['targetRemoved'], isTrue);
-      expect(cleanup['packageConfigRestored'], isTrue);
-      expect(File(p.join(temp.path, 'pubspec.lock')).existsSync(), isFalse);
-      expect(
-        File(
-          p.join(temp.path, '.dart_tool', 'package_config.json'),
-        ).readAsStringSync(),
-        isNot(contains('flutter_scout_helper')),
-      );
-    },
-    timeout: const Timeout(Duration(minutes: 2)),
-  );
+    final cleanup = await cli.debugCleanupTemporaryHelper(setup);
+    expect(cleanup['targetRemoved'], isTrue);
+    expect(cleanup['packageConfigRestored'], isTrue);
+    expect(File(p.join(temp.path, 'pubspec.lock')).existsSync(), isFalse);
+    expect(
+      File(
+        p.join(temp.path, '.dart_tool', 'package_config.json'),
+      ).readAsStringSync(),
+      isNot(contains('flutter_scout_helper')),
+    );
+  }, timeout: const Timeout(Duration(minutes: 2)));
 
   test('compact held-drag output keeps position and path progress', () {
     final cli = FlutterScoutCli();

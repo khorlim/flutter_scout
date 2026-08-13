@@ -8,6 +8,10 @@ outside the app worktree and is addressable with global `--app`.
 capability, and persistent transport. A stale VM URI is refreshed from owned
 logs when possible. If it cannot be refreshed, Scout marks the session stopped,
 terminates its verified VM log listener, and clears stale runtime files.
+If the app remains reachable after its Scout-owned Flutter runner exits,
+`status` reclassifies the session as attach-only and reports
+`ownershipLossReason: owner_process_exited`. The app remains available for
+inspection and actions, but Dart edits require a fresh Scout-owned launch.
 When the URI file is missing but a verified Scout-owned run remains alive,
 `status` restores it from that run's scoped log. From the app project, commands
 also select the sole current named session automatically; multiple candidates
@@ -39,6 +43,11 @@ build setting, or pubspec requires relaunch.
 A rejected reload does not mean the app died. Check `status`, reuse/repair the
 same named session, and reserve `stop --clear-session` plus relaunch for a dead
 run or a rebuild-requiring change.
+
+When `status` reports ownership loss, `ensure` preserves the running app and
+the ownership-loss diagnosis instead of claiming Scout still owns it. Use
+`launch --replace` only when replacing that app with a fresh reload-capable run
+is acceptable.
 
 Always stop Scout-owned sessions. Verify the reported Flutter PID and listener
 PID are gone; do not kill unrelated IDE or human-owned Flutter processes.

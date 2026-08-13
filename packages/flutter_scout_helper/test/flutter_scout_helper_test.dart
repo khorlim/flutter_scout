@@ -147,11 +147,9 @@ void main() {
 
     expect(runtime.removeAnnotation('ann_001'), isTrue, reason: 'removed');
     expect(runtime.removeAnnotation('ann_404'), isFalse, reason: 'notFound');
-    expect(
-      runtime.debugAnnotations.map((annotation) => annotation.id),
-      ['ann_002'],
-      reason: 'untargeted pins must survive',
-    );
+    expect(runtime.debugAnnotations.map((annotation) => annotation.id), [
+      'ann_002',
+    ], reason: 'untargeted pins must survive');
 
     runtime.debugAnnotations.clear();
   });
