@@ -37,4 +37,8 @@ jobs:
           flutter test
 
       - name: Formatting
-        run: dart format --set-exit-if-changed packages/flutter_scout/lib packages/flutter_scout/test packages/flutter_scout_helper/lib packages/flutter_scout_helper/test
+        run: |
+          dart format --set-exit-if-changed packages/flutter_scout/lib packages/flutter_scout/test packages/flutter_scout_helper/lib packages/flutter_scout_helper/test || {
+            git diff -- packages/flutter_scout/test/flutter_scout_test.dart packages/flutter_scout_helper/test/flutter_scout_helper_test.dart
+            exit 1
+          }
