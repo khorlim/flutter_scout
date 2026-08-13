@@ -127,4 +127,55 @@ extension _CliSessionRecovery on FlutterScoutCli {
     await _ensureVmLogListenerForCurrentSession(uri);
     return _DiscoveredVmUri(uri: uri, source: 'scout_owned_log');
   }
+
+  Future<bool> _reconcileReachableSessionOwnership(String vmUri) async {
+    final meta = _readSessionMeta();
+    if (meta?['mode'] != 'scout_owned_flutter_run') return false;
+
+    var ownerPid = _readPid() ?? int.tryParse('${meta?['pid'] ?? ''}');
+    if (ownerPid != null && await _looksLikeScoutFlutterRun(ownerPid)) {
+      return false;
+    }
+
+    final project = meta?['project']?.toString();
+    if (project != null && project.isNotEmpty) {
+      ownerPid = await _findScoutFlutterToolPid(
+        project: project,
+        instanceName: meta?['name']?.toString(),
+      );
+      if (ownerPid != null && await _looksLikeScoutFlutterRun(ownerPid)) {
+        File(_pidFile).writeAsStringSync('$ownerPid');
+        _writeSessionMeta({...?meta, 'pid': ownerPid});
+        return false;
+      }
+    }
+
+    final listenerPid = _readVmLogListenerPid();
+    if (listenerPid != null &&
+        await _looksLikeScoutVmLogListener(listenerPid)) {
+      Process.killPid(listenerPid);
+    }
+    _deleteFileIfExists(_pidFile);
+    _deleteFileIfExists(_vmLogListenerPidFile);
+
+    final now = DateTime.now().toUtc().toIso8601String();
+    final reconciled =
+        <String, Object?>{
+            ...?meta,
+            'mode': 'attach_only',
+            'state': 'ready',
+            'previousMode': 'scout_owned_flutter_run',
+            'ownershipLossReason': 'owner_process_exited',
+            'ownershipLostAt': now,
+            'vmServiceUri': vmUri,
+            'updatedAt': now,
+          }
+          ..remove('pid')
+          ..remove('vmLogListenerPid');
+    _writeSessionMeta(reconciled);
+    return true;
+  }
+
+  bool _sessionOwnershipWasLost() =>
+      _readSessionMeta()?['ownershipLossReason'] == 'owner_process_exited';
 }

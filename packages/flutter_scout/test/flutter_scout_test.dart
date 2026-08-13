@@ -91,6 +91,71 @@ void main() {
     });
   });
 
+  test(
+    'reachable session records when its Scout owner process exited',
+    () async {
+      await _withTempCwd(() async {
+        final sessionDir = Directory('.flutter_scout')..createSync();
+        File(
+          p.join(sessionDir.path, 'flutter.pid'),
+        ).writeAsStringSync('2147483646');
+        File(p.join(sessionDir.path, 'session_meta.json')).writeAsStringSync(
+          jsonEncode({
+            'mode': 'scout_owned_flutter_run',
+            'state': 'ready',
+            'pid': 2147483646,
+            'name': 'receipt-layout',
+          }),
+        );
+
+        final cli = FlutterScoutCli();
+        expect(
+          await cli.debugReconcileReachableSessionOwnership(
+            'ws://127.0.0.1:1/test/ws',
+          ),
+          isTrue,
+        );
+
+        final meta =
+            jsonDecode(
+                  File(
+                    p.join(sessionDir.path, 'session_meta.json'),
+                  ).readAsStringSync(),
+                )
+                as Map<String, dynamic>;
+        expect(meta['mode'], 'attach_only');
+        expect(meta['previousMode'], 'scout_owned_flutter_run');
+        expect(meta['ownershipLossReason'], 'owner_process_exited');
+        expect(meta.containsKey('pid'), isFalse);
+        expect(
+          File(p.join(sessionDir.path, 'flutter.pid')).existsSync(),
+          isFalse,
+        );
+
+        final hotUpdate = await cli.debugHotUpdateCapability(
+          'ws://127.0.0.1:1/test/ws',
+        );
+        expect(hotUpdate['ownershipLost'], isTrue);
+        expect((hotUpdate['reload'] as Map)['available'], isFalse);
+        expect((hotUpdate['reload'] as Map)['preservesState'], isFalse);
+        expect(
+          (hotUpdate['reload'] as Map)['method'],
+          'unavailable_after_owner_process_exit',
+        );
+
+        expect(
+          await cli.debugReconcileReachableSessionOwnership(
+            'ws://127.0.0.1:1/test/ws',
+          ),
+          isFalse,
+          reason: 'subsequent status checks should keep the recorded diagnosis',
+        );
+
+        expect(await cli.run(['reload']), 1);
+      });
+    },
+  );
+
   test('command journal redacts sensitive arguments', () async {
     await _withTempCwd(() async {
       final exitCode = await FlutterScoutCli().run([

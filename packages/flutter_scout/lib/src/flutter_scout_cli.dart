@@ -96,6 +96,14 @@ class FlutterScoutCli {
     ),
   );
 
+  /// Test-only ownership reconciliation for a reachable VM service.
+  Future<bool> debugReconcileReachableSessionOwnership(String vmUri) =>
+      _reconcileReachableSessionOwnership(vmUri);
+
+  /// Test-only view of hot-update availability for the current session.
+  Future<Map<String, Object?>> debugHotUpdateCapability(String vmUri) =>
+      _hotUpdateCapability(vmUri);
+
   /// Test-only session-safe VM URI selection from mixed log output.
   String? debugPreferredVmUriFromLogText(String text) =>
       _preferredVmUriFromLogText(text);
@@ -1679,6 +1687,9 @@ print(String(data: data, encoding: .utf8)!)
       'createdAt': ?meta?['createdAt'],
       'updatedAt': ?meta?['updatedAt'],
       'logFile': ?meta?['logFile'],
+      'previousMode': ?meta?['previousMode'],
+      'ownershipLossReason': ?meta?['ownershipLossReason'],
+      'ownershipLostAt': ?meta?['ownershipLostAt'],
       if (_implicitlySelectedSessionName != null)
         'implicitlySelectedName': _implicitlySelectedSessionName,
     };
@@ -1697,26 +1708,40 @@ print(String(data: data, encoding: .utf8)!)
   Future<Map<String, Object?>> _hotUpdateCapability(String vmUri) async {
     final pid = _readPid();
     final scoutOwned = pid != null && await _looksLikeScoutFlutterRun(pid);
+    final meta = _readSessionMeta();
+    final ownershipLossReason = meta?['ownershipLossReason']?.toString();
+    final ownershipLost = ownershipLossReason == 'owner_process_exited';
     final listenerPid = await _pidForListeningVmPort(vmUri);
     return {
       'reload': {
-        'available': true,
-        'method': scoutOwned
+        'available': !ownershipLost,
+        'method': ownershipLost
+            ? 'unavailable_after_owner_process_exit'
+            : scoutOwned
             ? 'sigusr1_hot_reload'
             : 'vm_service_reload_sources',
-        'preservesState': true,
+        'preservesState': !ownershipLost,
       },
       'restart': {
         'available': scoutOwned,
-        'method': scoutOwned
+        'method': ownershipLost
+            ? 'unavailable_after_owner_process_exit'
+            : scoutOwned
             ? 'sigusr2_hot_restart'
             : 'unavailable_without_scout_owned_flutter_run',
         'requiresScoutOwnedRun': true,
       },
       'attachOnly': !scoutOwned,
+      if (ownershipLost) 'ownershipLost': true,
+      if (ownershipLost) 'ownershipLossReason': ownershipLossReason,
       'scoutPid': ?pid,
       'vmServiceListenerPid': ?listenerPid,
-      'nextBestActions': scoutOwned
+      'nextBestActions': ownershipLost
+          ? const [
+              'The original Scout-owned Flutter runner exited; the app remains inspectable but cannot compile Dart edits',
+              'Use flutter-scout launch --replace --device <sim-id> --project <path> when a fresh Scout-owned run is acceptable',
+            ]
+          : scoutOwned
           ? const [
               'Use flutter-scout reload for Dart-only edits',
               'Use flutter-scout restart when Dart state must reset',
