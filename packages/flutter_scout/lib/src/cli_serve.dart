@@ -342,7 +342,7 @@ extension _CliServe on FlutterScoutCli {
           for (final value in decoded['args'] as List) value.toString(),
         ..._typedParamsToArgs(decoded['params']),
       ];
-      return _runCapturedArgs(argv);
+      return await _runCapturedArgs(argv);
     } catch (error) {
       return {
         'exitCode': 1,
