@@ -1325,6 +1325,11 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
     expect(plist, contains('/tmp/scout &amp; runner/config.json'));
     expect(plist, contains('/tmp/scout &lt;runner&gt;/output.txt'));
     expect(plist, contains('<key>PATH</key>'));
+    expect(
+      plist,
+      contains('<key>ProcessType</key>\n  <string>Interactive</string>'),
+    );
+    expect(plist, isNot(contains('<string>Background</string>')));
     expect(plist, isNot(contains('<key>KeepAlive</key>\n  <true/>')));
   });
 

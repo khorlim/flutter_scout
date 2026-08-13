@@ -151,7 +151,7 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
     <false/>
   </dict>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Interactive</string>
   <key>ThrottleInterval</key>
   <integer>2</integer>
   <key>StandardOutPath</key>
