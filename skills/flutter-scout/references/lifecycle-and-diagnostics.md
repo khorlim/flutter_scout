@@ -8,6 +8,13 @@ outside the app worktree and is addressable with global `--app`.
 capability, and persistent transport. A stale VM URI is refreshed from owned
 logs when possible. If it cannot be refreshed, Scout marks the session stopped,
 terminates its verified VM log listener, and clears stale runtime files.
+For Scout-owned macOS launches, `status` also reports the per-run `launchd`
+supervisor, its current worker state, and the last recorded Flutter-tool exit.
+The supervisor survives terminal or agent cleanup and restarts an abnormally
+lost worker. If the Flutter process survived, the new worker adopts it instead
+of launching a duplicate. A normal Flutter-tool exit is recorded and returns a
+successful supervisor result, so it does not create a relaunch loop or reset
+the app unexpectedly. Other platforms retain the detached-worker fallback.
 If the app remains reachable after its Scout-owned Flutter runner exits,
 `status` reclassifies the session as attach-only and reports
 `ownershipLossReason: owner_process_exited`. The app remains available for
@@ -50,4 +57,6 @@ the ownership-loss diagnosis instead of claiming Scout still owns it. Use
 is acceptable.
 
 Always stop Scout-owned sessions. Verify the reported Flutter PID and listener
-PID are gone; do not kill unrelated IDE or human-owned Flutter processes.
+PID are gone; do not kill unrelated IDE or human-owned Flutter processes. On
+macOS, `stop` first unloads the exact trusted `launchd` service identity, then
+terminates the verified Flutter process.

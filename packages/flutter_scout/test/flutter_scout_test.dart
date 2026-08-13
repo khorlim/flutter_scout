@@ -1305,6 +1305,66 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
       isNot(contains('seq=538')),
     );
   });
+
+  test('launchd runner plist restarts only an abnormally lost worker', () {
+    final plist = FlutterScoutCli().debugLaunchdRunnerPlist(
+      label: 'dev.flutter-scout.runner.test',
+      configFile: '/tmp/scout & runner/config.json',
+      outputFile: '/tmp/scout <runner>/output.txt',
+    );
+
+    expect(plist, contains('<string>dev.flutter-scout.runner.test</string>'));
+    expect(plist, contains('<key>RunAtLoad</key>\n  <true/>'));
+    expect(
+      plist,
+      contains(
+        '<key>KeepAlive</key>\n  <dict>\n'
+        '    <key>SuccessfulExit</key>\n    <false/>',
+      ),
+    );
+    expect(plist, contains('/tmp/scout &amp; runner/config.json'));
+    expect(plist, contains('/tmp/scout &lt;runner&gt;/output.txt'));
+    expect(plist, contains('<key>PATH</key>'));
+    expect(plist, isNot(contains('<key>KeepAlive</key>\n  <true/>')));
+  });
+
+  test('supervised worker records Flutter exit without requesting relaunch', () async {
+    await _withTempCwd(() async {
+      final runDirectory = Directory('run')..createSync();
+      final config = File(p.join(runDirectory.path, 'worker.json'));
+      final exitFile = File(p.join(runDirectory.path, 'exit.json'));
+      final stateFile = File(p.join(runDirectory.path, 'state.json'));
+      config.writeAsStringSync(
+        jsonEncode({
+          'project': Directory.current.path,
+          'flutterExecutable': '/bin/sh',
+          'flutterArgs': ['-c', 'exit 7'],
+          'logFile': p.join(runDirectory.path, 'flutter.log'),
+          'runId': 'test-run',
+          'exitFile': exitFile.path,
+          'stateFile': stateFile.path,
+          'persistentConfig': true,
+          'supervised': true,
+        }),
+      );
+
+      final result = await FlutterScoutCli().run([
+        'flutter-run-worker',
+        '--config',
+        config.path,
+      ]);
+
+      expect(result, 0);
+      expect(config.existsSync(), isTrue);
+      final exit = jsonDecode(exitFile.readAsStringSync()) as Map;
+      final state = jsonDecode(stateFile.readAsStringSync()) as Map;
+      expect(exit['exitCode'], 7);
+      expect(exit['flutterPid'], isA<int>());
+      expect(state['launchCount'], 1);
+      expect(state['workerExitingNormally'], isTrue);
+      expect(state['exitCode'], 7);
+    });
+  });
 }
 
 Future<void> _withTempCwd(Future<void> Function() body) async {

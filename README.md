@@ -78,6 +78,13 @@ Each name owns a separate runtime directory and every launch owns a unique run
 log. Concurrent `ensure` calls for the same name join the active build instead
 of starting a second `flutter run`. A direct second `launch` fails clearly; use
 `launch --replace` only when replacing the ready run is intentional.
+On macOS, Scout places its Flutter worker under a per-run `launchd` agent, so
+closing the launching terminal or losing the agent process does not normally
+remove hot reload/restart ownership. The supervisor restarts only an abnormally
+lost worker; a normal Flutter-tool exit is recorded and is not relaunched. A
+replacement worker adopts a still-running Flutter process instead of starting
+a duplicate. `status` exposes `supervisor`, `supervisorState`, and
+`lastRunnerExit` diagnostics.
 From the app project, session commands automatically reuse the sole current
 named session when no default session exists. When several named sessions are
 available, Scout refuses to guess and asks for `--app <name>`.
@@ -281,6 +288,11 @@ Stop a Scout-owned launch process:
 ```bash
 dart run bin/flutter_scout.dart stop --clear-session
 ```
+
+On macOS this first unloads the exact per-run `launchd` agent, then terminates
+the verified Flutter process. Do not unload Scout launch agents manually; the
+session identity checks in `stop` prevent unrelated services from being
+targeted.
 
 ## Current Limits
 

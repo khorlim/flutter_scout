@@ -37,6 +37,7 @@ extension _CliSession on FlutterScoutCli {
     if (!projectDir.existsSync()) {
       throw ScoutCliException('project_missing', 'Project not found: $project');
     }
+    final previousSessionMeta = _readSessionMeta();
     final existingVmUri = _readVmUri();
     if (existingVmUri != null && (await _validateVmUri(existingVmUri)).ok) {
       if (!parsed.flag('replace')) {
@@ -54,6 +55,10 @@ extension _CliSession on FlutterScoutCli {
       name: parsed.option('name'),
     );
     try {
+      // A normally exited macOS worker leaves an inactive launchd job loaded.
+      // Once this launch owns the session lease, unload the previous exact job
+      // before replacing its metadata with the new run.
+      await _stopRunnerSupervisor(previousSessionMeta);
       final instanceName = parsed.option('name');
       if (instanceName != null && instanceName.isNotEmpty) {
         // Session files live in the cwd; register it so `--app <name>` can
@@ -151,24 +156,58 @@ extension _CliSession on FlutterScoutCli {
         launchLease.runId,
         'flutter_worker.json',
       );
+      final workerExitFile = p.join(
+        _sessionDir.path,
+        'runs',
+        launchLease.runId,
+        'flutter_exit.json',
+      );
+      final supervisorOutputFile = p.join(
+        _sessionDir.path,
+        'runs',
+        launchLease.runId,
+        'supervisor.txt',
+      );
+      final supervisorStateFile = p.join(
+        _sessionDir.path,
+        'runs',
+        launchLease.runId,
+        'supervisor_state.json',
+      );
+      final flutterExecutable = await _resolveFlutterExecutable();
       File(workerConfigFile).writeAsStringSync(
         jsonEncode({
           'project': project,
+          'flutterExecutable': flutterExecutable,
           'flutterArgs': flutterArgs,
           'logFile': runLogFile,
           'runId': launchLease.runId,
+          'exitFile': workerExitFile,
+          'stateFile': supervisorStateFile,
+          'persistentConfig': Platform.isMacOS,
+          'supervised': Platform.isMacOS,
         }),
       );
-      final process = await Process.start(Platform.resolvedExecutable, [
-        Platform.script.toFilePath(),
-        'flutter-run-worker',
-        '--config',
-        workerConfigFile,
-      ], mode: ProcessStartMode.detached);
+      final supervisor = await _startFlutterRunnerSupervisor(
+        configFile: workerConfigFile,
+        runId: launchLease.runId,
+        outputFile: supervisorOutputFile,
+      );
       File(_deviceFile).writeAsStringSync(resolvedDevice.id);
       _writeDeviceInfo(resolvedDevice);
-      File(_pidFile).writeAsStringSync(process.pid.toString());
-      final signalSubscriptions = _installLaunchSignalHandlers(process);
+      final initialWorkerPid = supervisor.workerPid;
+      if (initialWorkerPid != null) {
+        File(_pidFile).writeAsStringSync(initialWorkerPid.toString());
+      }
+      _writeSessionMeta({
+        ...?_readSessionMeta(),
+        'supervisor': supervisor.toJson(),
+        'exitFile': workerExitFile,
+        'supervisorStateFile': supervisorStateFile,
+        'workerPid': ?initialWorkerPid,
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+      final signalSubscriptions = _installRunnerSignalHandlers(supervisor);
 
       final lines = <String>[];
       void handleLine(String line) {
@@ -204,7 +243,7 @@ extension _CliSession on FlutterScoutCli {
             if (lines.isNotEmpty) 'lastLine': _compactProgressLine(lines.last),
           });
         }
-        if (!await _processExists(process.pid)) break;
+        if (!await _runnerSupervisorAlive(supervisor)) break;
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
       for (final subscription in signalSubscriptions) {
@@ -212,6 +251,7 @@ extension _CliSession on FlutterScoutCli {
       }
 
       if (vmUri == null) {
+        await _stopRunnerSupervisor({'supervisor': supervisor.toJson()});
         if (temporarySetup != null) {
           await _cleanupTemporaryHelper(temporarySetup);
         }
@@ -224,7 +264,8 @@ extension _CliSession on FlutterScoutCli {
           jsonEncode({
             'launched': false,
             'reason': 'vm_service_uri_not_found',
-            'pid': process.pid,
+            'pid': supervisor.workerPid,
+            'supervisor': supervisor.toJson(),
             'timing': launchTiming.toJson(completedAt: DateTime.now()),
             'tailLogLines': lines.length > 20
                 ? lines.sublist(lines.length - 20)
@@ -241,7 +282,15 @@ extension _CliSession on FlutterScoutCli {
             project: project,
             instanceName: instanceName,
           ) ??
-          process.pid;
+          initialWorkerPid;
+      if (flutterToolPid == null) {
+        await _stopRunnerSupervisor({'supervisor': supervisor.toJson()});
+        throw const ScoutCliException(
+          'flutter_runner_pid_not_found',
+          'The supervised Flutter runner became ready but its process id '
+              'could not be verified.',
+        );
+      }
       File(_pidFile).writeAsStringSync('$flutterToolPid');
       final vmLogListenerPid = await _startVmLogListener(
         vmUri: wsUri,
@@ -255,6 +304,10 @@ extension _CliSession on FlutterScoutCli {
         'name': ?instanceName,
         'pid': flutterToolPid,
         'vmLogListenerPid': ?vmLogListenerPid,
+        'supervisor': supervisor.toJson(),
+        'exitFile': workerExitFile,
+        'supervisorStateFile': supervisorStateFile,
+        'workerPid': ?initialWorkerPid,
         'logFile': runLogFile,
         'project': project,
         'device': resolvedDevice.id,
@@ -277,6 +330,7 @@ extension _CliSession on FlutterScoutCli {
           'project': project,
           'pid': flutterToolPid,
           'vmLogListenerPid': ?vmLogListenerPid,
+          'supervisor': supervisor.toJson(),
           'vmServiceUri': wsUri,
           'logFile': runLogFile,
           'timing': launchTiming.toJson(completedAt: launchTiming.readyAt),
@@ -424,10 +478,15 @@ Future<void> main() async {
     }
     final config = Map<String, dynamic>.from(decoded);
     final project = config['project']?.toString();
+    final flutterExecutable = config['flutterExecutable']?.toString();
     final logFile = config['logFile']?.toString();
+    final exitFile = config['exitFile']?.toString();
+    final stateFile = config['stateFile']?.toString();
     final flutterArgs = config['flutterArgs'];
     if (project == null ||
         project.isEmpty ||
+        flutterExecutable == null ||
+        flutterExecutable.isEmpty ||
         logFile == null ||
         logFile.isEmpty ||
         flutterArgs is! List) {
@@ -445,11 +504,121 @@ Future<void> main() async {
       return writer.write('[$timestamp] [FLUTTER_$stream] $sanitized');
     }
 
+    Map<String, dynamic> readState() {
+      if (stateFile == null || stateFile.isEmpty) return <String, dynamic>{};
+      try {
+        final decoded = jsonDecode(File(stateFile).readAsStringSync());
+        return decoded is Map
+            ? Map<String, dynamic>.from(decoded)
+            : <String, dynamic>{};
+      } catch (_) {
+        return <String, dynamic>{};
+      }
+    }
+
+    void writeState(Map<String, Object?> state) {
+      if (stateFile == null || stateFile.isEmpty) return;
+      final file = File(stateFile);
+      file.parent.createSync(recursive: true);
+      final temporary = File('${file.path}.$pid.tmp');
+      temporary.writeAsStringSync(jsonEncode(state), flush: true);
+      temporary.renameSync(file.path);
+    }
+
+    final previousState = readState();
+    final launchCount = (previousState['launchCount'] as num?)?.toInt() ?? 0;
+    final workerStartedAt = DateTime.now().toUtc().toIso8601String();
+    var supervisorState = <String, Object?>{
+      'runId': ?config['runId']?.toString(),
+      'launchCount': launchCount + 1,
+      'workerPid': pid,
+      'workerStartedAt': workerStartedAt,
+      if (previousState['workerPid'] != null)
+        'previousWorkerPid': previousState['workerPid'],
+      if (previousState['workerStartedAt'] != null)
+        'previousWorkerStartedAt': previousState['workerStartedAt'],
+      if (launchCount > 0)
+        'previousWorkerExitRecorded':
+            previousState['workerExitingNormally'] == true,
+    };
+    writeState(supervisorState);
+
+    final previousFlutterPid = switch (previousState['flutterPid']) {
+      final num value => value.toInt(),
+      final String value => int.tryParse(value),
+      _ => null,
+    };
+    final recoverExistingFlutter =
+        config['supervised'] == true &&
+        launchCount > 0 &&
+        previousState['workerExitingNormally'] != true &&
+        previousFlutterPid != null &&
+        await _looksLikeScoutFlutterRun(previousFlutterPid);
+    if (recoverExistingFlutter) {
+      supervisorState = {
+        ...supervisorState,
+        'flutterPid': previousFlutterPid,
+        'recoveredExistingFlutter': true,
+        'recoveredAt': workerStartedAt,
+      };
+      writeState(supervisorState);
+      String? requestedSignal;
+      final signalSubscriptions = <StreamSubscription<ProcessSignal>>[
+        ProcessSignal.sigusr1.watch().listen(
+          (_) => Process.killPid(previousFlutterPid, ProcessSignal.sigusr1),
+        ),
+        ProcessSignal.sigusr2.watch().listen(
+          (_) => Process.killPid(previousFlutterPid, ProcessSignal.sigusr2),
+        ),
+        ProcessSignal.sigterm.watch().listen((_) {
+          requestedSignal = ProcessSignal.sigterm.toString();
+          Process.killPid(previousFlutterPid);
+        }),
+        ProcessSignal.sigint.watch().listen((_) {
+          requestedSignal = ProcessSignal.sigint.toString();
+          Process.killPid(previousFlutterPid, ProcessSignal.sigint);
+        }),
+      ];
+      try {
+        while (await _processExists(previousFlutterPid)) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
+        final exitedAt = DateTime.now().toUtc().toIso8601String();
+        final exitInfo = <String, Object?>{
+          'runId': ?config['runId']?.toString(),
+          'workerPid': pid,
+          'flutterPid': previousFlutterPid,
+          'requestedSignal': ?requestedSignal,
+          'reason': 'recovered_flutter_process_exited',
+          'exitedAt': exitedAt,
+        };
+        if (exitFile != null && exitFile.isNotEmpty) {
+          final file = File(exitFile);
+          file.parent.createSync(recursive: true);
+          file.writeAsStringSync(jsonEncode(exitInfo), flush: true);
+        }
+        supervisorState = {
+          ...supervisorState,
+          ...exitInfo,
+          'workerExitingNormally': true,
+        };
+        writeState(supervisorState);
+        return 0;
+      } finally {
+        for (final subscription in signalSubscriptions) {
+          await subscription.cancel();
+        }
+        await writer.close();
+      }
+    }
+
     final child = await Process.start(
-      'flutter',
+      flutterExecutable,
       flutterArgs.map((value) => value.toString()).toList(growable: false),
       workingDirectory: project,
     );
+    supervisorState = {...supervisorState, 'flutterPid': child.pid};
+    writeState(supervisorState);
     final outputDrains = <Future<void>>[
       child.stdout
           .transform(utf8.decoder)
@@ -462,6 +631,7 @@ Future<void> main() async {
           .asyncMap((line) => writeLine('STDERR', line))
           .drain<void>(),
     ];
+    String? requestedSignal;
     final signalSubscriptions = <StreamSubscription<ProcessSignal>>[
       ProcessSignal.sigusr1.watch().listen(
         (_) => child.kill(ProcessSignal.sigusr1),
@@ -469,21 +639,52 @@ Future<void> main() async {
       ProcessSignal.sigusr2.watch().listen(
         (_) => child.kill(ProcessSignal.sigusr2),
       ),
-      ProcessSignal.sigterm.watch().listen((_) => child.kill()),
-      ProcessSignal.sigint.watch().listen((_) => child.kill()),
+      ProcessSignal.sigterm.watch().listen((_) {
+        requestedSignal = ProcessSignal.sigterm.toString();
+        child.kill();
+      }),
+      ProcessSignal.sigint.watch().listen((_) {
+        requestedSignal = ProcessSignal.sigint.toString();
+        child.kill(ProcessSignal.sigint);
+      }),
     ];
     try {
       final exitCode = await child.exitCode;
       await Future.wait(outputDrains);
-      return exitCode;
+      final exitedAt = DateTime.now().toUtc().toIso8601String();
+      final exitInfo = <String, Object?>{
+        'runId': ?config['runId']?.toString(),
+        'workerPid': pid,
+        'flutterPid': child.pid,
+        'exitCode': exitCode,
+        'requestedSignal': ?requestedSignal,
+        'exitedAt': exitedAt,
+      };
+      if (exitFile != null && exitFile.isNotEmpty) {
+        final file = File(exitFile);
+        file.parent.createSync(recursive: true);
+        file.writeAsStringSync(jsonEncode(exitInfo), flush: true);
+      }
+      supervisorState = {
+        ...supervisorState,
+        ...exitInfo,
+        'workerExitingNormally': true,
+      };
+      writeState(supervisorState);
+      // launchd restarts the worker only when the worker itself is lost. A
+      // normal Flutter-tool exit is recorded but must not create a relaunch
+      // loop or unexpectedly reset the app.
+      return config['supervised'] == true ? 0 : exitCode;
     } finally {
       for (final subscription in signalSubscriptions) {
         await subscription.cancel();
       }
       await writer.close();
-      try {
-        configFile.deleteSync();
-      } catch (_) {}
+      if (config['persistentConfig'] != true) {
+        try {
+          configFile.deleteSync();
+        } catch (_) {}
+      }
     }
   }
 
@@ -1190,7 +1391,8 @@ Future<void> main() async {
       ..addFlag('clear-session', defaultsTo: false, negatable: false)
       ..addFlag('quiet', defaultsTo: false, negatable: false, hide: true);
     final parsed = parser.parse(args);
-    final serve = _readSessionMeta()?['serve'];
+    final sessionMeta = _readSessionMeta();
+    final serve = sessionMeta?['serve'];
     final servePid = serve is Map
         ? int.tryParse('${serve['pid'] ?? ''}')
         : null;
@@ -1201,6 +1403,7 @@ Future<void> main() async {
         ? null
         : await _pidForListeningVmPort(vmUri);
     final vmLogListenerPid = _readVmLogListenerPid();
+    final supervisorStop = await _stopRunnerSupervisor(sessionMeta);
     var stopped = false;
     var processExisted = false;
     String? pidKillSkippedReason;
@@ -1279,6 +1482,7 @@ Future<void> main() async {
           'vmLogListenerExisted': vmLogListenerExisted,
           'servePid': ?servePid,
           'serveExisted': serveExisted,
+          'supervisor': supervisorStop,
           'stopped': stopped,
           'pidKillSkippedReason': ?pidKillSkippedReason,
           ...vmLogListenerKillSkippedReason,

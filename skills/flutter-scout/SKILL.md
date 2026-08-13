@@ -67,6 +67,12 @@ Check `status` when ownership is unclear. Stop every Scout-owned run when done:
 flutter-scout --app template-save stop --clear-session
 ```
 
+On macOS, Scout-owned `launch`/`ensure` runs use a per-run `launchd`
+supervisor. They normally survive the launching terminal or agent being
+cleaned up, while explicit Ctrl-C during launch and `stop` still cancel the
+exact session. `status` includes supervisor state and the last recorded Flutter
+exit. A normal Flutter exit is diagnostic, not an automatic app relaunch.
+
 ## Inspect
 
 Start with bounded output:
@@ -138,6 +144,8 @@ this recovery ladder:
    If `sessionOwnershipLost:true` or
    `ownershipLossReason:owner_process_exited`, the app is inspectable but the
    original Flutter compiler process is gone, so Dart edits cannot be reloaded.
+   On macOS, also inspect `supervisorState` and `lastRunnerExit`; the supervisor
+   may have adopted a surviving Flutter tool after its worker was replaced.
 3. Run the same named `ensure` to repair/reuse the session when ownership or the
    saved VM URI is unclear.
 4. If the VM URI is known, reattach that same named session explicitly. Scout
