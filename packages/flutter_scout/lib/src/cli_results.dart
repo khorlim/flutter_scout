@@ -1059,8 +1059,16 @@ extension _CliResults on FlutterScoutCli {
       final verified = <String>[];
       final mismatched = <String>[];
       final notLoaded = <String>[];
+      final skipped = <String>[];
       for (final path in changed) {
         final relative = p.relative(path, from: project).replaceAll('\\', '/');
+        if (FlutterScoutCli.isNonRuntimeDartPath(relative)) {
+          // Test sources are never compiled into the running app, so counting
+          // them as notLoaded downgraded every clean reload to
+          // partially_verified and buried the sources that genuinely matter.
+          skipped.add(relative);
+          continue;
+        }
         final candidates = <String>{
           Uri.file(path).toString(),
           ?_packageUriForDartPath(path),
@@ -1093,6 +1101,7 @@ extension _CliResults on FlutterScoutCli {
         'verified': verified,
         'mismatched': mismatched,
         'notLoaded': notLoaded,
+        if (skipped.isNotEmpty) 'skipped': skipped,
       };
     } catch (error) {
       return {'status': 'unavailable', 'reason': error.toString()};

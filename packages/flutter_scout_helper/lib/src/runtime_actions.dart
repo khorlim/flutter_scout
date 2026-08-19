@@ -1723,6 +1723,29 @@ extension _RuntimeActions on FlutterScoutRuntime {
     final start =
         _pointForTarget(params['target'], params, snapshot: before) ??
         _screenCenter();
+    final viewport = _viewportRect();
+    if (!viewport.contains(start)) {
+      // Dispatching here does nothing, and reporting success taught agents to
+      // trust a gesture that never happened. Fail loudly and hand back the
+      // viewport so the caller can fix its coordinate frame — screenshot
+      // pixels are not logical points on a scaled display.
+      return _fail(
+        'gesture_start_outside_viewport',
+        'Gesture start $start is outside the viewport '
+            '${viewport.width}x${viewport.height}. Coordinates are logical '
+            'points with the origin at the top left. Use a target handle, or '
+            'scale screenshot pixels by the device pixel ratio first.',
+        extra: {
+          'gestureStart': [start.dx, start.dy],
+          'viewport': [
+            viewport.left,
+            viewport.top,
+            viewport.width,
+            viewport.height,
+          ],
+        },
+      );
+    }
     final explicitEnd = _pointFromParams(params, prefix: 'to');
     final delta = explicitEnd == null
         ? _dragDelta(direction, distance, scrollGesture: scrollGesture)
@@ -1741,10 +1764,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
           : (changed ? 'changed' : 'unchanged'),
       'gestureStart': [start.dx, start.dy],
       'gestureEnd': [start.dx + delta.dx, start.dy + delta.dy],
-      if (!changed)
-        'unchangedReason': _viewportRect().contains(start)
-            ? 'no_visible_change_after_gesture'
-            : 'gesture_start_outside_viewport',
+      if (!changed) 'unchangedReason': 'no_visible_change_after_gesture',
       'before': before.summaryJson(),
       'after': after.summaryJson(),
       'delta': actionDelta,

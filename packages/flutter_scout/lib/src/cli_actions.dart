@@ -1219,28 +1219,8 @@ extension _CliActions on FlutterScoutCli {
   /// (`[ts] [VM_STDOUT] flutter: msg`). We keep the timestamped VM copy and drop
   /// the bare echo, matched by count so genuinely repeated prints and
   /// startup-only lines (captured before the VM listener attached) survive.
-  List<String> _dedupeVmStdoutEcho(List<String> lines) {
-    final vmTag = RegExp(r'^\[[^\]]*\] \[VM_STD(?:OUT|ERR)\] (.*)$');
-    final vmPayloads = <String, int>{};
-    for (final line in lines) {
-      final match = vmTag.firstMatch(line);
-      if (match != null) {
-        final payload = match.group(1)!;
-        vmPayloads[payload] = (vmPayloads[payload] ?? 0) + 1;
-      }
-    }
-    if (vmPayloads.isEmpty) return lines;
-    final result = <String>[];
-    for (final line in lines) {
-      final remaining = vmPayloads[line];
-      if (remaining != null && remaining > 0) {
-        vmPayloads[line] = remaining - 1;
-        continue;
-      }
-      result.add(line);
-    }
-    return result;
-  }
+  List<String> _dedupeVmStdoutEcho(List<String> lines) =>
+      FlutterScoutCli.dedupeVmStdoutEcho(lines);
 
   Future<void> _tryStreamListen(VmService service, String stream) async {
     try {

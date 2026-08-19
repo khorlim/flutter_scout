@@ -60,3 +60,16 @@ Always stop Scout-owned sessions. Verify the reported Flutter PID and listener
 PID are gone; do not kill unrelated IDE or human-owned Flutter processes. On
 macOS, `stop` first unloads the exact trusted `launchd` service identity, then
 terminates the verified Flutter process.
+
+## Launch timeouts
+
+A launch waits for silence, not for the clock. It gives up after
+`--launch-idle-timeout` seconds without new runner output (default 180) and is
+bounded by `--launch-timeout` (default 1200). Both are accepted by `launch` and
+`ensure`, and `ensure` forwards them to the launch it falls back to.
+
+A cold first iOS or macOS build can spend minutes inside `pod install` without
+printing, which a fixed elapsed-time limit used to kill mid-build. When a launch
+does fail, `failureMode` says which limit ended it: `idle_timeout`,
+`hard_timeout`, or `runner_exited`. Only `runner_exited` means the runner itself
+stopped; for the other two, raise the limit before concluding the build failed.

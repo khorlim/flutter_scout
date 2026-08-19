@@ -1320,6 +1320,69 @@ print(String(data: data, encoding: .utf8)!)
     );
   }
 
+  /// Whether [relativePath] is a Dart file that a running app never loads.
+  ///
+  /// Test and tooling sources change like any other file, but they are not
+  /// compiled into the app, so source verification must not treat their absence
+  /// from the isolate as an unverified reload.
+  static bool isNonRuntimeDartPath(String relativePath) {
+    final normalized = relativePath.replaceAll('\\', '/');
+    if (normalized.endsWith('_test.dart')) return true;
+    const testRoots = {'test', 'integration_test', 'test_driver', 'benchmark'};
+    return normalized.split('/').any((segment) => testRoots.contains(segment));
+  }
+
+  /// Collapses the double-logging of app output into a single copy per line.
+  ///
+  /// App `print`/`dev.log` output reaches the Scout log twice: once as
+  /// `[FLUTTER_STDOUT]` from the Flutter tool and once as `[VM_STDOUT]` from
+  /// Scout's own VM log listener. Only tagged lines are considered, and a
+  /// duplicate is dropped only when a matching payload from the *other* source
+  /// appears within [window] lines, so a message the app genuinely logged twice
+  /// still shows up twice.
+  ///
+  /// Untagged lines are never dropped. They are the continuation lines of a
+  /// multi-line message, and removing them silently truncated log output.
+  /// Exposed for testing without a running app.
+  static List<String> dedupeVmStdoutEcho(
+    List<String> lines, {
+    int window = 200,
+  }) {
+    final tagged = RegExp(r'^\[[^\]]*\] \[(VM|FLUTTER)_STD(?:OUT|ERR)\] (.*)$');
+
+    // Payload -> indexes of still-unmatched Flutter-tool lines carrying it.
+    final pendingFlutter = <String, List<int>>{};
+    final drop = <int>{};
+
+    for (var index = 0; index < lines.length; index++) {
+      final match = tagged.firstMatch(lines[index]);
+      if (match == null) continue;
+      final source = match.group(1)!;
+      final payload = match.group(2)!;
+      if (payload.isEmpty) continue;
+
+      if (source == 'FLUTTER') {
+        (pendingFlutter[payload] ??= <int>[]).add(index);
+        continue;
+      }
+
+      final candidates = pendingFlutter[payload];
+      if (candidates == null || candidates.isEmpty) continue;
+      final origin = candidates.first;
+      if (index - origin > window) continue;
+      candidates.removeAt(0);
+      drop.add(index);
+    }
+
+    if (drop.isEmpty) return lines;
+    final result = <String>[];
+    for (var index = 0; index < lines.length; index++) {
+      if (drop.contains(index)) continue;
+      result.add(lines[index]);
+    }
+    return result;
+  }
+
   /// Finds the simulator matching [requested] (a UDID or device name) within the
   /// `xcrun simctl list devices --json` payload in [jsonOutput].
   ///

@@ -147,9 +147,11 @@ void main() {
 
     expect(runtime.removeAnnotation('ann_001'), isTrue, reason: 'removed');
     expect(runtime.removeAnnotation('ann_404'), isFalse, reason: 'notFound');
-    expect(runtime.debugAnnotations.map((annotation) => annotation.id), [
-      'ann_002',
-    ], reason: 'untargeted pins must survive');
+    expect(
+      runtime.debugAnnotations.map((annotation) => annotation.id),
+      ['ann_002'],
+      reason: 'untargeted pins must survive',
+    );
 
     runtime.debugAnnotations.clear();
   });
@@ -1335,6 +1337,42 @@ void main() {
     expect(scrollables, isNotEmpty);
     expect(scrollables.first['id'], 'scroll.appointments');
     expect(scrollables.first['axis'], 'vertical');
+  });
+
+  testWidgets('scroll refuses a start point outside the viewport', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            key: const ValueKey('list'),
+            children: [
+              for (var i = 0; i < 40; i++) ListTile(title: Text('Row $i')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Screenshot pixels are not logical points: on a 2x display these are far
+    // outside the view. Dispatching there did nothing but still reported
+    // success, so an agent could conclude a list had no more content.
+    final result = await FlutterScoutHelper.debugRuntime.debugScroll({
+      'direction': 'down',
+      'x': '4000',
+      'y': '4000',
+      'distance': '300',
+    });
+
+    expect(result['ok'], isFalse);
+    expect(
+      (result['error']! as Map<String, Object?>)['code'],
+      'gesture_start_outside_viewport',
+    );
+    expect(result['viewport'], isA<List<Object?>>());
   });
 
   testWidgets('scroll-to starts in the scrollable aligned with its target', (

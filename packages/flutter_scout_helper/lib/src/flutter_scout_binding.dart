@@ -286,6 +286,18 @@ class FlutterScoutRuntime {
   @visibleForTesting
   Future<void> debugDispatchTap(Offset point) => _dispatchTap(point);
 
+  /// Test-only: run a scroll through the same service-extension handler the
+  /// CLI uses, so coordinate handling is covered without a simulator.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugScroll(Map<String, String> params) async {
+    final response = await _handleScroll('debugScroll', {
+      'waitMs': '0',
+      'lateWaitMs': '0',
+      ...params,
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
   /// Test-only: resolve and dispatch a handle-targeted tap through the same
   /// service-extension handler used by the CLI.
   @visibleForTesting

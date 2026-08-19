@@ -22,8 +22,26 @@ extension _CliSession on FlutterScoutCli {
       ..addFlag('replace', defaultsTo: false, negatable: false)
       ..addMultiOption('dart-define')
       ..addMultiOption('dart-define-from-file')
+      ..addOption(
+        'launch-timeout',
+        help:
+            'Hard ceiling in seconds for a launch to produce a VM service URI '
+            '(default 1200). Raise it for very slow first builds.',
+      )
+      ..addOption(
+        'launch-idle-timeout',
+        help:
+            'Give up when the runner prints nothing for this many seconds '
+            '(default 180). This, not elapsed time, is what ends a stuck build.',
+      )
       ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
+    final launchTimeout = Duration(
+      seconds: int.tryParse(parsed.option('launch-timeout') ?? '') ?? 1200,
+    );
+    final launchIdleTimeout = Duration(
+      seconds: int.tryParse(parsed.option('launch-idle-timeout') ?? '') ?? 180,
+    );
     final device = parsed.option('device');
     if (device == null || device.isEmpty) {
       throw const ScoutCliException(
@@ -222,11 +240,20 @@ extension _CliSession on FlutterScoutCli {
       String? vmUri;
       var readLineCount = 0;
       var lastHeartbeat = DateTime.now();
-      final deadline = DateTime.now().add(const Duration(minutes: 5));
-      while (DateTime.now().isBefore(deadline)) {
+      // A cold build is slow but not stuck: pod install alone can run for
+      // minutes without printing. Give up on silence, not on elapsed time, so a
+      // first macOS/iOS build is never killed while it is still making
+      // progress. [hardDeadline] still bounds a runner that never finishes.
+      var lastProgressAt = DateTime.now();
+      var stopReason = 'hard_timeout';
+      final hardDeadline = DateTime.now().add(launchTimeout);
+      while (DateTime.now().isBefore(hardDeadline)) {
         final logFile = File(runLogFile);
         if (logFile.existsSync()) {
           final currentLines = _readLogLinesSync(logFile);
+          if (currentLines.length > readLineCount) {
+            lastProgressAt = DateTime.now();
+          }
           for (final line in currentLines.skip(readLineCount)) {
             handleLine(line);
             vmUri ??= _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
@@ -235,6 +262,14 @@ extension _CliSession on FlutterScoutCli {
           if (vmUri != null) break;
         }
         final now = DateTime.now();
+        if (now.difference(lastProgressAt) >= launchIdleTimeout) {
+          stopReason = 'idle_timeout';
+          _writeProgress('launch_stalled', {
+            'idleMs': now.difference(lastProgressAt).inMilliseconds,
+            'logLines': readLineCount,
+          });
+          break;
+        }
         if (now.difference(lastHeartbeat) >= const Duration(seconds: 15)) {
           lastHeartbeat = now;
           _writeProgress('launch_heartbeat', {
@@ -243,7 +278,10 @@ extension _CliSession on FlutterScoutCli {
             if (lines.isNotEmpty) 'lastLine': _compactProgressLine(lines.last),
           });
         }
-        if (!await _runnerSupervisorAlive(supervisor)) break;
+        if (!await _runnerSupervisorAlive(supervisor)) {
+          stopReason = 'runner_exited';
+          break;
+        }
         await Future<void>.delayed(const Duration(milliseconds: 250));
       }
       for (final subscription in signalSubscriptions) {
@@ -264,6 +302,13 @@ extension _CliSession on FlutterScoutCli {
           jsonEncode({
             'launched': false,
             'reason': 'vm_service_uri_not_found',
+            // Which of the three ways the wait ended. A hard_timeout or
+            // idle_timeout means Scout stopped a runner that may still have
+            // been building; raise --launch-timeout / --launch-idle-timeout
+            // rather than assuming the build itself failed.
+            'failureMode': stopReason,
+            'launchTimeoutSeconds': launchTimeout.inSeconds,
+            'launchIdleTimeoutSeconds': launchIdleTimeout.inSeconds,
             'pid': supervisor.workerPid,
             'supervisor': supervisor.toJson(),
             'timing': launchTiming.toJson(completedAt: DateTime.now()),
@@ -922,6 +967,18 @@ Future<void> main() async {
       ..addOption('helper-path')
       ..addMultiOption('dart-define')
       ..addMultiOption('dart-define-from-file')
+      ..addOption(
+        'launch-timeout',
+        help:
+            'Hard ceiling in seconds for a launch to produce a VM service URI '
+            '(default 1200). Raise it for very slow first builds.',
+      )
+      ..addOption(
+        'launch-idle-timeout',
+        help:
+            'Give up when the runner prints nothing for this many seconds '
+            '(default 180). This, not elapsed time, is what ends a stuck build.',
+      )
       ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final device = parsed.option('device');
@@ -1065,6 +1122,14 @@ Future<void> main() async {
       if (parsed.option('helper-path') != null) ...[
         '--helper-path',
         parsed.option('helper-path')!,
+      ],
+      if (parsed.option('launch-timeout') != null) ...[
+        '--launch-timeout',
+        parsed.option('launch-timeout')!,
+      ],
+      if (parsed.option('launch-idle-timeout') != null) ...[
+        '--launch-idle-timeout',
+        parsed.option('launch-idle-timeout')!,
       ],
       if (parsed.flag('verbose')) '--verbose',
     ];

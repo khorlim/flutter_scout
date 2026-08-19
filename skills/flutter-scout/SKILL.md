@@ -67,6 +67,14 @@ Check `status` when ownership is unclear. Stop every Scout-owned run when done:
 flutter-scout --app template-save stop --clear-session
 ```
 
+A launch ends on silence, not on elapsed time: it fails once the runner prints
+nothing for `--launch-idle-timeout` seconds (default 180), bounded by
+`--launch-timeout` (default 1200). A cold first build that spends minutes in
+`pod install` is therefore not killed while it is still progressing. On failure
+read `failureMode` — `idle_timeout` or `hard_timeout` means Scout stopped a
+runner that may still have been building, so raise the limit rather than
+assuming the build broke.
+
 On macOS, Scout-owned `launch`/`ensure` runs use a per-run `launchd`
 supervisor. They normally survive the launching terminal or agent being
 cleaned up, while explicit Ctrl-C during launch and `stop` still cancel the
@@ -123,6 +131,12 @@ Use `scroll-to <handle>` for offscreen/lazy controls, `dismiss` for the top
 route or close control, and `tap-text --contains` for truncated labels. Use
 coordinates only after handle/text targeting cannot express the action.
 
+Coordinates are logical points, not screenshot pixels. A gesture starting
+outside the view fails with `gesture_start_outside_viewport` and reports the
+viewport size; scale by the device pixel ratio or use a handle instead. Text
+that is not on screen fails with `text_not_found` — scroll it into view with
+`scroll-to` first rather than assuming the list has ended.
+
 ## After code edits
 
 ```bash
@@ -132,7 +146,8 @@ flutter-scout --app <task-slug> restart
 
 Read `sourceVerification`: `verified` compares changed Dart files on disk with
 the VM's loaded source; `mismatch` is a hard failure; `partially_verified`
-lists scripts the VM did not expose. Native/plugin/pubspec changes require a
+lists scripts the VM did not expose. Test sources are reported under `skipped`
+rather than `notLoaded`, because a running app never loads them. Native/plugin/pubspec changes require a
 fresh launch.
 
 If reload is rejected, do not clear the session or relaunch immediately. Use

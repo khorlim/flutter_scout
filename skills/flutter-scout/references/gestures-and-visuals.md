@@ -2,6 +2,14 @@
 
 Prefer handles, then visible text, then coordinates.
 
+Coordinates are logical points with the origin at the top left — not screenshot
+pixels. On a scaled display a screenshot is larger than the view, so pixel
+values land outside it. A gesture whose start point is outside the view fails
+with `gesture_start_outside_viewport` and reports the viewport size; scale by
+the device pixel ratio or use a handle. Scroll a specific list by passing
+`--target <scroll handle>` from `inspect --sections scrollables`, so the gesture
+cannot land on the wrong scrollable.
+
 ```bash
 flutter-scout tap btn.save --expect-text Saved
 flutter-scout tap-text "Save"
