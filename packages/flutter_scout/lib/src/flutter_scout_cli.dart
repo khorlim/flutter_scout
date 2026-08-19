@@ -2081,8 +2081,8 @@ Flutter Scout
 
 Usage:
   flutter-scout attach [--debug-url <url>] [--device <simulator-id>]
-  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper]
-  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper]
+  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper] [--launch-timeout <s>] [--launch-idle-timeout <s>]
+  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper] [--launch-timeout <s>] [--launch-idle-timeout <s>]
   flutter-scout status
   flutter-scout devices
   flutter-scout apps [--all] [--prune]
