@@ -53,6 +53,8 @@ class FlutterScoutCli {
   static const String packageVersion = '2.0.0-dev.1';
   static String? _sessionDirectoryOverride;
   static void Function()? debugEventJournalAfterHeadCommitHook;
+  static void Function()? debugEventProjectionDiskLoadHook;
+  static void Function()? debugRetentionRegistryWriteHook;
   static void Function(String path)? debugLogReadValidationHook;
   String? _activeCommandId;
   String? _activeCommandName;
@@ -61,6 +63,11 @@ class FlutterScoutCli {
   String? _implicitlySelectedSessionName;
   final Set<String> _activeSensitiveValues = <String>{};
   final Map<String, String> _protectedSecretIngress = <String, String>{};
+  _SensitiveRedactionMatcher? _sensitiveRedactionMatcherCache;
+  int _sensitiveRedactionMatcherBuildCount = 0;
+  String? _eventProjectionCacheSession;
+  int? _eventProjectionCacheSequence;
+  List<Map<String, Object?>>? _eventProjectionCacheRows;
 
   /// Test-only override for the session registry path, so tests never touch
   /// the real `~/.flutter_scout/registry.json`.
@@ -279,6 +286,11 @@ class FlutterScoutCli {
         ..addAll(previous);
     }
   }
+
+  /// Test-only counter proving repeated scalar redaction reuses the compiled
+  /// exact/encoded secret matcher until the active secret set changes.
+  int get debugSensitiveRedactionMatcherBuildCount =>
+      _sensitiveRedactionMatcherBuildCount;
 
   /// Test-only view of the additive machine-readable CLI response envelope.
   Map<String, Object?> debugCliResponseEnvelope(

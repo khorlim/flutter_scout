@@ -4,6 +4,8 @@ part of 'flutter_scout_binding.dart';
 // final recursive output scrub used by every service-extension response.
 
 const String _kScoutRedacted = '[REDACTED]';
+const int _maxKnownSensitiveValues = 256;
+const int _maxKnownSensitiveValueBytes = 1024 * 1024;
 
 final RegExp _kSensitiveFieldWordPattern = RegExp(
   r'(^|[^a-z0-9])(password|passcode|passphrase|pwd|secret|pin|cvv|cvc|otp|token|cookie|session[ _-]?id|api[ _-]?key|security[ _-]?code|card[ _-]?number|account[ _-]?number|one[ _-]?time[ _-]?code)($|[^a-z0-9])',
@@ -119,18 +121,41 @@ extension _RuntimePrivacy on FlutterScoutRuntime {
         _knownSensitiveValues.contains(value)) {
       return;
     }
+    if (_sensitiveValueCapacityExceeded) return;
+    final encodedBytes = utf8.encode(value).length;
+    if (_knownSensitiveValues.length >= _maxKnownSensitiveValues ||
+        _knownSensitiveValueBytes + encodedBytes >
+            _maxKnownSensitiveValueBytes) {
+      _sensitiveValueCapacityExceeded = true;
+      return;
+    }
     _knownSensitiveValues.add(value);
+    _knownSensitiveValueBytes += encodedBytes;
+    _knownSensitiveValuesByLength = null;
   }
 
   /// Error hooks can fire before the next inspect. Read only EditableText
   /// controllers that independently classify as sensitive so their current
   /// values are available to the error scrub immediately.
-  void _rememberSensitiveValuesFromTree() {
+  void _rememberSensitiveValuesFromTree({bool force = false}) {
+    if (_sensitiveValueCapacityExceeded || _sensitiveTreeScanInProgress) return;
+    final requestContext = _requestContext;
+    if (!force &&
+        requestContext != null &&
+        identical(_lastSensitiveTreeScanRequestContext, requestContext)) {
+      return;
+    }
     final root = WidgetsBinding.instance.rootElement;
     if (root == null) return;
+    _lastSensitiveTreeScanRequestContext = requestContext;
+    _sensitiveTreeScanInProgress = true;
     var budget = 10000;
     void visit(Element element) {
-      if (budget-- <= 0 || _isScoutOverlayWidget(element.widget)) return;
+      if (_sensitiveValueCapacityExceeded ||
+          budget-- <= 0 ||
+          _isScoutOverlayWidget(element.widget)) {
+        return;
+      }
       try {
         if (element is StatefulElement && element.state is EditableTextState) {
           final state = element.state as EditableTextState;
@@ -145,7 +170,17 @@ extension _RuntimePrivacy on FlutterScoutRuntime {
       element.visitChildElements(visit);
     }
 
-    visit(root);
+    try {
+      visit(root);
+    } finally {
+      _sensitiveTreeScanInProgress = false;
+    }
+  }
+
+  List<String> _sensitiveValuesByDescendingLength() {
+    return _knownSensitiveValuesByLength ??= List<String>.unmodifiable(
+      [..._knownSensitiveValues]..sort((a, b) => b.length.compareTo(a.length)),
+    );
   }
 
   String _redactSensitiveText(
@@ -154,9 +189,7 @@ extension _RuntimePrivacy on FlutterScoutRuntime {
   }) {
     if (value.isEmpty || _knownSensitiveValues.isEmpty) return value;
     var redacted = value;
-    final secrets = [..._knownSensitiveValues]
-      ..sort((a, b) => b.length.compareTo(a.length));
-    for (final secret in secrets) {
+    for (final secret in _sensitiveValuesByDescendingLength()) {
       if (secret.isEmpty || !redacted.contains(secret)) continue;
       if (redacted == secret) return replacement;
       final shortAlphaNumeric =
@@ -181,7 +214,7 @@ extension _RuntimePrivacy on FlutterScoutRuntime {
 
   bool _containsKnownSensitiveValue(String? value) {
     if (value == null || value.isEmpty) return false;
-    return _knownSensitiveValues.any(
+    return _sensitiveValuesByDescendingLength().any(
       (secret) => secret.isNotEmpty && value.contains(secret),
     );
   }

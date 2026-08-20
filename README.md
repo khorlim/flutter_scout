@@ -158,8 +158,9 @@ dart run bin/flutter_scout.dart doctor --project ../../apps/scout_test_app --dev
 dart run bin/flutter_scout.dart status
 ```
 
-For local package development, install the fast local shim so `flutter-scout`
-does not route through `dart pub global run` on every command:
+For local package development, activate the CLI from this checkout. Pub keeps
+the executable on its compiled snapshot path while the script refreshes it
+after package changes:
 
 ```bash
 tool/install-local-shim.sh

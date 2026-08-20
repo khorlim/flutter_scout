@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Restore compiled-snapshot local activation and remove repeated hot-path work:
+  event projections are recoverable non-durable caches with process-local
+  reuse, encoded secret matchers are compiled once per secret set, response
+  timing/encoding no longer recursively re-sanitizes proven-safe envelopes,
+  and no-op retention cleanup does not rewrite its durable registry.
 - Materialize post-action captures from both compatibility and typed response
   slots, so large PNG payloads are written once to private storage instead of
   overflowing the bounded CLI evidence envelope.

@@ -39,8 +39,11 @@ extension _CliResponse on FlutterScoutCli {
     Object? value, {
     bool? success,
     String? commandName,
+    bool valueIsSanitized = false,
   }) {
-    final sanitized = _sanitizeForSerialization(value);
+    final sanitized = valueIsSanitized
+        ? value
+        : _sanitizeForSerialization(value);
     final raw = sanitized is Map
         ? <String, Object?>{
             for (final entry in sanitized.entries)
@@ -87,7 +90,12 @@ extension _CliResponse on FlutterScoutCli {
           ? legacy['cliCommandId']
           : _activeCommandId ?? responseCommandId,
     );
-    final sessionMeta = _safeResponseSessionMeta();
+    final rawSessionMeta = _safeResponseSessionMeta();
+    final sessionMeta = rawSessionMeta == null
+        ? null
+        : Map<String, Object?>.from(
+            _sanitizeForSerialization(rawSessionMeta)! as Map,
+          );
     final runId = _nullableIdentity(
       legacy,
       nestedResult,
@@ -212,17 +220,19 @@ extension _CliResponse on FlutterScoutCli {
           'status',
           'health',
         }.contains(resolvedCommandName)) {
-      envelope['operability'] = _cliOperabilityFacts(
-        legacy,
-        commandName: resolvedCommandName!,
-        runId: runId,
-        runtimeInstanceId: runtimeInstanceId,
-        stateGeneration: stateGeneration,
-        capabilities: capabilities,
-        structuredError: structuredError,
+      envelope['operability'] = _sanitizeForSerialization(
+        _cliOperabilityFacts(
+          legacy,
+          commandName: resolvedCommandName!,
+          runId: runId,
+          runtimeInstanceId: runtimeInstanceId,
+          stateGeneration: stateGeneration,
+          capabilities: capabilities,
+          structuredError: structuredError,
+        ),
       );
     }
-    final finalBounded = _boundCliPayload(_sanitizeForSerialization(envelope));
+    final finalBounded = _boundCliPayload(envelope);
     final output = Map<String, Object?>.from(finalBounded.value! as Map);
     if (finalBounded.truncated && !bounded.truncated) {
       const finalError = <String, Object?>{
@@ -306,8 +316,13 @@ extension _CliResponse on FlutterScoutCli {
       probeValue: envelope,
       boundary: toStderr ? 'cli_stderr_response' : 'cli_stdout_response',
       pretty: pretty,
+      valueIsSanitized: true,
     );
-    final encoded = _encodeCliMachineMessage(envelope, pretty: pretty);
+    final encoded = _encodeCliMachineMessage(
+      envelope,
+      pretty: pretty,
+      valueIsSanitized: true,
+    );
     (toStderr ? stderr : stdout).writeln(encoded);
   }
 
@@ -365,16 +380,24 @@ extension _CliResponse on FlutterScoutCli {
       Map<String, dynamic>.from(heartbeat),
       probeValue: heartbeat,
       boundary: toStderr ? 'cli_stderr_heartbeat' : 'cli_stdout_heartbeat',
+      valueIsSanitized: true,
     );
-    final encoded = _encodeCliMachineMessage(heartbeat, pretty: false);
+    final encoded = _encodeCliMachineMessage(
+      heartbeat,
+      pretty: false,
+      valueIsSanitized: true,
+    );
     (toStderr ? stderr : stdout).writeln(encoded);
   }
 
   String _encodeCliMachineMessage(
     Map<String, Object?> envelope, {
     required bool pretty,
+    bool valueIsSanitized = false,
   }) {
-    final safe = _sanitizeForSerialization(envelope);
+    final safe = valueIsSanitized
+        ? envelope
+        : _sanitizeForSerialization(envelope);
     final encoder = pretty
         ? const JsonEncoder.withIndent('  ')
         : const JsonEncoder();

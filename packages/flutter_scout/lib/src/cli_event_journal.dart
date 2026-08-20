@@ -871,7 +871,20 @@ extension _SegmentedEventJournal on FlutterScoutCli {
   List<Map<String, Object?>> _loadEventProjectionTailUnlocked(
     _EventJournalHead head,
   ) {
-    if (head.lastOperationSequence == 0) return <Map<String, Object?>>[];
+    final session = p.normalize(p.absolute(_sessionDir.path));
+    if (_eventProjectionCacheSession == session &&
+        _eventProjectionCacheSequence == head.lastOperationSequence &&
+        _eventProjectionCacheRows != null) {
+      return <Map<String, Object?>>[
+        for (final row in _eventProjectionCacheRows!)
+          Map<String, Object?>.from(row),
+      ];
+    }
+    if (head.lastOperationSequence == 0) {
+      _cacheEventProjection(<Map<String, Object?>>[], head: head);
+      return <Map<String, Object?>>[];
+    }
+    FlutterScoutCli.debugEventProjectionDiskLoadHook?.call();
     final file = File(_eventsFile);
     try {
       final metadataFile = File(_eventProjectionHeadFile);
@@ -927,6 +940,7 @@ extension _SegmentedEventJournal on FlutterScoutCli {
           'The Scout event projection is stale relative to its durable head.',
         );
       }
+      _cacheEventProjection(rows, head: head);
       return rows.toList(growable: true);
     } on ScoutCliException {
       final rows = _foldEventOperationsUnlocked();
@@ -950,8 +964,12 @@ extension _SegmentedEventJournal on FlutterScoutCli {
     final encoded = retained.isEmpty
         ? ''
         : '${retained.map(jsonEncode).join('\n')}\n';
-    _atomicWritePrivateString(_eventsFile, encoded, boundary: _sessionDir.path);
-    _atomicWritePrivateJson(_eventProjectionHeadFile, <String, Object?>{
+    _atomicWritePrivateDerivedString(
+      _eventsFile,
+      encoded,
+      boundary: _sessionDir.path,
+    );
+    _atomicWritePrivateDerivedJson(_eventProjectionHeadFile, <String, Object?>{
       'schemaVersion': _eventJournalSchemaVersion,
       'kind': 'flutter_scout_event_projection_checkpoint',
       'lastOperationSequence': head.lastOperationSequence,
@@ -967,6 +985,18 @@ extension _SegmentedEventJournal on FlutterScoutCli {
           .convert(utf8.encode(encoded))
           .toString(),
     }, boundary: _sessionDir.path);
+    _cacheEventProjection(retained, head: head);
+  }
+
+  void _cacheEventProjection(
+    Iterable<Map<String, Object?>> rows, {
+    required _EventJournalHead head,
+  }) {
+    _eventProjectionCacheSession = p.normalize(p.absolute(_sessionDir.path));
+    _eventProjectionCacheSequence = head.lastOperationSequence;
+    _eventProjectionCacheRows = <Map<String, Object?>>[
+      for (final row in rows) Map<String, Object?>.from(row),
+    ];
   }
 }
 

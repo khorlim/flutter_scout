@@ -1,5 +1,22 @@
 part of 'flutter_scout_cli.dart';
 
+const int _maxCombinedSensitivePatternCharacters = 128 * 1024;
+
+final class _SensitiveRedactionMatcher {
+  const _SensitiveRedactionMatcher({
+    required this.sources,
+    required this.variants,
+    required this.pattern,
+  });
+
+  final Set<String> sources;
+  final List<String> variants;
+  final RegExp? pattern;
+
+  bool matches(Set<String> values) =>
+      sources.length == values.length && values.every(sources.contains);
+}
+
 // part: source redaction for action journals, replay artifacts, diagnostics,
 // and private child-process credential handoff.
 
@@ -196,6 +213,23 @@ extension _CliPrivacy on FlutterScoutCli {
     // Authorization value); applying the generic matcher first could mutate
     // only its prefix and prevent the exact value from matching afterwards.
     var safe = value;
+    final matcher = _activeSensitiveRedactionMatcher();
+    final pattern = matcher.pattern;
+    if (pattern != null) {
+      safe = safe.replaceAll(pattern, _kSerializedRedaction);
+    } else {
+      for (final secret in matcher.variants) {
+        safe = safe.replaceAll(secret, _kSerializedRedaction);
+      }
+    }
+    return _redactSensitiveLogText(safe);
+  }
+
+  _SensitiveRedactionMatcher _activeSensitiveRedactionMatcher() {
+    final cached = _sensitiveRedactionMatcherCache;
+    if (cached != null && cached.matches(_activeSensitiveValues)) {
+      return cached;
+    }
     final variants = <String>{};
     for (final secret in _activeSensitiveValues) {
       if (secret.isEmpty) continue;
@@ -217,12 +251,27 @@ extension _CliPrivacy on FlutterScoutCli {
     }
     final secrets = variants.toList(growable: false)
       ..sort((a, b) => b.length.compareTo(a.length));
-    for (final secret in secrets) {
-      if (secret.isNotEmpty) {
-        safe = safe.replaceAll(secret, _kSerializedRedaction);
+    RegExp? pattern;
+    final combinedCharacters = secrets.fold<int>(
+      0,
+      (total, secret) => total + secret.length + 1,
+    );
+    if (secrets.isNotEmpty &&
+        combinedCharacters <= _maxCombinedSensitivePatternCharacters) {
+      try {
+        pattern = RegExp(secrets.map(RegExp.escape).join('|'));
+      } catch (_) {
+        // Large or unusual secrets still use the deterministic cached list.
       }
     }
-    return _redactSensitiveLogText(safe);
+    final matcher = _SensitiveRedactionMatcher(
+      sources: Set<String>.unmodifiable(_activeSensitiveValues),
+      variants: List<String>.unmodifiable(secrets),
+      pattern: pattern,
+    );
+    _sensitiveRedactionMatcherCache = matcher;
+    _sensitiveRedactionMatcherBuildCount += 1;
+    return matcher;
   }
 
   Object? _sanitizeForSerialization(Object? value) {

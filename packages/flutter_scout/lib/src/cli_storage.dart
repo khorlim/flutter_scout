@@ -296,6 +296,73 @@ void _atomicWritePrivateString(
   required String boundary,
 }) => _atomicWritePrivateBytes(path, utf8.encode(value), boundary: boundary);
 
+/// Atomically replaces a private derived file without forcing its bytes to
+/// stable storage. Callers may use this only for projections that can be
+/// reconstructed from a separately flushed source of truth. Skipping fsync on
+/// these high-churn caches keeps every event append from paying durability
+/// twice while retaining owner-only modes, symlink refusal, and atomic rename.
+void _atomicWritePrivateDerivedBytes(
+  String path,
+  List<int> bytes, {
+  required String boundary,
+}) {
+  final target = _absoluteNormalized(path);
+  final root = _absoluteNormalized(boundary);
+  final parent = p.dirname(target);
+  _ensurePrivateDirectory(parent, boundary: root);
+  _assertPrivateFilePath(target, boundary: root);
+
+  final random = Random.secure().nextInt(0x7fffffff);
+  final temporaryPath = p.join(
+    parent,
+    '.${p.basename(target)}.$pid.'
+    '${DateTime.now().microsecondsSinceEpoch}.$random.tmp',
+  );
+  _assertPrivateFilePath(temporaryPath, boundary: root);
+  final temporary = File(temporaryPath);
+  RandomAccessFile? handle;
+  try {
+    temporary.createSync(exclusive: true);
+    _securePrivateFile(temporary.path, boundary: root);
+    handle = temporary.openSync(mode: FileMode.write);
+    handle.writeFromSync(bytes);
+    handle.closeSync();
+    handle = null;
+
+    _assertPrivateFilePath(target, boundary: root);
+    temporary.renameSync(target);
+    _securePrivateFile(target, boundary: root);
+  } catch (_) {
+    try {
+      handle?.closeSync();
+    } catch (_) {}
+    try {
+      if (temporary.existsSync()) temporary.deleteSync();
+    } catch (_) {}
+    rethrow;
+  }
+}
+
+void _atomicWritePrivateDerivedString(
+  String path,
+  String value, {
+  required String boundary,
+}) => _atomicWritePrivateDerivedBytes(
+  path,
+  utf8.encode(value),
+  boundary: boundary,
+);
+
+void _atomicWritePrivateDerivedJson(
+  String path,
+  Object? value, {
+  required String boundary,
+}) => _atomicWritePrivateDerivedString(
+  path,
+  const JsonEncoder.withIndent('  ').convert(value),
+  boundary: boundary,
+);
+
 /// Atomically writes an owner-only file selected by the caller without
 /// chmodding or otherwise taking ownership of its parent directory.
 ///
@@ -1032,6 +1099,7 @@ void _writeRetentionRegistryUnlocked(List<Map<String, Object?>> entries) {
     encoded,
     boundary: _sessionDir.path,
   );
+  FlutterScoutCli.debugRetentionRegistryWriteHook?.call();
 }
 
 T _withRetentionRegistryLock<T>(
@@ -1487,6 +1555,7 @@ Map<String, Object?> _cleanupPrivateArtifacts({
     var alreadyAbsent = 0;
     var manualPreserved = 0;
     var unexpiredPreserved = 0;
+    var registryChanged = false;
     for (final entry in state.entries) {
       final policy = entry['policy']! as String;
       if (policy == 'manual') {
@@ -1587,6 +1656,7 @@ Map<String, Object?> _cleanupPrivateArtifacts({
         } else {
           deleted += 1;
         }
+        registryChanged = true;
       } catch (_) {
         failures.add(<String, Object?>{
           'artifactId': artifactId,
@@ -1596,7 +1666,9 @@ Map<String, Object?> _cleanupPrivateArtifacts({
         retained.add(entry);
       }
     }
-    _writeRetentionRegistryUnlocked(retained);
+    if (registryChanged) {
+      _writeRetentionRegistryUnlocked(retained);
+    }
     return <String, Object?>{
       'ok': failures.isEmpty,
       'trigger': trigger,
@@ -1604,6 +1676,7 @@ Map<String, Object?> _cleanupPrivateArtifacts({
       'examined': examined,
       'deleted': deleted,
       'alreadyAbsent': alreadyAbsent,
+      'registryUpdated': registryChanged,
       'preserved': failures.length,
       'manualPreserved': manualPreserved,
       'unexpiredPreserved': unexpiredPreserved,
@@ -1620,6 +1693,7 @@ Map<String, Object?> _absentRetentionCleanupReport(String trigger) =>
       'examined': 0,
       'deleted': 0,
       'alreadyAbsent': 0,
+      'registryUpdated': false,
       'preserved': 0,
       'manualPreserved': 0,
       'unexpiredPreserved': 0,

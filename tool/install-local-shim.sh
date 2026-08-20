@@ -3,22 +3,23 @@ set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_dir=$(dirname "$script_dir")
-cli_script="$repo_dir/packages/flutter_scout/bin/flutter_scout.dart"
+cli_package="$repo_dir/packages/flutter_scout"
+dart_bin="${DART_BIN:-dart}"
 
-if [ ! -f "$cli_script" ]; then
-  echo "flutter_scout CLI script not found at $cli_script" >&2
+if [ ! -f "$cli_package/pubspec.yaml" ]; then
+  echo "flutter_scout CLI package not found at $cli_package" >&2
   exit 1
 fi
 
+"$dart_bin" pub global activate --source path "$cli_package"
+
 bin_dir="${PUB_CACHE:-$HOME/.pub-cache}/bin"
-mkdir -p "$bin_dir"
+executable="$bin_dir/flutter-scout"
+if [ ! -x "$executable" ]; then
+  echo "Pub did not install flutter-scout at $executable" >&2
+  exit 1
+fi
 
-cat > "$bin_dir/flutter-scout" <<EOF
-#!/usr/bin/env sh
-exec dart "$cli_script" "\$@"
-EOF
-chmod +x "$bin_dir/flutter-scout"
-
-printf '{"ok":true,"path":"%s","target":"%s"}\n' \
-  "$bin_dir/flutter-scout" \
-  "$cli_script"
+printf '{"ok":true,"path":"%s","source":"path","package":"%s","compiledSnapshotCache":true}\n' \
+  "$executable" \
+  "$cli_package"

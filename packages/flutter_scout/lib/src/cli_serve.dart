@@ -905,8 +905,11 @@ extension _CliServe on FlutterScoutCli {
       Map<String, dynamic>.from(envelope),
       probeValue: envelope,
       boundary: 'cli_http_response',
+      valueIsSanitized: true,
     );
-    response.write(_encodeCliMachineMessage(envelope, pretty: false));
+    response.write(
+      _encodeCliMachineMessage(envelope, pretty: false, valueIsSanitized: true),
+    );
     await response.close();
   }
 

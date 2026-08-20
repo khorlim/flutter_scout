@@ -1654,6 +1654,13 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
     final payloadGeneration = _responseStateGeneration(value);
     if (payloadGeneration == null) _ensureStateObservedForResponse();
     _rememberSensitiveValuesFromTree();
+    if (_sensitiveValueCapacityExceeded) {
+      return _protocolBoundFailure(
+        code: 'truncated_safety_evidence',
+        reason: 'sensitive_value_capacity_exceeded',
+        source: null,
+      );
+    }
     final rawIssue = _protocolPayloadIssue(value);
     if (rawIssue != null) {
       return _protocolBoundFailure(
@@ -1735,6 +1742,14 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
   }) {
     _ensureStateObservedForResponse();
     _rememberSensitiveValuesFromTree();
+    if (_sensitiveValueCapacityExceeded) {
+      return _protocolBoundFailure(
+        code: 'truncated_safety_evidence',
+        reason: 'sensitive_value_capacity_exceeded',
+        source: null,
+        originalErrorCode: code,
+      );
+    }
     final rawIssue = _protocolPayloadIssue(<String, Object?>{
       'code': code,
       'message': message,

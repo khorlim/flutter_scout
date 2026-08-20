@@ -70,7 +70,10 @@ dart pub get
 dart run bin/flutter_scout.dart <command>
 ```
 
-To refresh the normal `flutter-scout` executable from the local checkout after package changes:
+To refresh the normal `flutter-scout` executable from the local checkout after
+package changes, use the local activation script. It delegates to Pub's path
+activation so commands use the compiled snapshot cache instead of recompiling
+the source entrypoint on every invocation:
 
 ```bash
 /Users/han/flutter_packages/flutter_scout/tool/install-local-shim.sh

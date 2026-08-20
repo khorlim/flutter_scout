@@ -1,5 +1,9 @@
 ## Unreleased
 
+* Bound runtime sensitive-value retention to 256 values/1 MiB and fail closed
+  if that budget is exceeded. Reuse the sorted exact matcher and scan the
+  widget tree at most once per protocol request, while error hooks can still
+  force an immediate source scan before sanitizing diagnostics.
 * Accept Dart VM service `isolateId` routing metadata at the strict request
   boundary, bound it independently, and exclude it from Scout mutation
   business fingerprints so real VM extension calls reach their handlers.

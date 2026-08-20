@@ -89,6 +89,11 @@ class FlutterScoutRuntime {
       '${_installedAt.microsecondsSinceEpoch}-${identityHashCode(this)}';
   late final int _sensitiveValueSalt = math.Random.secure().nextInt(0x7fffffff);
   final Set<String> _knownSensitiveValues = <String>{};
+  int _knownSensitiveValueBytes = 0;
+  List<String>? _knownSensitiveValuesByLength;
+  bool _sensitiveValueCapacityExceeded = false;
+  Object? _lastSensitiveTreeScanRequestContext;
+  bool _sensitiveTreeScanInProgress = false;
   final LinkedHashMap<String, _MutationRecord> _mutationRecords =
       LinkedHashMap<String, _MutationRecord>();
   Future<void> _mutationTail = Future<void>.value();
@@ -662,6 +667,32 @@ class FlutterScoutRuntime {
     _recordError(type: 'test_error', message: message);
   }
 
+  /// Test-only bounded privacy-state surface.
+  @visibleForTesting
+  Map<String, Object?> get debugSensitiveValueTracking => <String, Object?>{
+    'count': _knownSensitiveValues.length,
+    'bytes': _knownSensitiveValueBytes,
+    'capacityExceeded': _sensitiveValueCapacityExceeded,
+  };
+
+  @visibleForTesting
+  void debugRememberSensitiveValue(String value) {
+    _rememberSensitiveValue(value);
+  }
+
+  @visibleForTesting
+  String debugRedactSensitiveText(String value) => _redactSensitiveText(value);
+
+  @visibleForTesting
+  void debugResetSensitiveValueTracking() {
+    _knownSensitiveValues.clear();
+    _knownSensitiveValueBytes = 0;
+    _knownSensitiveValuesByLength = null;
+    _sensitiveValueCapacityExceeded = false;
+    _lastSensitiveTreeScanRequestContext = null;
+    _sensitiveTreeScanInProgress = false;
+  }
+
   /// Test-only active non-blocking signal injection. This protects the
   /// distinction between factual active signals and active *blocking* signals.
   @visibleForTesting
@@ -881,12 +912,16 @@ class FlutterScoutRuntime {
     String? library,
     String? identityQualifier,
   }) {
-    _rememberSensitiveValuesFromTree();
+    _rememberSensitiveValuesFromTree(force: true);
     final timestamp = DateTime.now().toUtc();
     final severity = _errorSeverity(type: type, message: message);
-    final sanitizedMessage = _redactSensitiveText(message);
+    final sanitizedMessage = _sensitiveValueCapacityExceeded
+        ? _kScoutRedacted
+        : _redactSensitiveText(message);
     final sanitizedLibrary = library == null
         ? null
+        : _sensitiveValueCapacityExceeded
+        ? _kScoutRedacted
         : _redactSensitiveText(library);
     final cursor = ++_errorCursor;
     final context = _requestContext;

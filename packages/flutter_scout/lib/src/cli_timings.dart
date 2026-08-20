@@ -383,12 +383,15 @@ extension _CliPhaseTimings on FlutterScoutCli {
     required Object? probeValue,
     required String boundary,
     bool pretty = false,
+    bool valueIsSanitized = false,
   }) {
     final stopwatch = Stopwatch()..start();
     final encoder = pretty
         ? const JsonEncoder.withIndent('  ')
         : const JsonEncoder();
-    encoder.convert(_sanitizeForSerialization(probeValue));
+    encoder.convert(
+      valueIsSanitized ? probeValue : _sanitizeForSerialization(probeValue),
+    );
     stopwatch.stop();
     return _withMeasuredCliPhase(
       result,
