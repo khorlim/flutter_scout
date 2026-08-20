@@ -1,5 +1,9 @@
 ## Unreleased
 
+* Restore the bottom-left session badge for Scout-owned launches so concurrent
+  named agent windows remain distinguishable. The launch badge is passive,
+  pointer-transparent, and absent from semantics until annotation or recording
+  UI is explicitly enabled; attach-only apps remain unchanged.
 * Bound runtime sensitive-value retention to 256 values/1 MiB and fail closed
   if that budget is exceeded. Reuse the sorted exact matcher and scan the
   widget tree at most once per protocol request, while error hooks can still

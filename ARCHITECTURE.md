@@ -41,7 +41,7 @@ accessible because all parts share one library).
 | File | Responsibility |
 |------|----------------|
 | `flutter_scout_binding.dart` | Entry points (`FlutterScoutBinding`, `FlutterScoutHelper`), `FlutterScoutRuntime` shell: fields, `install()`, error hooks, extension registration, `@visibleForTesting` debug hooks, `_handleInspect`. |
-| `runtime_annotations.dart` | **Annotation workflow + in-app capture.** `_handleAnnotations` (list/wait/fixed/get-crop/signal-handoff), status transitions, `_captureRegion`/`_handleCapture`, explicit-opt-in overlay lifecycle, public `addAnnotation`/`annotationCandidatesAt`/`visibleAnnotationTargets`. |
+| `runtime_annotations.dart` | **Annotation workflow + in-app capture.** `_handleAnnotations` (list/wait/fixed/get-crop/signal-handoff), status transitions, `_captureRegion`/`_handleCapture`, passive Scout-launch badge + explicit interactive-overlay lifecycle, public `addAnnotation`/`annotationCandidatesAt`/`visibleAnnotationTargets`. |
 | `runtime_actions.dart` | Interaction handlers: tap, tap-text, input, long-press, fill, scroll, swipe, scroll-to, held drags, back/dismiss, bounded waits, same-call expectation + frame capture, and the structural split between passive observation and frame-driving post-mutation settling. |
 | `runtime_protocol.dart` | Schema/protocol envelopes, capability negotiation, monotonic state generation + SHA-256 identity, request/error cursors, mutation deadlines, serialization, and idempotent deduplication. |
 | `runtime_timings.dart` | Request-local, exclusive monotonic timing for helper-owned `snapshot`/`match`/`dispatch`/`settle`/`delta` phases and exact unavailable-state closure. |

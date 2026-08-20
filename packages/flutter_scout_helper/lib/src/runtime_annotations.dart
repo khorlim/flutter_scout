@@ -1313,8 +1313,18 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
 
   bool get _annotationOverlayUiActive => _annotationMode || _recording;
 
+  bool get _launchSessionBadgeVisible =>
+      _debugLaunchBadgeVisible ?? FlutterScoutRuntime._compiledRunId.isNotEmpty;
+
+  bool get _annotationOverlayInteractive =>
+      _debugForceOverlayInteractive ||
+      (_annotationOverlayOptedIn && _annotationOverlayUiActive);
+
+  bool get _annotationOverlayVisible =>
+      _launchSessionBadgeVisible || _annotationOverlayInteractive;
+
   void _reconcileAnnotationOverlay() {
-    if (_annotationOverlayOptedIn && _annotationOverlayUiActive) {
+    if (_annotationOverlayVisible) {
       _scheduleAnnotationOverlayInstall();
       return;
     }
@@ -1322,8 +1332,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   }
 
   void _scheduleAnnotationOverlayInstall({bool forceForTesting = false}) {
-    if (!kDebugMode || !_annotationOverlayOptedIn) return;
-    if (!_annotationOverlayUiActive && !forceForTesting) return;
+    if (!kDebugMode || (!_annotationOverlayVisible && !forceForTesting)) return;
     if (_annotationOverlayEntry != null) {
       if (_annotationOverlayHost?.mounted ?? false) return;
       // The Overlay that hosted the entry is gone (the app replaced its root
@@ -1346,8 +1355,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
 
   void _installAnnotationOverlayIfPossible({bool forceForTesting = false}) {
     if (!kDebugMode ||
-        !_annotationOverlayOptedIn ||
-        (!_annotationOverlayUiActive && !forceForTesting) ||
+        (!_annotationOverlayVisible && !forceForTesting) ||
         _annotationOverlayEntry != null) {
       return;
     }
@@ -1372,6 +1380,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     final entry = _annotationOverlayEntry;
     _annotationOverlayEntry = null;
     _annotationOverlayHost = null;
+    _debugForceOverlayInteractive = false;
     if (entry == null) return;
     try {
       entry.remove();

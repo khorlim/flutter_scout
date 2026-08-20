@@ -69,13 +69,18 @@ String get _scoutLauncherLabel =>
 
 /// A small HUD launcher pinned to the bottom-left. It names the running Scout
 /// session (per-session colour so overlapping worktree runs are told apart) and
-/// is the entry point to the Scout menu — annotation toggle, flow recorder, ….
-/// Always present so the menu is reachable; with no `--name` label it falls back
-/// to a neutral "SCOUT" chip. Tapping opens/closes the menu.
+/// becomes the entry point to the Scout menu after an explicit annotation or
+/// recording UI opt-in. Before that it is a passive, hit-test-transparent label.
+/// With no `--name` label it falls back to a neutral "SCOUT" chip.
 class _ScoutInstanceBadge extends StatelessWidget {
-  const _ScoutInstanceBadge({required this.menuOpen, required this.onTap});
+  const _ScoutInstanceBadge({
+    required this.menuOpen,
+    required this.interactive,
+    required this.onTap,
+  });
 
   final bool menuOpen;
+  final bool interactive;
   final VoidCallback onTap;
 
   @override
@@ -83,81 +88,89 @@ class _ScoutInstanceBadge extends StatelessWidget {
     return Positioned(
       left: 0,
       bottom: 0,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: ScoutMotion.base,
-          curve: ScoutMotion.enter,
-          padding: const EdgeInsets.symmetric(
-            horizontal: ScoutSpace.s,
-            vertical: ScoutSpace.xs,
-          ),
-          decoration: BoxDecoration(
-            // Per-session gradient fill so overlapping runs are distinguishable.
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                _scoutSessionPalette.fill,
-                _scoutSessionPalette.fillDark,
-              ],
-            ),
-            // Squared bottom-left so the badge hugs the exact corner of the
-            // app; the other three corners stay rounded like a corner tab.
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(ScoutRadius.panel),
-              topRight: Radius.circular(ScoutRadius.panel),
-              bottomRight: Radius.circular(ScoutRadius.panel),
-            ),
-            border: Border.all(
-              // Brighten the rim while the menu is open so the launcher reads
-              // as the active/expanded control.
-              color: _scoutSessionPalette.accent.withValues(
-                alpha: menuOpen ? 0.95 : 0.55,
+      child: IgnorePointer(
+        ignoring: !interactive,
+        child: ExcludeSemantics(
+          excluding: !interactive,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: interactive ? onTap : null,
+            child: AnimatedContainer(
+              duration: ScoutMotion.base,
+              curve: ScoutMotion.enter,
+              padding: const EdgeInsets.symmetric(
+                horizontal: ScoutSpace.s,
+                vertical: ScoutSpace.xs,
               ),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: _scoutSessionPalette.accent.withValues(
-                  alpha: menuOpen ? 0.5 : 0.30,
+              decoration: BoxDecoration(
+                // Per-session gradient fill so overlapping runs are distinguishable.
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    _scoutSessionPalette.fill,
+                    _scoutSessionPalette.fillDark,
+                  ],
                 ),
-                blurRadius: 16,
-                spreadRadius: -6,
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.my_location,
-                size: 12,
-                color: _scoutSessionPalette.foreground,
-              ),
-              const SizedBox(width: ScoutSpace.xs),
-              Text(
-                _scoutLauncherLabel,
-                style: ScoutType.label.copyWith(
-                  fontSize: 9,
-                  letterSpacing: 0.6,
-                  color: _scoutSessionPalette.foreground,
+                // Squared bottom-left so the badge hugs the exact corner of the
+                // app; the other three corners stay rounded like a corner tab.
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(ScoutRadius.panel),
+                  topRight: Radius.circular(ScoutRadius.panel),
+                  bottomRight: Radius.circular(ScoutRadius.panel),
                 ),
-              ),
-              const SizedBox(width: ScoutSpace.xs),
-              // Chevron flips up→down to signal the menu's open state.
-              AnimatedRotation(
-                turns: menuOpen ? 0.5 : 0.0,
-                duration: ScoutMotion.base,
-                curve: ScoutMotion.enter,
-                child: Icon(
-                  Icons.keyboard_arrow_up,
-                  size: 13,
-                  color: _scoutSessionPalette.foreground,
+                border: Border.all(
+                  // Brighten the rim while the menu is open so the launcher reads
+                  // as the active/expanded control.
+                  color: _scoutSessionPalette.accent.withValues(
+                    alpha: menuOpen ? 0.95 : 0.55,
+                  ),
+                  width: 1,
                 ),
+                boxShadow: [
+                  BoxShadow(
+                    color: _scoutSessionPalette.accent.withValues(
+                      alpha: menuOpen ? 0.5 : 0.30,
+                    ),
+                    blurRadius: 16,
+                    spreadRadius: -6,
+                  ),
+                ],
               ),
-            ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.my_location,
+                    size: 12,
+                    color: _scoutSessionPalette.foreground,
+                  ),
+                  const SizedBox(width: ScoutSpace.xs),
+                  Text(
+                    _scoutLauncherLabel,
+                    style: ScoutType.label.copyWith(
+                      fontSize: 9,
+                      letterSpacing: 0.6,
+                      color: _scoutSessionPalette.foreground,
+                    ),
+                  ),
+                  if (interactive) ...[
+                    const SizedBox(width: ScoutSpace.xs),
+                    // Chevron flips up→down to signal the menu's open state.
+                    AnimatedRotation(
+                      turns: menuOpen ? 0.5 : 0.0,
+                      duration: ScoutMotion.base,
+                      curve: ScoutMotion.enter,
+                      child: Icon(
+                        Icons.keyboard_arrow_up,
+                        size: 13,
+                        color: _scoutSessionPalette.foreground,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -625,6 +638,7 @@ class _FlutterScoutAnnotationOverlayState
 
   // Whether the bottom-left launcher menu is expanded. Pure UI state.
   bool _menuOpen = false;
+  bool _passiveMenuCloseScheduled = false;
 
   // A pin reticle is centered this far in from its target's top-left corner;
   // taps within [_pinHitRadius] of that center open the pin's delete popup.
@@ -660,6 +674,16 @@ class _FlutterScoutAnnotationOverlayState
 
   void _closeMenu() {
     if (_menuOpen) setState(() => _menuOpen = false);
+  }
+
+  void _schedulePassiveMenuClose() {
+    if (_passiveMenuCloseScheduled) return;
+    _passiveMenuCloseScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _passiveMenuCloseScheduled = false;
+      if (!mounted || !_menuOpen) return;
+      setState(() => _menuOpen = false);
+    });
   }
 
   // Menu → Annotate: flip annotation mode (revealing the draggable FAB) and
@@ -891,6 +915,8 @@ class _FlutterScoutAnnotationOverlayState
       valueListenable: widget.runtime._annotationRevision,
       builder: (context, revision, child) {
         final enabled = widget.runtime._annotationMode;
+        final interactive = widget.runtime._annotationOverlayInteractive;
+        if (!interactive && _menuOpen) _schedulePassiveMenuClose();
         final toggleButtonOffset = _resolvedToggleButtonOffset(context);
         if (enabled) {
           _scheduleTargetRefresh(revision);
@@ -950,15 +976,19 @@ class _FlutterScoutAnnotationOverlayState
               // barrier so it stays interactive (and reachable during
               // annotation mode) while the menu is open.
               if (notCapturing) ...[
-                if (_menuOpen)
+                if (interactive && _menuOpen)
                   Positioned.fill(
                     child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: _closeMenu,
                     ),
                   ),
-                _ScoutInstanceBadge(menuOpen: _menuOpen, onTap: _toggleMenu),
-                if (_menuOpen)
+                _ScoutInstanceBadge(
+                  menuOpen: interactive && _menuOpen,
+                  interactive: interactive,
+                  onTap: _toggleMenu,
+                ),
+                if (interactive && _menuOpen)
                   _ScoutMenu(
                     annotationActive: enabled,
                     annotationCount: widget.runtime._activeAnnotationCount,

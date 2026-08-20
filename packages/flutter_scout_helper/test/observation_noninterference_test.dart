@@ -186,6 +186,59 @@ void main() {
       );
     },
   );
+
+  testWidgets('Scout-owned launch badge is passive until UI opt-in', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final probeKey = GlobalKey<_NonInterferenceProbeState>();
+    await tester.pumpWidget(
+      MaterialApp(home: _NonInterferenceProbe(key: probeKey)),
+    );
+    await tester.pump();
+    expect(probeKey.currentState!.tickerValue, 0);
+
+    runtime.debugSetLaunchBadgeVisible(true);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(runtime.debugOverlayInstalled, isTrue);
+    expect(runtime.debugOverlayInteractive, isFalse);
+    expect(find.text('SCOUT'), findsOneWidget);
+    expect(find.bySemanticsLabel('SCOUT'), findsNothing);
+
+    // The passive label occupies this visual corner but must not consume the
+    // app's pointer or add a control to its semantics tree.
+    await tester.tapAt(const Offset(20, 590));
+    expect(probeKey.currentState!.bottomLeftTaps, 1);
+
+    runtime.debugSetAnnotationMode(true);
+    await tester.pump();
+    expect(runtime.debugOverlayInteractive, isTrue);
+    await tester.tap(find.text('SCOUT'));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.text('ANNOTATE'), findsOneWidget);
+
+    runtime.debugSetAnnotationMode(false);
+    await tester.pump();
+    await tester.pump();
+    expect(runtime.debugOverlayInstalled, isTrue);
+    expect(runtime.debugOverlayInteractive, isFalse);
+    expect(find.text('ANNOTATE'), findsNothing);
+
+    // A menu that was open before the badge became passive must not reappear
+    // if another agent later enables annotation mode.
+    runtime.debugSetAnnotationMode(true);
+    await tester.pump();
+    expect(find.text('ANNOTATE'), findsNothing);
+    runtime.debugSetAnnotationMode(false);
+    await tester.pump();
+
+    runtime.debugSetLaunchBadgeVisible(null);
+    await tester.pump();
+    expect(runtime.debugOverlayInstalled, isFalse);
+  });
 }
 
 class _NonInterferenceProbe extends StatefulWidget {

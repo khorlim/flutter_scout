@@ -59,7 +59,9 @@ result is replaced by a bounded
 typed failure that keeps identity, dispatch uncertainty, hard-signal cursors,
 runtime health, and phase availability without emitting a partial result.
 
-The overlay is not installed at attach. `annotations enable` is the explicit
-annotation-UI opt-in; starting a recording explicitly enables its HUD.
-`annotations disable` and recording stop remove the overlay as soon as both
-modes are inactive.
+Scout-owned launches install a passive bottom-left session badge derived from
+`FLUTTER_SCOUT_INSTANCE` (or `SCOUT` when unnamed). The badge is excluded from
+hit testing and semantics until `annotations enable` or recording start makes
+the existing HUD interactive. Attach alone installs no badge. Disabling
+annotations and stopping recording return a launch badge to passive mode, or
+remove the overlay entirely for a human-started attached app.

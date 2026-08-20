@@ -191,10 +191,12 @@ class FlutterScoutRuntime {
   // host Overlay is disposed without removing its entries.
   OverlayState? _annotationOverlayHost;
   bool _annotationOverlayInstallScheduled = false;
-  // The overlay is intentionally absent after install. It becomes eligible
-  // only through an explicit annotation/recording UI opt-in and is removed as
-  // soon as neither mode is active. Observation must never install chrome.
+  // Interactive overlay chrome remains explicit opt-in. A Scout-owned launch
+  // may still install its passive, pointer-transparent session badge so humans
+  // can distinguish concurrent agent windows without changing app semantics.
   bool _annotationOverlayOptedIn = false;
+  bool? _debugLaunchBadgeVisible;
+  bool _debugForceOverlayInteractive = false;
   FlutterExceptionHandler? _previousFlutterError;
   ui.ErrorCallback? _previousPlatformError;
 
@@ -241,6 +243,7 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.record', _handleRecord);
     _installRecorderRoute();
     _broadcastVmUri();
+    _reconcileAnnotationOverlay();
   }
 
   int get _activeAnnotationCount =>
@@ -282,7 +285,10 @@ class FlutterScoutRuntime {
       _updateAnnotationStatus(id: id, status: 'pending_review');
 
   @visibleForTesting
-  void debugSetAnnotationMode(bool enabled) => _setAnnotationMode(enabled);
+  void debugSetAnnotationMode(bool enabled) {
+    if (!enabled) _debugForceOverlayInteractive = false;
+    _setAnnotationMode(enabled);
+  }
 
   /// In-app Record toggle entry point (used by the launcher menu) and test hooks
   /// for the flow recorder; the implementation lives in runtime_recorder.dart.
@@ -322,8 +328,20 @@ class FlutterScoutRuntime {
   @visibleForTesting
   void debugEnsureOverlayInstalled() {
     _annotationOverlayOptedIn = true;
+    _debugForceOverlayInteractive = true;
     _scheduleAnnotationOverlayInstall(forceForTesting: true);
   }
+
+  /// Test-only launch-context seam. Production derives this from the
+  /// `FLUTTER_SCOUT_RUN_ID` injected only by Scout-owned launches.
+  @visibleForTesting
+  void debugSetLaunchBadgeVisible(bool? visible) {
+    _debugLaunchBadgeVisible = visible;
+    _reconcileAnnotationOverlay();
+  }
+
+  @visibleForTesting
+  bool get debugOverlayInteractive => _annotationOverlayInteractive;
 
   @visibleForTesting
   bool get debugOverlayInstalled =>

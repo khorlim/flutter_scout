@@ -137,7 +137,7 @@ Use `attach` only when you intentionally need to preserve or inspect a human-sta
 dart run bin/flutter_scout.dart attach --device <simulator-id> --debug-url-file /private/path/vm-service-url
 ```
 
-Pass `--name <label>` on every `launch` or `ensure` to distinguish concurrent sessions — e.g. one debug window per worktree on macOS/desktop. Scout injects it as a `--dart-define`; after annotation or recording UI is explicitly enabled, its HUD badge uses that label to identify the session. Launch/attach and observation alone install no badge or overlay:
+Pass `--name <label>` on every `launch` or `ensure` to distinguish concurrent sessions — e.g. one debug window per worktree on macOS/desktop. Scout injects it as a `--dart-define`; every Scout-owned launch shows that label in a passive, pointer-transparent bottom-left badge. Without `--name`, the badge reads `SCOUT`. Human-started apps reached through attach do not gain a badge:
 
 ```bash
 dart run bin/flutter_scout.dart launch --device macos --project ../../apps/scout_test_app --name feature-a
@@ -398,11 +398,12 @@ Replay output includes both `results` and a concise `transcript` array. The tran
 
 ## Annotation Mode
 
-Scout does not install overlay chrome merely because the helper attaches. Run
-`annotations enable` to explicitly opt into the annotation UI (or start a
-recording to opt into its HUD). Disabling annotation mode removes the overlay
-when recording is also inactive, so ordinary app input and semantics remain
-untouched. In annotation mode, tap a visible widget to select it. Repeated taps
+Scout-owned launches show a passive session badge for window identification;
+it is excluded from hit testing and semantics. Scout does not install that
+badge merely because the helper attaches. Run `annotations enable` to make the
+badge interactive and opt into the annotation UI (or start a recording to opt
+into its HUD). Disabling annotation mode returns the launch badge to passive
+mode when recording is also inactive. In annotation mode, tap a visible widget to select it. Repeated taps
 in the same spot cycle through stacked candidates, such as text, button,
 section, or screen-level targets. Add a comment and save it; the comment is kept
 in the running app and exposed to the CLI:
