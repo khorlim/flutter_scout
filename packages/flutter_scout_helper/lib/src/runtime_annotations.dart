@@ -566,7 +566,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     try {
       final mode = params['mode'] ?? 'screen';
       if (mode == 'changed-region') {
-        return _handleChangedRegionCapture(params);
+        return await _handleChangedRegionCapture(params);
       }
       final native = params['native'] ?? 'auto';
       Rect? rect;

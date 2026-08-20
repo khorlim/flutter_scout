@@ -993,7 +993,7 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
       _recordValidateSegment(feature);
       _recordValidateSegment(name);
       final location = _recordingStoreLocation();
-      return _recordWithIndexLock(location, () {
+      return await _recordWithIndexLock(location, () {
         _recordSecureExistingStore(location.root, boundary: location.boundary);
         final directory = '${location.root}/$feature';
         _recordEnsurePrivateDirectory(directory, boundary: location.boundary);
