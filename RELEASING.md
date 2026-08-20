@@ -17,7 +17,7 @@ One release owner must record:
 
 - candidate commit and clean worktree status;
 - current-release comparison commit or signed tag;
-- CI run URLs and all retained failing seeds;
+- manual verification run URLs and all retained failing seeds;
 - host hardware, OS, simulator/emulator image, device, viewport, locale, and
   build mode;
 - exact Flutter and Dart output;
@@ -31,9 +31,9 @@ must be reported separately and may be rerun only under a predeclared rule.
 
 ## Pinned toolchain
 
-Blocking CI pins Flutter `3.44.2`; its bundled Dart SDK is the blocking Dart
-toolchain. A release operator must use the same toolchain locally or rely on the
-blocking CI job and record:
+The manual verification workflow pins Flutter `3.44.2`; its bundled Dart SDK is
+the pinned Dart toolchain. A release operator must use the same toolchain
+locally or run the manual workflow and record:
 
 ```bash
 flutter --version
@@ -42,7 +42,7 @@ git rev-parse HEAD
 git status --short
 ```
 
-Current stable and beta run only as non-blocking compatibility canaries. A
+Stable and beta run only as compatibility canaries in the manual workflow. A
 canary failure is not silently ignored: classify it, open follow-up work, and
 record whether it changes the published support matrix.
 
@@ -51,7 +51,7 @@ SHA; the trailing major-version comment is descriptive only. Updating an action
 pin requires reviewing its upstream diff and rerunning all release gates.
 
 Changing the pinned toolchain requires a normal reviewed change with all gates
-rerun. Do not weaken or float the blocking pin during release preparation.
+rerun. Do not weaken or float the pin during release preparation.
 
 ## Commands currently available
 
@@ -147,8 +147,8 @@ artifacts, signature, provenance trust, or rollback exercise are complete.
 
 ## Repeated release-critical test gate
 
-Blocking CI repeats the release-critical CLI, helper, and verification-app
-subsets plus the complete evaluation/oracle/report suite three times, in
+The manually dispatched verification workflow repeats the release-critical CLI,
+helper, and verification-app subsets plus the complete evaluation/oracle/report suite three times, in
 serial, with preregistered test-order seeds `1729`, `2718`, and `31415`. Each
 suite attempt has a 20-minute deadline. A timeout or any non-zero attempt fails
 the job even if a later attempt passes; rerunning the workflow must never erase
@@ -157,7 +157,7 @@ or reclassify that failure.
 The gate writes the exact shell-escaped command and working directory, separate
 stdout and stderr logs, seed, attempt number, exit code, and outcome for every
 suite, plus the commit, worktree status, CI run identity, and Flutter/Dart
-toolchain identity. CI uploads the complete owner-only working set with
+toolchain identity. The workflow uploads the complete owner-only working set with
 `if: always()` and a 90-day retention period. The release owner must retain the
 artifact URL and digest with the candidate evidence, and must preserve any
 longer-lived failing seed or interleaving until the defect is resolved. A green
@@ -231,7 +231,7 @@ safety, truthfulness, or privacy regression.
 | Lifecycle fault injection | Deterministic interruption of launch, attach, reload, restart, stop, temporary-helper cleanup, metadata writes, daemon supervision, PID reuse, full disk, and permissions failure. | **BLOCKER:** full matrix is not implemented. |
 | Tier-1 simulator behavior | The same visibility, occlusion, modal, hit-test, input, scrolling, signal, capture, lifecycle, and cleanup contract on iOS Simulator and Android Emulator; macOS only if declared Tier 1. | **BLOCKER:** no complete automated cross-platform suite. |
 | Redaction and local transport security | Generated adversarial secret corpus; zero plaintext leaks across every output/artifact; authenticated-loopback, method, origin, parameter, body, deadline, path, and legacy-mode tests. | The deterministic 132-case source/sink/artifact corpus and focused transport/storage controls are implemented; **BLOCKER:** retained screenshot/OCR and cross-platform process-boundary evidence is incomplete. |
-| Debug-only operation | Positive-control debug build plus profile/release compiled and runtime absence on each declared Tier-1 target. | Android debug/profile/release APK sentinel scan is blocking CI; **BLOCKER:** retained runtime and iOS/Tier-1 parity evidence is incomplete. |
+| Debug-only operation | Positive-control debug build plus profile/release compiled and runtime absence on each declared Tier-1 target. | Android debug/profile/release APK sentinel scan is available in the manual verification workflow; **BLOCKER:** retained runtime and iOS/Tier-1 parity evidence is incomplete. |
 | Candidate benchmark | Raw paired current/candidate episodes with independent hidden oracles, fixed model/configuration/budgets, and public/private/frozen template separation. | **BLOCKER:** evaluation foundation exists; benchmark sets and scored runs do not. |
 | Performance and non-interference | Pinned phase timings, CPU, memory, frame-time, payload/token, observation-interference, and regression comparison. | **BLOCKER:** reference benchmark and baseline are not frozen. |
 | Endurance | 60 minutes or 1,000 actions without crash, crossover, deadlock, resource leak, or unbounded growth. | A deterministic correlated runner, independent probes, teardown checks, and tamper-evident archive contract are implemented; **BLOCKER:** no retained eligible 60-minute or 1,000-action run exists. |

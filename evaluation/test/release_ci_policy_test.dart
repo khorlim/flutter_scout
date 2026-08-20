@@ -4,7 +4,7 @@ import 'package:test/test.dart';
 
 void main() {
   test(
-    'blocking CI preserves and repeats every deterministic critical layer',
+    'manual verification preserves every deterministic critical layer',
     () {
       final workflow = File('../.github/workflows/ci.yml').readAsStringSync();
       final canaryStart = workflow.indexOf('  compatibility-canary:');
