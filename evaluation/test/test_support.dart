@@ -1,6 +1,19 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_scout_evaluation/flutter_scout_evaluation.dart';
+
+Future<Directory> createPrivateTestDirectory(String prefix) async {
+  final directory = await Directory.systemTemp.createTemp(prefix);
+  if (!Platform.isWindows) {
+    final result = await Process.run('chmod', <String>['700', directory.path]);
+    if (result.exitCode != 0) {
+      await directory.delete(recursive: true);
+      throw StateError('Could not make the temporary test directory private.');
+    }
+  }
+  return directory;
+}
 
 TaskManifest testManifest({
   String taskId = 'save-profile.variant-a',

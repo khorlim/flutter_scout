@@ -16,7 +16,7 @@ Future<void> main(List<String> arguments) async {
     '[FLUTTER_SCOUT_VM_URI]',
     'runtime_instance_mismatch',
     'held_drag_active',
-    'recorder_write_failed',
+    'recorder_persistence_delegated',
     'ext.flutter_scout_evaluator.supplier_state',
     'ext.flutter_scout_evaluator.supplier_reset',
     'SCOUT_EVALUATOR_BUILD_PROBE_9f4c2a7e',

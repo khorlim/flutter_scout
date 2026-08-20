@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Keep macOS launches waiting through the Dart launcher-to-VM executable
+  transition by validating the live worker against its exact post-exec
+  supervisor identity instead of prematurely reporting `runner_exited`.
 - Restore compiled-snapshot local activation and remove repeated hot-path work:
   event projections are recoverable non-durable caches with process-local
   reuse, encoded secret matchers are compiled once per secret set, response

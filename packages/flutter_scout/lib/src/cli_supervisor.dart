@@ -202,27 +202,32 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
   }
 
   Future<bool> _runnerSupervisorAlive(_RunnerSupervisor supervisor) async {
+    Future<bool> matchesLiveWorker(int workerPid) {
+      final state = _readSessionConfiguredJson('supervisorStateFile');
+      final expectedIdentity = _selectRunnerWorkerIdentity(
+        initialIdentity: supervisor.processIdentity,
+        expectedRunId: supervisor.runId,
+        liveWorkerPid: workerPid,
+        supervisorState: state,
+      );
+      return _matchesRunnerWorker(
+        workerPid,
+        expectedIdentity: expectedIdentity,
+        expectedRunId: supervisor.runId,
+        expectedConfigFile: supervisor.configFile,
+      );
+    }
+
     if (supervisor.type == 'launchd') {
       final domain = supervisor.domain;
       final label = supervisor.label;
       if (domain == null || label == null) return false;
       final workerPid = await _launchdServicePid(domain: domain, label: label);
       if (workerPid == null) return false;
-      return _matchesRunnerWorker(
-        workerPid,
-        expectedIdentity: supervisor.processIdentity,
-        expectedRunId: supervisor.runId,
-        expectedConfigFile: supervisor.configFile,
-      );
+      return matchesLiveWorker(workerPid);
     }
     final workerPid = supervisor.workerPid;
-    return workerPid != null &&
-        await _matchesRunnerWorker(
-          workerPid,
-          expectedIdentity: supervisor.processIdentity,
-          expectedRunId: supervisor.runId,
-          expectedConfigFile: supervisor.configFile,
-        );
+    return workerPid != null && await matchesLiveWorker(workerPid);
   }
 
   Future<bool> _matchesRunnerWorker(
@@ -537,6 +542,35 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
       if (result.exitCode != 0 && !alreadyStopped) 'error': message,
     };
   }
+}
+
+Object? _selectRunnerWorkerIdentity({
+  required Object? initialIdentity,
+  required String? expectedRunId,
+  required int liveWorkerPid,
+  required Map<String, dynamic>? supervisorState,
+}) {
+  if (supervisorState == null ||
+      supervisorState['runId']?.toString() != expectedRunId ||
+      int.tryParse('${supervisorState['workerPid'] ?? ''}') != liveWorkerPid ||
+      supervisorState['workerProcessIdentity'] is! Map) {
+    return initialIdentity;
+  }
+  return supervisorState['workerProcessIdentity'];
+}
+
+extension FlutterScoutCliSupervisorTesting on FlutterScoutCli {
+  Object? debugSelectRunnerWorkerIdentity({
+    required Object? initialIdentity,
+    required String? expectedRunId,
+    required int liveWorkerPid,
+    required Map<String, dynamic>? supervisorState,
+  }) => _selectRunnerWorkerIdentity(
+    initialIdentity: initialIdentity,
+    expectedRunId: expectedRunId,
+    liveWorkerPid: liveWorkerPid,
+    supervisorState: supervisorState,
+  );
 }
 
 class _RunnerSupervisor {
