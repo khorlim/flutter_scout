@@ -115,8 +115,8 @@ Proof keys resolve to these files:
   changelog alignment, incomplete-composition SBOM, unsigned provenance,
   artifact digests, rollback/signing state, and semantic tamper self-check;
   this key is not a finalized, signed, independently verified release.
-- `P-CI`: repository CI workflow configuration; this key is not a retained
-  successful CI run.
+- `P-CI`: repository manual verification workflow configuration; this key is
+  not a retained successful workflow run.
 - `P-OPERABILITY`: shared bounded status/doctor/health contract, compiled helper
   identity, observed/unavailable goldens, production health builder, and tests.
 - `P-TOOL-SIM`: public Supplier evaluator controller, schemas, fixtures, runner,
