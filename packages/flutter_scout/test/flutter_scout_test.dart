@@ -1853,6 +1853,54 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
     expect(plist, isNot(contains('<key>KeepAlive</key>\n  <true/>')));
   });
 
+  test('launch poll accepts the worker identity recorded after Dart exec', () {
+    final cli = FlutterScoutCli();
+    final initialIdentity = <String, Object?>{
+      'pid': 42,
+      'parentPid': 1,
+      'startedAt': 'Thu Aug 20 17:09:04 2026',
+      'executable': '/flutter/bin/cache/dart-sdk/bin/dart',
+      'commandIdentity': 'flutter_run_worker',
+    };
+    final postExecIdentity = <String, Object?>{
+      ...initialIdentity,
+      'executable': '/flutter/bin/cache/dart-sdk/bin/dartvm',
+    };
+    final state = <String, dynamic>{
+      'runId': 'launch-run',
+      'workerPid': 42,
+      'workerProcessIdentity': postExecIdentity,
+    };
+
+    expect(
+      cli.debugSelectRunnerWorkerIdentity(
+        initialIdentity: initialIdentity,
+        expectedRunId: 'launch-run',
+        liveWorkerPid: 42,
+        supervisorState: state,
+      ),
+      same(postExecIdentity),
+    );
+    expect(
+      cli.debugSelectRunnerWorkerIdentity(
+        initialIdentity: initialIdentity,
+        expectedRunId: 'different-run',
+        liveWorkerPid: 42,
+        supervisorState: state,
+      ),
+      same(initialIdentity),
+    );
+    expect(
+      cli.debugSelectRunnerWorkerIdentity(
+        initialIdentity: initialIdentity,
+        expectedRunId: 'launch-run',
+        liveWorkerPid: 99,
+        supervisorState: state,
+      ),
+      same(initialIdentity),
+    );
+  });
+
   test(
     'supervised worker records Flutter exit without requesting relaunch',
     () async {
