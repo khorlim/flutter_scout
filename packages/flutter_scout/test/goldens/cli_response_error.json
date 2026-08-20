@@ -1,0 +1,117 @@
+{
+  "messageType": "response",
+  "ok": false,
+  "schemaVersion": 1,
+  "protocolVersion": 15,
+  "protocolRange": {
+    "minimum": 15,
+    "maximum": 15,
+    "compatibility": "within_supported_range"
+  },
+  "capabilities": {
+    "runtimeSignalProvenanceV1": true,
+    "cliResponseEnvelopeV1": true,
+    "structuredHeartbeatsV1": true,
+    "correlatedEventCursorsV1": true,
+    "boundedCliPayloadsV1": true
+  },
+  "commandId": "failure-golden",
+  "cliCommandId": "failure-golden",
+  "commandName": "input",
+  "runId": "run-golden",
+  "runtimeInstanceId": null,
+  "stateGeneration": null,
+  "identityStatus": "partial",
+  "identityAvailability": {
+    "commandId": "available",
+    "cliCommandId": "available",
+    "runId": "available",
+    "runtimeInstanceId": "unavailable",
+    "stateGeneration": "unavailable"
+  },
+  "result": null,
+  "structuredError": {
+    "code": "usage",
+    "message": "A value is required."
+  },
+  "timings": {
+    "totalMs": 11,
+    "status": "partial",
+    "phases": {
+      "connect": {
+        "status": "unavailable",
+        "elapsedMs": null,
+        "owner": "cli",
+        "reason": "cli_phase_missing_from_response"
+      },
+      "snapshot": {
+        "status": "unavailable",
+        "elapsedMs": null,
+        "owner": "helper",
+        "reason": "helper_phase_missing_from_response"
+      },
+      "match": {
+        "status": "unavailable",
+        "elapsedMs": null,
+        "owner": "helper",
+        "reason": "helper_phase_missing_from_response"
+      },
+      "dispatch": {
+        "status": "unavailable",
+        "elapsedMs": null,
+        "owner": "helper",
+        "reason": "helper_phase_missing_from_response"
+      },
+      "settle": {
+        "status": "unavailable",
+        "elapsedMs": null,
+        "owner": "helper",
+        "reason": "helper_phase_missing_from_response"
+      },
+      "delta": {
+        "status": "unavailable",
+        "elapsedMs": null,
+        "owner": "helper",
+        "reason": "helper_phase_missing_from_response"
+      },
+      "logs": {
+        "status": "unavailable",
+        "elapsedMs": null,
+        "owner": "cli",
+        "reason": "cli_phase_missing_from_response"
+      },
+      "serialize": {
+        "status": "unavailable",
+        "elapsedMs": null,
+        "owner": "cli",
+        "reason": "cli_phase_missing_from_response"
+      }
+    },
+    "actionOverheadExcludingSettle": {
+      "status": "unavailable",
+      "elapsedMs": null,
+      "reason": "required_phase_measurements_unavailable",
+      "unavailablePhases": [
+        "connect",
+        "snapshot",
+        "match",
+        "dispatch",
+        "delta",
+        "logs",
+        "serialize"
+      ],
+      "excludes": "settle"
+    }
+  },
+  "logCursor": 0,
+  "eventCursor": null,
+  "payloadBounds": {
+    "maxSerializedBytes": 4194304,
+    "maxStringCharacters": 65536,
+    "maxCollectionEntries": 1024,
+    "maxDepth": 24,
+    "truncated": false,
+    "truncationCount": 0,
+    "safetyDisposition": "complete"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://flutter-scout.local/evaluation/v1/corpus_policy.schema.json",
+  "schemaVersion": 1,
+  "policyId": "gold-conformance",
+  "minimumTemplateCount": 60,
+  "minimumVariantsPerTemplate": 5,
+  "minimumTemplatesPerRequiredFamily": 1,
+  "minimumRealAppIdentitiesBeyondStressLab": 2,
+  "requiredFamilies": [
+    "forms",
+    "lists",
+    "grids",
+    "nested_scroll",
+    "tabs",
+    "dialogs_sheets_menus",
+    "pickers",
+    "custom_painted",
+    "gesture",
+    "lifecycle_reconnect",
+    "faults",
+    "security_privacy"
+  ],
+  "requiredPerturbationDimensions": [
+    "viewport",
+    "device_pixel_ratio",
+    "orientation",
+    "content_order",
+    "content_length",
+    "initial_scroll_state",
+    "initial_tab_state",
+    "initial_modal_state",
+    "initial_focus_state",
+    "animation_delay",
+    "network_delay",
+    "semantics_degradation",
+    "key_degradation"
+  ],
+  "requiredSplits": [
+    "public_development",
+    "private_validation",
+    "frozen_hidden_release"
+  ],
+  "stressLabAppIds": ["flutter-scout-stress-lab"]
+}

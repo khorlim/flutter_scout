@@ -506,7 +506,7 @@ void main() {
   );
 
   testWidgets('flow recorder captures taps + typed fields as handle-based steps, '
-      'redacts secrets, and writes the flow to disk', (tester) async {
+      'redacts all input values, and writes the flow to disk', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     final runtime = FlutterScoutHelper.debugRuntime;
     // Leave the shared singleton clean if a prior test left a recording open.
@@ -594,8 +594,9 @@ void main() {
     final nameStep = steps.firstWhere(
       (s) => s['cmd'] == 'input' && s['target'] == 'field.name',
     );
-    expect(nameStep['value'], 'QA Tester');
-    expect(nameStep.containsKey('_redacted'), isFalse);
+    expect(nameStep['_redacted'], 'true');
+    expect((nameStep['value'] as String).contains('VAR:'), isTrue);
+    expect((nameStep['value'] as String).contains('QA Tester'), isFalse);
 
     final pwStep = steps.firstWhere(
       (s) => s['cmd'] == 'input' && s['target'] == 'field.password',
@@ -611,6 +612,7 @@ void main() {
     expect(onDisk['feature'], 'members');
     expect(onDisk['name'], 'add-member');
     expect(onDisk['startScreen'], isNotNull);
+    expect(written.readAsStringSync(), isNot(contains('QA Tester')));
 
     // Index is rebuilt and lists the flow.
     final index =
@@ -619,6 +621,229 @@ void main() {
       (index['recordings'] as List).any((r) => r['name'] == 'add-member'),
       isTrue,
     );
+    expect(jsonEncode(result), isNot(contains('secret123')));
+    expect(jsonEncode(result), isNot(contains('QA Tester')));
+    expect(jsonEncode(runtime.debugRecordSteps), isNot(contains('secret123')));
+    expect(jsonEncode(runtime.debugRecordSteps), isNot(contains('QA Tester')));
+  });
+
+  testWidgets(
+    'sensitive fields are source-redacted across inspect, deltas, errors, '
+    'annotations, expectations, and debug APIs',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      final runtime = FlutterScoutHelper.debugRuntime;
+      const initialPassword = 'Scout-Private-P@55-9e7';
+      const updatedPassword = 'Scout-Private-N3w-P@55-a42';
+      const apiToken = 'scout_api_token_private_41f9';
+      final nameController = TextEditingController(text: 'Visible QA Name');
+      final passwordController = TextEditingController(text: initialPassword);
+      final tokenController = TextEditingController(text: apiToken);
+      final otpController = TextEditingController();
+      addTearDown(nameController.dispose);
+      addTearDown(passwordController.dispose);
+      addTearDown(tokenController.dispose);
+      addTearDown(otpController.dispose);
+
+      // The echo deliberately precedes the password field. The post-walk scrub
+      // must still remove a value discovered later in element-tree order.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                const Text('Echo: $initialPassword'),
+                TextField(
+                  key: const ValueKey('display_name'),
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: 'Name'),
+                ),
+                TextField(
+                  key: const ValueKey('account_password'),
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'Password'),
+                ),
+                TextField(
+                  key: const ValueKey('api_token'),
+                  controller: tokenController,
+                  decoration: const InputDecoration(labelText: 'API token'),
+                ),
+                TextField(
+                  key: const ValueKey('one_time_code'),
+                  controller: otpController,
+                  decoration: const InputDecoration(labelText: 'One-time code'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      void expectSecretFree(Object? value) {
+        final encoded = jsonEncode(value);
+        expect(encoded, isNot(contains(initialPassword)));
+        expect(encoded, isNot(contains(updatedPassword)));
+        expect(encoded, isNot(contains(apiToken)));
+        // Mask glyph count is secret length and must not enter tree output.
+        expect(encoded, isNot(contains('••')));
+      }
+
+      final snapshot = runtime.debugSnapshot();
+      final password = snapshot.findField('field.account_password')!;
+      final token = snapshot.findField('field.api_token')!;
+      final otp = snapshot.findField('field.one_time_code')!;
+      final name = snapshot.findField('field.display_name')!;
+      expect(password.obscured, isTrue);
+      expect(password.redacted, isTrue);
+      expect(password.value, isNull);
+      expect(password.isEmpty, isFalse);
+      expect(password.hasValue, isTrue);
+      expect(token.obscured, isFalse);
+      expect(token.redacted, isTrue, reason: 'password-style metadata');
+      expect(token.value, isNull);
+      expect(otp.redacted, isTrue);
+      expect(otp.isEmpty, isTrue);
+      expect(otp.hasValue, isFalse);
+      expect(name.redacted, isFalse);
+      expect(name.value, 'Visible QA Name');
+
+      final passwordJson = password.toJson();
+      expect(passwordJson.containsKey('value'), isFalse);
+      expect(passwordJson['redacted'], isTrue);
+      expect(passwordJson['isEmpty'], isFalse);
+      expect(passwordJson['hasValue'], isTrue);
+      expect(passwordJson.containsKey('length'), isFalse);
+
+      final summary = snapshot.summaryJson();
+      final fieldValues = (summary['fieldValues']! as Map)
+          .cast<String, Object?>();
+      final passwordState = (fieldValues[password.id]! as Map)
+          .cast<String, Object?>();
+      expect(passwordState, <String, Object?>{
+        'redacted': true,
+        'isEmpty': false,
+        'hasValue': true,
+      });
+      final fieldsById = (summary['fieldsById']! as Map)
+          .cast<String, Object?>();
+      final passwordById = (fieldsById[password.id]! as Map)
+          .cast<String, Object?>();
+      expect(passwordById.containsKey('value'), isFalse);
+      expect(passwordById['redacted'], isTrue);
+
+      expect(snapshot.visibleText, contains('Echo: [REDACTED]'));
+      expectSecretFree(snapshot.toJson());
+      expectSecretFree(runtime.debugInspectPayload(brief: true));
+      expectSecretFree(runtime.debugInspectPayload(sections: {'fields'}));
+      expectSecretFree(runtime.debugInspectPayload(sections: {'visualTree'}));
+      expectSecretFree(
+        runtime.debugInspectPayload(sections: {'controlGroups'}),
+      );
+      expectSecretFree(snapshot.suggestedActions);
+      expectSecretFree([
+        for (final target in runtime.debugVisibleAnnotationTargets())
+          target.toJson(),
+      ]);
+      expectSecretFree(runtime.debugCaptureMarks().legend);
+
+      final inputResult = await runtime.debugInputTarget(
+        password.id,
+        updatedPassword,
+      );
+      expect(inputResult['ok'], isTrue);
+      final delta = (inputResult['delta']! as Map).cast<String, Object?>();
+      expect(
+        (delta['changedFields']! as List<Object?>),
+        contains(password.id),
+        reason: 'non-empty secret changes still produce a useful delta',
+      );
+      expectSecretFree(inputResult);
+      expect(
+        runtime.debugWaitForConditionsMet({
+          'field': '${password.id}=$updatedPassword',
+        }),
+        isTrue,
+      );
+
+      final expectation = await tester.runAsync(
+        () => runtime.debugActionExpectation({
+          'expectField': '${password.id}=$updatedPassword',
+          'expectTimeoutMs': '250',
+        }),
+      );
+      expect(expectation!['ok'], isTrue);
+      final conditions =
+          ((expectation['expectation']! as Map)['conditions']! as Map)
+              .cast<String, Object?>();
+      final fieldCondition = (conditions['field']! as Map)
+          .cast<String, Object?>();
+      expect(fieldCondition['redacted'], isTrue);
+      expect(fieldCondition['hasValue'], isTrue);
+      expectSecretFree(expectation);
+
+      runtime.debugRecordError(
+        'Authentication rejected $updatedPassword and $apiToken',
+      );
+      final withError = runtime.debugInspectPayload(brief: true);
+      expectSecretFree(withError);
+      expect(jsonEncode(withError), contains('[REDACTED]'));
+    },
+  );
+
+  testWidgets('custom numeric keypad values are redacted from control and tree '
+      'output', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    const pin = '7391';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              const Text('Enter PIN'),
+              const Text(pin, key: ValueKey('pin_display')),
+              SizedBox(
+                width: 240,
+                height: 320,
+                child: GridView.count(
+                  crossAxisCount: 3,
+                  children: [
+                    for (final digit in <String>[
+                      '1',
+                      '2',
+                      '3',
+                      '4',
+                      '5',
+                      '6',
+                      '7',
+                      '8',
+                      '9',
+                      '0',
+                    ])
+                      TextButton(onPressed: () {}, child: Text(digit)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    expect(snapshot.controlGroups, isNotEmpty);
+    final group = snapshot.controlGroups.first;
+    final valueState = (group['currentValue']! as Map).cast<String, Object?>();
+    expect(valueState, <String, Object?>{
+      'redacted': true,
+      'isEmpty': false,
+      'hasValue': true,
+    });
+    final encoded = jsonEncode(snapshot.toJson());
+    expect(encoded, isNot(contains(pin)));
+    expect(encoded, contains('[REDACTED]'));
   });
 
   group('scoutAnnotationDialogPlacement', () {
@@ -978,7 +1203,7 @@ void main() {
         surfaceOnly: true,
       );
       final quality =
-          semanticInspect['semanticQuality']! as Map<String, Object?>;
+          semanticInspect['semanticCoverageHeuristic']! as Map<String, Object?>;
       final metrics = quality['metrics']! as Map<String, Object?>;
       expect(metrics['nonHitTestableActions'], 0);
     },
@@ -1289,18 +1514,23 @@ void main() {
     expect(brief['visibleText'], contains('Save'));
     expect(brief.containsKey('textTargets'), isFalse);
     expect(brief.containsKey('visualTree'), isFalse);
-    expect(brief.containsKey('semanticQuality'), isFalse);
+    expect(brief.containsKey('semanticCoverageHeuristic'), isFalse);
     expect(brief.containsKey('devicePixelRatio'), isFalse);
     expect(brief.containsKey('logicalSize'), isFalse);
-    expect(brief.containsKey('perception'), isFalse);
+    expect(brief['perception'], isA<Map<String, Object?>>());
+    expect(
+      (brief['perception']! as Map)['pixelEvidence'],
+      'not_included_in_inspect',
+    );
+    expect(brief['omittedSections'], isA<Map<String, Object?>>());
     expect(brief['scrollables'], isA<List<Object?>>());
     final interactables = brief['interactables']! as List<Object?>;
     final save = interactables.cast<Map<String, Object?>>().firstWhere(
       (node) => node['id'] == 'btn.save',
     );
-    // Compact node: no rects, no confidence plumbing.
+    // Compact node: no rects or heuristic-scoring plumbing.
     expect(save.containsKey('rect'), isFalse);
-    expect(save.containsKey('confidence'), isFalse);
+    expect(save.containsKey('heuristicScore'), isFalse);
     expect(brief['fieldValues'], isA<Map<String, Object?>>());
 
     // Sections opt back into full data.
@@ -1310,11 +1540,20 @@ void main() {
     expect(sectioned['textTargets'], isA<List<Object?>>());
     expect(sectioned['scrollables'], isA<List<Object?>>());
     expect(sectioned.containsKey('interactables'), isFalse);
+    expect(
+      (sectioned['omittedSections']! as Map)['sections'],
+      contains('interactables'),
+    );
 
-    // Brief payload is materially smaller than the full one.
+    // Brief payload remains materially smaller while retaining viewport,
+    // capture coverage, and known perception limitations (safety evidence must
+    // not be removed merely to meet an arbitrary byte ratio).
     final fullLength = jsonEncode(runtime.debugInspectPayload()).length;
     final briefLength = jsonEncode(brief).length;
-    expect(briefLength, lessThan(fullLength ~/ 2));
+    // The compact form must remain at least one-third smaller even though it
+    // deliberately retains safety-critical viewport, capture, perception, and
+    // scroll provenance that cannot be dropped for a byte-ratio target.
+    expect(briefLength, lessThan(fullLength * 2 ~/ 3));
   });
 
   testWidgets('inspect exposes stable keyed scroll handles', (tester) async {
@@ -1716,12 +1955,15 @@ void main() {
     final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
       brief: true,
     );
-    expect(brief.containsKey('semanticQuality'), isFalse);
+    expect(brief.containsKey('semanticCoverageHeuristic'), isFalse);
     final diagnostics = FlutterScoutHelper.debugRuntime.debugInspectPayload(
       sections: {'semantics'},
     );
-    final quality = diagnostics['semanticQuality']! as Map<String, Object?>;
-    expect(quality['score'], lessThan(100));
+    final quality =
+        diagnostics['semanticCoverageHeuristic']! as Map<String, Object?>;
+    expect(quality['heuristicScore'], lessThan(100));
+    expect(quality['scoreKind'], 'uncalibrated_heuristic');
+    expect(quality['heuristicBand'], isA<String>());
     final issues = (quality['issues']! as List).cast<Map<String, Object?>>();
     expect(
       issues.map((issue) => issue['code']),

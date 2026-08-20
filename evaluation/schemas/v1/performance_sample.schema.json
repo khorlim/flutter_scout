@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/performance_sample.schema.json",
+  "title": "Flutter Scout immutable raw performance sample v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sampleId",
+    "configSha256",
+    "conditionId",
+    "repetition",
+    "warmupIterationsCompleted",
+    "capturedAtUtc",
+    "phaseTimingsUs",
+    "responsePayloadBytes",
+    "resources",
+    "observationEffects"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "sampleId": { "$ref": "#/$defs/id" },
+    "configSha256": { "$ref": "#/$defs/sha256" },
+    "conditionId": { "$ref": "#/$defs/id" },
+    "repetition": { "type": "integer", "minimum": 1 },
+    "warmupIterationsCompleted": { "type": "integer", "minimum": 1 },
+    "capturedAtUtc": { "$ref": "#/$defs/utc" },
+    "phaseTimingsUs": { "$ref": "#/$defs/phases" },
+    "responsePayloadBytes": { "type": "integer", "minimum": 0 },
+    "resources": { "$ref": "#/$defs/resources" },
+    "observationEffects": { "$ref": "#/$defs/effects" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "utc": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "method",
+        "collectorVersion",
+        "target",
+        "capturedAtUtc"
+      ],
+      "properties": {
+        "source": { "$ref": "#/$defs/nonEmpty" },
+        "method": { "$ref": "#/$defs/nonEmpty" },
+        "collectorVersion": { "$ref": "#/$defs/nonEmpty" },
+        "target": { "$ref": "#/$defs/nonEmpty" },
+        "capturedAtUtc": { "$ref": "#/$defs/utc" }
+      }
+    },
+    "phases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "connect",
+        "snapshot",
+        "match",
+        "dispatch",
+        "settle",
+        "delta",
+        "logs",
+        "serialize"
+      ],
+      "properties": {
+        "connect": { "type": "integer", "minimum": 0 },
+        "snapshot": { "type": "integer", "minimum": 0 },
+        "match": { "type": "integer", "minimum": 0 },
+        "dispatch": { "type": "integer", "minimum": 0 },
+        "settle": { "type": "integer", "minimum": 0 },
+        "delta": { "type": "integer", "minimum": 0 },
+        "logs": { "type": "integer", "minimum": 0 },
+        "serialize": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memory", "frameTime", "endurance"],
+      "properties": {
+        "cpu": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "idlePercent",
+            "activePercent",
+            "windowMs",
+            "provenance"
+          ],
+          "properties": {
+            "idlePercent": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "activePercent": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "windowMs": { "type": "integer", "minimum": 1 },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        "memory": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "processRssBytes",
+            "incrementalRssBytes",
+            "peakRssBytes",
+            "provenance"
+          ],
+          "properties": {
+            "processRssBytes": { "type": "integer", "minimum": 0 },
+            "incrementalRssBytes": { "type": "integer", "minimum": 0 },
+            "peakRssBytes": { "type": "integer", "minimum": 0 },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        "frameTime": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["frameCount", "medianUs", "p95Us", "provenance"],
+          "properties": {
+            "frameCount": { "type": "integer", "minimum": 1 },
+            "medianUs": { "type": "integer", "minimum": 0 },
+            "p95Us": { "type": "integer", "minimum": 0 },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        },
+        "endurance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "durationMs",
+            "actionCount",
+            "crashCount",
+            "crossoverCount",
+            "deadlockCount",
+            "startRssBytes",
+            "endRssBytes",
+            "peakRssBytes",
+            "unboundedGrowthObserved",
+            "provenance"
+          ],
+          "properties": {
+            "durationMs": { "type": "integer", "minimum": 1 },
+            "actionCount": { "type": "integer", "minimum": 1 },
+            "crashCount": { "type": "integer", "minimum": 0 },
+            "crossoverCount": { "type": "integer", "minimum": 0 },
+            "deadlockCount": { "type": "integer", "minimum": 0 },
+            "startRssBytes": { "type": "integer", "minimum": 0 },
+            "endRssBytes": { "type": "integer", "minimum": 0 },
+            "peakRssBytes": { "type": "integer", "minimum": 0 },
+            "unboundedGrowthObserved": { "type": "boolean" },
+            "provenance": { "$ref": "#/$defs/provenance" }
+          }
+        }
+      }
+    },
+    "identityEffect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["beforeIdentity", "afterIdentity", "mutationCount"],
+      "properties": {
+        "beforeIdentity": { "$ref": "#/$defs/nonEmpty" },
+        "afterIdentity": { "$ref": "#/$defs/nonEmpty" },
+        "mutationCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "effects": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "focus",
+        "pointerGesture",
+        "route",
+        "semantics",
+        "overlay",
+        "businessState",
+        "syntheticFrameCount",
+        "provenance"
+      ],
+      "properties": {
+        "focus": { "$ref": "#/$defs/identityEffect" },
+        "pointerGesture": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "activePointersBefore",
+            "activePointersAfter",
+            "pointerEventsDispatched",
+            "gesturesDispatched"
+          ],
+          "properties": {
+            "activePointersBefore": { "type": "integer", "minimum": 0 },
+            "activePointersAfter": { "type": "integer", "minimum": 0 },
+            "pointerEventsDispatched": { "type": "integer", "minimum": 0 },
+            "gesturesDispatched": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "route": { "$ref": "#/$defs/identityEffect" },
+        "semantics": { "$ref": "#/$defs/identityEffect" },
+        "overlay": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "interceptingBefore",
+            "interceptingAfter",
+            "interceptionCount",
+            "persistentInterceptionIntroduced"
+          ],
+          "properties": {
+            "interceptingBefore": { "type": "boolean" },
+            "interceptingAfter": { "type": "boolean" },
+            "interceptionCount": { "type": "integer", "minimum": 0 },
+            "persistentInterceptionIntroduced": { "type": "boolean" }
+          }
+        },
+        "businessState": { "$ref": "#/$defs/identityEffect" },
+        "syntheticFrameCount": { "type": "integer", "minimum": 0 },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    }
+  }
+}

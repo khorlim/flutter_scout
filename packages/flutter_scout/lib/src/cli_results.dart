@@ -18,10 +18,32 @@ extension _CliResults on FlutterScoutCli {
     final totalStopwatch = Stopwatch()..start();
     final logCursor = _currentLogCursor();
     final vmStopwatch = Stopwatch()..start();
-    var result = _withProtocolDiagnostics(
-      method,
-      await _call(method, params, callTimeout),
-    );
+    late Map<String, dynamic> result;
+    try {
+      result = _withProtocolDiagnostics(
+        method,
+        await _call(method, params, callTimeout),
+      );
+    } catch (error) {
+      final recognizedTransportLoss =
+          error is TimeoutException ||
+          error is RPCError ||
+          error is SocketException ||
+          error is HttpException ||
+          error is WebSocketException;
+      if (!recognizedTransportLoss) rethrow;
+      final timedOut = error is TimeoutException;
+      result = _notDispatchedProtocolFailure(
+        code: timedOut ? 'runtime_transport_timeout' : 'runtime_transport_lost',
+        message: timedOut
+            ? 'The runtime transport timed out before Scout received an actionable semantic observation.'
+            : 'The runtime transport was lost before Scout received an actionable semantic observation.',
+        method: method,
+        runId: _currentRunIdFromSession(),
+        transport: timedOut ? 'timeout' : 'failed',
+        details: <String, Object?>{'failureType': error.runtimeType.toString()},
+      );
+    }
     vmStopwatch.stop();
     result = _materializeActionCapture(result, captureOutput);
     final logStopwatch = Stopwatch()..start();
@@ -41,42 +63,290 @@ extension _CliResults on FlutterScoutCli {
       enrichedResult,
       enabled: assertNoErrors,
     );
+    enrichedResult = _withMeasuredCliPhase(
+      enrichedResult,
+      phase: 'logs',
+      elapsedMs: logStopwatch.elapsedMilliseconds,
+      scope:
+          'bounded log-cursor collection, log-settle window, and expectation checks',
+      facts: <String, Object?>{
+        'sinceCursor': logCursor,
+        'expectationRequested': expectLog != null || rejectLog != null,
+      },
+    );
     totalStopwatch.stop();
+    final helperTimings = enrichedResult['timings'];
     enrichedResult = {
       ...enrichedResult,
-      'timings': {
+      'timings': <String, Object?>{
+        if (helperTimings is Map)
+          for (final entry in helperTimings.entries)
+            if (entry.key.toString() != 'totalMs')
+              entry.key.toString(): entry.value,
+        if (helperTimings is Map && helperTimings['totalMs'] is num)
+          'helperTotalMs': helperTimings['totalMs'],
         'vmCallMs': vmStopwatch.elapsedMilliseconds,
         'logSettleAndExpectationMs': logStopwatch.elapsedMilliseconds,
         'totalMs': totalStopwatch.elapsedMilliseconds,
       },
     };
+    final actionSucceeded = enrichedResult['ok'] == true;
+    enrichedResult = _commitActionEvidence(
+      method: method,
+      result: enrichedResult,
+      record: record,
+    );
     final output = compact
         ? _compactActionResult(enrichedResult)
         : enrichedResult;
     _emitActionOutput(output);
-    if (record != null && enrichedResult['ok'] == true) {
-      _recordAction(record);
+    if (record != null && actionSucceeded && enrichedResult['ok'] == true) {
       await _maybeStartAutoServe();
     }
-    _appendEvent({
-      'schemaVersion': 1,
-      'type': 'action_result',
-      'commandId': ?_activeCommandId,
-      'method': method,
-      'ok': enrichedResult['ok'] == true,
-      'runId': ?enrichedResult['runId'],
-      'runtimeInstanceId': ?enrichedResult['runtimeInstanceId'],
-      'snapshotId': ?enrichedResult['snapshotId'],
-      'timings': enrichedResult['timings'],
-      if (enrichedResult['error'] != null) 'error': enrichedResult['error'],
-      'blockingRuntimeErrors': _objectList(
-        enrichedResult['blockingErrors'],
-      ).length,
-      'blockingLogSignals': _objectList(
-        enrichedResult['blockingLogSignals'],
-      ).length,
-    });
     return enrichedResult['ok'] == false ? 1 : 0;
+  }
+
+  /// Commits the replay journal and action-result event before any success is
+  /// emitted. A failed sink converts the response into an explicit uncertain
+  /// failure; callers must reconcile state rather than blindly retrying.
+  Map<String, dynamic> _commitActionEvidence({
+    required String method,
+    required Map<String, dynamic> result,
+    Map<String, Object?>? record,
+  }) {
+    final originalOk = result['ok'] == true;
+    var reported = _withCanonicalPhaseTimings(result);
+    final reportedPhases = ((reported['timings']! as Map)['phases']! as Map);
+    final reportedLogs = reportedPhases['logs'];
+    if (reportedLogs is! Map || reportedLogs['status'] != 'measured') {
+      reported = _withUnavailableCliPhase(
+        reported,
+        phase: 'logs',
+        reason: 'not_applicable:log_collection_not_requested_for_command',
+      );
+    }
+    var actionRecorded = false;
+    String? failedSink;
+    Object? persistenceError;
+    final idempotency = result['idempotency'];
+    final replayedFromReceipt =
+        idempotency is Map && idempotency['status'] == 'replayed';
+
+    if (record != null && originalOk && !replayedFromReceipt) {
+      try {
+        _recordAction(record);
+        actionRecorded = true;
+      } catch (error) {
+        failedSink = 'session_action_journal';
+        persistenceError = error;
+        reported = _actionEvidenceFailure(
+          result,
+          sink: failedSink,
+          error: error,
+          actionRecorded: false,
+          mutationIntent: true,
+        );
+      }
+    }
+
+    final evidence = <String, Object?>{
+      'status': failedSink == null ? 'committed' : 'partial',
+      // This object is written as part of the event itself: if the row is
+      // observable, the event journal commit necessarily succeeded.
+      'eventJournal': 'committed',
+      'actionJournal': record == null
+          ? 'not_applicable'
+          : replayedFromReceipt
+          ? 'not_repeated_idempotency_replay'
+          : !originalOk
+          ? 'not_recorded_unsuccessful'
+          : actionRecorded
+          ? 'committed'
+          : 'failed',
+      'failedSink': ?failedSink,
+    };
+    reported = <String, dynamic>{...reported, 'evidence': evidence};
+
+    try {
+      Map<String, Object?> eventPayloadFor(
+        Map<String, dynamic> value,
+      ) => <String, Object?>{
+        'schemaVersion': 1,
+        'type': 'action_result',
+        ..._protocolEventEvidence(value),
+        'cliCommandId': ?_activeCommandId,
+        'method': method,
+        'ok': value['ok'] == true,
+        'originalOk': originalOk,
+        'runId': ?value['runId'],
+        'runtimeInstanceId': ?value['runtimeInstanceId'],
+        'snapshotId': ?value['snapshotId'],
+        'timings': value['timings'],
+        'evidence': evidence,
+        'error': ?value['error'],
+        'blockingRuntimeErrors': _objectList(value['blockingErrors']).length,
+        'blockingLogSignals': _objectList(value['blockingLogSignals']).length,
+      };
+
+      final probeEventPayload = _idempotencySafeEvidenceValue(
+        reported,
+        eventPayloadFor(reported),
+      );
+      reported = _withCliSerializeProbe(
+        reported,
+        probeValue: probeEventPayload,
+        boundary: 'action_event_journal',
+      );
+      final safeEventPayload = _idempotencySafeEvidenceValue(
+        reported,
+        eventPayloadFor(reported),
+      );
+      final eventCursor = _appendEventStrict(<String, Object?>{
+        for (final entry in (safeEventPayload! as Map).entries)
+          entry.key.toString(): entry.value,
+      });
+      return <String, dynamic>{
+        ...reported,
+        'evidence': <String, Object?>{
+          ...evidence,
+          'eventJournal': 'committed',
+          'eventCursor': eventCursor,
+        },
+      };
+    } catch (error) {
+      return _actionEvidenceFailure(
+        reported,
+        sink: 'action_event_journal',
+        error: error,
+        actionRecorded: actionRecorded,
+        mutationIntent: record != null,
+        priorSink: failedSink,
+        priorError: persistenceError,
+      );
+    }
+  }
+
+  Map<String, dynamic> _actionEvidenceFailure(
+    Map<String, dynamic> result, {
+    required String sink,
+    required Object error,
+    required bool actionRecorded,
+    required bool mutationIntent,
+    String? priorSink,
+    Object? priorError,
+  }) {
+    final priorErrorPayload = result['error'];
+    final priorEvidence = result['evidence'];
+    final priorActionJournal = priorEvidence is Map
+        ? priorEvidence['actionJournal']?.toString()
+        : null;
+    return <String, dynamic>{
+      ...result,
+      'ok': false,
+      'error': <String, Object?>{
+        'code': 'action_evidence_persistence_failed',
+        'message':
+            'Scout received an action outcome but could not commit all '
+            'required evidence. The action may have occurred; inspect current '
+            'state before deciding whether to retry.',
+        'failedSink': sink,
+        'cause': error.toString(),
+      },
+      'priorActionError': ?priorErrorPayload,
+      'mutationMayHaveOccurred': _actionMayHaveOccurred(
+        result,
+        mutationIntent: mutationIntent,
+      ),
+      'evidence': <String, Object?>{
+        'status': 'unavailable',
+        'eventJournal': sink == 'action_event_journal'
+            ? 'failed'
+            : 'not_committed',
+        'actionJournal': actionRecorded
+            ? 'committed'
+            : priorActionJournal ??
+                  (sink == 'session_action_journal'
+                      ? 'failed'
+                      : 'not_applicable'),
+        'failedSink': sink,
+        'priorFailedSink': ?priorSink,
+        if (priorError case final priorError?)
+          'priorCause': priorError.toString(),
+      },
+    };
+  }
+
+  bool _actionMayHaveOccurred(
+    Map<String, dynamic> result, {
+    required bool mutationIntent,
+  }) {
+    if (mutationIntent && result['ok'] == true) return true;
+    final dispatch = result['dispatch'];
+    if (dispatch is String) {
+      return dispatch == 'dispatched' || dispatch == 'dispatch_outcome_unknown';
+    }
+    if (dispatch is Map) {
+      final status = dispatch['status']?.toString();
+      if (status == 'dispatched' || status == 'dispatch_outcome_unknown') {
+        return true;
+      }
+    }
+    final activation = result['activation'];
+    return activation is Map && activation['dispatched'] == true;
+  }
+
+  Map<String, Object?> _protocolEventEvidence(Map<String, dynamic> result) {
+    final evidence = <String, Object?>{
+      for (final key in const <String>[
+        'schemaVersion',
+        'protocolVersion',
+        'minSupportedProtocolVersion',
+        'maxSupportedProtocolVersion',
+        'capabilities',
+        'capabilitySource',
+        'commandId',
+        'runId',
+        'runtimeInstanceId',
+        'stateGeneration',
+        'stateDigest',
+        'snapshotId',
+        'identityStatus',
+        'errorCursor',
+        'logCursor',
+        'errorsSinceCursor',
+        'transport',
+        'dispatch',
+        'observation',
+        'postcondition',
+        'runtimeHealth',
+        'runtimeHealthScope',
+        'activeBlockingSignals',
+        'stable',
+        'stability',
+        'evidence',
+        'idempotency',
+        'idempotencyKeyDigest',
+        'idempotencyScope',
+        'expectedStateGeneration',
+        'deadlineEpochMs',
+        'reconciledAfterTimeout',
+        'beforeStateGeneration',
+        'beforeSnapshotId',
+        'afterStateGeneration',
+        'afterSnapshotId',
+        'structuredError',
+      ])
+        if (result.containsKey(key)) key: result[key],
+    };
+    final digest = _resultIdempotencyKeyDigest(result);
+    final source = _resultIdempotencyKeySource(result);
+    if (digest != null) evidence['idempotencyKeyDigest'] = digest;
+    if (source != null) evidence['idempotencyKeySource'] = source;
+    final safe = _idempotencySafeEvidenceValue(result, evidence);
+    return <String, Object?>{
+      for (final entry in (safe! as Map).entries)
+        entry.key.toString(): entry.value,
+    };
   }
 
   Future<Map<String, dynamic>> _applyLogExpectations(
@@ -104,7 +374,22 @@ extension _CliResults on FlutterScoutCli {
     final deadline = DateTime.now().add(timeout);
     String text = '';
     do {
-      text = _readLogChunk(file, sinceCursor: sinceCursor).lines.join('\n');
+      final chunk = _readLogChunk(file, sinceCursor: sinceCursor);
+      if (chunk.truncated) {
+        return {
+          ...result,
+          'ok': false,
+          'error': {
+            'code': 'log_expectation_unavailable',
+            'message':
+                'Fresh Scout-owned logs exceeded the bounded read window; '
+                'the requested expectation cannot be proven.',
+          },
+          'logCursor': chunk.endCursor,
+          'retainedFromLogCursor': chunk.startCursor,
+        };
+      }
+      text = chunk.lines.join('\n');
       if (rejectLog != null &&
           rejectLog.isNotEmpty &&
           text.toLowerCase().contains(rejectLog.toLowerCase())) {
@@ -153,8 +438,8 @@ extension _CliResults on FlutterScoutCli {
     if (encoded is! String || encoded.isEmpty) return result;
     try {
       final file = File(output).absolute;
-      file.parent.createSync(recursive: true);
-      file.writeAsBytesSync(base64Decode(encoded));
+      _writePrivateArtifactBytes(file.path, base64Decode(encoded));
+      _writePrivateArtifactMetadata(file.path, 'session');
       return {
         ...result,
         'capture': {
@@ -182,32 +467,42 @@ extension _CliResults on FlutterScoutCli {
     if (!enabled || result['ok'] == false) return result;
     bool blocking(Object? value) =>
         value is Map && value['blocking'] == true && value['stale'] != true;
-    final runtime = _objectList(
-      result['recentErrors'],
-    ).where(blocking).toList();
+    // Protocol-v15's cursor-relative list is authoritative for action
+    // attribution. Fall back only for an explicitly older read payload.
+    final runtimeSource = result.containsKey('errorsSinceCursor')
+        ? result['errorsSinceCursor']
+        : result['recentErrors'];
+    final runtime = _objectList(runtimeSource).where(blocking).toList();
+    final activeRuntime = _objectList(
+      result['activeBlockingSignals'],
+    ).where((value) => value is Map && value['blocking'] == true).toList();
     final logs = _objectList(
       result['recentLogSignals'],
     ).where(blocking).toList();
-    if (runtime.isEmpty && logs.isEmpty) return result;
+    if (runtime.isEmpty && activeRuntime.isEmpty && logs.isEmpty) return result;
     return {
       ...result,
       'ok': false,
       'error': {
         'code': 'blocking_errors_observed',
         'message':
-            'The action completed, but fresh blocking runtime errors were observed.',
+            'The action completed, but fresh or currently active blocking runtime errors were observed.',
       },
       'blockingErrors': runtime,
+      'activeBlockingErrors': activeRuntime,
       'blockingLogSignals': logs,
     };
   }
 
   void _emitActionOutput(Map<String, dynamic> output) {
+    final safe = Map<String, dynamic>.from(
+      _sanitizeForSerialization(output)! as Map,
+    );
     if (_suppressActionOutput) {
-      _suppressedActionResults.add(Map<String, dynamic>.from(output));
+      _suppressedActionResults.add(safe);
       return;
     }
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(output));
+    _printJson(safe);
   }
 
   Future<Map<String, dynamic>> _withRecentLogSignals(
@@ -225,7 +520,12 @@ extension _CliResults on FlutterScoutCli {
       ...result,
       'logCursor': _currentLogCursor(),
       'runId': ?_currentRunIdFromSession(),
-      if (signals.isNotEmpty) 'recentLogSignals': _logSignalMaps(signals),
+      if (signals.isNotEmpty)
+        'recentLogSignals': _logSignalMaps(
+          signals,
+          phase: 'action',
+          actionCommandId: _activeCommandId,
+        ),
     };
   }
 
@@ -234,33 +534,31 @@ extension _CliResults on FlutterScoutCli {
     Map<String, String> params,
   ) async {
     if (!_needsTapTextFallback(result)) return result;
-    final textTarget = result['target'];
-    if (textTarget is! Map<String, dynamic>) return result;
-    final inspect = await _tryInspect();
-    if (inspect == null) return result;
-    final fallbackTarget = _findActionableForTextTarget(inspect, textTarget);
-    if (fallbackTarget == null) return result;
-    final fallbackId = fallbackTarget['id']?.toString();
-    if (fallbackId == null || fallbackId.isEmpty) return result;
-
-    final fallbackResult = await _call('ext.flutter_scout.tap', {
-      'target': fallbackId,
-      if (params['waitMs'] != null) 'waitMs': params['waitMs']!,
-    });
+    // This legacy helper has already dispatched the mutation. A second tap at
+    // a newly inferred parent can duplicate an irreversible operation even
+    // when the first response lacked modern target evidence.
     return {
-      ...fallbackResult,
+      ...result,
+      'ok': false,
       'action': 'tap-text ${params['text'] ?? params['target']}',
-      'target': fallbackResult['target'] ?? fallbackTarget,
-      'textTarget': textTarget,
+      'dispatch': 'dispatched',
+      'postcondition': 'postcondition_not_requested',
       'fallback': {
-        'used': true,
-        'reason':
-            'attached_helper_returned_text_target_without_actionable_parent',
-        'target': fallbackId,
+        'used': false,
+        'reason': 'mutation_already_dispatched_by_incompatible_helper',
+      },
+      'error': {
+        'code': 'incompatible_helper_after_dispatch',
+        'message':
+            'The attached helper dispatched tap-text but did not return the '
+            'target-safety evidence required by this CLI. Scout did not retry '
+            'the mutation. Hot restart or relaunch with the current helper '
+            'before acting again.',
       },
       'warnings': [
-        ..._objectList(fallbackResult['warnings']),
-        'Attached helper did not provide tap-text actionable-parent data; CLI retried using overlapping inspect target `$fallbackId`.',
+        ..._objectList(result['warnings']),
+        'Automatic tap-text fallback was withheld because the first mutation '
+            'may already have taken effect.',
       ],
     };
   }
@@ -271,39 +569,6 @@ extension _CliResults on FlutterScoutCli {
     final target = result['target'];
     if (target is! Map) return false;
     return target['kind'] == 'text';
-  }
-
-  Map<String, dynamic>? _findActionableForTextTarget(
-    Map<String, dynamic> inspect,
-    Map<String, dynamic> textTarget,
-  ) {
-    final textRect = _rectFromNode(textTarget);
-    if (textRect == null) return null;
-    final candidates = _nodesFromInspect(inspect, 'interactables')
-        .where((node) => node['kind'] != 'text' && node['kind'] != 'field')
-        .toList(growable: false);
-    Map<String, dynamic>? best;
-    var bestScore = 0.0;
-    for (final candidate in candidates) {
-      final rect = _rectFromNode(candidate);
-      if (rect == null) continue;
-      final containsCenter = _rectContains(rect, _rectCenter(textRect));
-      final overlap = _overlapRatio(textRect, rect);
-      final sameLabel =
-          candidate['label'] != null &&
-          textTarget['label'] != null &&
-          candidate['label'].toString() == textTarget['label'].toString();
-      final score =
-          (containsCenter ? 3.0 : 0.0) +
-          (sameLabel ? 2.0 : 0.0) +
-          overlap -
-          (_rectArea(rect) / 1000000000);
-      if (score > bestScore) {
-        bestScore = score;
-        best = candidate;
-      }
-    }
-    return bestScore > 0 ? best : null;
   }
 
   Map<String, dynamic> _withProtocolDiagnostics(
@@ -390,10 +655,17 @@ extension _CliResults on FlutterScoutCli {
           after is Map<String, dynamic> &&
           !_inspectChanged(before, after);
       return {
+        ..._compactProtocolSafetyEvidence(result),
         'ok': false,
         if (result['error'] != null) 'error': result['error'],
+        if (result['priorActionError'] != null)
+          'priorActionError': result['priorActionError'],
+        if (result['mutationMayHaveOccurred'] != null)
+          'mutationMayHaveOccurred': result['mutationMayHaveOccurred'],
+        if (result['evidence'] != null) 'evidence': result['evidence'],
         if (result['action'] != null) 'action': result['action'],
         if (result['stable'] != null) 'stable': result['stable'],
+        if (result['stability'] is Map) 'stability': result['stability'],
         if (result['result'] != null) 'result': result['result'],
         if (result['lateChangeObserved'] != null)
           'lateChangeObserved': result['lateChangeObserved'],
@@ -462,9 +734,12 @@ extension _CliResults on FlutterScoutCli {
         : const <String, Object?>{};
     final workflowHints = _workflowHints();
     return {
+      ..._compactProtocolSafetyEvidence(result),
       'ok': result['ok'],
+      if (result['evidence'] != null) 'evidence': result['evidence'],
       if (result['action'] != null) 'action': result['action'],
       if (result['stable'] != null) 'stable': result['stable'],
+      if (result['stability'] is Map) 'stability': result['stability'],
       if (result['result'] != null) 'result': result['result'],
       if (result['lateChangeObserved'] != null)
         'lateChangeObserved': result['lateChangeObserved'],
@@ -483,6 +758,8 @@ extension _CliResults on FlutterScoutCli {
       if (result['timings'] != null) 'timings': result['timings'],
       if (result['sourceVerification'] != null)
         'sourceVerification': result['sourceVerification'],
+      if (result['operabilityPersistence'] != null)
+        'operabilityPersistence': result['operabilityPersistence'],
       if (result['acknowledgement'] != null)
         'acknowledgement': result['acknowledgement'],
       if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
@@ -522,6 +799,8 @@ extension _CliResults on FlutterScoutCli {
               {
                 if (field['target'] != null) 'target': field['target'],
                 if (field['ok'] != null) 'ok': field['ok'],
+                if (field['stable'] != null) 'stable': field['stable'],
+                if (field['stability'] is Map) 'stability': field['stability'],
                 if (field['changed'] != null) 'changed': field['changed'],
                 if (field['delta'] is Map)
                   'delta': _compactDelta(field['delta'] as Map),
@@ -536,6 +815,8 @@ extension _CliResults on FlutterScoutCli {
         'protocolMismatch': result['protocolMismatch'],
       if (after is Map<String, dynamic> && after['screen'] != null)
         'screen': after['screen'],
+      if (after is Map<String, dynamic> && after['screenEvidence'] is Map)
+        'screenEvidence': after['screenEvidence'],
       if (after is Map<String, dynamic> && after['snapshotId'] != null)
         'snapshotId': after['snapshotId'],
       if (after is Map<String, dynamic> && after['activeSurface'] is Map)
@@ -552,19 +833,95 @@ extension _CliResults on FlutterScoutCli {
     };
   }
 
+  /// Protocol evidence is safety-critical and must survive compact output.
+  /// Agents need these fields to distinguish an observed success from an
+  /// unknown dispatch outcome without requesting the verbose payload.
+  Map<String, Object?> _compactProtocolSafetyEvidence(
+    Map<String, dynamic> result,
+  ) {
+    final compact = <String, Object?>{
+      for (final key in const <String>[
+        'schemaVersion',
+        'protocolVersion',
+        'minSupportedProtocolVersion',
+        'maxSupportedProtocolVersion',
+        'capabilities',
+        'capabilitySource',
+        'commandId',
+        'runId',
+        'runtimeInstanceId',
+        'stateGeneration',
+        'stateDigest',
+        'snapshotId',
+        'identityStatus',
+        'errorCursor',
+        'errorsSinceCursor',
+        'structuredError',
+        'transport',
+        'dispatch',
+        'observation',
+        'postcondition',
+        'runtimeHealth',
+        'runtimeHealthScope',
+        'activeBlockingSignals',
+        'idempotency',
+        'idempotencyKeyDigest',
+        'idempotencyScope',
+        'idempotencyScopeKey',
+        'expectedStateGeneration',
+        'deadlineEpochMs',
+        'reconciledAfterTimeout',
+        'beforeStateGeneration',
+        'beforeSnapshotId',
+        'afterStateGeneration',
+        'afterSnapshotId',
+      ])
+        if (result.containsKey(key)) key: result[key],
+    };
+    final digest = _resultIdempotencyKeyDigest(result);
+    final source = _resultIdempotencyKeySource(result);
+    if (digest != null) compact['idempotencyKeyDigest'] = digest;
+    if (source != null) compact['idempotencyKeySource'] = source;
+    // A generated key is new retry authority supplied by Scout, so returning
+    // it to the direct caller is safe and necessary. A caller-supplied key is
+    // never copied into compact evidence or any persisted artifact.
+    if (source == 'generated' && result['idempotencyKey'] is String) {
+      compact['idempotencyKey'] = result['idempotencyKey'];
+    }
+    return compact;
+  }
+
   Map<String, dynamic> _compactBriefInspect(Map<String, dynamic> result) {
     final compact = Map<String, dynamic>.from(result);
     if (compact['protocolMismatch'] == null) {
       compact.remove('helperProtocolVersion');
     }
-    compact
-      ..remove('runtimeInstanceId')
-      ..removeWhere(
-        (_, value) =>
-            value == null ||
-            (value is List && value.isEmpty) ||
-            (value is Map && value.isEmpty),
-      );
+    const safetyKeys = <String>{
+      'schemaVersion',
+      'protocolVersion',
+      'minSupportedProtocolVersion',
+      'maxSupportedProtocolVersion',
+      'capabilities',
+      'capabilitySource',
+      'commandId',
+      'runId',
+      'runtimeInstanceId',
+      'stateGeneration',
+      'stateDigest',
+      'snapshotId',
+      'identityStatus',
+      'errorCursor',
+      'errorsSinceCursor',
+      'structuredError',
+      'timings',
+    };
+    compact.removeWhere(
+      (key, value) =>
+          !safetyKeys.contains(key) &&
+          (value == null ||
+              (value is List && value.isEmpty) ||
+              (value is Map && value.isEmpty)),
+    );
     final visible = compact['visibleText'];
     final hitTestable = compact['hitTestableText'];
     if (visible is List && hitTestable is List) {
@@ -634,6 +991,8 @@ extension _CliResults on FlutterScoutCli {
   Map<String, Object?> _compactSummary(Map<String, dynamic> summary) {
     return {
       if (summary['screen'] != null) 'screen': summary['screen'],
+      if (summary['screenEvidence'] is Map)
+        'screenEvidence': summary['screenEvidence'],
       if (summary['activeSurface'] is Map)
         'activeSurface': _compactActiveSurface(summary['activeSurface'] as Map),
       if (summary['routeGuess'] != null) 'routeGuess': summary['routeGuess'],
@@ -665,6 +1024,10 @@ extension _CliResults on FlutterScoutCli {
     if (surface['kind'] != null) 'kind': surface['kind'],
     if (surface['label'] != null) 'label': surface['label'],
     if (surface['screen'] != null) 'screen': surface['screen'],
+    if (surface['source'] != null) 'source': surface['source'],
+    if (surface['heuristicScore'] != null)
+      'heuristicScore': surface['heuristicScore'],
+    if (surface['scoreKind'] != null) 'scoreKind': surface['scoreKind'],
   };
 
   Map<String, Object?> _compactDelta(Map delta) {
@@ -713,34 +1076,165 @@ extension _CliResults on FlutterScoutCli {
     Map<String, String> params = const {},
     Duration? callTimeout,
   ]) async {
+    final connectionTiming = _CliConnectPhaseTiming();
+    final result = await _callWithConnectionTiming(
+      method,
+      params,
+      callTimeout,
+      connectionTiming,
+    );
+    return _withConnectionPhaseTiming(result, connectionTiming);
+  }
+
+  Future<Map<String, dynamic>> _callWithConnectionTiming(
+    String method,
+    Map<String, String> params,
+    Duration? callTimeout,
+    _CliConnectPhaseTiming connectionTiming,
+  ) async {
+    final mutating = _isMutatingExtension(method, params);
+    final preTransport = mutating
+        ? _inspectReceiptBeforeTransport(method: method, businessParams: params)
+        : null;
+    final immediateReceiptOutcome = preTransport?.immediate;
+    if (immediateReceiptOutcome != null) {
+      connectionTiming.unavailable(
+        'durable_receipt_replay_skipped_vm_connection',
+      );
+      return immediateReceiptOutcome;
+    }
+    final uncertainReceiptInvocation = preTransport?.uncertainInvocation;
     final uri = _readVmUri();
     if (uri == null || uri.isEmpty) {
-      throw const ScoutCliException(
-        'not_attached',
-        'Run flutter-scout attach --debug-url <url> first.',
+      connectionTiming.unavailable('vm_service_uri_unavailable');
+      if (uncertainReceiptInvocation != null) {
+        return _idempotencyReconciliationUnavailable(
+          uncertainReceiptInvocation,
+          connectionStage: 'session_uri_lookup',
+        );
+      }
+      return _notDispatchedProtocolFailure(
+        code: 'not_attached',
+        message:
+            'Save the local VM-service URL in an owner-only 0600 file, then '
+            'run flutter-scout attach --debug-url-file <path>.',
+        method: method,
+        runId: _currentRunIdFromSession(),
+        transport: 'failed',
+        details: <String, Object?>{
+          'connectionStage': 'session_uri_lookup',
+          'mutationIntent': mutating,
+        },
       );
     }
     // In batch mode one WebSocket serves every step; per-call connect/dispose
     // is pure overhead (and a timing gap the UI can drift through).
     final reuse = _reuseVmConnection;
-    final VmService service;
+    late final VmService service;
     if (reuse && _cachedVmService != null && _cachedVmUri == uri) {
+      connectionTiming.begin(reused: true, connection: 'cached_vm_service');
       service = _cachedVmService!;
+      connectionTiming.complete(outcome: 'reused');
     } else {
-      service = await _connect(uri);
+      connectionTiming.begin(reused: false, connection: 'new_vm_service');
+      try {
+        service = await _connect(uri);
+        connectionTiming.complete(outcome: 'connected');
+      } catch (error) {
+        connectionTiming.complete(outcome: 'failed');
+        if (reuse) await _disposeCachedVmService();
+        if (uncertainReceiptInvocation != null) {
+          return _idempotencyReconciliationUnavailable(
+            uncertainReceiptInvocation,
+            connectionStage: 'initial_connect',
+            cause: error,
+          );
+        }
+        return _notDispatchedProtocolFailure(
+          code: 'vm_service_connection_failed',
+          message:
+              'Flutter Scout could not establish the bounded VM-service connection. Nothing was dispatched.',
+          method: method,
+          runId: _currentRunIdFromSession(),
+          transport: 'failed',
+          details: <String, Object?>{
+            'connectionStage': 'initial_connect',
+            'mutationIntent': mutating,
+            'failureType': error.runtimeType.toString(),
+          },
+        );
+      }
       if (reuse) {
         await _disposeCachedVmService();
         _cachedVmService = service;
         _cachedVmUri = uri;
       }
     }
+    final timeout = callTimeout ?? const Duration(seconds: 20);
+    _MutationInvocation? mutation;
     try {
       final isolateId = await _findMainIsolate(service);
-      final Response response;
+      Map<String, String> effectiveParams;
+      if (mutating) {
+        final prepared = await _prepareMutationInvocation(
+          service: service,
+          isolateId: isolateId,
+          method: method,
+          params: params,
+          actionTimeout: timeout,
+          connectionPhase: connectionTiming.phaseRecord,
+        );
+        final preflightFailure = prepared.failure;
+        if (preflightFailure != null) {
+          if (uncertainReceiptInvocation != null &&
+              preflightFailure['dispatch'] != 'dispatch_outcome_unknown') {
+            return _idempotencyReconciliationUnavailable(
+              uncertainReceiptInvocation,
+              connectionStage: 'protocol_preflight',
+            );
+          }
+          return preflightFailure;
+        }
+        final replay = prepared.replay;
+        if (replay != null) return replay;
+        mutation = prepared.invocation!;
+        effectiveParams = mutation.params;
+      } else {
+        effectiveParams = _withReadEnvelope(params);
+      }
+
+      Map<String, dynamic> result;
+      var reconciledAfterTimeout = false;
       try {
-        response = await service
-            .callServiceExtension(method, isolateId: isolateId, args: params)
-            .timeout(callTimeout ?? const Duration(seconds: 20));
+        result = await _invokeServiceExtension(
+          service: service,
+          isolateId: isolateId,
+          method: method,
+          params: effectiveParams,
+          timeout: timeout,
+        );
+      } on TimeoutException {
+        final invocation = mutation;
+        if (invocation == null) rethrow;
+        // Reconcile only with the exact same idempotency key and fingerprint.
+        // If the first request reached this runtime, the helper returns the
+        // original future/result. If it did not, its expired deadline prevents
+        // a late dispatch. A fresh key is never generated here.
+        try {
+          result = await _invokeServiceExtension(
+            service: service,
+            isolateId: isolateId,
+            method: method,
+            params: invocation.params,
+            timeout: const Duration(seconds: 2),
+          );
+          reconciledAfterTimeout = true;
+        } catch (_) {
+          return _closeDurableMutationOutcome(
+            invocation,
+            _mutationTimeoutFailure(invocation),
+          );
+        }
       } on RPCError catch (error) {
         if (_looksLikeMissingScoutExtension(error)) {
           throw const ScoutCliException(
@@ -752,25 +1246,137 @@ extension _CliResults on FlutterScoutCli {
                 'binding is initialized.',
           );
         }
+        final invocation = mutation;
+        if (invocation != null) {
+          return _closeDurableMutationOutcome(
+            invocation,
+            _unknownDispatchProtocolFailure(
+              code: 'mutation_transport_error',
+              message:
+                  'The VM service failed after the mutation request may have been dispatched. Scout will not retry with a new identity.',
+              invocation: invocation,
+              transport: 'failed',
+              details: <String, Object?>{
+                'rpcErrorCode': error.code,
+                'rpcErrorMessage': error.message,
+              },
+            ),
+          );
+        }
         rethrow;
       }
-      final json = response.json;
-      if (json == null) return {'ok': false, 'error': 'empty VM response'};
-      if (json.containsKey('ok')) {
-        return Map<String, dynamic>.from(json);
+
+      final invocation = mutation;
+      if (invocation == null) return result;
+      final identityFailure = _validateMutationResponse(result, invocation);
+      if (identityFailure != null) {
+        return _closeDurableMutationOutcome(invocation, identityFailure);
       }
-      final result = json['result'];
-      if (result is String) {
-        return jsonDecode(result) as Map<String, dynamic>;
+      return _closeDurableMutationOutcome(
+        invocation,
+        _withClosedMutationOutcome(
+          result,
+          invocation,
+          reconciledAfterTimeout: reconciledAfterTimeout,
+        ),
+      );
+    } on RPCError catch (error) {
+      if (_looksLikeMissingScoutExtension(error)) {
+        if (uncertainReceiptInvocation != null) {
+          return _idempotencyReconciliationUnavailable(
+            uncertainReceiptInvocation,
+            connectionStage: 'protocol_preflight',
+            cause: error,
+          );
+        }
+        throw const ScoutCliException(
+          'flutter_scout_helper_not_registered',
+          'VM service is reachable, but ext.flutter_scout is not registered. '
+              'Add flutter_scout_helper and call '
+              'FlutterScoutBinding.ensureInitialized() before runApp(), or '
+              'FlutterScoutHelper.ensureRegistered() after an existing debug '
+              'binding is initialized.',
+        );
       }
-      if (result is Map<String, dynamic>) {
-        return result;
+      final invocation = mutation;
+      if (invocation != null) {
+        return _closeDurableMutationOutcome(
+          invocation,
+          _unknownDispatchProtocolFailure(
+            code: 'mutation_transport_error',
+            message:
+                'The VM service failed after the mutation request may have been dispatched. Scout will not retry with a new identity.',
+            invocation: invocation,
+            transport: 'failed',
+            details: <String, Object?>{
+              'rpcErrorCode': error.code,
+              'rpcErrorMessage': error.message,
+            },
+          ),
+        );
       }
-      return Map<String, dynamic>.from(json);
-    } catch (_) {
+      if (mutating) {
+        if (uncertainReceiptInvocation != null) {
+          return _idempotencyReconciliationUnavailable(
+            uncertainReceiptInvocation,
+            connectionStage: 'protocol_preflight',
+            cause: error,
+          );
+        }
+        return _notDispatchedProtocolFailure(
+          code: 'protocol_preflight_transport_error',
+          message:
+              'The VM service failed during mutation preflight. Nothing was dispatched.',
+          method: method,
+          runId: _currentRunIdFromSession(),
+          transport: 'failed',
+          details: <String, Object?>{
+            'rpcErrorCode': error.code,
+            'rpcErrorMessage': error.message,
+          },
+        );
+      }
+      rethrow;
+    } catch (error) {
       // A failed call over a cached connection may mean the socket is dead;
       // drop it so the next step reconnects fresh.
       if (reuse) await _disposeCachedVmService();
+      final invocation = mutation;
+      if (invocation != null) {
+        return _closeDurableMutationOutcome(
+          invocation,
+          _unknownDispatchProtocolFailure(
+            code: 'mutation_transport_error',
+            message:
+                'The mutation call failed after dispatch may have occurred. Scout will not retry with a new identity.',
+            invocation: invocation,
+            transport: 'failed',
+            details: <String, Object?>{
+              'failureType': error.runtimeType.toString(),
+            },
+          ),
+        );
+      }
+      if (mutating) {
+        if (uncertainReceiptInvocation != null) {
+          return _idempotencyReconciliationUnavailable(
+            uncertainReceiptInvocation,
+            connectionStage: 'protocol_preflight',
+            cause: error,
+          );
+        }
+        return _notDispatchedProtocolFailure(
+          code: 'protocol_preflight_transport_error',
+          message:
+              'Mutation preflight failed before a request identity was dispatched.',
+          method: method,
+          runId: _currentRunIdFromSession(),
+          transport: 'failed',
+          details: <String, Object?>{
+            'failureType': error.runtimeType.toString(),
+          },
+        );
+      }
       rethrow;
     } finally {
       if (!reuse) await service.dispose();
@@ -781,16 +1387,124 @@ extension _CliResults on FlutterScoutCli {
     required String action,
     required ProcessSignal signal,
     required bool fullRestart,
+  }) => _runDurableLocalMutation(
+    method: 'process.flutter.$action',
+    businessParams: <String, String>{
+      'action': action,
+      'signal': signal.toString(),
+      'fullRestart': '$fullRestart',
+    },
+    dispatch: () => _performHotUpdate(
+      action: action,
+      signal: signal,
+      fullRestart: fullRestart,
+    ),
+    classifyDispatch: _classifyHotUpdateDispatch,
+  );
+
+  String _classifyHotUpdateDispatch(Map<String, dynamic> result) {
+    final existing = result['dispatch']?.toString();
+    if (existing == 'dispatched' ||
+        existing == 'not_dispatched' ||
+        existing == 'dispatch_outcome_unknown') {
+      return existing!;
+    }
+    final error = result['error'];
+    final code = error is Map ? error['code']?.toString() : null;
+    if (code == 'not_attached' ||
+        code == 'hot_reload_unavailable_owner_exited' ||
+        code == 'hot_restart_unavailable' ||
+        (code?.endsWith('_signal_failed') ?? false)) {
+      return 'not_dispatched';
+    }
+    if (code == 'vm_reload_unavailable') {
+      return 'dispatch_outcome_unknown';
+    }
+    return 'dispatched';
+  }
+
+  Future<Map<String, dynamic>> _performHotUpdate({
+    required String action,
+    required ProcessSignal signal,
+    required bool fullRestart,
   }) async {
     final started = DateTime.now();
     final before = await _tryInspect();
     final beforeRuntimeInstanceId = before?['runtimeInstanceId']?.toString();
+
+    Map<String, dynamic> closeNativeHotUpdateTimings(Map<String, dynamic> raw) {
+      var timed = <String, dynamic>{
+        for (final entry in raw.entries)
+          if (!entry.key.startsWith('_phase')) entry.key: entry.value,
+      };
+      timed = _withPreflightPhaseTimings(timed, before?['timings']);
+      // `_waitForInspectAfterHotUpdate` owns its nested reconnect/snapshot
+      // probes as settle work. Do not also aggregate the returned inspect's
+      // phases here or those intervals would overlap `settle`.
+      final extraConnectMs = raw['_phaseConnectMs'];
+      if (extraConnectMs is int) {
+        timed = _withMeasuredPhase(
+          timed,
+          phase: 'connect',
+          elapsedMs: _phaseElapsedMs(timed, 'connect') + extraConnectMs,
+          owner: 'cli',
+          scope: 'sequential helper and native VM-service connections',
+        );
+      }
+      for (final phase in const <String>[
+        'dispatch',
+        'settle',
+        'delta',
+        'logs',
+      ]) {
+        final elapsedMs =
+            raw['_phase${phase[0].toUpperCase()}${phase.substring(1)}Ms'];
+        if (elapsedMs is int) {
+          timed = _withMeasuredPhase(
+            timed,
+            phase: phase,
+            elapsedMs: _phaseElapsedMs(timed, phase) + elapsedMs,
+            owner: phase == 'dispatch' || phase == 'logs'
+                ? 'cli'
+                : 'helper_and_cli',
+            scope: switch (phase) {
+              'dispatch' => 'native Flutter hot-update dispatch',
+              'settle' =>
+                'post-dispatch helper availability and semantic settling',
+              'delta' =>
+                'post-settle source verification and factual delta construction',
+              'logs' => 'bounded Flutter-tool acknowledgement log collection',
+              _ => 'native Flutter hot-update phase',
+            },
+          );
+        } else {
+          timed = _withUnavailablePhase(
+            timed,
+            phase: phase,
+            owner: phase == 'dispatch' || phase == 'logs' ? 'cli' : 'helper',
+            reason: raw['dispatch'] == 'not_dispatched'
+                ? 'not_applicable:native_hot_update_not_dispatched'
+                : 'native_hot_update_phase_not_reached_before_response',
+          );
+        }
+      }
+      return _withUnavailablePhase(
+        timed,
+        phase: 'match',
+        owner: 'cli',
+        reason: 'not_applicable:native_hot_update_has_no_widget_selector',
+      );
+    }
+
     final logCursor = _currentLogCursor();
     final pid = _readPid();
-    if (pid != null && await _looksLikeScoutFlutterRun(pid)) {
+    final sessionMeta = _readSessionMeta();
+    if (pid != null && await _matchesOwnedFlutterRun(pid, sessionMeta)) {
+      final dispatchStopwatch = Stopwatch()..start();
       final sent = Process.killPid(pid, signal);
+      dispatchStopwatch.stop();
       if (!sent) {
-        return {
+        return closeNativeHotUpdateTimings(<String, dynamic>{
           'ok': false,
           'action': action,
           'error': {
@@ -799,8 +1513,11 @@ extension _CliResults on FlutterScoutCli {
           },
           'fullRebuildRequired': false,
           'appReachable': before != null,
-        };
+          'dispatch': 'not_dispatched',
+          '_phaseDispatchMs': dispatchStopwatch.elapsedMilliseconds,
+        });
       }
+      final logsStopwatch = Stopwatch()..start();
       final acknowledgement = await _waitForHotUpdateAcknowledgement(
         action: action,
         sinceCursor: logCursor,
@@ -808,13 +1525,17 @@ extension _CliResults on FlutterScoutCli {
             ? const Duration(seconds: 30)
             : const Duration(seconds: 20),
       );
+      logsStopwatch.stop();
       if (acknowledgement['ok'] != true) {
-        return {
+        final settleStopwatch = Stopwatch()..start();
+        final reachable = await _tryInspect() != null;
+        settleStopwatch.stop();
+        return closeNativeHotUpdateTimings(<String, dynamic>{
           'ok': false,
           'action': action,
           'method': fullRestart ? 'sigusr2_hot_restart' : 'sigusr1_hot_reload',
           'pid': pid,
-          'appReachable': await _tryInspect() != null,
+          'appReachable': reachable,
           'elapsedMs': DateTime.now().difference(started).inMilliseconds,
           'acknowledgement': acknowledgement,
           'error': {
@@ -823,9 +1544,14 @@ extension _CliResults on FlutterScoutCli {
                 : '${action}_ack_timeout',
             'message': acknowledgement['message'],
           },
-        };
+          'dispatch': 'dispatched',
+          '_phaseDispatchMs': dispatchStopwatch.elapsedMilliseconds,
+          '_phaseLogsMs': logsStopwatch.elapsedMilliseconds,
+          '_phaseSettleMs': settleStopwatch.elapsedMilliseconds,
+        });
       }
       final acknowledgedAt = DateTime.now();
+      final settleStopwatch = Stopwatch()..start();
       final after = await _waitForInspectAfterHotUpdate(
         timeout: fullRestart
             ? const Duration(seconds: 15)
@@ -833,10 +1559,14 @@ extension _CliResults on FlutterScoutCli {
         previousRuntimeInstanceId: beforeRuntimeInstanceId,
         requireNewRuntime: fullRestart,
       );
+      settleStopwatch.stop();
+      final deltaStopwatch = Stopwatch()..start();
       final sourceVerification = await _verifyLoadedDartSources();
       final sourceMismatch = sourceVerification['status'] == 'mismatch';
+      final delta = _inspectDelta(before, after);
+      deltaStopwatch.stop();
       final elapsedMs = DateTime.now().difference(started).inMilliseconds;
-      return {
+      return closeNativeHotUpdateTimings(<String, dynamic>{
         'ok': after != null && !sourceMismatch,
         'action': action,
         'method': fullRestart ? 'sigusr2_hot_restart' : 'sigusr1_hot_reload',
@@ -855,7 +1585,7 @@ extension _CliResults on FlutterScoutCli {
         'sourceVerification': sourceVerification,
         'before': before,
         'after': after,
-        'delta': _inspectDelta(before, after),
+        'delta': delta,
         'recentErrors': after?['recentErrors'] ?? const <Object?>[],
         if (after == null)
           'error': {
@@ -874,14 +1604,19 @@ extension _CliResults on FlutterScoutCli {
             'Run flutter-scout inspect',
             'If the app is not reachable, run flutter-scout launch --device <sim-id> --project <path>',
           ],
-      };
+        'dispatch': 'dispatched',
+        '_phaseDispatchMs': dispatchStopwatch.elapsedMilliseconds,
+        '_phaseLogsMs': logsStopwatch.elapsedMilliseconds,
+        '_phaseSettleMs': settleStopwatch.elapsedMilliseconds,
+        '_phaseDeltaMs': deltaStopwatch.elapsedMilliseconds,
+      });
     }
 
     if (!fullRestart) {
       final ownershipLossReason = _readSessionMeta()?['ownershipLossReason']
           ?.toString();
       if (ownershipLossReason == 'owner_process_exited') {
-        return {
+        return closeNativeHotUpdateTimings(<String, dynamic>{
           'ok': false,
           'action': action,
           'method': 'unavailable_after_owner_process_exit',
@@ -897,12 +1632,15 @@ extension _CliResults on FlutterScoutCli {
             'Keep using inspect and actions against the currently running app when previous code is sufficient',
             'Use flutter-scout launch --replace --device <sim-id> --project <path> when a fresh Scout-owned run is acceptable',
           ],
-        };
+          'dispatch': 'not_dispatched',
+        });
       }
-      return _vmServiceReload(started: started, before: before);
+      return closeNativeHotUpdateTimings(
+        await _vmServiceReload(started: started, before: before),
+      );
     }
 
-    return {
+    return closeNativeHotUpdateTimings(<String, dynamic>{
       'ok': false,
       'action': action,
       'method': 'unavailable_without_scout_owned_flutter_run',
@@ -922,7 +1660,8 @@ extension _CliResults on FlutterScoutCli {
         'Run flutter-scout reload for Dart-only changes that can be applied through the VM service',
         'If reload is rejected, relaunch from the owning terminal or start a Scout-owned run with flutter-scout ensure --device <sim-id> --project <path>',
       ],
-    };
+      'dispatch': 'not_dispatched',
+    });
   }
 
   Future<Map<String, dynamic>> _vmServiceReload({
@@ -939,12 +1678,18 @@ extension _CliResults on FlutterScoutCli {
           'code': 'not_attached',
           'message': 'Run flutter-scout attach or launch first.',
         },
+        'dispatch': 'not_dispatched',
       };
     }
+    Stopwatch? connectStopwatch;
+    Stopwatch? dispatchStopwatch;
     try {
+      connectStopwatch = Stopwatch()..start();
       final service = await _connect(uri);
+      connectStopwatch.stop();
       try {
         final isolateId = await _findMainIsolate(service);
+        dispatchStopwatch = Stopwatch()..start();
         final report = await service
             .reloadSources(isolateId, force: false, pause: false)
             .timeout(const Duration(seconds: 20));
@@ -959,9 +1704,13 @@ extension _CliResults on FlutterScoutCli {
         } catch (_) {
           // Some embedder/tool combinations reassemble as part of reloadSources.
         }
+        dispatchStopwatch.stop();
+        final settleStopwatch = Stopwatch()..start();
         final after = await _waitForInspectAfterHotUpdate(
           timeout: const Duration(seconds: 8),
         );
+        settleStopwatch.stop();
+        final deltaStopwatch = Stopwatch()..start();
         final sourceVerification = reloadSucceeded
             ? await _verifyLoadedDartSources(
                 service: service,
@@ -969,6 +1718,8 @@ extension _CliResults on FlutterScoutCli {
               )
             : const <String, Object?>{'status': 'not_checked'};
         final sourceMismatch = sourceVerification['status'] == 'mismatch';
+        final delta = _inspectDelta(before, after);
+        deltaStopwatch.stop();
         final elapsedMs = DateTime.now().difference(started).inMilliseconds;
         return {
           'ok': reloadSucceeded && after != null && !sourceMismatch,
@@ -989,7 +1740,7 @@ extension _CliResults on FlutterScoutCli {
           'elapsedMs': elapsedMs,
           'before': before,
           'after': after,
-          'delta': _inspectDelta(before, after),
+          'delta': delta,
           'recentErrors': after?['recentErrors'] ?? const <Object?>[],
           if (!reloadSucceeded)
             'error': {
@@ -1008,11 +1759,18 @@ extension _CliResults on FlutterScoutCli {
               'message':
                   'Reload acknowledged, but the VM source differs from changed Dart files on disk.',
             },
+          'dispatch': 'dispatched',
+          '_phaseConnectMs': connectStopwatch.elapsedMilliseconds,
+          '_phaseDispatchMs': dispatchStopwatch.elapsedMilliseconds,
+          '_phaseSettleMs': settleStopwatch.elapsedMilliseconds,
+          '_phaseDeltaMs': deltaStopwatch.elapsedMilliseconds,
         };
       } finally {
         await service.dispose();
       }
     } catch (error) {
+      connectStopwatch?.stop();
+      dispatchStopwatch?.stop();
       return {
         'ok': false,
         'action': 'reload',
@@ -1020,6 +1778,13 @@ extension _CliResults on FlutterScoutCli {
         'fullRebuildRequired': false,
         'appReachable': await _tryInspect() != null,
         'error': {'code': 'vm_reload_unavailable', 'message': error.toString()},
+        'dispatch': dispatchStopwatch == null
+            ? 'not_dispatched'
+            : 'dispatch_outcome_unknown',
+        if (connectStopwatch != null)
+          '_phaseConnectMs': connectStopwatch.elapsedMilliseconds,
+        if (dispatchStopwatch != null)
+          '_phaseDispatchMs': dispatchStopwatch.elapsedMilliseconds,
         'nextBestActions': [
           'Use the owning Flutter terminal or IDE debug session to hot reload this attached app',
           'Start the app with flutter-scout launch to enable signal-based reload/restart',
@@ -1249,6 +2014,17 @@ extension _CliResults on FlutterScoutCli {
       final file = File(_logFile);
       if (file.existsSync()) {
         final chunk = _readLogChunk(file, sinceCursor: sinceCursor);
+        if (chunk.truncated) {
+          return {
+            'ok': false,
+            'truncated': true,
+            'cursor': chunk.endCursor,
+            'retainedFromCursor': chunk.startCursor,
+            'message':
+                'Flutter tool acknowledgement logs exceeded the bounded '
+                'read window; update success cannot be proven.',
+          };
+        }
         var cursor = chunk.startCursor;
         for (final rawLine in chunk.lines) {
           cursor += utf8.encode(rawLine).length + 1;

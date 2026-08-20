@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/agent_task.schema.json",
+  "title": "Flutter Scout agent-visible task projection v1",
+  "description": "The only task object that may be supplied to an evaluated agent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "taskId",
+    "instruction",
+    "allowedTools",
+    "budget"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "taskId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "instruction": { "type": "string", "minLength": 1 },
+    "allowedTools": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxActions", "maxWallTimeMs"],
+      "properties": {
+        "maxActions": { "type": "integer", "minimum": 1 },
+        "maxWallTimeMs": { "type": "integer", "minimum": 1 },
+        "maxTokens": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

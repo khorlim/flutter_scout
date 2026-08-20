@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.dev/protocol/schemas/v1/persistent-call.schema.json",
+  "title": "Flutter Scout authenticated persistent call",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["method"],
+  "properties": {
+    "method": {
+      "type": "string",
+      "enum": [
+        "annotations", "apps", "back", "bounds", "crop", "deeplink", "dismiss",
+        "drag-cancel", "drag-end", "drag-move", "drag-start", "drag-status",
+        "fill", "health", "input", "inspect",
+        "locate", "logs", "long-press", "reload", "restart", "reveal",
+        "screenshot", "scroll", "scroll-to", "status", "swipe", "tap",
+        "tap-text", "wait", "wait-for", "where"
+      ]
+    },
+    "app": {"type": "string", "minLength": 1, "maxLength": 128},
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "args": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"type": "string", "maxLength": 16384}
+    },
+    "params": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": {
+        "anyOf": [
+          {"type": "null"},
+          {"type": "string", "maxLength": 16384},
+          {"type": "number"},
+          {"type": "boolean"},
+          {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "type": ["string", "number", "boolean"]
+            }
+          },
+          {"type": "object"}
+        ]
+      }
+    }
+  }
+}

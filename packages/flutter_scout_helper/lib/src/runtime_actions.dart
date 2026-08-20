@@ -2,6 +2,12 @@ part of 'flutter_scout_binding.dart';
 
 // part: interaction handlers (tap, tap-text, input, long-press, fill, scroll, swipe, scroll-to, back, wait-stable) and pointer dispatch wait.
 
+/// Whether a bounded wait is a passive observation or the settling phase of a
+/// mutation Scout has already dispatched. There is deliberately no default on
+/// `_waitStable`/`_awaitConditions`: every caller must choose, so a new read
+/// cannot silently inherit frame-driving behavior.
+enum _FrameAdvancePolicy { observeOnly, mutationSettling }
+
 extension _RuntimeActions on FlutterScoutRuntime {
   Future<developer.ServiceExtensionResponse> _handleTap(
     String method,
@@ -12,60 +18,53 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final target = params['target'];
       final x = double.tryParse(params['x'] ?? '');
       final y = double.tryParse(params['y'] ?? '');
-
-      Offset? point;
-      ScoutNode? node;
-      if (target != null && target.isNotEmpty) {
-        // Resolve against the snapshot we just took — a second full tree walk
-        // here doubled the cost of every targeted tap.
-        node = before.findNode(target);
-        point = node?.suggestedTapPoint;
-      } else if (x != null && y != null) {
-        point = Offset(x, y);
-      }
-
-      if (node != null && node.visibleFraction > 0 && !node.hitTestable) {
-        return _fail(
-          'target_not_found',
-          'Target `$target` matched `${node.id}` but is not hit-testable at its suggested tap point. It may be obscured by an overlay or blocked by another widget.',
-          extra: {
-            'reason': 'target_not_hit_testable',
-            'target': node.toJson(),
-            if (before.activeSurface != null)
-              'activeSurface': before.activeSurface,
-            'hint':
-                'Inspect the active surface and tap one of its hit-testable controls, or dismiss it before retrying `$target`.',
-          },
+      if (target == null || target.isEmpty) {
+        _markRequestPhaseUnavailable(
+          'match',
+          'not_applicable:coordinate_tap_has_no_widget_selector',
         );
       }
 
+      Offset? point;
+      ScoutNode? node;
+      _TargetResolution? resolution;
+      Map<String, Object?>? coordinateEvidence;
+      if (target != null && target.isNotEmpty) {
+        resolution = _resolveTarget(before, target);
+        if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+        resolution = _revalidateTarget(resolution);
+        if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+        node = resolution.node;
+        point = resolution.safePoint;
+      } else if (x != null && y != null) {
+        point = Offset(x, y);
+        coordinateEvidence = _coordinateEvidence(point, before);
+      }
+
       if (point == null) {
-        if (node != null && node.visibleFraction == 0) {
-          return _fail(
-            'target_not_visible',
-            'Target `$target` matched `${node.id}` but is offscreen; scroll it into view before tapping.',
-            extra: {
-              'reachHint': 'scroll-to $target',
-              'recentErrors': _recentErrors(),
-            },
-          );
-        }
         return _fail(
           'target_not_found',
-          'No tappable target matched `$target`.',
+          'Expected one unique target handle or explicit logical x/y coordinates.',
           extra: _notFoundScrollHint(target),
+        );
+      }
+      if (!_viewportRect().contains(point)) {
+        coordinateEvidence ??= _coordinateEvidence(point, before);
+        return _fail(
+          'gesture_start_outside_viewport',
+          'Tap point $point is outside the logical viewport.',
+          extra: {'coordinateEvidence': coordinateEvidence},
         );
       }
 
       await _dispatchTap(point);
       final actionSnapshot = await _snapshotAfterAction(before, params);
-      final stable = actionSnapshot.stable;
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
       return await _respondWithExpectation(params, {
         'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
-        'stable': stable,
+        ..._stabilityResponseFields(actionSnapshot.stability),
         'result': _tapResult(
           changed: changed,
           activityObserved: activityObserved,
@@ -91,6 +90,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
                     ? 'Target was already selected before the tap; no change is expected.'
                     : 'Tap was dispatched, but no synchronous Flutter tree, field, text, or geometry change was observed before the wait timeout.'),
         },
+        if (resolution != null) 'resolution': resolution.toJson(),
+        'coordinateEvidence': ?coordinateEvidence,
         if (!activityObserved && node?.selected != true)
           'warnings': const [
             'Tap dispatched without an observed synchronous UI change; check recentErrors, overlays, logs, or increase --wait-ms if the action is async.',
@@ -115,20 +116,39 @@ extension _RuntimeActions on FlutterScoutRuntime {
       if (text == null || text.trim().isEmpty) {
         return _fail('missing_text', 'Expected text to tap.');
       }
-      final match = _findVisibleTextMatch(
+      var resolution = _resolveTextTarget(
+        before,
         text,
         loose: params['contains'] == 'true',
       );
-      if (match == null) {
+      if (!resolution.isUnique) {
         final suggestions = _textSuggestions(before.visibleText, text);
-        return _fail(
-          'text_not_found',
-          'No visible text matched `$text`.'
-              '${suggestions.isEmpty ? '' : ' Did you mean: ${suggestions.map((s) => '`$s`').join(', ')}?'}',
-          extra: {if (suggestions.isNotEmpty) 'didYouMean': suggestions},
-        );
+        if (resolution.status == _TargetResolutionStatus.notFound &&
+            suggestions.isNotEmpty) {
+          return _fail(
+            'text_not_found',
+            'No visible text matched `$text`. Did you mean: ${suggestions.map((s) => '`$s`').join(', ')}?',
+            extra: {
+              'resolution': resolution.toJson(),
+              'didYouMean': suggestions,
+              'activation': const {'dispatched': false},
+            },
+          );
+        }
+        return _targetResolutionFailure(resolution);
       }
-      final targetNode = match.actionable ?? match.text;
+      resolution = _revalidateTextTarget(
+        resolution,
+        loose: params['contains'] == 'true',
+      );
+      if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+      final targetNode = resolution.node!;
+      final match = _TextTargetMatch(
+        text: resolution.textNode ?? targetNode,
+        actionable: identical(resolution.textNode, targetNode)
+            ? null
+            : targetNode,
+      );
       if (_unsafeTapTextActivation(match, text) &&
           params['allowMismatch'] != 'true') {
         return _fail(
@@ -147,7 +167,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
           },
         );
       }
-      final point = _tapPointForTextMatch(match);
+      final point = resolution.safePoint;
       if (point == null) {
         return _fail(
           'text_not_actionable',
@@ -157,13 +177,12 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final activationRisk = _tapTextActivationRisk(match);
       await _dispatchTap(point);
       final actionSnapshot = await _snapshotAfterAction(before, params);
-      final stable = actionSnapshot.stable;
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
       return await _respondWithExpectation(params, {
         'action': 'tap-text $text',
-        'stable': stable,
+        ..._stabilityResponseFields(actionSnapshot.stability),
         'result': _tapResult(
           changed: changed,
           activityObserved: activityObserved,
@@ -178,6 +197,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
         if (actionSnapshot.waitTimedOut) 'waitTimedOut': true,
         'target': targetNode.toJson(),
         'textTarget': match.text.toJson(),
+        'resolution': resolution.toJson(),
         'activation': {
           'dispatched': true,
           'observedChange': changed,
@@ -241,16 +261,6 @@ extension _RuntimeActions on FlutterScoutRuntime {
     return 'activated_no_observed_change';
   }
 
-  Offset? _tapPointForTextMatch(_TextTargetMatch match) {
-    final textPoint = match.text.suggestedTapPoint ?? match.text.rect?.center;
-    final actionable = match.actionable;
-    if (actionable == null) {
-      return textPoint != null && _hitTestable(textPoint) ? textPoint : null;
-    }
-    if (_shouldTapTextPoint(match)) return textPoint;
-    return actionable.suggestedTapPoint ?? actionable.rect?.center ?? textPoint;
-  }
-
   bool _shouldTapTextPoint(_TextTargetMatch match) {
     final actionable = match.actionable;
     final actionRect = actionable?.rect;
@@ -298,7 +308,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
         score += 10;
       }
       if (actionable.confidence < 0.75) {
-        reasons.add('low_confidence_target');
+        reasons.add('low_heuristic_score_target');
         score += 8;
       }
     }
@@ -313,7 +323,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
         : 'low';
     return {
       'level': level,
-      'confidence': (1 - (score / 60)).clamp(0.0, 1.0),
+      'heuristicScore': (1 - (score / 60)).clamp(0.0, 1.0),
+      'scoreKind': 'uncalibrated_heuristic',
+      'heuristicMeaning': 'relative_activation_safety',
       if (reasons.isNotEmpty) 'reasons': reasons,
     };
   }
@@ -343,7 +355,15 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final before = _snapshot();
       final target = params['target'];
       final value = params['value'] ?? '';
-      final editable = _findEditable(target: target);
+      var resolution = target == null || target.isEmpty || target == 'focused'
+          ? _resolveFocusedField(before)
+          : _resolveTarget(before, target, fieldOnly: true);
+      if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+      resolution = target == null || target.isEmpty || target == 'focused'
+          ? _revalidateFocusedField(resolution)
+          : _revalidateTarget(resolution, fieldOnly: true);
+      if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+      final editable = resolution.node?._editableState;
       if (editable == null) {
         return _fail(
           'field_not_found',
@@ -352,11 +372,15 @@ extension _RuntimeActions on FlutterScoutRuntime {
         );
       }
       _setEditableText(editable, value);
-      final stable = await _waitStableForAction(params);
+      final stability = await _waitStableForAction(
+        params,
+        initialSnapshot: before,
+      );
       final after = _snapshot();
       return await _respondWithExpectation(params, {
         'action': 'input ${target ?? 'focused'}',
-        'stable': stable,
+        'resolution': resolution.toJson(),
+        ..._stabilityResponseFields(stability),
         'result': _changed(before, after) ? 'changed' : 'unchanged',
         'before': before.summaryJson(),
         'after': after.summaryJson(),
@@ -376,7 +400,27 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final before = _snapshot();
       final target = params['target'];
       final durationMs = int.tryParse(params['durationMs'] ?? '') ?? 600;
-      final point = _pointForTarget(target, params, snapshot: before);
+      if (target == null || target.isEmpty) {
+        _markRequestPhaseUnavailable(
+          'match',
+          'not_applicable:coordinate_long_press_has_no_widget_selector',
+        );
+      }
+      _TargetResolution? resolution;
+      Map<String, Object?>? coordinateEvidence;
+      Offset? point;
+      if (target != null && target.isNotEmpty) {
+        resolution = _resolveTarget(before, target);
+        if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+        resolution = _revalidateTarget(resolution);
+        if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+        point = resolution.safePoint;
+      } else {
+        point = _pointFromParams(params);
+        if (point != null) {
+          coordinateEvidence = _coordinateEvidence(point, before);
+        }
+      }
       if (point == null) {
         return _fail(
           'target_not_found',
@@ -384,14 +428,27 @@ extension _RuntimeActions on FlutterScoutRuntime {
           extra: _notFoundScrollHint(target),
         );
       }
+      if (!_viewportRect().contains(point)) {
+        coordinateEvidence ??= _coordinateEvidence(point, before);
+        return _fail(
+          'gesture_start_outside_viewport',
+          'Long-press point $point is outside the logical viewport.',
+          extra: {'coordinateEvidence': coordinateEvidence},
+        );
+      }
 
       await _dispatchPress(point, hold: Duration(milliseconds: durationMs));
-      final stable = await _waitStableForAction(params);
+      final stability = await _waitStableForAction(
+        params,
+        initialSnapshot: before,
+      );
       final after = _snapshot();
       return _ok({
         'action': 'longPress ${target ?? '${point.dx},${point.dy}'}',
-        'stable': stable,
+        ..._stabilityResponseFields(stability),
         'result': _changed(before, after) ? 'changed' : 'unchanged',
+        if (resolution != null) 'resolution': resolution.toJson(),
+        'coordinateEvidence': ?coordinateEvidence,
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),
@@ -417,13 +474,45 @@ extension _RuntimeActions on FlutterScoutRuntime {
         return _fail('invalid_values', '`values` must be a JSON object.');
       }
 
+      // Preflight the complete batch before changing the first controller. A
+      // duplicate/missing/unsafe selector must never yield a surprising partial
+      // fill merely because it appeared later in map order.
+      for (final target in decoded.keys) {
+        final resolution = _resolveTarget(before, target, fieldOnly: true);
+        if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+      }
+
       final filled = <String>[];
       final failed = <String>[];
       final results = <Map<String, Object?>>[];
       final warnings = <String>[];
       for (final entry in decoded.entries) {
         final fieldBefore = _snapshot();
-        final editable = _findEditable(target: entry.key);
+        var resolution = _resolveTarget(
+          fieldBefore,
+          entry.key,
+          fieldOnly: true,
+        );
+        if (!resolution.isUnique) {
+          failed.add(entry.key);
+          results.add({
+            'target': entry.key,
+            'ok': false,
+            'resolution': resolution.toJson(),
+          });
+          break;
+        }
+        resolution = _revalidateTarget(resolution, fieldOnly: true);
+        if (!resolution.isUnique) {
+          failed.add(entry.key);
+          results.add({
+            'target': entry.key,
+            'ok': false,
+            'resolution': resolution.toJson(),
+          });
+          break;
+        }
+        final editable = resolution.node?._editableState;
         if (editable == null) {
           failed.add(entry.key);
           results.add({
@@ -437,7 +526,10 @@ extension _RuntimeActions on FlutterScoutRuntime {
           continue;
         }
         _setEditableText(editable, entry.value?.toString() ?? '');
-        final fieldStable = await _waitStableForAction(params);
+        final fieldStability = await _waitStableForAction(
+          params,
+          initialSnapshot: fieldBefore,
+        );
         final fieldAfter = _snapshot();
         final fieldDelta = _delta(fieldBefore, fieldAfter);
         final changedFields = fieldDelta['changedFields'];
@@ -461,17 +553,21 @@ extension _RuntimeActions on FlutterScoutRuntime {
         results.add({
           'target': entry.key,
           'ok': true,
-          'stable': fieldStable,
+          ..._stabilityResponseFields(fieldStability),
           'changed': changed,
+          'resolution': resolution.toJson(),
           'delta': fieldDelta,
         });
       }
 
-      final stable = await _waitStableForAction(params);
+      final stability = await _waitStableForAction(
+        params,
+        initialSnapshot: before,
+      );
       final after = _snapshot();
       return await _respondWithExpectation(params, {
         'action': 'fill',
-        'stable': stable,
+        ..._stabilityResponseFields(stability),
         'filled': filled,
         'failed': failed,
         'fieldResults': results,
@@ -537,20 +633,54 @@ extension _RuntimeActions on FlutterScoutRuntime {
         );
       }
       final before = _snapshot();
-      final start =
-          _pointForTarget(params['target'], params, snapshot: before) ??
-          _screenCenter();
+      final target = params['target'];
+      if (target == null || target.isEmpty) {
+        _markRequestPhaseUnavailable(
+          'match',
+          'not_applicable:coordinate_drag_start_has_no_widget_selector',
+        );
+      }
+      _markRequestPhaseUnavailable(
+        'settle',
+        'not_applicable:held_drag_remains_active_after_drag_start',
+      );
+      _TargetResolution? resolution;
+      Map<String, Object?>? coordinateEvidence;
+      Offset start;
+      if (target != null && target.isNotEmpty) {
+        resolution = _resolveTarget(before, target);
+        if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+        resolution = _revalidateTarget(resolution);
+        if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+        start = resolution.safePoint!;
+      } else {
+        start = _pointFromParams(params) ?? _screenCenter();
+        coordinateEvidence = _coordinateEvidence(start, before);
+      }
       if (!_viewportRect().contains(start)) {
-        return _fail('gesture_start_outside_viewport', '$start is offscreen.');
+        coordinateEvidence ??= _coordinateEvidence(start, before);
+        return _fail(
+          'gesture_start_outside_viewport',
+          '$start is offscreen.',
+          extra: {'coordinateEvidence': coordinateEvidence},
+        );
       }
       final state = await _beginHeldDrag(start, before);
-      _recordHeldDragSample(state, before);
+      final after = _snapshot();
+      _recordHeldDragSample(state, after);
+      final stability = _heldDragStability(before, after);
       return _ok({
         'action': 'drag-start',
+        ..._stabilityResponseFields(stability),
         'active': true,
         'position': [start.dx, start.dy],
         'pathLength': state.path.length,
-        'snapshot': before.summaryJson(),
+        if (resolution != null) 'resolution': resolution.toJson(),
+        'coordinateEvidence': ?coordinateEvidence,
+        'before': before.summaryJson(),
+        'after': after.summaryJson(),
+        'snapshot': after.summaryJson(),
+        'delta': _delta(before, after),
       });
     } catch (error) {
       return _fail('drag_start_failed', error.toString());
@@ -563,6 +693,14 @@ extension _RuntimeActions on FlutterScoutRuntime {
   ) async {
     try {
       final state = _heldDrag;
+      _markRequestPhaseUnavailable(
+        'match',
+        'not_applicable:drag_move_continues_existing_pointer_identity',
+      );
+      _markRequestPhaseUnavailable(
+        'settle',
+        'not_applicable:held_drag_remains_active_after_drag_move',
+      );
       if (state == null) {
         return _fail('no_active_drag', 'Start one with drag-start first.');
       }
@@ -578,14 +716,20 @@ extension _RuntimeActions on FlutterScoutRuntime {
         next.dx.clamp(0.0, _viewportRect().width),
         next.dy.clamp(0.0, _viewportRect().height),
       );
+      final coordinateEvidence = _coordinateEvidence(clamped, beforeMove);
       await _moveHeldDrag(clamped);
       final after = _snapshot();
       _recordHeldDragSample(state, after);
+      final stability = _heldDragStability(beforeMove, after);
       return _ok({
         'action': 'drag-move',
+        ..._stabilityResponseFields(stability),
         'active': true,
         'position': [clamped.dx, clamped.dy],
         'pathLength': state.path.length,
+        'coordinateEvidence': coordinateEvidence,
+        'before': beforeMove.summaryJson(),
+        'after': after.summaryJson(),
         'snapshot': after.summaryJson(),
         'delta': _delta(beforeMove, after),
       });
@@ -600,27 +744,38 @@ extension _RuntimeActions on FlutterScoutRuntime {
   ) async {
     try {
       final active = _heldDrag;
+      _markRequestPhaseUnavailable(
+        'match',
+        'not_applicable:drag_end_uses_existing_pointer_identity',
+      );
       if (active == null) {
         return _fail('no_active_drag', 'There is no held drag to end.');
       }
+      final beforeMove = _snapshot();
       final destination = _heldDragDestination(active, params);
+      Map<String, Object?>? coordinateEvidence;
       if (destination != null) {
+        coordinateEvidence = _coordinateEvidence(destination, beforeMove);
         await _moveHeldDrag(destination);
         _recordHeldDragSample(active, _snapshot());
       }
       final state = await _finishHeldDrag(cancel: false);
-      final stable = await _waitStableForAction(params);
+      final stability = await _waitStableForAction(
+        params,
+        initialSnapshot: state.before,
+      );
       final after = _snapshot();
       _recordHeldDragSample(state, after, phase: 'end');
       final changed = _changed(state.before, after);
       return _ok({
         'action': 'drag-end',
         'active': false,
-        'stable': stable,
+        ..._stabilityResponseFields(stability),
         'result': changed ? 'changed' : 'unchanged',
         'gestureStart': [state.start.dx, state.start.dy],
         'gestureEnd': [state.position.dx, state.position.dy],
         'gesturePath': state.path,
+        'coordinateEvidence': ?coordinateEvidence,
         'before': state.before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(state.before, after),
@@ -636,11 +791,29 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params,
   ) async {
     try {
+      final active = _heldDrag;
+      _markRequestPhaseUnavailable(
+        'match',
+        'not_applicable:drag_cancel_uses_existing_pointer_identity',
+      );
+      if (active == null) {
+        return _fail('no_active_drag', 'There is no held drag to cancel.');
+      }
       final state = await _finishHeldDrag(cancel: true);
+      final stability = await _waitStableForAction(
+        params,
+        initialSnapshot: active.before,
+      );
+      final after = _snapshot();
       return _ok({
         'action': 'drag-cancel',
         'active': false,
+        ..._stabilityResponseFields(stability),
         'gesturePath': state.path,
+        'before': active.before.summaryJson(),
+        'after': after.summaryJson(),
+        'delta': _delta(active.before, after),
+        'recentErrors': _recentErrors(),
       });
     } catch (error) {
       return _fail('no_active_drag', error.toString());
@@ -652,15 +825,23 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params,
   ) async {
     final state = _heldDrag;
+    final snapshot = _snapshot();
+    final stability = state == null
+        ? _unobservedStability(snapshot)
+        : _heldDragStability(state.before, snapshot);
     return _ok({
       'action': 'drag-status',
+      ..._stabilityResponseFields(
+        stability,
+        frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
+      ),
       'active': state != null,
       if (state != null) ...{
         'gestureStart': [state.start.dx, state.start.dy],
         'position': [state.position.dx, state.position.dy],
         'elapsedMs': DateTime.now().difference(state.startedAt).inMilliseconds,
         'gesturePath': state.path,
-        'snapshot': _snapshot().summaryJson(),
+        'snapshot': snapshot.summaryJson(),
       },
     });
   }
@@ -694,6 +875,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
       'screen': snapshot.screen,
       'viewSignature': snapshot.viewSignature,
       'visibleTextHash': snapshot.visibleTextHash,
+      'stateGeneration': snapshot.stateGeneration,
+      'snapshotId': snapshot.snapshotId,
     });
   }
 
@@ -712,17 +895,35 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final distance =
           double.tryParse(params['distance'] ?? '') ??
           (_viewportRect().height * 0.7);
+      _StabilityObservation? lastStability;
 
       // Already reachable without scrolling.
-      var node = before.findNode(target);
-      if (_isReachable(node)) {
+      var resolution = _resolveTarget(before, target);
+      if (resolution.status == _TargetResolutionStatus.ambiguous ||
+          resolution.status == _TargetResolutionStatus.wrongSurface ||
+          resolution.status == _TargetResolutionStatus.disabled ||
+          resolution.status == _TargetResolutionStatus.occluded ||
+          resolution.status == _TargetResolutionStatus.notHitTestable) {
+        return _targetResolutionFailure(resolution);
+      }
+      var node = resolution.node;
+      if (resolution.isUnique) {
+        _markRequestPhaseUnavailable(
+          'dispatch',
+          'not_applicable:scroll_to_target_already_visible_no_dispatch',
+        );
+        _markRequestPhaseUnavailable(
+          'settle',
+          'not_applicable:scroll_to_target_already_visible_no_post_dispatch_settle',
+        );
         return _scrollToResult(
           before: before,
           after: before,
-          node: node!,
+          node: resolution.node!,
           scrolls: 0,
           result: 'already_visible',
           target: target,
+          resolution: resolution,
         );
       }
 
@@ -740,6 +941,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       );
       var current = before;
       var scrolls = 0;
+      final gestureEvidence = <Map<String, Object?>>[];
       while (scrolls < maxScrolls) {
         if (DateTime.now().isAfter(budgetDeadline)) {
           final after = _snapshot();
@@ -754,9 +956,28 @@ extension _RuntimeActions on FlutterScoutRuntime {
                 'is still moving — run `scroll-to $target` again to continue '
                 'from here.',
             target: target,
+            stability: lastStability,
           );
         }
-        final start = _scrollStartFor(current, direction, target: node);
+        final dispatchSnapshot = _snapshot();
+        if (dispatchSnapshot.snapshotId != current.snapshotId) {
+          return _targetResolutionFailure(
+            _TargetResolution(
+              status: _TargetResolutionStatus.stale,
+              requested: target,
+              snapshot: dispatchSnapshot,
+              scope: _targetScope(dispatchSnapshot),
+              candidates: resolution.candidates,
+              node: node,
+              reason: 'State changed immediately before scroll dispatch.',
+            ),
+          );
+        }
+        final start = _scrollStartFor(
+          dispatchSnapshot,
+          direction,
+          target: node,
+        );
         if (start == null) {
           final after = _snapshot();
           return _scrollToFailure(
@@ -768,22 +989,38 @@ extension _RuntimeActions on FlutterScoutRuntime {
                 'No scrollable was found to reach `$target`. Verify the '
                 'handle exists on this screen.',
             target: target,
+            stability: lastStability,
           );
         }
         final delta = _dragDelta(direction, distance, scrollGesture: true);
+        gestureEvidence.add(_coordinateEvidence(start, dispatchSnapshot));
         await _dispatchDrag(start, delta);
-        await _waitStableForAction(params);
+        lastStability = await _waitStableForAction(
+          params,
+          initialSnapshot: dispatchSnapshot,
+        );
         scrolls++;
         final after = _snapshot();
-        node = after.findNode(target);
-        if (_isReachable(node)) {
+        resolution = _resolveTarget(after, target);
+        if (resolution.status == _TargetResolutionStatus.ambiguous ||
+            resolution.status == _TargetResolutionStatus.wrongSurface ||
+            resolution.status == _TargetResolutionStatus.disabled ||
+            resolution.status == _TargetResolutionStatus.occluded ||
+            resolution.status == _TargetResolutionStatus.notHitTestable) {
+          return _targetResolutionFailure(resolution);
+        }
+        node = resolution.node;
+        if (resolution.isUnique) {
           return _scrollToResult(
             before: before,
             after: after,
-            node: node!,
+            node: resolution.node!,
             scrolls: scrolls,
             result: 'reached',
             target: target,
+            resolution: resolution,
+            gestureEvidence: gestureEvidence,
+            stability: lastStability,
           );
         }
         // Stop early only if the scrollable genuinely did not move (hit an
@@ -801,6 +1038,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
                 'without finding `$target`. Try --direction ${_oppositeDirection(direction)} '
                 'or a different screen.',
             target: target,
+            stability: lastStability,
           );
         }
         current = after;
@@ -814,14 +1052,12 @@ extension _RuntimeActions on FlutterScoutRuntime {
             'Did not reach `$target` within $maxScrolls scroll(s). Increase '
             '--max-scrolls if the target is deeper.',
         target: target,
+        stability: lastStability,
       );
     } catch (error) {
       return _fail('scroll_to_failed', error.toString());
     }
   }
-
-  bool _isReachable(ScoutNode? node) =>
-      node != null && node.visibleFraction > 0 && node.hitTestable;
 
   /// Extra payload for a `target_not_found` failure. When the screen has a
   /// scrollable, the target may simply be lazy-unbuilt or offscreen, so point
@@ -865,6 +1101,13 @@ extension _RuntimeActions on FlutterScoutRuntime {
   }) {
     final vertical = direction == 'down' || direction == 'up';
     final candidates = <({Rect rect, bool axisMatch, double area})>[];
+    final activeSurfaceRect = snapshot.activeSurface == null
+        ? null
+        : (_rectFromJson(snapshot.activeSurface?['rect']) ??
+              _surfaceRectFor(snapshot));
+    if (snapshot.activeSurface != null && activeSurfaceRect == null) {
+      return null;
+    }
     for (final scrollable in snapshot.scrollables) {
       final visible = scrollable['visibleRect'];
       final raw = visible is List ? visible : scrollable['rect'];
@@ -876,6 +1119,13 @@ extension _RuntimeActions on FlutterScoutRuntime {
         (raw[3] as num).toDouble(),
       );
       if (rect.width <= 0 || rect.height <= 0) continue;
+      if (activeSurfaceRect != null) {
+        final exposed = rect.intersect(activeSurfaceRect);
+        final area = rect.width * rect.height;
+        final exposedArea =
+            math.max(0.0, exposed.width) * math.max(0.0, exposed.height);
+        if (area <= 0 || exposedArea / area < 0.5) continue;
+      }
       final declaredAxis = scrollable['axis']?.toString();
       final axisMatch = declaredAxis == null
           ? (vertical
@@ -949,13 +1199,21 @@ extension _RuntimeActions on FlutterScoutRuntime {
     required int scrolls,
     required String result,
     required String target,
+    _TargetResolution? resolution,
+    List<Map<String, Object?>> gestureEvidence = const [],
+    _StabilityObservation? stability,
   }) {
+    final effectiveStability =
+        stability ?? _unobservedStability(after, reason: 'no_scroll_required');
     return _ok({
       'action': 'scroll-to $target',
+      ..._stabilityResponseFields(effectiveStability),
       'result': result,
       'reason': result,
       'scrollsUsed': scrolls,
       'target': node.toJson(),
+      if (resolution != null) 'resolution': resolution.toJson(),
+      if (gestureEvidence.isNotEmpty) 'gestureEvidence': gestureEvidence,
       'before': before.summaryJson(),
       'after': after.summaryJson(),
       'delta': _delta(before, after),
@@ -970,11 +1228,15 @@ extension _RuntimeActions on FlutterScoutRuntime {
     required String reason,
     required String message,
     required String target,
+    _StabilityObservation? stability,
   }) {
+    final effectiveStability = stability ?? _unobservedStability(after);
     return _fail(
       'target_not_reached',
       message,
       extra: {
+        'action': 'scroll-to $target',
+        ..._stabilityResponseFields(effectiveStability),
         'reason': reason,
         'scrollsUsed': scrolls,
         'before': before.summaryJson(),
@@ -990,6 +1252,10 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params,
   ) async {
     try {
+      _markRequestPhaseUnavailable(
+        'match',
+        'not_applicable:system_back_has_no_widget_selector',
+      );
       final before = _snapshot();
       final rootContext = WidgetsBinding.instance.rootElement;
       if (rootContext == null) {
@@ -998,12 +1264,18 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final navigator =
           _findViewportModalNavigator(rootContext) ??
           _findActiveNavigator(rootContext);
-      final popped = await navigator?.maybePop() ?? false;
-      final stable = await _waitStableForAction(params);
+      final popped = await _inRequestPhaseAsync<bool>(
+        'dispatch',
+        () async => (await navigator?.maybePop()) ?? false,
+      );
+      final stability = await _waitStableForAction(
+        params,
+        initialSnapshot: before,
+      );
       final after = _snapshot();
       return _ok({
         'action': 'back',
-        'stable': stable,
+        ..._stabilityResponseFields(stability),
         'popped': popped,
         'result': _changed(before, after) ? 'changed' : 'unchanged',
         'before': before.summaryJson(),
@@ -1034,19 +1306,37 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final navigator =
           _findViewportModalNavigator(rootContext) ??
           _findActiveNavigator(rootContext);
-      final popped = await navigator?.maybePop() ?? false;
+      final popped = await _inRequestPhaseAsync<bool>(
+        'dispatch',
+        () async => (await navigator?.maybePop()) ?? false,
+      );
       String strategy = popped ? 'popped_route' : 'none';
       String? tappedId;
+      _TargetResolution? closeResolution;
       if (!popped) {
         // No route popped — look for a close-like control on the current
         // screen (a custom overlay's own X/Cancel).
         final closeNode = _findCloseControl(before);
-        final point = closeNode?.suggestedTapPoint;
-        if (closeNode != null && point != null) {
+        if (closeNode != null) {
+          closeResolution = _resolveTarget(before, closeNode.id);
+          if (!closeResolution.isUnique) {
+            return _targetResolutionFailure(closeResolution);
+          }
+          closeResolution = _revalidateTarget(closeResolution);
+          if (!closeResolution.isUnique) {
+            return _targetResolutionFailure(closeResolution);
+          }
+          final point = closeResolution.safePoint!;
           await _dispatchTap(point);
           strategy = 'tapped_close';
-          tappedId = closeNode.id;
+          tappedId = closeResolution.node!.id;
         }
+      }
+      if (closeResolution == null) {
+        _markRequestPhaseUnavailable(
+          'match',
+          'not_applicable:dismiss_used_navigator_without_widget_selector',
+        );
       }
       final actionSnapshot = await _snapshotAfterAction(before, params);
       final after = actionSnapshot.snapshot;
@@ -1054,10 +1344,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final activityObserved = changed || actionSnapshot.activityObserved;
       return _ok({
         'action': 'dismiss',
-        'stable': actionSnapshot.stable,
+        ..._stabilityResponseFields(actionSnapshot.stability),
         'strategy': strategy,
         'popped': popped,
         'tappedClose': ?tappedId,
+        if (closeResolution != null) 'resolution': closeResolution.toJson(),
         'result': changed
             ? 'changed'
             : activityObserved
@@ -1117,14 +1408,18 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params,
   ) async {
     final timeoutMs = int.tryParse(params['timeoutMs'] ?? '') ?? 3000;
-    final startedAt = DateTime.now();
-    final stable = await _waitStable(
-      timeout: Duration(milliseconds: timeoutMs),
+    final stability = await _waitStable(
+      timeout: Duration(milliseconds: math.max(0, timeoutMs)),
+      frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
     );
     return _ok({
-      'stable': stable,
-      'reason': stable ? null : 'frames_still_changing',
-      'waitedMs': DateTime.now().difference(startedAt).inMilliseconds,
+      'action': 'wait-stable',
+      ..._stabilityResponseFields(
+        stability,
+        frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
+      ),
+      'reason': stability.stoppingReason,
+      'waitedMs': stability.elapsedMs,
       'snapshot': _snapshot().summaryJson(),
       'recentErrors': _recentErrors(),
     });
@@ -1147,10 +1442,18 @@ extension _RuntimeActions on FlutterScoutRuntime {
         );
       }
       final conditions = _describeWaitConditions(params);
-      final outcome = await _awaitConditions(params);
+      final outcome = await _awaitConditions(
+        params,
+        frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
+      );
+      final stability = _conditionWaitStability(outcome);
       if (outcome.met) {
         return _ok({
           'action': 'wait-for',
+          ..._stabilityResponseFields(
+            stability,
+            frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
+          ),
           'result': 'met',
           'waitedMs': outcome.waitedMs,
           'polls': outcome.polls,
@@ -1163,6 +1466,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
           'blocking_error_during_wait',
           'A fresh blocking error surfaced while waiting; the awaited UI change is unlikely to arrive.',
           extra: {
+            'action': 'wait-for',
+            ..._stabilityResponseFields(
+              stability,
+              frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
+            ),
             'result': 'blocked',
             'waitedMs': outcome.waitedMs,
             'polls': outcome.polls,
@@ -1175,6 +1483,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
         'Conditions not met within ${outcome.waitedMs}ms: '
             '${conditions.entries.map((e) => '${e.key}=`${e.value}`').join(', ')}.',
         extra: {
+          'action': 'wait-for',
+          ..._stabilityResponseFields(
+            stability,
+            frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
+          ),
           'result': 'timeout',
           'waitedMs': outcome.waitedMs,
           'polls': outcome.polls,
@@ -1187,64 +1500,219 @@ extension _RuntimeActions on FlutterScoutRuntime {
     }
   }
 
-  /// Polls snapshots (driving deferred frames on backgrounded windows) until
-  /// every condition in [params] holds, a fresh blocking error appears, or
-  /// the timeout elapses. Shared by wait-for and action `expect*` params.
-  Future<
-    ({
-      bool met,
-      bool blocked,
-      int waitedMs,
-      int polls,
-      List<String> visibleText,
-    })
-  >
-  _awaitConditions(
+  /// Polls snapshots until every condition in [params] holds, a fresh blocking
+  /// error appears, or the timeout elapses. Read-only `wait-for` passes
+  /// [_FrameAdvancePolicy.observeOnly]; a same-call post-mutation expectation
+  /// passes [_FrameAdvancePolicy.mutationSettling].
+  Future<_ConditionWaitOutcome> _awaitConditions(
     Map<String, String> params, {
+    required _FrameAdvancePolicy frameAdvancePolicy,
+    String prefix = '',
+    String timeoutParam = 'timeoutMs',
+    int defaultTimeoutMs = 5000,
+  }) => _inRequestPhaseAsync(
+    'settle',
+    () => _awaitConditionsWithoutPhaseTiming(
+      params,
+      frameAdvancePolicy: frameAdvancePolicy,
+      prefix: prefix,
+      timeoutParam: timeoutParam,
+      defaultTimeoutMs: defaultTimeoutMs,
+    ),
+  );
+
+  Future<_ConditionWaitOutcome> _awaitConditionsWithoutPhaseTiming(
+    Map<String, String> params, {
+    required _FrameAdvancePolicy frameAdvancePolicy,
     String prefix = '',
     String timeoutParam = 'timeoutMs',
     int defaultTimeoutMs = 5000,
   }) async {
-    final timeoutMs =
-        int.tryParse(params[timeoutParam] ?? '') ?? defaultTimeoutMs;
+    final timeoutMs = math.max(
+      0,
+      int.tryParse(params[timeoutParam] ?? '') ?? defaultTimeoutMs,
+    );
     final pollMs = (int.tryParse(params['pollMs'] ?? '') ?? 150).clamp(
       16,
       2000,
     );
     final stopwatch = Stopwatch()..start();
+    final startedEpochMs = DateTime.now().millisecondsSinceEpoch;
+    final requestedDeadlineEpochMs = startedEpochMs + timeoutMs;
+    final requestDeadlineEpochMs = _requestContext?.deadlineEpochMs;
+    final deadlineEpochMs = requestDeadlineEpochMs == null
+        ? requestedDeadlineEpochMs
+        : math.min(requestedDeadlineEpochMs, requestDeadlineEpochMs);
+    final effectiveBudgetMs = math.max(0, deadlineEpochMs - startedEpochMs);
     var polls = 0;
+    ScoutSnapshot? initial;
+    ScoutSnapshot? previous;
+    var semanticChanges = 0;
+    var lastSemanticChangeMs = 0;
+    final semanticStates = <String>{};
+    var scheduledFrameSamples = 0;
+    var transientCallbackSamples = 0;
+    var maxTransientCallbacks = 0;
+    var disabledFrameSamples = 0;
     while (true) {
       polls += 1;
-      _pumpPendingFrame();
-      await _drainDeferredFrames(budget: Duration(milliseconds: pollMs));
+      if (frameAdvancePolicy == _FrameAdvancePolicy.mutationSettling) {
+        _advancePendingMutationFrame();
+        final remainingBeforeDrain = math.max(
+          0,
+          deadlineEpochMs - DateTime.now().millisecondsSinceEpoch,
+        );
+        if (remainingBeforeDrain > 0) {
+          await _drainDeferredMutationFrames(
+            budget: Duration(
+              milliseconds: math.min(pollMs, remainingBeforeDrain),
+            ),
+          );
+        }
+      }
       final snapshot = _snapshot();
+      initial ??= snapshot;
+      semanticStates.add(_semanticStabilitySignature(snapshot));
+      if (previous != null && _changed(previous, snapshot)) {
+        semanticChanges += 1;
+        lastSemanticChangeMs = stopwatch.elapsedMilliseconds;
+      }
+      previous = snapshot;
+      final binding = WidgetsBinding.instance;
+      if (binding.hasScheduledFrame) scheduledFrameSamples += 1;
+      if (binding.transientCallbackCount > 0) {
+        transientCallbackSamples += 1;
+      }
+      maxTransientCallbacks = math.max(
+        maxTransientCallbacks,
+        binding.transientCallbackCount,
+      );
+      if (!binding.framesEnabled) disabledFrameSamples += 1;
+
+      _ConditionWaitOutcome close({required bool met, required bool blocked}) =>
+          _ConditionWaitOutcome(
+            met: met,
+            blocked: blocked,
+            waitedMs: stopwatch.elapsedMilliseconds,
+            budgetMs: effectiveBudgetMs,
+            deadlineEpochMs: deadlineEpochMs,
+            polls: polls,
+            visibleText: snapshot.visibleText,
+            initialSnapshot: initial!,
+            finalSnapshot: snapshot,
+            semanticChangeCount: semanticChanges,
+            distinctSemanticStates: semanticStates.length,
+            quietForMs: math.max(
+              0,
+              stopwatch.elapsedMilliseconds - lastSemanticChangeMs,
+            ),
+            scheduledFrameSamples: scheduledFrameSamples,
+            transientCallbackSamples: transientCallbackSamples,
+            maxTransientCallbacks: maxTransientCallbacks,
+            disabledFrameSamples: disabledFrameSamples,
+            lastHasScheduledFrame: binding.hasScheduledFrame,
+            lastTransientCallbackCount: binding.transientCallbackCount,
+            lastSchedulerPhase: binding.schedulerPhase.name,
+          );
       if (_waitForConditionsMet(
         snapshot: snapshot,
         params: params,
         prefix: prefix,
       )) {
-        return (
-          met: true,
-          blocked: false,
-          waitedMs: stopwatch.elapsedMilliseconds,
-          polls: polls,
-          visibleText: snapshot.visibleText,
-        );
+        return close(met: true, blocked: false);
       }
       final blocking = snapshot.recentErrors.any(
         (error) => error['blocking'] == true && error['stale'] != true,
       );
-      if (blocking || stopwatch.elapsedMilliseconds >= timeoutMs) {
-        return (
-          met: false,
-          blocked: blocking,
-          waitedMs: stopwatch.elapsedMilliseconds,
-          polls: polls,
-          visibleText: snapshot.visibleText,
-        );
+      final deadlineReached =
+          DateTime.now().millisecondsSinceEpoch >= deadlineEpochMs;
+      if (blocking || deadlineReached) {
+        return close(met: false, blocked: blocking);
       }
-      await Future<void>.delayed(Duration(milliseconds: pollMs));
+      final remaining = math.max(
+        0,
+        deadlineEpochMs - DateTime.now().millisecondsSinceEpoch,
+      );
+      if (remaining == 0) {
+        return close(met: false, blocked: false);
+      }
+      await Future<void>.delayed(
+        Duration(milliseconds: math.min(pollMs, remaining)),
+      );
     }
+  }
+
+  _StabilityObservation _conditionWaitStability(_ConditionWaitOutcome outcome) {
+    const quietWindowMs = 120;
+    final frameActive =
+        outcome.lastTransientCallbackCount > 0 ||
+        outcome.lastSchedulerPhase != SchedulerPhase.idle.name;
+    late final _StabilityState state;
+    late final bool actionable;
+    late final String stoppingReason;
+    if (outcome.blocked) {
+      state = _StabilityState.transient;
+      actionable = false;
+      stoppingReason = 'fresh_blocking_error';
+    } else if (outcome.met) {
+      // A condition is a postcondition, not a quiescence proof. It may be met
+      // while a transition/spinner is still active, so only declare stable
+      // when the scheduler is quiet and semantics have had a quiet window.
+      if (!frameActive && outcome.quietForMs >= quietWindowMs) {
+        state = _StabilityState.stable;
+        actionable = true;
+        stoppingReason = 'condition_met_with_semantic_quiescence';
+      } else {
+        state = _StabilityState.transient;
+        actionable = false;
+        stoppingReason = 'condition_met_before_stability';
+      }
+    } else if (outcome.semanticChangeCount >= 2) {
+      state = _StabilityState.neverSettling;
+      actionable = false;
+      stoppingReason = 'condition_budget_exhausted_semantics_changing';
+    } else if (frameActive && outcome.quietForMs >= quietWindowMs) {
+      state = _StabilityState.continuousAnimation;
+      actionable = true;
+      stoppingReason =
+          'condition_budget_exhausted_with_actionable_semantics_quiet';
+    } else if (!frameActive && outcome.quietForMs >= quietWindowMs) {
+      state = _StabilityState.stable;
+      actionable = true;
+      stoppingReason = 'condition_budget_exhausted_but_ui_stable';
+    } else {
+      state = _StabilityState.transient;
+      actionable = false;
+      stoppingReason = 'condition_budget_exhausted_transient_activity';
+    }
+    return _StabilityObservation(
+      state: state,
+      actionable: actionable,
+      stoppingReason: stoppingReason,
+      elapsedMs: outcome.waitedMs,
+      budgetMs: outcome.budgetMs,
+      deadlineEpochMs: outcome.deadlineEpochMs,
+      sampleCount: outcome.polls,
+      semanticChangeCount: outcome.semanticChangeCount,
+      distinctSemanticStates: outcome.distinctSemanticStates,
+      quietWindowMs: quietWindowMs,
+      quietForMs: outcome.quietForMs,
+      scheduledFrameSamples: outcome.scheduledFrameSamples,
+      transientCallbackSamples: outcome.transientCallbackSamples,
+      maxTransientCallbacks: outcome.maxTransientCallbacks,
+      disabledFrameSamples: outcome.disabledFrameSamples,
+      lastHasScheduledFrame: outcome.lastHasScheduledFrame,
+      lastTransientCallbackCount: outcome.lastTransientCallbackCount,
+      lastSchedulerPhase: outcome.lastSchedulerPhase,
+      initialStateGeneration: outcome.initialSnapshot.stateGeneration,
+      initialStateDigest: outcome.initialSnapshot.stateDigest,
+      initialSnapshotId: outcome.initialSnapshot.snapshotId,
+      finalStateGeneration: outcome.finalSnapshot.stateGeneration,
+      finalStateDigest: outcome.finalSnapshot.stateDigest,
+      finalSnapshotId: outcome.finalSnapshot.snapshotId,
+      expectationMet: outcome.met,
+      limitations: _stabilityLimitations,
+    );
   }
 
   /// Completes an action response, honoring `expect*` params: when present,
@@ -1263,6 +1731,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     final conditions = _describeWaitConditions(params, prefix: 'expect');
     final outcome = await _awaitConditions(
       params,
+      frameAdvancePolicy: _FrameAdvancePolicy.mutationSettling,
       prefix: 'expect',
       timeoutParam: 'expectTimeoutMs',
     );
@@ -1272,10 +1741,23 @@ extension _RuntimeActions on FlutterScoutRuntime {
       'polls': outcome.polls,
       'conditions': conditions,
     };
+    final expectationStability = _conditionWaitStability(outcome);
+    final payloadTimings = payload['timings'];
+    final withFinalStability = <String, Object?>{
+      ...payload,
+      'stable': expectationStability.stable,
+      'stability': expectationStability.toJson(),
+      'timings': <String, Object?>{
+        if (payloadTimings is Map)
+          for (final entry in payloadTimings.entries)
+            entry.key.toString(): entry.value,
+        'expectationWaitMs': expectationStability.elapsedMs,
+      },
+    };
     if (outcome.met) {
       return _ok(
         await _withActionCapture(params, {
-          ...payload,
+          ...withFinalStability,
           'expectation': expectation,
         }),
       );
@@ -1286,7 +1768,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       '${outcome.waitedMs}ms: '
       '${conditions.entries.map((e) => '${e.key}=`${e.value}`').join(', ')}.',
       extra: {
-        ...payload,
+        ...withFinalStability,
         'expectation': expectation,
         'visibleText': outcome.visibleText,
       },
@@ -1354,11 +1836,37 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params, {
     String prefix = '',
   }) {
-    return {
-      for (final name in _conditionNames)
-        if ((params[_conditionParam(prefix, name)] ?? '').isNotEmpty)
-          name: params[_conditionParam(prefix, name)],
-    };
+    final result = <String, Object?>{};
+    ScoutSnapshot? snapshot;
+    for (final name in _conditionNames) {
+      final raw = params[_conditionParam(prefix, name)];
+      if (raw == null || raw.isEmpty) continue;
+      if (name != 'field') {
+        result[name] = raw;
+        continue;
+      }
+      final separator = raw.indexOf('=');
+      final target = separator <= 0 ? raw : raw.substring(0, separator);
+      snapshot ??= _snapshot();
+      final resolution = _resolveTarget(
+        snapshot,
+        target,
+        fieldOnly: true,
+        safety: _TargetSafety.identify,
+      );
+      final field = resolution.isUnique ? resolution.node : null;
+      if (field?.redacted == true || _sensitiveDescriptor(target)) {
+        result[name] = <String, Object?>{
+          'target': field?.id ?? target,
+          'redacted': true,
+          if (field?.isEmpty != null) 'isEmpty': field!.isEmpty,
+          if (field?.hasValue != null) 'hasValue': field!.hasValue,
+        };
+      } else {
+        result[name] = raw;
+      }
+    }
+    return result;
   }
 
   /// Evaluates every present condition against [snapshot]; all must hold.
@@ -1393,13 +1901,23 @@ extension _RuntimeActions on FlutterScoutRuntime {
     if (gone != null && visible(gone)) return false;
     final target = param('target');
     if (target != null) {
-      final node = snapshot.findNode(target);
-      if (node == null || node.visibleFraction <= 0) return false;
+      final resolution = _resolveTarget(
+        snapshot,
+        target,
+        safety: _TargetSafety.observeVisible,
+      );
+      if (!resolution.isUnique) return false;
     }
     final selected = param('selected');
     if (selected != null) {
-      final node = snapshot.findNode(selected);
-      if (node == null || node.selected != true) return false;
+      final resolution = _resolveTarget(
+        snapshot,
+        selected,
+        safety: _TargetSafety.observeVisible,
+      );
+      if (!resolution.isUnique || resolution.node?.selected != true) {
+        return false;
+      }
     }
     final screen = param('screen');
     if (screen != null && snapshot.screen != screen) return false;
@@ -1412,9 +1930,16 @@ extension _RuntimeActions on FlutterScoutRuntime {
     if (field != null) {
       final separator = field.indexOf('=');
       if (separator <= 0) return false;
-      final node = snapshot.findField(field.substring(0, separator));
+      final resolution = _resolveTarget(
+        snapshot,
+        field.substring(0, separator),
+        fieldOnly: true,
+        safety: _TargetSafety.identify,
+      );
+      final node = resolution.isUnique ? resolution.node : null;
+      final expected = field.substring(separator + 1);
       if (node == null ||
-          (node.value ?? '') != field.substring(separator + 1)) {
+          !node.matchesFieldValue(expected, _fieldValueToken(expected))) {
         return false;
       }
     }
@@ -1429,7 +1954,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
   /// receiving frame callbacks from the embedder. A tapped callback's
   /// `setState` then never produces a serviced frame, so without this the
   /// action looks like `activated_no_observed_change` even though it ran.
-  void _pumpPendingFrame() {
+  void _advancePendingMutationFrame() {
     final binding = WidgetsBinding.instance;
     // Only step in when the embedder has stopped delivering frames — i.e. a
     // backgrounded/occluded desktop window where `framesEnabled` is false. In
@@ -1444,6 +1969,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     // engine.
     if (binding.framesEnabled) return;
     if (binding.schedulerPhase != SchedulerPhase.idle) return;
+    _manualMutationFrameAdvanceCount += 1;
     binding.handleBeginFrame(null);
     binding.handleDrawFrame();
   }
@@ -1451,7 +1977,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
   /// Runs deferred frames WITH AN ADVANCING CLOCK while the embedder delivers
   /// no vsync (backgrounded/occluded desktop window), so in-flight animations
   /// — route pushes, flips, tab transitions — progress to completion instead
-  /// of freezing on their first frame. [_pumpPendingFrame] alone cannot do
+  /// of freezing on their first frame. [_advancePendingMutationFrame] alone
+  /// cannot do
   /// this: `handleBeginFrame(null)` reuses the previous raw timestamp, so
   /// tickers see zero elapsed time no matter how many frames are pumped.
   ///
@@ -1463,7 +1990,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
   /// Self-terminates when no more frames are scheduled (animations finished),
   /// when real vsync resumes, or when [budget] runs out (indeterminate
   /// spinners schedule frames forever; the budget keeps waits bounded).
-  Future<void> _drainDeferredFrames({
+  Future<void> _drainDeferredMutationFrames({
     Duration budget = const Duration(milliseconds: 1500),
   }) async {
     final binding = WidgetsBinding.instance;
@@ -1478,6 +2005,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
         (binding.hasScheduledFrame || binding.transientCallbackCount > 0) &&
         binding.schedulerPhase == SchedulerPhase.idle &&
         stopwatch.elapsed < budget) {
+      _manualMutationFrameAdvanceCount += 1;
       binding.handleBeginFrame(
         base + stopwatch.elapsed + const Duration(milliseconds: 1),
       );
@@ -1486,70 +2014,589 @@ extension _RuntimeActions on FlutterScoutRuntime {
     }
   }
 
-  Future<void> _waitForFrame() async {
+  /// Settles a mutation Scout has already dispatched. This API is named and
+  /// scoped for mutation use because `SchedulerBinding.endOfFrame` can schedule
+  /// a frame when idle, and disabled desktop frames may be manually advanced.
+  Future<void> _settleMutationFrames() =>
+      _inRequestPhaseAsync('settle', _settleMutationFramesWithoutPhaseTiming);
+
+  Future<void> _settleMutationFramesWithoutPhaseTiming() async {
     await WidgetsBinding.instance.endOfFrame.timeout(
       const Duration(milliseconds: 500),
       onTimeout: () {},
     );
-    _pumpPendingFrame();
+    _advancePendingMutationFrame();
     // If an animation is mid-flight on a backgrounded window, let it finish
     // (bounded) so the snapshot reads settled UI, not a frozen transition.
-    await _drainDeferredFrames(budget: const Duration(milliseconds: 400));
+    await _drainDeferredMutationFrames(
+      budget: const Duration(milliseconds: 400),
+    );
   }
 
-  Future<bool> _waitStable({
+  static const List<String> _stabilityLimitations = <String>[
+    'Observes the redacted Flutter widget/render/semantics state and scheduler; it does not infer motion from pixels.',
+    'Opaque platform views, engine-only animation, and external compositor motion require screenshot or platform evidence.',
+    'Continuous animation is inferred only when frame activity continues while actionable semantic state stays quiet.',
+    'Observation mode samples on wall-clock intervals and does not schedule, pump, or fabricate Flutter frames.',
+    'Application and engine frames may progress independently while frames are enabled; that progress is not caused by Scout observation.',
+  ];
+
+  Map<String, Object?> _observationEffects(
+    _FrameAdvancePolicy frameAdvancePolicy,
+  ) => <String, Object?>{
+    'mode': frameAdvancePolicy == _FrameAdvancePolicy.observeOnly
+        ? 'read_only_observation'
+        : 'post_mutation_settling',
+    if (frameAdvancePolicy == _FrameAdvancePolicy.observeOnly)
+      'scoutSchedulesFrames': false
+    else
+      'scoutMayScheduleFrames': true,
+    'scoutMayAdvanceDisabledFrames':
+        frameAdvancePolicy == _FrameAdvancePolicy.mutationSettling,
+    'phasePointerDispatch': false,
+    'phaseFocusRequest': false,
+    'phaseRouteMutation': false,
+    'phaseOverlayInstallation': false,
+    'naturalApplicationProgressMayOccur': true,
+    'limitations': const <String>[
+      'Natural app, engine, platform, timer, isolate, and network progress can occur independently during a bounded observation.',
+      'The policy reports Scout behavior; it does not attribute concurrent application changes to Scout.',
+    ],
+  };
+
+  Map<String, Object?> _stabilityResponseFields(
+    _StabilityObservation observation, {
+    _FrameAdvancePolicy frameAdvancePolicy =
+        _FrameAdvancePolicy.mutationSettling,
+  }) => <String, Object?>{
+    // Compatibility for existing callers. Only the closed `stable` state is
+    // true; continuous_animation is actionable but is not relabelled stable.
+    'stable': observation.stable,
+    'stability': observation.toJson(),
+    'timings': <String, Object?>{'settleMs': observation.elapsedMs},
+    'observationEffects': _observationEffects(frameAdvancePolicy),
+  };
+
+  String _semanticStabilitySignature(ScoutSnapshot snapshot) {
+    final comparable = Map<String, Object?>.from(snapshot.summaryJson())
+      ..remove('idle')
+      ..remove('stateGeneration')
+      ..remove('stateDigest')
+      ..remove('snapshotId');
+    return crypto.sha256
+        .convert(utf8.encode(_canonicalJson(comparable)))
+        .toString();
+  }
+
+  _StabilityObservation _closedStabilityObservation({
+    required _StabilityState state,
+    required bool actionable,
+    required String stoppingReason,
+    required Stopwatch stopwatch,
+    required int budgetMs,
+    required int deadlineEpochMs,
+    required int sampleCount,
+    required int semanticChangeCount,
+    required int distinctSemanticStates,
+    required int quietWindowMs,
+    required int quietForMs,
+    required int scheduledFrameSamples,
+    required int transientCallbackSamples,
+    required int maxTransientCallbacks,
+    required int disabledFrameSamples,
+    required bool? lastHasScheduledFrame,
+    required int? lastTransientCallbackCount,
+    required String? lastSchedulerPhase,
+    required ScoutSnapshot? initial,
+    required ScoutSnapshot? finalSnapshot,
+    bool expectationMet = false,
+    bool boundedByRequestDeadline = false,
+  }) => _StabilityObservation(
+    state: state,
+    actionable: actionable,
+    stoppingReason: stoppingReason,
+    elapsedMs: stopwatch.elapsedMilliseconds,
+    budgetMs: budgetMs,
+    deadlineEpochMs: deadlineEpochMs,
+    sampleCount: sampleCount,
+    semanticChangeCount: semanticChangeCount,
+    distinctSemanticStates: distinctSemanticStates,
+    quietWindowMs: quietWindowMs,
+    quietForMs: quietForMs,
+    scheduledFrameSamples: scheduledFrameSamples,
+    transientCallbackSamples: transientCallbackSamples,
+    maxTransientCallbacks: maxTransientCallbacks,
+    disabledFrameSamples: disabledFrameSamples,
+    lastHasScheduledFrame: lastHasScheduledFrame,
+    lastTransientCallbackCount: lastTransientCallbackCount,
+    lastSchedulerPhase: lastSchedulerPhase,
+    initialStateGeneration: initial?.stateGeneration,
+    initialStateDigest: initial?.stateDigest,
+    initialSnapshotId: initial?.snapshotId,
+    finalStateGeneration: finalSnapshot?.stateGeneration,
+    finalStateDigest: finalSnapshot?.stateDigest,
+    finalSnapshotId: finalSnapshot?.snapshotId,
+    expectationMet: expectationMet,
+    boundedByRequestDeadline: boundedByRequestDeadline,
+    limitations: _stabilityLimitations,
+  );
+
+  /// Waits for actionable/semantic quiescence under a hard wall-clock bound.
+  ///
+  /// Scheduler facts remain evidence, but they do not define stability alone:
+  /// an unchanged, usable tree with a perpetual spinner is classified as
+  /// continuous_animation, while a tree whose agent-visible state keeps
+  /// changing is never_settling. A condition can stop the wait early and is
+  /// reported as transient rather than silently promoted to stable.
+  Future<_StabilityObservation> _waitStable({
+    required _FrameAdvancePolicy frameAdvancePolicy,
     Duration timeout = const Duration(seconds: 3),
     bool Function()? stopWhen,
+    ScoutSnapshot? initialSnapshot,
+  }) => _inRequestPhaseAsync(
+    'settle',
+    () => _waitStableWithoutPhaseTiming(
+      frameAdvancePolicy: frameAdvancePolicy,
+      timeout: timeout,
+      stopWhen: stopWhen,
+      initialSnapshot: initialSnapshot,
+    ),
+  );
+
+  Future<_StabilityObservation> _waitStableWithoutPhaseTiming({
+    required _FrameAdvancePolicy frameAdvancePolicy,
+    Duration timeout = const Duration(seconds: 3),
+    bool Function()? stopWhen,
+    ScoutSnapshot? initialSnapshot,
   }) async {
-    final deadline = DateTime.now().add(timeout);
-    var quietFrames = 0;
-    while (DateTime.now().isBefore(deadline)) {
-      if (stopWhen?.call() == true) {
-        return !WidgetsBinding.instance.hasScheduledFrame;
-      }
-      final remaining = deadline.difference(DateTime.now());
-      final frameTimeout = remaining < const Duration(milliseconds: 200)
-          ? remaining
-          : const Duration(milliseconds: 200);
-      if (frameTimeout <= Duration.zero) break;
-      await WidgetsBinding.instance.endOfFrame.timeout(
-        frameTimeout,
-        onTimeout: () {},
-      );
-      // A backgrounded desktop window receives no vsync, so the awaited frame
-      // may never have run. Drive it ourselves so the stability check and the
-      // snapshot that follows reflect post-action state — including running
-      // any in-flight animation to completion with an advancing clock, or it
-      // would keep `hasScheduledFrame` true forever and never look stable.
-      _pumpPendingFrame();
-      await _drainDeferredFrames(budget: frameTimeout);
-      if (!WidgetsBinding.instance.hasScheduledFrame) {
-        quietFrames++;
-        if (quietFrames >= 2) return true;
-      } else {
-        quietFrames = 0;
-      }
-      if (stopWhen?.call() == true) {
-        return !WidgetsBinding.instance.hasScheduledFrame;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 40));
+    const quietWindow = Duration(milliseconds: 120);
+    const continuousWindow = Duration(milliseconds: 220);
+    final stopwatch = Stopwatch()..start();
+    final requestedMs = math.max(0, timeout.inMilliseconds);
+    final requestDeadline = _requestContext?.deadlineEpochMs;
+    final wallNow = DateTime.now().millisecondsSinceEpoch;
+    final requestRemaining = requestDeadline == null
+        ? requestedMs
+        : math.max(0, requestDeadline - wallNow);
+    final budgetMs = math.min(requestedMs, requestRemaining);
+    final boundedByRequestDeadline =
+        requestDeadline != null && requestRemaining < requestedMs;
+    final deadlineEpochMs = wallNow + budgetMs;
+
+    ScoutSnapshot? initial = initialSnapshot;
+    ScoutSnapshot? previous = initialSnapshot;
+    ScoutSnapshot? finalSnapshot = initialSnapshot;
+    var samples = initialSnapshot == null ? 0 : 1;
+    var semanticChanges = 0;
+    final semanticStates = <String>{};
+    if (initialSnapshot != null) {
+      semanticStates.add(_semanticStabilitySignature(initialSnapshot));
     }
-    return !WidgetsBinding.instance.hasScheduledFrame;
+    var scheduledFrameSamples = 0;
+    var transientCallbackSamples = 0;
+    var maxTransientCallbacks = 0;
+    var disabledFrameSamples = 0;
+    bool? lastScheduled;
+    int? lastTransientCallbacks;
+    String? lastSchedulerPhase;
+    var consecutiveInactiveSamples = 0;
+    var activeFrameSamplesSinceSemanticChange = 0;
+    var lastSemanticChangeMs = 0;
+
+    _StabilityObservation unavailable(String reason, {ScoutSnapshot? last}) =>
+        _closedStabilityObservation(
+          state: _StabilityState.observationUnavailable,
+          actionable: false,
+          stoppingReason: reason,
+          stopwatch: stopwatch,
+          budgetMs: budgetMs,
+          deadlineEpochMs: deadlineEpochMs,
+          sampleCount: samples,
+          semanticChangeCount: semanticChanges,
+          distinctSemanticStates: semanticStates.length,
+          quietWindowMs: quietWindow.inMilliseconds,
+          quietForMs: math.max(
+            0,
+            stopwatch.elapsedMilliseconds - lastSemanticChangeMs,
+          ),
+          scheduledFrameSamples: scheduledFrameSamples,
+          transientCallbackSamples: transientCallbackSamples,
+          maxTransientCallbacks: maxTransientCallbacks,
+          disabledFrameSamples: disabledFrameSamples,
+          lastHasScheduledFrame: lastScheduled,
+          lastTransientCallbackCount: lastTransientCallbacks,
+          lastSchedulerPhase: lastSchedulerPhase,
+          initial: initial,
+          finalSnapshot: last ?? finalSnapshot,
+          boundedByRequestDeadline: boundedByRequestDeadline,
+        );
+
+    _StabilityObservation runtimeLost(String reason, {ScoutSnapshot? last}) =>
+        _closedStabilityObservation(
+          state: _StabilityState.runtimeLost,
+          actionable: false,
+          stoppingReason: reason,
+          stopwatch: stopwatch,
+          budgetMs: budgetMs,
+          deadlineEpochMs: deadlineEpochMs,
+          sampleCount: samples,
+          semanticChangeCount: semanticChanges,
+          distinctSemanticStates: semanticStates.length,
+          quietWindowMs: quietWindow.inMilliseconds,
+          quietForMs: math.max(
+            0,
+            stopwatch.elapsedMilliseconds - lastSemanticChangeMs,
+          ),
+          scheduledFrameSamples: scheduledFrameSamples,
+          transientCallbackSamples: transientCallbackSamples,
+          maxTransientCallbacks: maxTransientCallbacks,
+          disabledFrameSamples: disabledFrameSamples,
+          lastHasScheduledFrame: lastScheduled,
+          lastTransientCallbackCount: lastTransientCallbacks,
+          lastSchedulerPhase: lastSchedulerPhase,
+          initial: initial,
+          finalSnapshot: last ?? finalSnapshot,
+          boundedByRequestDeadline: boundedByRequestDeadline,
+        );
+
+    bool? runtimeAvailable() {
+      try {
+        return debugRuntimeAvailabilityProbe?.call() ??
+            WidgetsBinding.instance.rootElement != null;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    if (!_stabilityObservationEnabled) {
+      return unavailable('observation_disabled');
+    }
+    if (budgetMs <= 0) {
+      return unavailable(
+        boundedByRequestDeadline
+            ? 'request_deadline_reached'
+            : 'observation_disabled_by_zero_budget',
+      );
+    }
+    final initialRuntimeAvailability = runtimeAvailable();
+    if (initialRuntimeAvailability == null) {
+      return unavailable('runtime_availability_observation_failed');
+    }
+    if (!initialRuntimeAvailability) {
+      return initial == null
+          ? unavailable('root_element_unavailable')
+          : runtimeLost('app_or_runtime_lost_before_observation');
+    }
+
+    while (stopwatch.elapsedMilliseconds < budgetMs) {
+      final currentRuntimeAvailability = runtimeAvailable();
+      if (currentRuntimeAvailability == null) {
+        return unavailable('runtime_availability_observation_failed');
+      }
+      if (!currentRuntimeAvailability) {
+        return runtimeLost('app_or_runtime_lost_during_observation');
+      }
+      ScoutSnapshot current;
+      try {
+        current = _snapshot();
+      } catch (_) {
+        return unavailable('snapshot_observation_failed');
+      }
+      initial ??= current;
+      samples += 1;
+      finalSnapshot = current;
+      semanticStates.add(_semanticStabilitySignature(current));
+
+      final semanticChanged = previous != null && _changed(previous, current);
+      if (semanticChanged) {
+        semanticChanges += 1;
+        lastSemanticChangeMs = stopwatch.elapsedMilliseconds;
+        consecutiveInactiveSamples = 0;
+        activeFrameSamplesSinceSemanticChange = 0;
+      }
+      previous = current;
+
+      final binding = WidgetsBinding.instance;
+      final scheduled = binding.hasScheduledFrame;
+      final transientCallbacks = binding.transientCallbackCount;
+      final schedulerPhase = binding.schedulerPhase.name;
+      final frameActive =
+          transientCallbacks > 0 ||
+          binding.schedulerPhase != SchedulerPhase.idle;
+      if (scheduled) scheduledFrameSamples += 1;
+      if (transientCallbacks > 0) transientCallbackSamples += 1;
+      maxTransientCallbacks = math.max(
+        maxTransientCallbacks,
+        transientCallbacks,
+      );
+      if (!binding.framesEnabled) disabledFrameSamples += 1;
+      lastScheduled = scheduled;
+      lastTransientCallbacks = transientCallbacks;
+      lastSchedulerPhase = schedulerPhase;
+      if (frameActive) {
+        consecutiveInactiveSamples = 0;
+        activeFrameSamplesSinceSemanticChange += 1;
+      } else {
+        consecutiveInactiveSamples += 1;
+      }
+
+      final quietForMs = math.max(
+        0,
+        stopwatch.elapsedMilliseconds - lastSemanticChangeMs,
+      );
+      if (stopWhen?.call() == true) {
+        return _closedStabilityObservation(
+          state: _StabilityState.transient,
+          actionable: false,
+          stoppingReason: 'expectation_met',
+          stopwatch: stopwatch,
+          budgetMs: budgetMs,
+          deadlineEpochMs: deadlineEpochMs,
+          sampleCount: samples,
+          semanticChangeCount: semanticChanges,
+          distinctSemanticStates: semanticStates.length,
+          quietWindowMs: quietWindow.inMilliseconds,
+          quietForMs: quietForMs,
+          scheduledFrameSamples: scheduledFrameSamples,
+          transientCallbackSamples: transientCallbackSamples,
+          maxTransientCallbacks: maxTransientCallbacks,
+          disabledFrameSamples: disabledFrameSamples,
+          lastHasScheduledFrame: lastScheduled,
+          lastTransientCallbackCount: lastTransientCallbacks,
+          lastSchedulerPhase: lastSchedulerPhase,
+          initial: initial,
+          finalSnapshot: finalSnapshot,
+          expectationMet: true,
+          boundedByRequestDeadline: boundedByRequestDeadline,
+        );
+      }
+      if (consecutiveInactiveSamples >= 2 &&
+          quietForMs >= quietWindow.inMilliseconds) {
+        return _closedStabilityObservation(
+          state: _StabilityState.stable,
+          actionable: true,
+          stoppingReason: 'semantic_quiet_and_no_frame_activity',
+          stopwatch: stopwatch,
+          budgetMs: budgetMs,
+          deadlineEpochMs: deadlineEpochMs,
+          sampleCount: samples,
+          semanticChangeCount: semanticChanges,
+          distinctSemanticStates: semanticStates.length,
+          quietWindowMs: quietWindow.inMilliseconds,
+          quietForMs: quietForMs,
+          scheduledFrameSamples: scheduledFrameSamples,
+          transientCallbackSamples: transientCallbackSamples,
+          maxTransientCallbacks: maxTransientCallbacks,
+          disabledFrameSamples: disabledFrameSamples,
+          lastHasScheduledFrame: lastScheduled,
+          lastTransientCallbackCount: lastTransientCallbacks,
+          lastSchedulerPhase: lastSchedulerPhase,
+          initial: initial,
+          finalSnapshot: finalSnapshot,
+          boundedByRequestDeadline: boundedByRequestDeadline,
+        );
+      }
+      if (activeFrameSamplesSinceSemanticChange >= 3 &&
+          quietForMs >= continuousWindow.inMilliseconds) {
+        return _closedStabilityObservation(
+          state: _StabilityState.continuousAnimation,
+          actionable: true,
+          stoppingReason:
+              'continuous_frame_activity_with_actionable_semantics_quiet',
+          stopwatch: stopwatch,
+          budgetMs: budgetMs,
+          deadlineEpochMs: deadlineEpochMs,
+          sampleCount: samples,
+          semanticChangeCount: semanticChanges,
+          distinctSemanticStates: semanticStates.length,
+          quietWindowMs: quietWindow.inMilliseconds,
+          quietForMs: quietForMs,
+          scheduledFrameSamples: scheduledFrameSamples,
+          transientCallbackSamples: transientCallbackSamples,
+          maxTransientCallbacks: maxTransientCallbacks,
+          disabledFrameSamples: disabledFrameSamples,
+          lastHasScheduledFrame: lastScheduled,
+          lastTransientCallbackCount: lastTransientCallbacks,
+          lastSchedulerPhase: lastSchedulerPhase,
+          initial: initial,
+          finalSnapshot: finalSnapshot,
+          boundedByRequestDeadline: boundedByRequestDeadline,
+        );
+      }
+
+      final remainingMs = budgetMs - stopwatch.elapsedMilliseconds;
+      if (remainingMs <= 0) break;
+      if (frameAdvancePolicy == _FrameAdvancePolicy.mutationSettling) {
+        final frameTimeout = Duration(
+          milliseconds: math.min(80, math.max(1, remainingMs)),
+        );
+        await binding.endOfFrame.timeout(frameTimeout, onTimeout: () {});
+        _advancePendingMutationFrame();
+        // Drain only a small slice per sample so a perpetual animation cannot
+        // consume the entire observation budget without semantic samples.
+        await _drainDeferredMutationFrames(
+          budget: Duration(milliseconds: math.min(32, remainingMs)),
+        );
+      }
+      final delayMs = math.min(
+        frameAdvancePolicy == _FrameAdvancePolicy.observeOnly ? 24 : 16,
+        math.max(0, budgetMs - stopwatch.elapsedMilliseconds),
+      );
+      if (delayMs > 0) {
+        await Future<void>.delayed(Duration(milliseconds: delayMs));
+      }
+    }
+
+    final quietForMs = math.max(
+      0,
+      stopwatch.elapsedMilliseconds - lastSemanticChangeMs,
+    );
+    final requestBoundExpired =
+        boundedByRequestDeadline &&
+        DateTime.now().millisecondsSinceEpoch >= deadlineEpochMs;
+    if (activeFrameSamplesSinceSemanticChange >= 2 &&
+        quietForMs >= quietWindow.inMilliseconds) {
+      return _closedStabilityObservation(
+        state: _StabilityState.continuousAnimation,
+        actionable: true,
+        stoppingReason: requestBoundExpired
+            ? 'request_deadline_reached_with_actionable_semantics_quiet'
+            : 'budget_exhausted_with_actionable_semantics_quiet',
+        stopwatch: stopwatch,
+        budgetMs: budgetMs,
+        deadlineEpochMs: deadlineEpochMs,
+        sampleCount: samples,
+        semanticChangeCount: semanticChanges,
+        distinctSemanticStates: semanticStates.length,
+        quietWindowMs: quietWindow.inMilliseconds,
+        quietForMs: quietForMs,
+        scheduledFrameSamples: scheduledFrameSamples,
+        transientCallbackSamples: transientCallbackSamples,
+        maxTransientCallbacks: maxTransientCallbacks,
+        disabledFrameSamples: disabledFrameSamples,
+        lastHasScheduledFrame: lastScheduled,
+        lastTransientCallbackCount: lastTransientCallbacks,
+        lastSchedulerPhase: lastSchedulerPhase,
+        initial: initial,
+        finalSnapshot: finalSnapshot,
+        boundedByRequestDeadline: boundedByRequestDeadline,
+      );
+    }
+    final changing = semanticChanges >= 2;
+    return _closedStabilityObservation(
+      state: changing
+          ? _StabilityState.neverSettling
+          : _StabilityState.transient,
+      actionable: false,
+      stoppingReason: requestBoundExpired
+          ? 'request_deadline_reached'
+          : changing
+          ? 'budget_exhausted_semantics_changing'
+          : 'budget_exhausted_transient_activity',
+      stopwatch: stopwatch,
+      budgetMs: budgetMs,
+      deadlineEpochMs: deadlineEpochMs,
+      sampleCount: samples,
+      semanticChangeCount: semanticChanges,
+      distinctSemanticStates: semanticStates.length,
+      quietWindowMs: quietWindow.inMilliseconds,
+      quietForMs: quietForMs,
+      scheduledFrameSamples: scheduledFrameSamples,
+      transientCallbackSamples: transientCallbackSamples,
+      maxTransientCallbacks: maxTransientCallbacks,
+      disabledFrameSamples: disabledFrameSamples,
+      lastHasScheduledFrame: lastScheduled,
+      lastTransientCallbackCount: lastTransientCallbacks,
+      lastSchedulerPhase: lastSchedulerPhase,
+      initial: initial,
+      finalSnapshot: finalSnapshot,
+      boundedByRequestDeadline: boundedByRequestDeadline,
+    );
   }
 
-  Future<bool> _waitStableForAction(
+  Future<_StabilityObservation> _waitStableForAction(
     Map<String, String> params, {
     bool Function()? stopWhen,
+    ScoutSnapshot? initialSnapshot,
   }) {
     final waitMs = int.tryParse(params['waitMs'] ?? '') ?? 1500;
-    if (waitMs <= 0) return Future.value(false);
     return _waitStable(
-      timeout: Duration(milliseconds: waitMs),
+      frameAdvancePolicy: _FrameAdvancePolicy.mutationSettling,
+      timeout: Duration(milliseconds: math.max(0, waitMs)),
       stopWhen: stopWhen,
+      initialSnapshot: initialSnapshot,
+    );
+  }
+
+  _StabilityObservation _heldDragStability(
+    ScoutSnapshot before,
+    ScoutSnapshot after,
+  ) {
+    final stopwatch = Stopwatch()..start();
+    final binding = WidgetsBinding.instance;
+    final changed = _changed(before, after);
+    return _closedStabilityObservation(
+      state: _StabilityState.transient,
+      actionable: false,
+      stoppingReason: 'held_drag_active',
+      stopwatch: stopwatch,
+      budgetMs: 0,
+      deadlineEpochMs: DateTime.now().millisecondsSinceEpoch,
+      sampleCount: 2,
+      semanticChangeCount: changed ? 1 : 0,
+      distinctSemanticStates: changed ? 2 : 1,
+      quietWindowMs: 120,
+      quietForMs: 0,
+      scheduledFrameSamples: binding.hasScheduledFrame ? 1 : 0,
+      transientCallbackSamples: binding.transientCallbackCount > 0 ? 1 : 0,
+      maxTransientCallbacks: binding.transientCallbackCount,
+      disabledFrameSamples: binding.framesEnabled ? 0 : 1,
+      lastHasScheduledFrame: binding.hasScheduledFrame,
+      lastTransientCallbackCount: binding.transientCallbackCount,
+      lastSchedulerPhase: binding.schedulerPhase.name,
+      initial: before,
+      finalSnapshot: after,
+    );
+  }
+
+  _StabilityObservation _unobservedStability(
+    ScoutSnapshot? snapshot, {
+    String reason = 'stability_wait_not_requested',
+  }) {
+    final stopwatch = Stopwatch()..start();
+    return _closedStabilityObservation(
+      state: _StabilityState.observationUnavailable,
+      actionable: false,
+      stoppingReason: reason,
+      stopwatch: stopwatch,
+      budgetMs: 0,
+      deadlineEpochMs: DateTime.now().millisecondsSinceEpoch,
+      sampleCount: snapshot == null ? 0 : 1,
+      semanticChangeCount: 0,
+      distinctSemanticStates: snapshot == null ? 0 : 1,
+      quietWindowMs: 120,
+      quietForMs: 0,
+      scheduledFrameSamples: 0,
+      transientCallbackSamples: 0,
+      maxTransientCallbacks: 0,
+      disabledFrameSamples: 0,
+      lastHasScheduledFrame: null,
+      lastTransientCallbackCount: null,
+      lastSchedulerPhase: null,
+      initial: snapshot,
+      finalSnapshot: snapshot,
     );
   }
 
   Future<_ActionSnapshotResult> _snapshotAfterAction(
+    ScoutSnapshot before,
+    Map<String, String> params,
+  ) => _inRequestPhaseAsync(
+    'settle',
+    () => _snapshotAfterActionWithoutPhaseTiming(before, params),
+  );
+
+  Future<_ActionSnapshotResult> _snapshotAfterActionWithoutPhaseTiming(
     ScoutSnapshot before,
     Map<String, String> params,
   ) async {
@@ -1586,12 +2633,17 @@ extension _RuntimeActions on FlutterScoutRuntime {
       }
     }
 
-    await _waitForFrame();
+    await _settleMutationFrames();
     await sample();
     if (expectationSnapshot case final expected?) {
+      final expectationStability = await _waitStableForAction(
+        params,
+        stopWhen: () => true,
+        initialSnapshot: before,
+      );
       return _ActionSnapshotResult(
         snapshot: expected,
-        stable: !WidgetsBinding.instance.hasScheduledFrame,
+        stability: expectationStability,
         activityObserved: activityObserved,
         transientViewSignatures: transientViewSignatures,
       );
@@ -1600,16 +2652,17 @@ extension _RuntimeActions on FlutterScoutRuntime {
       const Duration(milliseconds: 60),
       (_) => unawaited(sample()),
     );
-    final stable = await _waitStableForAction(
+    var stability = await _waitStableForAction(
       params,
       stopWhen: () => expectationSnapshot != null,
+      initialSnapshot: before,
     );
     await sample();
     if (expectationSnapshot case final expected?) {
       sampler.cancel();
       return _ActionSnapshotResult(
         snapshot: expected,
-        stable: stable,
+        stability: stability,
         activityObserved: activityObserved,
         transientViewSignatures: transientViewSignatures,
       );
@@ -1630,7 +2683,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       sampler.cancel();
       return _ActionSnapshotResult(
         snapshot: after,
-        stable: stable,
+        stability: stability,
         activityObserved: activityObserved,
         transientViewSignatures: transientViewSignatures,
       );
@@ -1641,7 +2694,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       sampler.cancel();
       return _ActionSnapshotResult(
         snapshot: after,
-        stable: stable,
+        stability: stability,
         activityObserved: activityObserved,
         transientViewSignatures: transientViewSignatures,
       );
@@ -1650,7 +2703,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
     final deadline = DateTime.now().add(Duration(milliseconds: lateWaitMs));
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(milliseconds: 80));
-      await _waitStable(timeout: const Duration(milliseconds: 250));
+      stability = await _waitStable(
+        frameAdvancePolicy: _FrameAdvancePolicy.mutationSettling,
+        timeout: const Duration(milliseconds: 250),
+        initialSnapshot: after,
+      );
       after = _snapshot();
       if (_changed(before, after)) {
         activityObserved = true;
@@ -1659,7 +2716,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
           sampler.cancel();
           return _ActionSnapshotResult(
             snapshot: after,
-            stable: !WidgetsBinding.instance.hasScheduledFrame,
+            stability: stability,
             lateChangeObserved: true,
             activityObserved: true,
             transientViewSignatures: transientViewSignatures,
@@ -1669,7 +2726,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
         sampler.cancel();
         return _ActionSnapshotResult(
           snapshot: after,
-          stable: !WidgetsBinding.instance.hasScheduledFrame,
+          stability: stability,
           lateChangeObserved: true,
           activityObserved: true,
           transientViewSignatures: transientViewSignatures,
@@ -1680,10 +2737,10 @@ extension _RuntimeActions on FlutterScoutRuntime {
     sampler.cancel();
     return _ActionSnapshotResult(
       snapshot: after,
-      stable: stable,
+      stability: stability,
       activityObserved: activityObserved,
       transientViewSignatures: transientViewSignatures,
-      waitTimedOut: !stable || WidgetsBinding.instance.hasScheduledFrame,
+      waitTimedOut: !stability.actionable && stability.exhausted,
     );
   }
 
@@ -1720,9 +2777,26 @@ extension _RuntimeActions on FlutterScoutRuntime {
     required Map<String, String> params,
   }) async {
     final before = _snapshot();
-    final start =
-        _pointForTarget(params['target'], params, snapshot: before) ??
-        _screenCenter();
+    final target = params['target'];
+    if (target == null || target.isEmpty) {
+      _markRequestPhaseUnavailable(
+        'match',
+        'not_applicable:coordinate_gesture_has_no_widget_selector',
+      );
+    }
+    _TargetResolution? resolution;
+    Map<String, Object?>? coordinateEvidence;
+    Offset start;
+    if (target != null && target.isNotEmpty) {
+      resolution = _resolveTarget(before, target);
+      if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+      resolution = _revalidateTarget(resolution);
+      if (!resolution.isUnique) return _targetResolutionFailure(resolution);
+      start = resolution.safePoint!;
+    } else {
+      start = _pointFromParams(params) ?? _screenCenter();
+      coordinateEvidence = _coordinateEvidence(start, before);
+    }
     final viewport = _viewportRect();
     if (!viewport.contains(start)) {
       // Dispatching here does nothing, and reporting success taught agents to
@@ -1750,20 +2824,27 @@ extension _RuntimeActions on FlutterScoutRuntime {
     final delta = explicitEnd == null
         ? _dragDelta(direction, distance, scrollGesture: scrollGesture)
         : explicitEnd - start;
+    final endCoordinateEvidence = _coordinateEvidence(start + delta, before);
     await _dispatchDrag(start, delta);
-    final stable = await _waitStableForAction(params);
+    final stability = await _waitStableForAction(
+      params,
+      initialSnapshot: before,
+    );
     final after = _snapshot();
     final changed = _changed(before, after);
     final actionDelta = _delta(before, after);
     final screenChanged = actionDelta['screenChanged'] == true;
     return _ok({
       'action': action,
-      'stable': stable,
+      ..._stabilityResponseFields(stability),
       'result': screenChanged
           ? 'navigated'
           : (changed ? 'changed' : 'unchanged'),
       'gestureStart': [start.dx, start.dy],
       'gestureEnd': [start.dx + delta.dx, start.dy + delta.dy],
+      if (resolution != null) 'resolution': resolution.toJson(),
+      'coordinateEvidence': ?coordinateEvidence,
+      'gestureEndCoordinateEvidence': endCoordinateEvidence,
       if (!changed) 'unchangedReason': 'no_visible_change_after_gesture',
       'before': before.summaryJson(),
       'after': after.summaryJson(),

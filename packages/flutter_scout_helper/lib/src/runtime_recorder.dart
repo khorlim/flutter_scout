@@ -34,12 +34,46 @@ class _RecordPointer {
 /// real text; supplied at replay via `--var <field>=<value>`.
 const String _kRecordRedactedPrefix = '\u0000VAR:';
 
-/// Field id/label/key fragments that force redaction even if the platform hands
-/// us the literal text (defence-in-depth alongside the obscure-char heuristic).
-final RegExp _kRecordSecretPattern = RegExp(
-  r'pass|pwd|secret|pin|cvv|cvc|otp|token|passcode',
-  caseSensitive: false,
+const String _kRecordDataClassification = 'private_application_data';
+const int _kRecordPrivateDirectoryMode = 0x1c0; // 0700
+const int _kRecordPrivateFileMode = 0x180; // 0600
+const Duration _kRecordStaleTemporaryAge = Duration(hours: 24);
+const int _kRecordMaximumArtifactBytes = 8 * 1024 * 1024;
+const int _kRecordMaximumScanEntries = 10000;
+
+final RegExp _kRecordStorageSegment = RegExp(
+  r'^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$',
 );
+final RegExp _kRecordOwnedTemporaryName = RegExp(
+  r'^\.[a-z0-9][a-z0-9-]*\.json\.[0-9]+\.[0-9]+\.[0-9]+\.tmp$',
+);
+
+class _RecordingStorageFailure implements Exception {
+  const _RecordingStorageFailure(this.code);
+
+  final String code;
+}
+
+class _RecordingStoreLocation {
+  const _RecordingStoreLocation({required this.boundary, required this.root});
+
+  final String boundary;
+  final String root;
+}
+
+class _RecordingWriteResult {
+  const _RecordingWriteResult.persisted(this.path)
+    : status = 'persisted_by_helper',
+      reason = null;
+
+  const _RecordingWriteResult.delegated(this.reason)
+    : path = null,
+      status = 'delegated_to_cli';
+
+  final String? path;
+  final String status;
+  final String? reason;
+}
 
 extension _RuntimeRecorder on FlutterScoutRuntime {
   // ---- lifecycle --------------------------------------------------------
@@ -70,74 +104,100 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
       return {'ok': false, 'error': 'already_recording', 'name': _recordName};
     }
     final baseline = _snapshot();
-    _recordSteps.clear();
-    _recordPointers.clear();
-    _recordPaused = false;
-    _recordBaseline = baseline;
-    _recordCommitTail = Future<void>.value();
-    _recordLastActionAt = DateTime.now();
-    _recordPendingDwellMs = 0;
-    _recordStartedAt = DateTime.now();
-    _recordStartScreen = baseline.screen;
-    _recordFeature = _recordSlug(feature) ?? 'unsorted';
-    _recordName = _recordSlug(name) ?? _recordAutoName();
-    _recordTitle = (title != null && title.trim().isNotEmpty)
-        ? title.trim()
-        : null;
-    _recording = true;
-    _bumpRecordRevision();
-    return {'ok': true, ..._recordStatusJson()};
+    return _inRequestPhase('dispatch', () {
+      _recordSteps.clear();
+      _recordPointers.clear();
+      _recordPaused = false;
+      _recordBaseline = baseline;
+      _recordCommitTail = Future<void>.value();
+      _recordLastActionAt = DateTime.now();
+      _recordPendingDwellMs = 0;
+      _recordStartedAt = DateTime.now();
+      _recordStartScreen = baseline.screen;
+      _recordFeature = _recordSlug(feature) ?? 'unsorted';
+      _recordName = _recordSlug(name) ?? _recordAutoName();
+      _recordTitle = (title != null && title.trim().isNotEmpty)
+          ? title.trim()
+          : null;
+      _recording = true;
+      // Starting a recording is an explicit request for the recording HUD.
+      // The runtime itself never installs overlay chrome merely because it
+      // attached or because an observation command ran.
+      _annotationOverlayOptedIn = true;
+      _bumpRecordRevision();
+      _reconcileAnnotationOverlay();
+      return {'ok': true, ..._recordStatusJson()};
+    });
   }
 
   Future<Map<String, Object?>> _stopRecording({bool discard = false}) async {
     if (!_recording) {
       return {'ok': false, 'error': 'not_recording'};
     }
-    // Let any in-flight gesture commit (still settling) finish so its step is
-    // included, not dropped by serializing the flow out from under it.
-    await _recordCommitTail;
-    // Flush any trailing text edit the tester made before hitting stop.
-    _recordFlushFieldEdits(_snapshot());
+    // Complete the recorder precondition before this command dispatches. This
+    // is snapshot/precondition work, not post-dispatch application settling.
+    await _inRequestPhaseAsync('snapshot', () async {
+      await _recordCommitTail;
+      // Flush any trailing text edit the tester made before hitting stop.
+      _recordFlushFieldEdits(_snapshot());
+    });
     final name = _recordName!;
     final feature = _recordFeature!;
     final flow = _recordFlowJson();
-    _recording = false;
-    _recordPaused = false;
-    _recordPointers.clear();
-    _recordBaseline = null;
-    _bumpRecordRevision();
-    if (discard) {
+    return _inRequestPhaseAsync('dispatch', () async {
+      _recording = false;
+      _recordPaused = false;
+      _recordPointers.clear();
+      _recordBaseline = null;
+      _bumpRecordRevision();
+      _reconcileAnnotationOverlay();
+      if (discard) {
+        _resetRecordMeta();
+        return {'ok': true, 'discarded': true, 'name': name};
+      }
+      final written = await _writeRecordingToDisk(feature, name, flow);
       _resetRecordMeta();
-      return {'ok': true, 'discarded': true, 'name': name};
-    }
-    final written = await _writeRecordingToDisk(feature, name, flow);
-    _resetRecordMeta();
-    return {
-      'ok': true,
-      'name': name,
-      'feature': feature,
-      'stepCount': (flow['steps'] as List).length,
-      'path': ?written,
-      'persisted': written != null,
-      // Always hand the flow back so a CLI/agent driver can persist it even
-      // when the app sandbox cannot reach the project dir (iOS simulator).
-      'flow': flow,
-    };
+      return {
+        'ok': true,
+        'name': name,
+        'feature': feature,
+        'stepCount': (flow['steps'] as List).length,
+        'path': ?written.path,
+        'persisted': written.path != null,
+        'persistenceStatus': written.status,
+        if (written.reason != null) 'persistenceReason': written.reason,
+        'artifactHandling': {
+          'dataClassification': _kRecordDataClassification,
+          'containsPrivateApplicationData': true,
+          'retentionPolicy': 'manual',
+          'telemetryCollected': false,
+          'cliFallbackAvailable': true,
+        },
+        // Always hand the flow back so a CLI/agent driver can persist it even
+        // when the app sandbox cannot reach the project dir (iOS simulator).
+        'flow': flow,
+      };
+    });
   }
 
   void _pauseRecording() {
     if (_recording && !_recordPaused) {
-      _recordPaused = true;
-      _bumpRecordRevision();
+      _inRequestPhase('dispatch', () {
+        _recordPaused = true;
+        _bumpRecordRevision();
+      });
     }
   }
 
   void _resumeRecording() {
     if (_recording && _recordPaused) {
-      _recordPaused = false;
       // Re-baseline so a mid-pause manual change isn't attributed to a step.
-      _recordBaseline = _snapshot();
-      _bumpRecordRevision();
+      final baseline = _snapshot();
+      _inRequestPhase('dispatch', () {
+        _recordPaused = false;
+        _recordBaseline = baseline;
+        _bumpRecordRevision();
+      });
     }
   }
 
@@ -145,13 +205,15 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
     if (_recordSteps.isEmpty) {
       return {'ok': true, 'dropped': null, 'stepCount': 0};
     }
-    final dropped = _recordSteps.removeLast();
-    _bumpRecordRevision();
-    return {
-      'ok': true,
-      'dropped': _recordPublicStep(dropped),
-      'stepCount': _recordSteps.length,
-    };
+    return _inRequestPhase('dispatch', () {
+      final dropped = _recordSteps.removeLast();
+      _bumpRecordRevision();
+      return {
+        'ok': true,
+        'dropped': _recordPublicStep(dropped),
+        'stepCount': _recordSteps.length,
+      };
+    });
   }
 
   void _resetRecordMeta() {
@@ -409,20 +471,25 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
   void _recordFlushFieldEdits(ScoutSnapshot current) {
     final baseline = _recordBaseline;
     if (baseline == null) return;
-    final beforeValues = {for (final f in baseline.fields) f.id: f.value ?? ''};
+    final beforeFields = {for (final field in baseline.fields) field.id: field};
     for (final field in current.fields) {
-      final now = field.value ?? '';
-      final was = beforeValues[field.id];
+      final before = beforeFields[field.id];
       // Emit whenever a field we already knew about changed value — including a
       // clear (populated → ''), which a replay must reproduce. Brand-new fields
-      // (was == null) are skipped as focus noise.
-      if (was == null || was == now) continue;
+      // are skipped as focus noise. Every recorded input value is private
+      // application data and becomes a runtime variable placeholder at source;
+      // sensitive fields also compare their private salted token, never
+      // plaintext or length.
+      if (before == null || before.hasSameFieldValue(field)) continue;
       final redacted = _recordShouldRedact(field);
       final step = <String, String>{
         'cmd': 'input',
         'target': field.id,
-        'value': redacted ? '$_kRecordRedactedPrefix${field.id}' : now,
+        'value': redacted
+            ? '$_kRecordRedactedPrefix${field.id}'
+            : field.value ?? '',
         if (redacted) '_redacted': 'true',
+        if (redacted) '_redactionPolicy': 'source',
         if (field.label != null && field.label!.trim().isNotEmpty)
           '_label': 'enter ${field.label!.trim()}',
       };
@@ -431,15 +498,11 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
     _recordBaseline = current;
   }
 
-  bool _recordShouldRedact(ScoutNode field) {
-    // Primary signal: the field's editable is obscureText:true. (field.value is
-    // Flutter's raw plaintext — obscuring is render-only — so a mask-glyph
-    // check would never fire; the flag is the only reliable signal.)
-    if (field.obscured) return true;
-    // Secondary net: field id/label/key names a secret even if not obscured.
-    final haystack = [field.id, field.label ?? '', field.key ?? ''].join(' ');
-    return _kRecordSecretPattern.hasMatch(haystack);
-  }
+  // Recording is a persistence boundary. Even an apparently ordinary name,
+  // note, or search value can contain credentials or personal data, and the
+  // recorder cannot prove otherwise. Preserve only the field identity; replay
+  // requests the value through the CLI's protected variable mechanism.
+  bool _recordShouldRedact(ScoutNode _) => true;
 
   // ---- auto-assertion ---------------------------------------------------
 
@@ -505,12 +568,13 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
 
   Map<String, Object?> _recordFlowJson() {
     final now = DateTime.now().toUtc();
-    return {
+    final created = (_recordStartedAt ?? now).toUtc();
+    final flow = <String, Object?>{
       'schemaVersion': 1,
       'name': _recordName,
       'feature': _recordFeature,
       if (_recordTitle != null) 'title': _recordTitle,
-      'createdAt': (_recordStartedAt ?? now).toUtc().toIso8601String(),
+      'createdAt': created.toIso8601String(),
       'updatedAt': now.toIso8601String(),
       'revision': 1,
       'instance': _scoutInstanceLabel.isEmpty ? null : _scoutInstanceLabel,
@@ -519,7 +583,9 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
       'steps': [
         for (final step in _recordSteps) Map<String, String>.from(step),
       ],
+      ..._recordArtifactMetadata(created),
     };
+    return _recordFlowForPersistence(flow);
   }
 
   Map<String, Object?> _recordStatusJson() {
@@ -545,70 +611,542 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
     return subject.isEmpty ? cmd : '$cmd $subject';
   }
 
-  /// Resolves `<project>/.flutter_scout/recordings`, preferring the injected
-  /// project path and falling back to the process cwd (works for the macOS
-  /// desktop app). Returns null when no writable root can be established.
-  String? get _recordingsRootPath {
-    if (_recordRootOverride != null) return _recordRootOverride;
-    final project = FlutterScoutRuntime._recordProjectDefine.isNotEmpty
+  Map<String, Object?> _recordArtifactMetadata(DateTime createdAt) => {
+    'dataClassification': _kRecordDataClassification,
+    'containsPrivateApplicationData': true,
+    'retentionPolicy': {
+      'policy': 'manual',
+      'createdAt': createdAt.toUtc().toIso8601String(),
+      'disposition': 'explicit_manual_deletion',
+    },
+    'telemetryCollected': false,
+  };
+
+  /// The helper only writes where it can enforce the complete private-storage
+  /// contract. Mobile sandboxes and Windows are deliberately delegated to the
+  /// CLI, which always receives [flow] from `_stopRecording` and persists it
+  /// using its own platform storage implementation.
+  bool get _recordHelperCanGuaranteePrivateStorage =>
+      Platform.isMacOS || (Platform.isLinux && !Platform.isAndroid);
+
+  _RecordingStoreLocation _recordingStoreLocation() {
+    if (!_recordHelperCanGuaranteePrivateStorage) {
+      throw const _RecordingStorageFailure(
+        'helper_private_storage_unsupported_platform',
+      );
+    }
+    final override = _recordRootOverride;
+    if (override != null) {
+      final root = _recordNormalizeAbsolutePath(override);
+      final boundary = _recordParentPath(root);
+      if (root == '/' || root == boundary) {
+        throw const _RecordingStorageFailure('unsafe_recording_root');
+      }
+      _recordRequireTrustedBoundary(boundary);
+      return _RecordingStoreLocation(boundary: boundary, root: root);
+    }
+    final rawProject = FlutterScoutRuntime._recordProjectDefine.isNotEmpty
         ? FlutterScoutRuntime._recordProjectDefine
         : Directory.current.path;
-    if (project.isEmpty) return null;
-    return '$project/.flutter_scout/recordings';
+    if (rawProject.isEmpty) {
+      throw const _RecordingStorageFailure('recording_project_path_missing');
+    }
+    final project = _recordNormalizeAbsolutePath(rawProject);
+    if (project == '/') {
+      throw const _RecordingStorageFailure('unsafe_recording_root');
+    }
+    _recordRequireTrustedBoundary(project);
+    return _RecordingStoreLocation(
+      boundary: project,
+      root: '$project/.flutter_scout/recordings',
+    );
   }
 
-  Future<String?> _writeRecordingToDisk(
+  String _recordNormalizeAbsolutePath(String raw) {
+    if (!raw.startsWith('/') || raw.contains('\u0000')) {
+      throw const _RecordingStorageFailure('unsafe_recording_root');
+    }
+    final parts = <String>[];
+    for (final part in raw.split('/')) {
+      if (part.isEmpty) continue;
+      if (part == '.' || part == '..' || _recordHasControlCharacters(part)) {
+        throw const _RecordingStorageFailure('unsafe_recording_root');
+      }
+      parts.add(part);
+    }
+    return parts.isEmpty ? '/' : '/${parts.join('/')}';
+  }
+
+  bool _recordHasControlCharacters(String value) {
+    for (final unit in value.codeUnits) {
+      if (unit < 0x20 || unit == 0x7f) return true;
+    }
+    return false;
+  }
+
+  void _recordRequireTrustedBoundary(String boundary) {
+    final type = FileSystemEntity.typeSync(boundary, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      throw const _RecordingStorageFailure('recording_symbolic_link_refused');
+    }
+    if (type != FileSystemEntityType.directory) {
+      throw const _RecordingStorageFailure('recording_boundary_unavailable');
+    }
+  }
+
+  String _recordParentPath(String path) {
+    final slash = path.lastIndexOf('/');
+    if (slash <= 0) return '/';
+    return path.substring(0, slash);
+  }
+
+  String _recordBaseName(String path) {
+    final slash = path.lastIndexOf('/');
+    return slash < 0 ? path : path.substring(slash + 1);
+  }
+
+  List<String> _recordManagedPaths(String boundary, String target) {
+    final root = _recordNormalizeAbsolutePath(boundary);
+    final value = _recordNormalizeAbsolutePath(target);
+    final inside = root == '/'
+        ? value.startsWith('/')
+        : value.startsWith('$root/');
+    if (value != root && !inside) {
+      throw const _RecordingStorageFailure('recording_path_escaped_root');
+    }
+    if (value == root) return <String>[root];
+    final relative = root == '/'
+        ? value.substring(1)
+        : value.substring(root.length + 1);
+    final paths = <String>[];
+    var cursor = root;
+    for (final part in relative.split('/')) {
+      cursor = cursor == '/' ? '/$part' : '$cursor/$part';
+      paths.add(cursor);
+    }
+    return paths;
+  }
+
+  void _recordAssertManagedPath(
+    String boundary,
+    String target, {
+    required bool finalMayBeFile,
+    bool allowMissing = true,
+  }) {
+    final paths = _recordManagedPaths(boundary, target);
+    for (var index = 0; index < paths.length; index++) {
+      final path = paths[index];
+      final isFinal = index == paths.length - 1;
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      if (type == FileSystemEntityType.notFound && allowMissing) continue;
+      if (type == FileSystemEntityType.link) {
+        throw const _RecordingStorageFailure('recording_symbolic_link_refused');
+      }
+      final accepted = isFinal && finalMayBeFile
+          ? type == FileSystemEntityType.file
+          : type == FileSystemEntityType.directory;
+      if (!accepted) {
+        throw const _RecordingStorageFailure(
+          'recording_unexpected_filesystem_object',
+        );
+      }
+    }
+  }
+
+  void _recordEnforceMode(String path, int mode) {
+    final type = FileSystemEntity.typeSync(path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return;
+    if (type == FileSystemEntityType.link) {
+      throw const _RecordingStorageFailure('recording_symbolic_link_refused');
+    }
+    final current = FileStat.statSync(path).mode & 0x1ff;
+    if (current == mode) return;
+    final symbolic = mode == _kRecordPrivateDirectoryMode ? '700' : '600';
+    final result = Process.runSync('/bin/chmod', <String>[symbolic, path]);
+    if (result.exitCode != 0 ||
+        (FileStat.statSync(path).mode & 0x1ff) != mode) {
+      throw const _RecordingStorageFailure(
+        'recording_private_permissions_unavailable',
+      );
+    }
+  }
+
+  void _recordEnsurePrivateDirectory(String path, {required String boundary}) {
+    _recordAssertManagedPath(boundary, path, finalMayBeFile: false);
+    Directory(path).createSync(recursive: true);
+    _recordAssertManagedPath(
+      boundary,
+      path,
+      finalMayBeFile: false,
+      allowMissing: false,
+    );
+    for (final managed in _recordManagedPaths(boundary, path)) {
+      _recordEnforceMode(managed, _kRecordPrivateDirectoryMode);
+    }
+  }
+
+  void _recordSecureExistingStore(String root, {required String boundary}) {
+    _recordEnsurePrivateDirectory(root, boundary: boundary);
+    var count = 0;
+    for (final entity in Directory(
+      root,
+    ).listSync(recursive: true, followLinks: false)) {
+      if (++count > _kRecordMaximumScanEntries) {
+        throw const _RecordingStorageFailure('recording_store_scan_limit');
+      }
+      final type = FileSystemEntity.typeSync(entity.path, followLinks: false);
+      if (type == FileSystemEntityType.link) {
+        throw const _RecordingStorageFailure('recording_symbolic_link_refused');
+      }
+      if (type == FileSystemEntityType.directory) {
+        _recordEnforceMode(entity.path, _kRecordPrivateDirectoryMode);
+      } else if (type == FileSystemEntityType.file) {
+        _recordEnforceMode(entity.path, _kRecordPrivateFileMode);
+      } else if (type != FileSystemEntityType.notFound) {
+        throw const _RecordingStorageFailure(
+          'recording_unexpected_filesystem_object',
+        );
+      }
+    }
+  }
+
+  void _recordAssertPrivateFile(
+    String path, {
+    required String boundary,
+    bool allowMissing = true,
+  }) {
+    _recordAssertManagedPath(
+      boundary,
+      path,
+      finalMayBeFile: true,
+      allowMissing: allowMissing,
+    );
+  }
+
+  void _recordSecurePrivateFile(String path, {required String boundary}) {
+    _recordAssertPrivateFile(path, boundary: boundary, allowMissing: false);
+    _recordEnforceMode(path, _kRecordPrivateFileMode);
+  }
+
+  void _recordAtomicWriteJson(
+    String path,
+    Object? value, {
+    required String boundary,
+  }) {
+    final parent = _recordParentPath(path);
+    _recordEnsurePrivateDirectory(parent, boundary: boundary);
+    _recordAssertPrivateFile(path, boundary: boundary);
+    final bytes = utf8.encode(
+      const JsonEncoder.withIndent('  ').convert(value),
+    );
+    if (bytes.length > _kRecordMaximumArtifactBytes) {
+      throw const _RecordingStorageFailure('recording_artifact_size_limit');
+    }
+    final temporaryPath =
+        '$parent/.${_recordBaseName(path)}.$pid.'
+        '${DateTime.now().microsecondsSinceEpoch}.'
+        '${math.Random.secure().nextInt(0x7fffffff)}.tmp';
+    _recordAssertPrivateFile(temporaryPath, boundary: boundary);
+    final temporary = File(temporaryPath);
+    RandomAccessFile? handle;
+    try {
+      temporary.createSync(exclusive: true);
+      _recordSecurePrivateFile(temporaryPath, boundary: boundary);
+      handle = temporary.openSync(mode: FileMode.write);
+      handle.writeFromSync(bytes);
+      handle.flushSync();
+      handle.closeSync();
+      handle = null;
+
+      // The private parent prevents an untrusted user racing this final check.
+      // Revalidating still catches accidental or same-owner link replacement.
+      _recordAssertPrivateFile(path, boundary: boundary);
+      temporary.renameSync(path);
+      _recordSecurePrivateFile(path, boundary: boundary);
+    } catch (_) {
+      try {
+        handle?.closeSync();
+      } catch (_) {}
+      try {
+        if (temporary.existsSync()) temporary.deleteSync();
+      } catch (_) {}
+      rethrow;
+    }
+  }
+
+  T _recordWithIndexLock<T>(
+    _RecordingStoreLocation location,
+    T Function() body,
+  ) {
+    final lockPath = '${location.root}/index.json.lock';
+    _recordEnsurePrivateDirectory(location.root, boundary: location.boundary);
+    _recordAssertPrivateFile(lockPath, boundary: location.boundary);
+    final lock = File(lockPath);
+    if (!lock.existsSync()) {
+      try {
+        lock.createSync(exclusive: true);
+      } on FileSystemException {
+        // A cooperative process may have created it between exists and create.
+      }
+    }
+    _recordSecurePrivateFile(lockPath, boundary: location.boundary);
+    final handle = lock.openSync(mode: FileMode.append);
+    handle.lockSync(FileLock.blockingExclusive);
+    try {
+      _recordAssertPrivateFile(
+        lockPath,
+        boundary: location.boundary,
+        allowMissing: false,
+      );
+      return body();
+    } finally {
+      try {
+        handle.unlockSync();
+      } finally {
+        handle.closeSync();
+      }
+    }
+  }
+
+  Map<String, Object?> _recordFlowForPersistence(Map<String, Object?> flow) {
+    final safe = _redactSensitiveMap(flow);
+    final rawSteps = safe['steps'];
+    if (rawSteps is List) {
+      safe['steps'] = <Map<String, Object?>>[
+        for (final raw in rawSteps)
+          if (raw is Map)
+            () {
+              final step = <String, Object?>{
+                for (final entry in raw.entries)
+                  entry.key.toString(): entry.value,
+              };
+              if (step['cmd'] == 'input') {
+                final target = _recordPlaceholderKey(
+                  step['target']?.toString() ?? 'input',
+                );
+                step['value'] = '$_kRecordRedactedPrefix$target';
+                step['_redacted'] = 'true';
+                step['_redactionPolicy'] = 'source';
+              } else if (step['cmd'] == 'fill') {
+                final rawValues = step['values'];
+                final decodedValues = rawValues is String
+                    ? _recordTryDecodeJson(rawValues)
+                    : rawValues;
+                if (decodedValues is Map) {
+                  step['values'] = <String, String>{
+                    for (final key in decodedValues.keys)
+                      key.toString():
+                          '$_kRecordRedactedPrefix${_recordPlaceholderKey(key.toString())}',
+                  };
+                } else {
+                  step['values'] = '${_kRecordRedactedPrefix}fill.values';
+                }
+                step['_redacted'] = 'true';
+                step['_redactionPolicy'] = 'source';
+              }
+              return step;
+            }(),
+      ];
+      safe['stepCount'] = (safe['steps'] as List).length;
+    }
+    final created =
+        DateTime.tryParse(safe['createdAt']?.toString() ?? '')?.toUtc() ??
+        DateTime.now().toUtc();
+    safe.addAll(_recordArtifactMetadata(created));
+    return safe;
+  }
+
+  Object? _recordTryDecodeJson(String value) {
+    try {
+      return jsonDecode(value);
+    } catch (_) {
+      return value;
+    }
+  }
+
+  String _recordPlaceholderKey(String raw) {
+    final buffer = StringBuffer();
+    for (final unit in raw.codeUnits) {
+      if (unit < 0x20 || unit == 0x7f || unit == 0x3d) {
+        buffer.write('_');
+      } else {
+        buffer.writeCharCode(unit);
+      }
+    }
+    final normalized = buffer.toString().trim().replaceAll(RegExp(r'\s+'), ' ');
+    if (normalized.isEmpty) return 'value';
+    return normalized.length <= 120 ? normalized : normalized.substring(0, 120);
+  }
+
+  void _recordValidateSegment(String value) {
+    if (!_kRecordStorageSegment.hasMatch(value)) {
+      throw const _RecordingStorageFailure('recording_invalid_storage_segment');
+    }
+  }
+
+  Future<_RecordingWriteResult> _writeRecordingToDisk(
     String feature,
     String name,
     Map<String, Object?> flow,
   ) async {
-    final root = _recordingsRootPath;
-    if (root == null) return null;
     try {
-      final dir = Directory('$root/$feature');
-      await dir.create(recursive: true);
-      final file = File('${dir.path}/$name.json');
-      await file.writeAsString(
-        const JsonEncoder.withIndent('  ').convert(flow),
-      );
-      await _writeRecordingsIndex(root);
-      return file.path;
-    } catch (error) {
+      _recordValidateSegment(feature);
+      _recordValidateSegment(name);
+      final location = _recordingStoreLocation();
+      return _recordWithIndexLock(location, () {
+        _recordSecureExistingStore(location.root, boundary: location.boundary);
+        final directory = '${location.root}/$feature';
+        _recordEnsurePrivateDirectory(directory, boundary: location.boundary);
+        final path = '$directory/$name.json';
+        _recordAtomicWriteJson(
+          path,
+          _recordFlowForPersistence(flow),
+          boundary: location.boundary,
+        );
+        _writeRecordingsIndex(location);
+        return _RecordingWriteResult.persisted(path);
+      });
+    } on _RecordingStorageFailure catch (error) {
       _recordError(
-        type: 'recorder_write_failed',
-        message: 'Could not write recording to $root: $error',
+        type: 'recorder_persistence_delegated',
+        message:
+            'Helper persistence declined (${error.code}); CLI fallback required.',
       );
-      return null;
+      return _RecordingWriteResult.delegated(error.code);
+    } catch (_) {
+      _recordError(
+        type: 'recorder_persistence_delegated',
+        message: 'Helper persistence failed; CLI fallback required.',
+      );
+      return const _RecordingWriteResult.delegated(
+        'recording_storage_operation_failed',
+      );
     }
   }
 
-  /// Rebuilds recordings/index.json by scanning the store — self-healing, so a
-  /// hand-deleted flow file never leaves a dangling row.
-  Future<void> _writeRecordingsIndex(String root) async {
+  /// Rebuilds recordings/index.json while the cross-process lock is held.
+  /// Corrupt flows are excluded with ordered diagnostics. Stale, clearly-owned
+  /// atomic temp files are removed after 24 hours; newer temps are left alone
+  /// because another process may still be committing them.
+  void _writeRecordingsIndex(_RecordingStoreLocation location) {
     final rows = <Map<String, Object?>>[];
-    final rootDir = Directory(root);
-    if (rootDir.existsSync()) {
-      for (final entity in rootDir.listSync()) {
-        if (entity is! Directory) continue;
-        final feature = entity.path.split('/').last;
-        for (final flowFile in entity.listSync()) {
-          if (flowFile is! File || !flowFile.path.endsWith('.json')) continue;
-          try {
-            final decoded = jsonDecode(flowFile.readAsStringSync());
-            if (decoded is! Map) continue;
-            rows.add({
-              'name': decoded['name'],
-              'feature': decoded['feature'] ?? feature,
-              if (decoded['title'] != null) 'title': decoded['title'],
-              'path': 'recordings/$feature/${flowFile.path.split('/').last}',
-              'stepCount': decoded['stepCount'] ?? 0,
-              'revision': decoded['revision'] ?? 1,
-              'updatedAt': decoded['updatedAt'],
-              'startScreen': decoded['startScreen'],
-            });
-          } catch (_) {
-            // Skip an unreadable flow file rather than failing the whole index.
+    final ignored = <Map<String, Object?>>[];
+    final now = DateTime.now().toUtc();
+    final rootDir = Directory(location.root);
+    var scanned = 0;
+    for (final entity in rootDir.listSync(followLinks: false)) {
+      if (++scanned > _kRecordMaximumScanEntries) {
+        throw const _RecordingStorageFailure('recording_store_scan_limit');
+      }
+      final rootType = FileSystemEntity.typeSync(
+        entity.path,
+        followLinks: false,
+      );
+      if (rootType == FileSystemEntityType.link) {
+        throw const _RecordingStorageFailure('recording_symbolic_link_refused');
+      }
+      if (rootType == FileSystemEntityType.file) {
+        final basename = _recordBaseName(entity.path);
+        if (_recordHandleOwnedTemporary(
+          File(entity.path),
+          relativePath: 'recordings/$basename',
+          now: now,
+          ignored: ignored,
+        )) {
+          continue;
+        }
+        if (basename != 'index.json' && basename != 'index.json.lock') {
+          ignored.add({
+            'path': 'recordings/$basename',
+            'reason': 'unexpected_root_artifact_excluded',
+          });
+        }
+        continue;
+      }
+      if (rootType != FileSystemEntityType.directory) continue;
+      final feature = _recordBaseName(entity.path);
+      if (!_kRecordStorageSegment.hasMatch(feature)) {
+        ignored.add({
+          'path': 'recordings/$feature',
+          'reason': 'invalid_feature_directory',
+        });
+        continue;
+      }
+      for (final child in Directory(entity.path).listSync(followLinks: false)) {
+        if (++scanned > _kRecordMaximumScanEntries) {
+          throw const _RecordingStorageFailure('recording_store_scan_limit');
+        }
+        final type = FileSystemEntity.typeSync(child.path, followLinks: false);
+        if (type == FileSystemEntityType.link) {
+          throw const _RecordingStorageFailure(
+            'recording_symbolic_link_refused',
+          );
+        }
+        if (type != FileSystemEntityType.file) continue;
+        final basename = _recordBaseName(child.path);
+        if (_recordHandleOwnedTemporary(
+          File(child.path),
+          relativePath: 'recordings/$feature/$basename',
+          now: now,
+          ignored: ignored,
+        )) {
+          continue;
+        }
+        if (!basename.endsWith('.json') || basename.startsWith('.')) continue;
+        final expectedName = basename.substring(0, basename.length - 5);
+        if (!_kRecordStorageSegment.hasMatch(expectedName)) {
+          ignored.add({
+            'path': 'recordings/$feature/$basename',
+            'reason': 'invalid_recording_filename',
+          });
+          continue;
+        }
+        try {
+          if (FileStat.statSync(child.path).size >
+              _kRecordMaximumArtifactBytes) {
+            throw const FormatException('flow exceeds storage limit');
           }
+          final decoded = jsonDecode(File(child.path).readAsStringSync());
+          if (decoded is! Map || decoded['steps'] is! List) {
+            throw const FormatException('invalid flow shape');
+          }
+          final rawFlow = <String, Object?>{
+            for (final entry in decoded.entries)
+              entry.key.toString(): entry.value,
+          };
+          if (rawFlow['name']?.toString() != expectedName ||
+              rawFlow['feature']?.toString() != feature) {
+            throw const FormatException('flow identity mismatch');
+          }
+          final safeFlow = _recordFlowForPersistence(rawFlow);
+          final originalJson = const JsonEncoder.withIndent(
+            '  ',
+          ).convert(rawFlow);
+          final safeJson = const JsonEncoder.withIndent('  ').convert(safeFlow);
+          if (originalJson != safeJson) {
+            _recordAtomicWriteJson(
+              child.path,
+              safeFlow,
+              boundary: location.boundary,
+            );
+          }
+          rows.add({
+            'name': safeFlow['name'],
+            'feature': feature,
+            if (safeFlow['title'] != null) 'title': safeFlow['title'],
+            'path': 'recordings/$feature/$basename',
+            'stepCount': safeFlow['stepCount'] ?? 0,
+            'revision': safeFlow['revision'] ?? 1,
+            'updatedAt': safeFlow['updatedAt'],
+            'startScreen': safeFlow['startScreen'],
+            'dataClassification': _kRecordDataClassification,
+            'containsPrivateApplicationData': true,
+          });
+        } catch (_) {
+          ignored.add({
+            'path': 'recordings/$feature/$basename',
+            'reason': 'corrupt_or_incompatible_recording_excluded',
+          });
         }
       }
     }
@@ -621,13 +1159,47 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
         (b['name'] ?? '').toString(),
       );
     });
-    final index = {
+    ignored.sort(
+      (a, b) =>
+          (a['path'] ?? '').toString().compareTo((b['path'] ?? '').toString()),
+    );
+    final index = <String, Object?>{
       'schemaVersion': 1,
-      'updatedAt': DateTime.now().toUtc().toIso8601String(),
+      'updatedAt': now.toIso8601String(),
       'recordings': rows,
+      if (ignored.isNotEmpty) 'ignoredArtifacts': ignored,
+      ..._recordArtifactMetadata(now),
     };
-    final file = File('$root/index.json');
-    await file.writeAsString(const JsonEncoder.withIndent('  ').convert(index));
+    _recordAtomicWriteJson(
+      '${location.root}/index.json',
+      index,
+      boundary: location.boundary,
+    );
+  }
+
+  bool _recordHandleOwnedTemporary(
+    File file, {
+    required String relativePath,
+    required DateTime now,
+    required List<Map<String, Object?>> ignored,
+  }) {
+    if (!_kRecordOwnedTemporaryName.hasMatch(_recordBaseName(file.path))) {
+      return false;
+    }
+    final modified = FileStat.statSync(file.path).modified.toUtc();
+    if (now.difference(modified) >= _kRecordStaleTemporaryAge) {
+      file.deleteSync();
+      ignored.add({
+        'path': relativePath,
+        'reason': 'stale_atomic_temporary_removed',
+      });
+    } else {
+      ignored.add({
+        'path': relativePath,
+        'reason': 'active_atomic_temporary_ignored',
+      });
+    }
+    return true;
   }
 
   // ---- VM service extension --------------------------------------------
@@ -640,30 +1212,64 @@ extension _RuntimeRecorder on FlutterScoutRuntime {
       final action = params['action'] ?? 'status';
       switch (action) {
         case 'start':
-          return _ok(
-            _startRecording(
-              name: params['name'],
-              feature: params['feature'],
-              title: params['title'],
-            ),
+          _markRequestPhaseUnavailable(
+            'match',
+            'not_applicable:recording_tool_state_mutation_has_no_widget_selector',
           );
+          final started = _startRecording(
+            name: params['name'],
+            feature: params['feature'],
+            title: params['title'],
+          );
+          if (started['ok'] == true) await _settleMutationFrames();
+          return _ok(started);
         case 'stop':
-          return _ok(
-            await _stopRecording(discard: params['discard'] == 'true'),
+          _markRequestPhaseUnavailable(
+            'match',
+            'not_applicable:recording_tool_state_mutation_has_no_widget_selector',
           );
+          final stopped = await _stopRecording(
+            discard: params['discard'] == 'true',
+          );
+          if (stopped['ok'] == true) await _settleMutationFrames();
+          return _ok(stopped);
         case 'pause':
+          _markRequestPhaseUnavailable(
+            'match',
+            'not_applicable:recording_tool_state_mutation_has_no_widget_selector',
+          );
           _pauseRecording();
+          await _settleMutationFrames();
           return _ok({'ok': true, ..._recordStatusJson()});
         case 'resume':
+          _markRequestPhaseUnavailable(
+            'match',
+            'not_applicable:recording_tool_state_mutation_has_no_widget_selector',
+          );
           _resumeRecording();
+          await _settleMutationFrames();
           return _ok({'ok': true, ..._recordStatusJson()});
         case 'undo':
-          return _ok(_undoLastStep());
+          _markRequestPhaseUnavailable(
+            'match',
+            'not_applicable:recording_tool_state_mutation_has_no_widget_selector',
+          );
+          final undone = _undoLastStep();
+          await _settleMutationFrames();
+          return _ok(undone);
         case 'status':
-          return _ok(_recordStatusJson());
+          return _ok({
+            ..._recordStatusJson(),
+            'observationEffects': _observationEffects(
+              _FrameAdvancePolicy.observeOnly,
+            ),
+          });
         case 'steps':
           return _ok({
             ..._recordStatusJson(),
+            'observationEffects': _observationEffects(
+              _FrameAdvancePolicy.observeOnly,
+            ),
             'steps': [
               for (final step in _recordSteps) Map<String, String>.from(step),
             ],

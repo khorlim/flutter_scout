@@ -9,11 +9,19 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
-          channel: stable
+          flutter-version: '3.44.2'
           cache: true
+
+      - name: Toolchain identity
+        run: |
+          flutter --version
+          dart --version
+
+      - name: Formatting
+        run: dart format --set-exit-if-changed packages/flutter_scout/lib packages/flutter_scout/test packages/flutter_scout_helper/lib packages/flutter_scout_helper/test apps/scout_test_app/lib apps/scout_test_app/test evaluation/lib evaluation/bin evaluation/test tool/release tool/verify_debug_only_build.dart
 
       - name: CLI package — analyze & test
         working-directory: packages/flutter_scout
@@ -26,15 +34,229 @@ jobs:
         working-directory: packages/flutter_scout_helper
         run: |
           flutter pub get
-          flutter analyze
+          flutter analyze --fatal-infos
           flutter test
 
       - name: Test app — analyze & test
         working-directory: apps/scout_test_app
         run: |
           flutter pub get
-          flutter analyze
+          flutter analyze --fatal-infos
           flutter test
 
-      - name: Formatting
-        run: dart format --set-exit-if-changed packages/flutter_scout/lib packages/flutter_scout/test packages/flutter_scout_helper/lib packages/flutter_scout_helper/test
+      - name: Release-critical tests — three preserved repetitions
+        if: always()
+        shell: bash
+        env:
+          REPEAT_EVIDENCE_DIR: ${{ runner.temp }}/flutter-scout-critical-repetitions
+        run: |
+          set -euo pipefail
+          umask 077
+
+          if [[ -e "$REPEAT_EVIDENCE_DIR" ]]; then
+            echo "refusing to replace existing repeat evidence: $REPEAT_EVIDENCE_DIR" >&2
+            exit 2
+          fi
+          mkdir -m 700 "$REPEAT_EVIDENCE_DIR"
+          candidate_commit="$(git rev-parse HEAD)"
+          repository_status="$(git status --short)"
+          flutter_identity="$(flutter --version 2>&1)"
+          dart_identity="$(dart --version 2>&1)"
+          {
+            printf 'github_sha=%s\n' "$GITHUB_SHA"
+            printf 'github_run_id=%s\n' "$GITHUB_RUN_ID"
+            printf 'github_run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
+            printf 'repository_commit=%s\n' "$candidate_commit"
+            printf 'repository_status_begin\n'
+            printf '%s\n' "$repository_status"
+            printf 'repository_status_end\n'
+            printf '%s\n' "$flutter_identity"
+            printf '%s\n' "$dart_identity"
+          } > "$REPEAT_EVIDENCE_DIR/context.log" 2>&1
+          printf 'suite\tattempt\tordering_seed\texit_code\tstatus\n' \
+            > "$REPEAT_EVIDENCE_DIR/outcomes.tsv"
+
+          failures=0
+          run_suite() {
+            local suite="$1"
+            local attempt="$2"
+            local seed="$3"
+            local working_directory="$4"
+            shift 4
+
+            local stem="$REPEAT_EVIDENCE_DIR/${attempt}-${suite}-seed-${seed}"
+            printf '%q ' "$@" > "${stem}.command"
+            printf '\nworking-directory=%q\n' "$working_directory" \
+              >> "${stem}.command"
+
+            local status
+            if (
+              cd "$working_directory"
+              timeout --signal=TERM --kill-after=15s 20m "$@"
+            ) > "${stem}.stdout.log" 2> "${stem}.stderr.log"; then
+              status=0
+            else
+              status=$?
+            fi
+
+            cat "${stem}.stdout.log"
+            cat "${stem}.stderr.log" >&2
+            chmod 600 "${stem}.command" "${stem}.stdout.log" \
+              "${stem}.stderr.log"
+
+            local outcome=passed
+            if [[ "$status" -ne 0 ]]; then
+              outcome=failed
+              failures=1
+            fi
+            printf '%s\t%s\t%s\t%s\t%s\n' \
+              "$suite" "$attempt" "$seed" "$status" "$outcome" \
+              >> "$REPEAT_EVIDENCE_DIR/outcomes.tsv"
+          }
+
+          seeds=(1729 2718 31415)
+          for index in "${!seeds[@]}"; do
+            attempt=$((index + 1))
+            seed="${seeds[$index]}"
+
+            run_suite cli "$attempt" "$seed" packages/flutter_scout \
+              dart test -j 1 --reporter expanded \
+              "--test-randomize-ordering-seed=$seed" \
+              test/flutter_scout_test.dart \
+              test/protocol_safety_test.dart \
+              test/cross_version_compatibility_test.dart \
+              test/lifecycle_safety_test.dart \
+              test/privacy_redaction_test.dart \
+              test/protected_secret_ingress_test.dart \
+              test/dart_define_ingress_test.dart \
+              test/adversarial_privacy_corpus_test.dart \
+              test/artifact_retention_test.dart \
+              test/bounded_batch_replay_test.dart \
+              test/vm_transport_security_test.dart \
+              test/native_platform_test.dart \
+              test/operability_contract_test.dart \
+              test/changed_region_capture_test.dart \
+              test/public_contract_goldens_test.dart \
+              test/runtime_log_signal_classification_test.dart
+
+            run_suite helper "$attempt" "$seed" \
+              packages/flutter_scout_helper \
+              flutter test -j 1 --reporter expanded \
+              "--test-randomize-ordering-seed=$seed" \
+              test/protocol_hardening_test.dart \
+              test/runtime_resolution_test.dart \
+              test/runtime_navigation_test.dart \
+              test/perception_scroll_truth_test.dart \
+              test/snapshot_truth_test.dart \
+              test/observation_noninterference_test.dart \
+              test/adversarial_privacy_corpus_test.dart \
+              test/protocol_property_fuzz_test.dart \
+              test/resolution_property_fuzz_test.dart \
+              test/snapshot_state_property_fuzz_test.dart \
+              test/semantic_stability_test.dart \
+              test/runtime_signal_provenance_test.dart \
+              test/runtime_recorder_storage_test.dart \
+              test/operability_identity_test.dart
+
+            run_suite verification-app "$attempt" "$seed" \
+              apps/scout_test_app \
+              flutter test -j 1 --reporter expanded \
+              "--test-randomize-ordering-seed=$seed" \
+              test/widget_test.dart \
+              test/evaluation_oracle_test.dart \
+              test/public_fixture_screen_test.dart
+
+            run_suite evaluation "$attempt" "$seed" evaluation \
+              dart test -j 1 --reporter expanded \
+              "--test-randomize-ordering-seed=$seed"
+          done
+
+          chmod 600 "$REPEAT_EVIDENCE_DIR/context.log" \
+            "$REPEAT_EVIDENCE_DIR/outcomes.tsv"
+          exit "$failures"
+
+      - name: Upload release-critical repetition evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: critical-test-repetitions-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/flutter-scout-critical-repetitions
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Release tooling — analyze & self-check
+        run: |
+          dart analyze --fatal-infos tool/release tool/verify_debug_only_build.dart
+          dart run tool/release/release_evidence_self_check.dart
+
+      - name: Debug-only build boundary
+        working-directory: apps/scout_test_app
+        run: |
+          flutter build apk --debug --target-platform android-arm64 --no-pub \
+            --dart-define=FLUTTER_SCOUT_EVALUATOR_ENABLED=true \
+            --dart-define=FLUTTER_SCOUT_EVALUATOR_TOKEN=SCOUT_EVALUATOR_BUILD_PROBE_9f4c2a7e
+          flutter build apk --profile --target-platform android-arm64 --no-pub \
+            --dart-define=FLUTTER_SCOUT_EVALUATOR_ENABLED=true \
+            --dart-define=FLUTTER_SCOUT_EVALUATOR_TOKEN=SCOUT_EVALUATOR_BUILD_PROBE_9f4c2a7e
+          flutter build apk --release --target-platform android-arm64 --no-pub \
+            --dart-define=FLUTTER_SCOUT_EVALUATOR_ENABLED=true \
+            --dart-define=FLUTTER_SCOUT_EVALUATOR_TOKEN=SCOUT_EVALUATOR_BUILD_PROBE_9f4c2a7e
+          dart run ../../tool/verify_debug_only_build.dart \
+            --debug build/app/outputs/flutter-apk/app-debug.apk \
+            --profile build/app/outputs/flutter-apk/app-profile.apk \
+            --release build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Evaluation contracts — analyze & test
+        working-directory: evaluation
+        run: |
+          dart pub get
+          dart analyze --fatal-infos
+          dart test
+
+  compatibility-canary:
+    name: Flutter ${{ matrix.channel }} compatibility canary
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, beta]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: ${{ matrix.channel }}
+          cache: true
+
+      - name: Toolchain identity
+        run: |
+          flutter --version
+          dart --version
+
+      - name: CLI package — analyze & test
+        working-directory: packages/flutter_scout
+        run: |
+          dart pub get
+          dart analyze --fatal-infos
+          dart test
+
+      - name: Helper package — analyze & test
+        working-directory: packages/flutter_scout_helper
+        run: |
+          flutter pub get
+          flutter analyze --fatal-infos
+          flutter test
+
+      - name: Test app — analyze & test
+        working-directory: apps/scout_test_app
+        run: |
+          flutter pub get
+          flutter analyze --fatal-infos
+          flutter test
+
+      - name: Evaluation contracts — analyze & test
+        working-directory: evaluation
+        run: |
+          dart pub get
+          dart analyze --fatal-infos
+          dart test

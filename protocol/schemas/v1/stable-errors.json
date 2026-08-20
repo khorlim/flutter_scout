@@ -1,0 +1,1454 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": 15,
+  "artifactKind": "flutter_scout_stable_structured_error_contract",
+  "evidenceScope": {
+    "kind": "current_source_contract",
+    "errorsInducedAgainstApp": false,
+    "simulatorOrDeviceExercised": false,
+    "releaseBinariesExercised": false
+  },
+  "compatibilityRule": "Within schema version 1, a code remains stable and its meaning must not change. Additive detail fields are allowed.",
+  "dynamicFamilies": [
+    {
+      "sourceTemplate": "${action}_signal_failed",
+      "actionValues": [
+        "reload",
+        "restart"
+      ]
+    },
+    {
+      "sourceTemplate": "${action}_rejected",
+      "actionValues": [
+        "reload",
+        "restart"
+      ]
+    },
+    {
+      "sourceTemplate": "${action}_ack_timeout",
+      "actionValues": [
+        "reload",
+        "restart"
+      ]
+    },
+    {
+      "sourceTemplate": "${action}_timeout",
+      "actionValues": [
+        "reload",
+        "restart"
+      ]
+    },
+    {
+      "sourceTemplate": "${action}_source_mismatch",
+      "actionValues": [
+        "reload",
+        "restart"
+      ]
+    },
+    {
+      "sourceTemplate": "conditional target/capture/protocol outcomes",
+      "explicitCodes": [
+        "blocking_error_during_wait",
+        "command_failed",
+        "deeplink_dispatch_timeout",
+        "deeplink_process_failed",
+        "deeplink_tool_output_exceeded",
+        "expectation_not_met",
+        "incomplete_helper_identity",
+        "incompatible_helper_protocol",
+        "incompatible_helper_schema",
+        "invalid_helper_envelope",
+        "missing_mutation_capability",
+        "mutation_response_generation_regressed",
+        "runtime_transport_lost",
+        "runtime_transport_timeout",
+        "session_cleanup_incomplete",
+        "snapshot_history_unavailable",
+        "stale_target",
+        "target_ambiguous",
+        "target_disabled",
+        "target_not_visible"
+      ]
+    }
+  ],
+  "errors": {
+    "action_evidence_persistence_failed": {
+      "meaning": "The action may have completed, but its required durable evidence could not be committed.",
+      "family": "persistence_or_security"
+    },
+    "ambiguous_recording": {
+      "meaning": "Scout reports the stable ambiguous recording failure condition.",
+      "family": "persistence_or_security"
+    },
+    "annotated_unsupported_native": {
+      "meaning": "Scout reports the stable annotated unsupported native failure condition.",
+      "family": "operation"
+    },
+    "annotation_ids_required": {
+      "meaning": "The annotation ids is required before this operation can proceed.",
+      "family": "operation"
+    },
+    "annotation_not_found": {
+      "meaning": "The requested annotation could not be found.",
+      "family": "operation"
+    },
+    "annotations_failed": {
+      "meaning": "The annotations operation failed.",
+      "family": "operation"
+    },
+    "back_failed": {
+      "meaning": "The back operation failed.",
+      "family": "operation"
+    },
+    "batch_argument_bounds_exceeded": {
+      "meaning": "The batch argument bounds exceeds its documented bound.",
+      "family": "request_rejected"
+    },
+    "batch_command_forbidden": {
+      "meaning": "Scout reports the stable batch command forbidden failure condition.",
+      "family": "request_rejected"
+    },
+    "batch_command_invalid": {
+      "meaning": "Scout reports the stable batch command invalid failure condition.",
+      "family": "request_rejected"
+    },
+    "batch_command_schema_invalid": {
+      "meaning": "Scout reports the stable batch command schema invalid failure condition.",
+      "family": "request_rejected"
+    },
+    "batch_command_too_large": {
+      "meaning": "The batch command exceeds its documented bound.",
+      "family": "request_rejected"
+    },
+    "batch_empty": {
+      "meaning": "Scout reports the stable batch empty failure condition.",
+      "family": "request_rejected"
+    },
+    "batch_input_conflict": {
+      "meaning": "The batch input conflicts with already accepted state.",
+      "family": "request_rejected"
+    },
+    "batch_nested_secret_source_forbidden": {
+      "meaning": "Scout reports the stable batch nested secret source forbidden failure condition.",
+      "family": "request_rejected"
+    },
+    "batch_placeholder_scope_invalid": {
+      "meaning": "Scout reports the stable batch placeholder scope invalid failure condition.",
+      "family": "request_rejected"
+    },
+    "batch_script_invalid": {
+      "meaning": "Scout reports the stable batch script invalid failure condition.",
+      "family": "request_rejected"
+    },
+    "batch_step_failed": {
+      "meaning": "The batch step operation failed.",
+      "family": "operation"
+    },
+    "batch_too_many_commands": {
+      "meaning": "Scout reports the stable batch too many commands failure condition.",
+      "family": "request_rejected"
+    },
+    "batch_unterminated_quote": {
+      "meaning": "Scout reports the stable batch unterminated quote failure condition.",
+      "family": "request_rejected"
+    },
+    "blocking_error_during_wait": {
+      "meaning": "A fresh blocking runtime error occurred while a bounded expectation was being observed.",
+      "family": "operation"
+    },
+    "blocking_errors_observed": {
+      "meaning": "Scout reports the stable blocking errors observed failure condition.",
+      "family": "operation"
+    },
+    "capture_failed": {
+      "meaning": "The capture operation failed.",
+      "family": "operation"
+    },
+    "capture_missing_rect": {
+      "meaning": "Scout reports the stable capture missing rect failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "changed_region_annotation_unsupported": {
+      "meaning": "Scout reports the stable changed region annotation unsupported failure condition.",
+      "family": "operation"
+    },
+    "changed_region_capture_backend_unavailable": {
+      "meaning": "The changed region capture backend capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "changed_region_capture_failed": {
+      "meaning": "The changed region capture operation failed.",
+      "family": "operation"
+    },
+    "changed_region_capture_unavailable": {
+      "meaning": "The changed region capture capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "changed_region_contract_invalid": {
+      "meaning": "Scout reports the stable changed region contract invalid failure condition.",
+      "family": "operation"
+    },
+    "changed_region_count_exceeded": {
+      "meaning": "The changed region count exceeds its documented bound.",
+      "family": "operation"
+    },
+    "changed_region_geometry_unavailable": {
+      "meaning": "The changed region geometry capability or evidence is unavailable.",
+      "family": "resolution_or_observation"
+    },
+    "changed_region_native_capture_required": {
+      "meaning": "The changed region native capture is required before this operation can proceed.",
+      "family": "operation"
+    },
+    "changed_region_native_capture_unsupported": {
+      "meaning": "Scout reports the stable changed region native capture unsupported failure condition.",
+      "family": "operation"
+    },
+    "changed_region_output_too_large": {
+      "meaning": "The changed region output exceeds its documented bound.",
+      "family": "operation"
+    },
+    "changed_region_pixel_ratio_override_unsupported": {
+      "meaning": "Scout reports the stable changed region pixel ratio override unsupported failure condition.",
+      "family": "operation"
+    },
+    "changed_region_snapshot_changed_during_capture": {
+      "meaning": "Scout reports the stable changed region snapshot changed during capture failure condition.",
+      "family": "operation"
+    },
+    "changed_region_unavailable": {
+      "meaning": "The changed region capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "changed_region_union_too_large": {
+      "meaning": "The changed region union exceeds its documented bound.",
+      "family": "operation"
+    },
+    "command_evidence_completion_failed": {
+      "meaning": "The command may have completed, but its reserved durable event could not be closed.",
+      "family": "persistence_or_security"
+    },
+    "command_failed": {
+      "meaning": "The command failed without a more specific stable error code.",
+      "family": "operation"
+    },
+    "conflicting_deeplink_url_sources": {
+      "meaning": "Scout reports the stable conflicting deeplink url sources failure condition.",
+      "family": "request_rejected"
+    },
+    "conflicting_vm_service_uri_sources": {
+      "meaning": "Scout reports the stable conflicting vm service uri sources failure condition.",
+      "family": "request_rejected"
+    },
+    "credential_file_exists": {
+      "meaning": "Scout reports the stable credential file exists failure condition.",
+      "family": "persistence_or_security"
+    },
+    "crop_unsupported_target": {
+      "meaning": "Scout reports the stable crop unsupported target failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "cross_site_request_rejected": {
+      "meaning": "Scout reports the stable cross site request rejected failure condition.",
+      "family": "execution_or_reconciliation"
+    },
+    "deeplink_dispatch_timeout": {
+      "meaning": "The bounded deeplink dispatch operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "deeplink_outcome_unknown": {
+      "meaning": "The native deep-link tool did not provide proof that closes whether dispatch occurred.",
+      "family": "execution_or_reconciliation"
+    },
+    "deeplink_process_failed": {
+      "meaning": "The deeplink process operation failed.",
+      "family": "operation"
+    },
+    "deeplink_process_start_failed": {
+      "meaning": "The deeplink process start operation failed.",
+      "family": "operation"
+    },
+    "deeplink_tool_output_exceeded": {
+      "meaning": "The deeplink tool output exceeds its documented bound.",
+      "family": "operation"
+    },
+    "device_discovery_failed": {
+      "meaning": "The device discovery operation failed.",
+      "family": "operation"
+    },
+    "device_not_found": {
+      "meaning": "The requested device could not be found.",
+      "family": "operation"
+    },
+    "dismiss_failed": {
+      "meaning": "The dismiss operation failed.",
+      "family": "operation"
+    },
+    "drag_already_active": {
+      "meaning": "Scout reports the stable drag already active failure condition.",
+      "family": "operation"
+    },
+    "drag_end_failed": {
+      "meaning": "The drag end operation failed.",
+      "family": "operation"
+    },
+    "drag_move_failed": {
+      "meaning": "The drag move operation failed.",
+      "family": "operation"
+    },
+    "drag_start_failed": {
+      "meaning": "The drag start operation failed.",
+      "family": "operation"
+    },
+    "duplicate_idempotency_key": {
+      "meaning": "One request repeats an idempotency key where uniqueness is required.",
+      "family": "request_rejected"
+    },
+    "duplicate_secret_source": {
+      "meaning": "Scout reports the stable duplicate secret source failure condition.",
+      "family": "request_rejected"
+    },
+    "duplicate_var": {
+      "meaning": "Scout reports the stable duplicate var failure condition.",
+      "family": "request_rejected"
+    },
+    "empty_vm_response": {
+      "meaning": "The VM service returned no decodable helper envelope.",
+      "family": "operation"
+    },
+    "ensure_discovery_timeout": {
+      "meaning": "The bounded ensure discovery operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "event_journal_capacity_exceeded": {
+      "meaning": "The append-only event journal reached its bounded segment or open-reservation capacity; no committed event was deleted or overwritten.",
+      "family": "persistence_or_security"
+    },
+    "event_journal_corrupt": {
+      "meaning": "The event journal data is corrupt and cannot be trusted.",
+      "family": "persistence_or_security"
+    },
+    "event_reservation_missing": {
+      "meaning": "Scout reports the stable event reservation missing failure condition.",
+      "family": "operation"
+    },
+    "event_serialization_failed": {
+      "meaning": "The event serialization operation failed.",
+      "family": "operation"
+    },
+    "event_update_invalid": {
+      "meaning": "Scout reports the stable event update invalid failure condition.",
+      "family": "operation"
+    },
+    "evidence_index_corrupt": {
+      "meaning": "The evidence index data is corrupt and cannot be trusted.",
+      "family": "persistence_or_security"
+    },
+    "evidence_output_exists": {
+      "meaning": "Scout reports the stable evidence output exists failure condition.",
+      "family": "persistence_or_security"
+    },
+    "expectation_not_met": {
+      "meaning": "Scout reports the stable expectation not met failure condition.",
+      "family": "operation"
+    },
+    "expected_log_timeout": {
+      "meaning": "The bounded expected log operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "field_not_found": {
+      "meaning": "The requested field could not be found.",
+      "family": "resolution_or_observation"
+    },
+    "fill_failed": {
+      "meaning": "The fill operation failed.",
+      "family": "operation"
+    },
+    "flutter_executable_not_found": {
+      "meaning": "The requested flutter executable could not be found.",
+      "family": "operation"
+    },
+    "flutter_runner_pid_not_found": {
+      "meaning": "The requested flutter runner pid could not be found.",
+      "family": "operation"
+    },
+    "flutter_scout_helper_not_registered": {
+      "meaning": "Scout reports the stable flutter scout helper not registered failure condition.",
+      "family": "operation"
+    },
+    "flutter_worker_unavailable": {
+      "meaning": "The flutter worker capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "gesture_start_outside_viewport": {
+      "meaning": "Scout reports the stable gesture start outside viewport failure condition.",
+      "family": "operation"
+    },
+    "held_drag_active": {
+      "meaning": "Scout reports the stable held drag active failure condition.",
+      "family": "operation"
+    },
+    "hot_reload_unavailable_owner_exited": {
+      "meaning": "Scout reports the stable hot reload unavailable owner exited failure condition.",
+      "family": "operation"
+    },
+    "hot_restart_unavailable": {
+      "meaning": "The hot restart capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "idempotency_conflict": {
+      "meaning": "An idempotency key was reused with a different canonical request.",
+      "family": "operation"
+    },
+    "idempotency_outcome_commit_failed": {
+      "meaning": "The idempotency outcome commit operation failed.",
+      "family": "execution_or_reconciliation"
+    },
+    "idempotency_outcome_corrupt": {
+      "meaning": "The idempotency outcome data is corrupt and cannot be trusted.",
+      "family": "execution_or_reconciliation"
+    },
+    "idempotency_outcome_pruned": {
+      "meaning": "The original idempotent outcome is no longer retained, so safe replay cannot be proven.",
+      "family": "execution_or_reconciliation"
+    },
+    "idempotency_outcome_serialization_failed": {
+      "meaning": "The idempotency outcome serialization operation failed.",
+      "family": "execution_or_reconciliation"
+    },
+    "idempotency_receipt_conflict": {
+      "meaning": "The idempotency receipt conflicts with already accepted state.",
+      "family": "operation"
+    },
+    "idempotency_receipt_corrupt": {
+      "meaning": "The idempotency receipt data is corrupt and cannot be trusted.",
+      "family": "operation"
+    },
+    "idempotency_receipt_identity_mismatch": {
+      "meaning": "The observed idempotency receipt identity does not match the required identity or value.",
+      "family": "compatibility_or_identity"
+    },
+    "idempotency_receipt_missing": {
+      "meaning": "Scout reports the stable idempotency receipt missing failure condition.",
+      "family": "operation"
+    },
+    "idempotency_receipt_reservation_failed": {
+      "meaning": "The idempotency receipt reservation operation failed.",
+      "family": "operation"
+    },
+    "idempotency_reconciliation_unavailable": {
+      "meaning": "The idempotency reconciliation capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "idempotency_registry_capacity_reached": {
+      "meaning": "Scout reports the stable idempotency registry capacity reached failure condition.",
+      "family": "persistence_or_security"
+    },
+    "idempotency_registry_corrupt": {
+      "meaning": "The idempotency registry data is corrupt and cannot be trusted.",
+      "family": "persistence_or_security"
+    },
+    "idempotency_registry_integrity_unknown": {
+      "meaning": "Scout reports the stable idempotency registry integrity unknown failure condition.",
+      "family": "persistence_or_security"
+    },
+    "idempotency_runtime_replaced": {
+      "meaning": "Scout reports the stable idempotency runtime replaced failure condition.",
+      "family": "operation"
+    },
+    "image_decode_failed": {
+      "meaning": "The image decode operation failed.",
+      "family": "operation"
+    },
+    "incompatible_helper_after_dispatch": {
+      "meaning": "The helper became incompatible after a mutation may already have dispatched.",
+      "family": "execution_or_reconciliation"
+    },
+    "incompatible_helper_protocol": {
+      "meaning": "The CLI and helper protocol ranges do not overlap.",
+      "family": "compatibility_or_identity"
+    },
+    "incompatible_helper_schema": {
+      "meaning": "The helper response schema is incompatible with the CLI schema.",
+      "family": "compatibility_or_identity"
+    },
+    "incompatible_protocol": {
+      "meaning": "The observed protocol is incompatible with this contract.",
+      "family": "compatibility_or_identity"
+    },
+    "incompatible_schema": {
+      "meaning": "The observed schema is incompatible with this contract.",
+      "family": "compatibility_or_identity"
+    },
+    "incomplete_helper_identity": {
+      "meaning": "The helper omitted a required runtime identity or state generation.",
+      "family": "compatibility_or_identity"
+    },
+    "input_failed": {
+      "meaning": "The input operation failed.",
+      "family": "operation"
+    },
+    "insecure_dart_define_secret": {
+      "meaning": "A secret-looking inline Dart define was rejected before Scout persisted session state or started a child process; retry with an owner-only define file.",
+      "family": "persistence_or_security"
+    },
+    "insecure_secret_file_permissions": {
+      "meaning": "Scout reports the stable insecure secret file permissions failure condition.",
+      "family": "persistence_or_security"
+    },
+    "inspect_failed": {
+      "meaning": "The inspect operation failed.",
+      "family": "operation"
+    },
+    "internal_server_error": {
+      "meaning": "Scout reports the stable internal server error failure condition.",
+      "family": "operation"
+    },
+    "invalid_app": {
+      "meaning": "The supplied app is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_arg": {
+      "meaning": "The supplied arg is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_args": {
+      "meaning": "The supplied args is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_changed_region_padding": {
+      "meaning": "The supplied changed region padding is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_credential": {
+      "meaning": "The supplied credential is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_crop_padding": {
+      "meaning": "The supplied crop padding is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_crop_rect": {
+      "meaning": "The supplied crop rect is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_dart_define_source": {
+      "meaning": "A Dart define or define-file option omitted its required non-empty value, so Scout rejected the request before dispatch.",
+      "family": "request_rejected"
+    },
+    "invalid_deadline": {
+      "meaning": "The supplied deadline is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_deeplink_url": {
+      "meaning": "The supplied deeplink url is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_direction": {
+      "meaning": "The supplied direction is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_fill_json": {
+      "meaning": "The supplied fill json is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_helper_envelope": {
+      "meaning": "A required helper response field or outcome slot is absent or malformed.",
+      "family": "request_rejected"
+    },
+    "invalid_idempotency_key": {
+      "meaning": "The supplied idempotency key is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_json": {
+      "meaning": "The supplied json is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_navigation_query": {
+      "meaning": "The supplied navigation query is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_parameter_value": {
+      "meaning": "The supplied parameter value is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_params": {
+      "meaning": "The supplied params is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_preflight_state_identity": {
+      "meaning": "The supplied preflight state identity is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_protected_json": {
+      "meaning": "The supplied protected json is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_protected_json_value": {
+      "meaning": "The supplied protected json value is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_request": {
+      "meaning": "The supplied request is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_retention_policy": {
+      "meaning": "The supplied retention policy is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_secret_file": {
+      "meaning": "The supplied secret file is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_secret_file_type": {
+      "meaning": "The supplied secret file type is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_secret_input_utf8": {
+      "meaning": "The supplied secret input utf8 is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_secret_source": {
+      "meaning": "The supplied secret source is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_snapshot_id": {
+      "meaning": "The supplied snapshot id is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_state_generation": {
+      "meaning": "The supplied state generation is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_utf8": {
+      "meaning": "The supplied utf8 is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_values": {
+      "meaning": "The supplied values is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_var": {
+      "meaning": "The supplied var is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_var_file": {
+      "meaning": "The supplied var file is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_var_name": {
+      "meaning": "The supplied var name is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_var_value": {
+      "meaning": "The supplied var value is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_vm_uri_file": {
+      "meaning": "The supplied vm uri file is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_worker_config": {
+      "meaning": "The supplied worker config is invalid.",
+      "family": "request_rejected"
+    },
+    "launch_in_progress": {
+      "meaning": "Scout reports the stable launch in progress failure condition.",
+      "family": "operation"
+    },
+    "launch_join_timeout": {
+      "meaning": "The bounded launch join operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "launchd_bootstrap_failed": {
+      "meaning": "The launchd bootstrap operation failed.",
+      "family": "operation"
+    },
+    "launchd_uid_invalid": {
+      "meaning": "Scout reports the stable launchd uid invalid failure condition.",
+      "family": "operation"
+    },
+    "launchd_uid_unavailable": {
+      "meaning": "The launchd uid capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "legacy_run_disabled": {
+      "meaning": "Scout reports the stable legacy run disabled failure condition.",
+      "family": "operation"
+    },
+    "local_mutation_dispatch_outcome_unknown": {
+      "meaning": "A local mutation did not close whether dispatch occurred and must be reconciled before retry.",
+      "family": "execution_or_reconciliation"
+    },
+    "locate_failed": {
+      "meaning": "The locate operation failed.",
+      "family": "operation"
+    },
+    "log_expectation_unavailable": {
+      "meaning": "The log expectation capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "long_press_failed": {
+      "meaning": "The long press operation failed.",
+      "family": "operation"
+    },
+    "loopback_required": {
+      "meaning": "The loopback is required before this operation can proceed.",
+      "family": "operation"
+    },
+    "managed_session_cleanup_unavailable": {
+      "meaning": "The managed session cleanup capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "method_not_allowed": {
+      "meaning": "Scout reports the stable method not allowed failure condition.",
+      "family": "operation"
+    },
+    "missing_command": {
+      "meaning": "Required command is missing.",
+      "family": "request_rejected"
+    },
+    "missing_destination": {
+      "meaning": "Required destination is missing.",
+      "family": "request_rejected"
+    },
+    "missing_device": {
+      "meaning": "Required device is missing.",
+      "family": "request_rejected"
+    },
+    "missing_idempotency_key": {
+      "meaning": "Required idempotency key is missing.",
+      "family": "request_rejected"
+    },
+    "missing_method": {
+      "meaning": "Required method is missing.",
+      "family": "request_rejected"
+    },
+    "missing_mutation_capability": {
+      "meaning": "The helper does not advertise every capability required for safe mutation.",
+      "family": "request_rejected"
+    },
+    "missing_mutation_envelope": {
+      "meaning": "Required mutation envelope is missing.",
+      "family": "request_rejected"
+    },
+    "missing_session_run_id": {
+      "meaning": "Required session run id is missing.",
+      "family": "request_rejected"
+    },
+    "missing_target": {
+      "meaning": "Required target is missing.",
+      "family": "request_rejected"
+    },
+    "missing_text": {
+      "meaning": "Required text is missing.",
+      "family": "request_rejected"
+    },
+    "missing_values": {
+      "meaning": "Required values is missing.",
+      "family": "request_rejected"
+    },
+    "missing_var": {
+      "meaning": "Required var is missing.",
+      "family": "request_rejected"
+    },
+    "mutation_deadline_expired": {
+      "meaning": "Scout reports the stable mutation deadline expired failure condition.",
+      "family": "execution_or_reconciliation"
+    },
+    "mutation_dispatch_failed": {
+      "meaning": "The mutation dispatch operation failed.",
+      "family": "execution_or_reconciliation"
+    },
+    "mutation_dispatch_outcome_unknown": {
+      "meaning": "Scout cannot prove whether the mutation dispatched; retry requires reconciliation under the same idempotency key.",
+      "family": "execution_or_reconciliation"
+    },
+    "mutation_executor_failed": {
+      "meaning": "The mutation executor operation failed.",
+      "family": "operation"
+    },
+    "mutation_response_generation_regressed": {
+      "meaning": "The mutation response reports a state generation older than its precondition.",
+      "family": "compatibility_or_identity"
+    },
+    "mutation_response_identity_mismatch": {
+      "meaning": "The mutation response identity differs from the dispatched request identity.",
+      "family": "compatibility_or_identity"
+    },
+    "mutation_transport_error": {
+      "meaning": "Scout reports the stable mutation transport error failure condition.",
+      "family": "execution_or_reconciliation"
+    },
+    "native_crop_coordinate_frame_mismatch": {
+      "meaning": "The observed native crop coordinate frame does not match the required identity or value.",
+      "family": "operation"
+    },
+    "native_deeplink_preflight_observation_unavailable": {
+      "meaning": "The native deeplink preflight observation capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "no_actions": {
+      "meaning": "Scout reports the stable no actions failure condition.",
+      "family": "operation"
+    },
+    "no_active_drag": {
+      "meaning": "Scout reports the stable no active drag failure condition.",
+      "family": "operation"
+    },
+    "no_isolate": {
+      "meaning": "Scout reports the stable no isolate failure condition.",
+      "family": "operation"
+    },
+    "no_recorded_actions": {
+      "meaning": "Scout reports the stable no recorded actions failure condition.",
+      "family": "persistence_or_security"
+    },
+    "no_root": {
+      "meaning": "Scout reports the stable no root failure condition.",
+      "family": "operation"
+    },
+    "not_attached": {
+      "meaning": "Scout reports the stable not attached failure condition.",
+      "family": "operation"
+    },
+    "operability_observation_failed": {
+      "meaning": "The operability observation operation failed.",
+      "family": "operation"
+    },
+    "operability_observation_timeout": {
+      "meaning": "The bounded operability observation operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "orientation_failed": {
+      "meaning": "The orientation operation failed.",
+      "family": "operation"
+    },
+    "origin_not_allowed": {
+      "meaning": "Scout reports the stable origin not allowed failure condition.",
+      "family": "operation"
+    },
+    "private_permissions_failed": {
+      "meaning": "The private permissions operation failed.",
+      "family": "persistence_or_security"
+    },
+    "project_missing": {
+      "meaning": "Scout reports the stable project missing failure condition.",
+      "family": "operation"
+    },
+    "protected_input_unavailable": {
+      "meaning": "The protected input capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "protected_stdin_requires_pipe": {
+      "meaning": "Scout reports the stable protected stdin requires pipe failure condition.",
+      "family": "operation"
+    },
+    "protocol_preflight_failed": {
+      "meaning": "The protocol preflight operation failed.",
+      "family": "compatibility_or_identity"
+    },
+    "protocol_preflight_identity_mismatch": {
+      "meaning": "The observed protocol preflight identity does not match the required identity or value.",
+      "family": "compatibility_or_identity"
+    },
+    "protocol_preflight_timeout": {
+      "meaning": "The bounded protocol preflight operation did not complete before its deadline.",
+      "family": "compatibility_or_identity"
+    },
+    "protocol_preflight_transport_error": {
+      "meaning": "Scout reports the stable protocol preflight transport error failure condition.",
+      "family": "compatibility_or_identity"
+    },
+    "query_not_allowed": {
+      "meaning": "Scout reports the stable query not allowed failure condition.",
+      "family": "operation"
+    },
+    "record_failed": {
+      "meaning": "The record operation failed.",
+      "family": "persistence_or_security"
+    },
+    "record_name_taken": {
+      "meaning": "Scout reports the stable record name taken failure condition.",
+      "family": "persistence_or_security"
+    },
+    "record_not_found": {
+      "meaning": "The requested record could not be found.",
+      "family": "persistence_or_security"
+    },
+    "recording_persistence_failed": {
+      "meaning": "The recording persistence operation failed.",
+      "family": "persistence_or_security"
+    },
+    "rect_out_of_bounds": {
+      "meaning": "Scout reports the stable rect out of bounds failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "registry_corrupt": {
+      "meaning": "The registry data is corrupt and cannot be trusted.",
+      "family": "persistence_or_security"
+    },
+    "rejected_log_observed": {
+      "meaning": "Scout reports the stable rejected log observed failure condition.",
+      "family": "execution_or_reconciliation"
+    },
+    "reload_ack_timeout": {
+      "meaning": "The bounded reload ack operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "reload_inspect_timeout": {
+      "meaning": "The bounded reload inspect operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "reload_rejected": {
+      "meaning": "Scout reports the stable reload rejected failure condition.",
+      "family": "execution_or_reconciliation"
+    },
+    "reload_signal_failed": {
+      "meaning": "The reload signal operation failed.",
+      "family": "execution_or_reconciliation"
+    },
+    "reload_source_mismatch": {
+      "meaning": "The observed reload source does not match the required identity or value.",
+      "family": "operation"
+    },
+    "reload_sources_failed": {
+      "meaning": "The reload sources operation failed.",
+      "family": "operation"
+    },
+    "reload_timeout": {
+      "meaning": "The bounded reload operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "replay_element_invalid": {
+      "meaning": "Scout reports the stable replay element invalid failure condition.",
+      "family": "operation"
+    },
+    "replay_empty": {
+      "meaning": "Scout reports the stable replay empty failure condition.",
+      "family": "operation"
+    },
+    "replay_input_conflict": {
+      "meaning": "The replay input conflicts with already accepted state.",
+      "family": "operation"
+    },
+    "replay_invalid": {
+      "meaning": "Scout reports the stable replay invalid failure condition.",
+      "family": "operation"
+    },
+    "replay_invalid_json": {
+      "meaning": "Scout reports the stable replay invalid json failure condition.",
+      "family": "operation"
+    },
+    "replay_parameter_bounds_exceeded": {
+      "meaning": "The replay parameter bounds exceeds its documented bound.",
+      "family": "operation"
+    },
+    "replay_too_many_actions": {
+      "meaning": "Scout reports the stable replay too many actions failure condition.",
+      "family": "operation"
+    },
+    "request_body_too_large": {
+      "meaning": "The request body exceeds its documented bound.",
+      "family": "operation"
+    },
+    "request_deadline_exceeded": {
+      "meaning": "The request deadline exceeds its documented bound.",
+      "family": "execution_or_reconciliation"
+    },
+    "request_parameter_count_exceeded": {
+      "meaning": "The request parameter count exceeds its documented bound.",
+      "family": "operation"
+    },
+    "request_parameter_name_too_large": {
+      "meaning": "The request parameter name exceeds its documented bound.",
+      "family": "operation"
+    },
+    "request_parameter_too_large": {
+      "meaning": "The request parameter exceeds its documented bound.",
+      "family": "operation"
+    },
+    "request_payload_too_large": {
+      "meaning": "The request payload exceeds its documented bound.",
+      "family": "operation"
+    },
+    "response_payload_too_large": {
+      "meaning": "The encoded response exceeds the published bound and is replaced by a typed failure.",
+      "family": "operation"
+    },
+    "restart_ack_timeout": {
+      "meaning": "The bounded restart ack operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "restart_rejected": {
+      "meaning": "Scout reports the stable restart rejected failure condition.",
+      "family": "execution_or_reconciliation"
+    },
+    "restart_signal_failed": {
+      "meaning": "The restart signal operation failed.",
+      "family": "execution_or_reconciliation"
+    },
+    "restart_source_mismatch": {
+      "meaning": "The observed restart source does not match the required identity or value.",
+      "family": "operation"
+    },
+    "restart_timeout": {
+      "meaning": "The bounded restart operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    },
+    "retention_cleanup_unavailable": {
+      "meaning": "The retention cleanup capability or evidence is unavailable.",
+      "family": "persistence_or_security"
+    },
+    "retention_identity_too_large": {
+      "meaning": "The retention identity exceeds its documented bound.",
+      "family": "compatibility_or_identity"
+    },
+    "retention_identity_unavailable": {
+      "meaning": "The retention identity capability or evidence is unavailable.",
+      "family": "compatibility_or_identity"
+    },
+    "retention_registry_full": {
+      "meaning": "Scout reports the stable retention registry full failure condition.",
+      "family": "persistence_or_security"
+    },
+    "retention_registry_invalid": {
+      "meaning": "Scout reports the stable retention registry invalid failure condition.",
+      "family": "persistence_or_security"
+    },
+    "retention_registry_lock_invalid": {
+      "meaning": "Scout reports the stable retention registry lock invalid failure condition.",
+      "family": "persistence_or_security"
+    },
+    "retention_registry_lock_timeout": {
+      "meaning": "The bounded retention registry lock operation did not complete before its deadline.",
+      "family": "persistence_or_security"
+    },
+    "run_mismatch": {
+      "meaning": "The observed run does not match the required identity or value.",
+      "family": "compatibility_or_identity"
+    },
+    "runtime_instance_mismatch": {
+      "meaning": "The observed runtime instance does not match the required identity or value.",
+      "family": "compatibility_or_identity"
+    },
+    "runtime_log_changed": {
+      "meaning": "The Scout-owned runtime log or its metadata changed identity, type, length, or snapshotted bytes during a bounded read.",
+      "family": "persistence_or_security"
+    },
+    "runtime_log_corrupt": {
+      "meaning": "The Scout-owned runtime log or its metadata is malformed, invalid UTF-8, or otherwise cannot be trusted.",
+      "family": "persistence_or_security"
+    },
+    "runtime_log_record_too_large": {
+      "meaning": "A single Scout runtime log record exceeds the 256 KiB safety bound and cannot be returned.",
+      "family": "persistence_or_security"
+    },
+    "runtime_transport_lost": {
+      "meaning": "The runtime transport was lost before Scout received an authoritative result.",
+      "family": "execution_or_reconciliation"
+    },
+    "runtime_transport_timeout": {
+      "meaning": "The runtime transport deadline elapsed before Scout received an authoritative result.",
+      "family": "execution_or_reconciliation"
+    },
+    "screenshot_failed": {
+      "meaning": "The screenshot operation failed.",
+      "family": "operation"
+    },
+    "screenshot_invalid_png": {
+      "meaning": "Scout reports the stable screenshot invalid png failure condition.",
+      "family": "operation"
+    },
+    "scroll_failed": {
+      "meaning": "The scroll operation failed.",
+      "family": "operation"
+    },
+    "scroll_to_failed": {
+      "meaning": "The scroll to operation failed.",
+      "family": "operation"
+    },
+    "scrollable_not_found": {
+      "meaning": "The requested scrollable could not be found.",
+      "family": "resolution_or_observation"
+    },
+    "secret_file_changed": {
+      "meaning": "Scout reports the stable secret file changed failure condition.",
+      "family": "persistence_or_security"
+    },
+    "secret_file_not_found": {
+      "meaning": "The requested secret file could not be found.",
+      "family": "persistence_or_security"
+    },
+    "secret_input_too_large": {
+      "meaning": "The secret input exceeds its documented bound.",
+      "family": "operation"
+    },
+    "session_already_running": {
+      "meaning": "Scout reports the stable session already running failure condition.",
+      "family": "operation"
+    },
+    "session_cleanup_incomplete": {
+      "meaning": "Session cleanup preserved unexpected or unsafe residue and did not claim complete removal.",
+      "family": "operation"
+    },
+    "session_journal_corrupt": {
+      "meaning": "The session journal data is corrupt and cannot be trusted.",
+      "family": "persistence_or_security"
+    },
+    "session_not_registered": {
+      "meaning": "Scout reports the stable session not registered failure condition.",
+      "family": "operation"
+    },
+    "session_selection_required": {
+      "meaning": "The session selection is required before this operation can proceed.",
+      "family": "operation"
+    },
+    "snapshot_delta_failed": {
+      "meaning": "The snapshot delta operation failed.",
+      "family": "operation"
+    },
+    "snapshot_history_unavailable": {
+      "meaning": "The snapshot history capability or evidence is unavailable.",
+      "family": "resolution_or_observation"
+    },
+    "stale_snapshot_identity": {
+      "meaning": "Scout reports the stable stale snapshot identity failure condition.",
+      "family": "compatibility_or_identity"
+    },
+    "stale_state_generation": {
+      "meaning": "The app state generation changed before dispatch, so the mutation was not applied.",
+      "family": "compatibility_or_identity"
+    },
+    "stale_target": {
+      "meaning": "The requested target handle belongs to an older observation and is no longer safe to use.",
+      "family": "resolution_or_observation"
+    },
+    "state_observation_failed": {
+      "meaning": "The state observation operation failed.",
+      "family": "operation"
+    },
+    "swipe_failed": {
+      "meaning": "The swipe operation failed.",
+      "family": "operation"
+    },
+    "tap_failed": {
+      "meaning": "The tap operation failed.",
+      "family": "operation"
+    },
+    "tap_text_failed": {
+      "meaning": "The tap text operation failed.",
+      "family": "resolution_or_observation"
+    },
+    "tap_text_target_mismatch": {
+      "meaning": "The observed tap text target does not match the required identity or value.",
+      "family": "resolution_or_observation"
+    },
+    "target_ambiguous": {
+      "meaning": "More than one currently actionable target matches, so Scout abstains.",
+      "family": "resolution_or_observation"
+    },
+    "target_disabled": {
+      "meaning": "The matched target is disabled and cannot be safely activated.",
+      "family": "resolution_or_observation"
+    },
+    "target_geometry_scale_unavailable": {
+      "meaning": "The target geometry scale capability or evidence is unavailable.",
+      "family": "resolution_or_observation"
+    },
+    "target_has_no_rect": {
+      "meaning": "Scout reports the stable target has no rect failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "target_not_found": {
+      "meaning": "No currently observable target satisfies the requested selector.",
+      "family": "resolution_or_observation"
+    },
+    "target_not_reached": {
+      "meaning": "Scout reports the stable target not reached failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "target_not_visible": {
+      "meaning": "The matched target is not currently visible on the active surface.",
+      "family": "resolution_or_observation"
+    },
+    "target_observation_scope_unavailable": {
+      "meaning": "The target observation scope capability or evidence is unavailable.",
+      "family": "resolution_or_observation"
+    },
+    "target_observation_unavailable": {
+      "meaning": "The target observation capability or evidence is unavailable.",
+      "family": "resolution_or_observation"
+    },
+    "temporary_helper_atomic_temp_collision": {
+      "meaning": "Scout reports the stable temporary helper atomic temp collision failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_dependencies_missing": {
+      "meaning": "Scout reports the stable temporary helper dependencies missing failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_file_too_large": {
+      "meaning": "The temporary helper file exceeds its documented bound.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_file_unsafe": {
+      "meaning": "Scout reports the stable temporary helper file unsafe failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_legacy_cleanup_unsafe": {
+      "meaning": "Scout reports the stable temporary helper legacy cleanup unsafe failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_lock_unsafe": {
+      "meaning": "Scout reports the stable temporary helper lock unsafe failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_mode_preservation_failed": {
+      "meaning": "The temporary helper mode preservation operation failed.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_path_invalid": {
+      "meaning": "Scout reports the stable temporary helper path invalid failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_path_missing": {
+      "meaning": "Scout reports the stable temporary helper path missing failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_project_missing": {
+      "meaning": "Scout reports the stable temporary helper project missing failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_project_path_invalid": {
+      "meaning": "Scout reports the stable temporary helper project path invalid failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_pub_get_failed": {
+      "meaning": "The temporary helper pub get operation failed.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_pubspec_missing": {
+      "meaning": "Scout reports the stable temporary helper pubspec missing failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_record_corrupt": {
+      "meaning": "The temporary helper record data is corrupt and cannot be trusted.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_record_digest_invalid": {
+      "meaning": "Scout reports the stable temporary helper record digest invalid failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_record_identity_invalid": {
+      "meaning": "Scout reports the stable temporary helper record identity invalid failure condition.",
+      "family": "compatibility_or_identity"
+    },
+    "temporary_helper_record_integrity_failed": {
+      "meaning": "The temporary helper record integrity operation failed.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_record_missing": {
+      "meaning": "Scout reports the stable temporary helper record missing failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_record_path_invalid": {
+      "meaning": "Scout reports the stable temporary helper record path invalid failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_record_path_mismatch": {
+      "meaning": "The observed temporary helper record path does not match the required identity or value.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_record_schema_invalid": {
+      "meaning": "Scout reports the stable temporary helper record schema invalid failure condition.",
+      "family": "compatibility_or_identity"
+    },
+    "temporary_helper_record_too_large": {
+      "meaning": "The temporary helper record exceeds its documented bound.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_repair_required": {
+      "meaning": "The temporary helper repair is required before this operation can proceed.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_run_id_invalid": {
+      "meaning": "Scout reports the stable temporary helper run id invalid failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_scout_root_unsafe": {
+      "meaning": "Scout reports the stable temporary helper scout root unsafe failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_target_missing": {
+      "meaning": "Scout reports the stable temporary helper target missing failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "temporary_helper_target_outside_project": {
+      "meaning": "Scout reports the stable temporary helper target outside project failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "temporary_helper_tombstone_not_committed": {
+      "meaning": "Scout reports the stable temporary helper tombstone not committed failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_tombstone_path_invalid": {
+      "meaning": "Scout reports the stable temporary helper tombstone path invalid failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_tombstone_target_present": {
+      "meaning": "Scout reports the stable temporary helper tombstone target present failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "temporary_helper_tracked_path_outside_project": {
+      "meaning": "Scout reports the stable temporary helper tracked path outside project failure condition.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_transaction_exists": {
+      "meaning": "Scout reports the stable temporary helper transaction exists failure condition.",
+      "family": "persistence_or_security"
+    },
+    "text_not_actionable": {
+      "meaning": "Scout reports the stable text not actionable failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "text_not_found": {
+      "meaning": "The requested text could not be found.",
+      "family": "resolution_or_observation"
+    },
+    "too_many_args": {
+      "meaning": "Scout reports the stable too many args failure condition.",
+      "family": "request_rejected"
+    },
+    "too_many_vars": {
+      "meaning": "Scout reports the stable too many vars failure condition.",
+      "family": "request_rejected"
+    },
+    "truncated_safety_evidence": {
+      "meaning": "Required safety evidence was truncated, so the response fails closed.",
+      "family": "persistence_or_security"
+    },
+    "unexpected_body": {
+      "meaning": "Scout reports the stable unexpected body failure condition.",
+      "family": "operation"
+    },
+    "unexpected_error": {
+      "meaning": "Scout reports the stable unexpected error failure condition.",
+      "family": "operation"
+    },
+    "unknown_annotation_action": {
+      "meaning": "The requested annotation action is not recognized.",
+      "family": "request_rejected"
+    },
+    "unknown_command": {
+      "meaning": "The requested public CLI command name is not recognized.",
+      "family": "request_rejected"
+    },
+    "unknown_endpoint": {
+      "meaning": "The requested endpoint is not recognized.",
+      "family": "request_rejected"
+    },
+    "unknown_method": {
+      "meaning": "The requested method is not recognized.",
+      "family": "request_rejected"
+    },
+    "unknown_parameter": {
+      "meaning": "The requested parameter is not recognized.",
+      "family": "request_rejected"
+    },
+    "unknown_record_action": {
+      "meaning": "The requested record action is not recognized.",
+      "family": "request_rejected"
+    },
+    "unknown_request_field": {
+      "meaning": "The requested request field is not recognized.",
+      "family": "request_rejected"
+    },
+    "unsafe_retention_target": {
+      "meaning": "Scout reports the stable unsafe retention target failure condition.",
+      "family": "resolution_or_observation"
+    },
+    "unsafe_secret_file": {
+      "meaning": "Scout reports the stable unsafe secret file failure condition.",
+      "family": "persistence_or_security"
+    },
+    "unsafe_storage_path": {
+      "meaning": "Scout reports the stable unsafe storage path failure condition.",
+      "family": "persistence_or_security"
+    },
+    "unsupported_capability": {
+      "meaning": "The requested capability is not supported by this contract.",
+      "family": "request_rejected"
+    },
+    "unsupported_content_type": {
+      "meaning": "The requested content type is not supported by this contract.",
+      "family": "request_rejected"
+    },
+    "unsupported_method": {
+      "meaning": "The requested method is not supported by this contract.",
+      "family": "request_rejected"
+    },
+    "usage": {
+      "meaning": "The command arguments do not satisfy the documented command grammar.",
+      "family": "request_rejected"
+    },
+    "vm_reload_unavailable": {
+      "meaning": "The vm reload capability or evidence is unavailable.",
+      "family": "operation"
+    },
+    "vm_service_connection_failed": {
+      "meaning": "The vm service connection operation failed.",
+      "family": "operation"
+    },
+    "vm_service_uri_not_found": {
+      "meaning": "The requested vm service uri could not be found.",
+      "family": "operation"
+    },
+    "wait_for_failed": {
+      "meaning": "The wait for operation failed.",
+      "family": "operation"
+    },
+    "wait_for_timeout": {
+      "meaning": "The bounded wait for operation did not complete before its deadline.",
+      "family": "execution_or_reconciliation"
+    }
+  },
+  "nonErrorStructuredCodes": {
+    "automatic_persistent_transport": {
+      "kind": "workflow_hint",
+      "meaning": "Persistent transport is being started automatically for the exploratory workflow."
+    },
+    "duplicate_action_labels": {
+      "kind": "quality_issue",
+      "meaning": "Multiple visible actions share a label and may be harder to distinguish."
+    },
+    "insecure_secret_source": {
+      "kind": "deprecation_warning",
+      "meaning": "A sensitive value arrived through a legacy process-argument source."
+    },
+    "low_heuristic_score_targets": {
+      "kind": "quality_issue",
+      "meaning": "One or more inferred targets have weak semantic evidence."
+    },
+    "many_anonymous_targets": {
+      "kind": "perception_limitation",
+      "meaning": "Many visible targets lack stable semantic names."
+    },
+    "no_structured_rows": {
+      "kind": "quality_issue",
+      "meaning": "A dense surface exposes no reliably structured rows."
+    },
+    "non_hit_testable_actions": {
+      "kind": "quality_issue",
+      "meaning": "Visible action candidates are not hit-testable at their suggested points."
+    },
+    "retention_cleanup_incomplete": {
+      "kind": "retention_warning",
+      "meaning": "Expired artifacts were preserved because their recorded identity could not be re-established."
+    },
+    "unlabeled_interactables": {
+      "kind": "quality_issue",
+      "meaning": "Visible interactive elements lack stable labels or identifiers."
+    }
+  }
+}

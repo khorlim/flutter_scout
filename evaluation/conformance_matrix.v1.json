@@ -1,0 +1,1144 @@
+{
+  "schemaVersion": 1,
+  "standard": "../QUALITY_STANDARD.md",
+  "standardSha256": "e52c9e8cf3a481ac48042afe928c1051b5d78e4feac7242d27724d97184f25ea",
+  "scope": "Repository-wide deterministic proof inventory covering evaluation, CLI, helper, verification-app, protocol, security, CI, and release-tool contracts. Status describes retained proof machinery, not simulator or real-app benchmark attainment, platform support, performance, held-out results, release eligibility, or gold conformance. Unmeasured does not assert that product code is absent; it asserts that qualifying retained evidence is not registered here.",
+  "statusDefinitions": {
+    "implemented_proof": "Repository tests or machine artifacts deterministically prove the complete stated contract at their declared layer. Quantitative or environment-dependent attainment still requires retained raw episodes.",
+    "partial_proof": "Some contract or reporting support exists, but required product, simulator, corpus, or empirical evidence is incomplete.",
+    "unmeasured": "No qualifying reproducible proof is recorded here; no pass may be inferred."
+  },
+  "releaseImpactDefinitions": {
+    "blocker": "Missing or failing proof blocks a gold-conformance or release claim under the standard.",
+    "conditional_blocker": "A provisional target blocks only after its environment/baseline is ratified, or the clause is otherwise conditional.",
+    "advisory": "Recommended evidence; absence is reported but is not by itself a normative MUST-level blocker."
+  },
+  "proofReferences": {
+    "P-SCHEMAS": [
+      "schemas/v1/task_manifest.schema.json",
+      "schemas/v1/episode_result.schema.json",
+      "schemas/v1/benchmark_config.schema.json",
+      "schemas/v1/benchmark_schedule.schema.json",
+      "schemas/v1/benchmark_episode.schema.json",
+      "schemas/v1/benchmark_report.schema.json",
+      "schemas/v1/corpus_policy.schema.json",
+      "schemas/v1/corpus_descriptor.schema.json",
+      "schemas/v1/corpus_validation_report.schema.json"
+    ],
+    "P-ORACLE": [
+      "lib/src/oracle.dart",
+      "test/oracle_test.dart"
+    ],
+    "P-CATALOG": [
+      "lib/src/catalog.dart",
+      "lib/src/task_manifest.dart",
+      "test/catalog_test.dart"
+    ],
+    "P-CORPUS": [
+      "policies/gold_conformance.v1.json",
+      "lib/src/corpus.dart",
+      "lib/src/public_authoring_catalog.dart",
+      "bin/validate_catalog.dart",
+      "bin/generate_public_catalog.dart",
+      "test/corpus_test.dart"
+    ],
+    "P-CONFIG": [
+      "lib/src/benchmark_config.dart",
+      "test/benchmark_config_test.dart"
+    ],
+    "P-SCHEDULE": [
+      "lib/src/benchmark_schedule.dart",
+      "test/benchmark_schedule_test.dart"
+    ],
+    "P-CONTROLLED-COMPARISONS": [
+      "CONTROLLED_COMPARISONS.md",
+      "lib/src/benchmark_config.dart",
+      "lib/src/benchmark_schedule.dart",
+      "lib/src/benchmark_episode.dart",
+      "lib/src/benchmark_report.dart",
+      "schemas/v1/benchmark_config.schema.json",
+      "schemas/v1/benchmark_schedule.schema.json",
+      "schemas/v1/benchmark_episode.schema.json",
+      "schemas/v1/benchmark_report.schema.json",
+      "test/controlled_comparison_test.dart"
+    ],
+    "P-ARCHIVE": [
+      "lib/src/episode_archive.dart",
+      "lib/src/benchmark_episode.dart",
+      "test/episode_archive_test.dart",
+      "test/benchmark_episode_test.dart"
+    ],
+    "P-REPORT": [
+      "lib/src/benchmark_report.dart",
+      "bin/benchmark.dart",
+      "test/benchmark_report_test.dart",
+      "test/benchmark_cli_test.dart"
+    ],
+    "P-STATS": [
+      "lib/src/statistics.dart",
+      "test/statistics_test.dart"
+    ],
+    "P-SAFETY-METRICS": [
+      "SAFETY_METRICS.md",
+      "lib/src/safety_metrics.dart",
+      "lib/src/benchmark_report.dart",
+      "schemas/v1/benchmark_config.schema.json",
+      "schemas/v1/episode_result.schema.json",
+      "schemas/v1/benchmark_report.schema.json",
+      "test/safety_metrics_contract_test.dart"
+    ],
+    "P-FAILURE": [
+      "lib/src/failure.dart",
+      "lib/src/episode_result.dart"
+    ],
+    "P-GUIDE": [
+      "README.md"
+    ],
+    "P-CLI-PROTOCOL": [
+      "../packages/flutter_scout/lib/src/cli_protocol.dart",
+      "../packages/flutter_scout/lib/src/cli_response.dart",
+      "../packages/flutter_scout/test/cli_response_contract_test.dart",
+      "../packages/flutter_scout/test/protocol_safety_test.dart",
+      "../packages/flutter_scout/test/protocol_schema_test.dart"
+    ],
+    "P-COMMAND-GOLDENS": [
+      "../protocol/schemas/v1/public-cli-commands.json",
+      "../protocol/schemas/v1/stable-errors.json",
+      "../packages/flutter_scout/test/public_contract_goldens_test.dart",
+      "../packages/flutter_scout/test/goldens/public-contract-envelopes.v1.json",
+      "../packages/flutter_scout/tool/update_public_contract_goldens.dart"
+    ],
+    "P-HELPER-PROTOCOL": [
+      "../packages/flutter_scout_helper/lib/src/runtime_protocol.dart",
+      "../packages/flutter_scout_helper/test/runtime_protocol_test.dart"
+    ],
+    "P-IDEMPOTENCY": [
+      "../packages/flutter_scout/lib/src/cli_idempotency.dart",
+      "../packages/flutter_scout/test/protocol_safety_test.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_protocol.dart",
+      "../packages/flutter_scout_helper/test/protocol_hardening_test.dart",
+      "../protocol/schemas/v1/persistent-call.schema.json"
+    ],
+    "P-BOUNDED-INPUT": [
+      "../packages/flutter_scout/lib/src/cli_batch.dart",
+      "../packages/flutter_scout/lib/src/cli_evidence.dart",
+      "../packages/flutter_scout/lib/src/cli_privacy.dart",
+      "../packages/flutter_scout/test/bounded_batch_replay_test.dart",
+      "../docs/bounded-batch-replay.md"
+    ],
+    "P-PERCEPTION": [
+      "../packages/flutter_scout_helper/lib/src/runtime_nodes.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_snapshot.dart",
+      "../packages/flutter_scout_helper/test/perception_scroll_truth_test.dart",
+      "../packages/flutter_scout_helper/test/snapshot_truth_test.dart",
+      "../packages/flutter_scout_helper/test/icon_tables_fresh_test.dart",
+      "../packages/flutter_scout_helper/test/flutter_scout_helper_test.dart"
+    ],
+    "P-RESOLUTION": [
+      "../packages/flutter_scout_helper/lib/src/runtime_resolution.dart",
+      "../packages/flutter_scout_helper/test/runtime_resolution_test.dart"
+    ],
+    "P-NAVIGATION": [
+      "../packages/flutter_scout/lib/src/cli_navigation.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_navigation.dart",
+      "../packages/flutter_scout/test/navigation_cli_test.dart",
+      "../packages/flutter_scout_helper/test/runtime_navigation_test.dart"
+    ],
+    "P-CHANGED-CAPTURE": [
+      "../packages/flutter_scout/lib/src/cli_capture.dart",
+      "../packages/flutter_scout/test/changed_region_capture_test.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_internals.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_annotations.dart",
+      "../packages/flutter_scout_helper/test/runtime_navigation_test.dart",
+      "../protocol/schemas/v1/navigation-response.schema.json",
+      "../protocol/schemas/v1/response.schema.json",
+      "../protocol/schemas/v1/helper-methods.json"
+    ],
+    "P-NATIVE-MOBILE": [
+      "../packages/flutter_scout/lib/src/cli_native_platform.dart",
+      "../packages/flutter_scout/lib/src/cli_capture.dart",
+      "../packages/flutter_scout/test/native_platform_test.dart",
+      "../packages/flutter_scout/test/navigation_cli_test.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_navigation.dart",
+      "../packages/flutter_scout_helper/test/runtime_navigation_test.dart",
+      "../COMPATIBILITY.md"
+    ],
+    "P-STABILITY-SIGNALS": [
+      "../packages/flutter_scout_helper/lib/src/runtime_actions.dart",
+      "../packages/flutter_scout_helper/test/semantic_stability_test.dart",
+      "../packages/flutter_scout_helper/test/runtime_signal_provenance_test.dart"
+    ],
+    "P-LIFECYCLE": [
+      "../packages/flutter_scout/lib/src/cli_session.dart",
+      "../packages/flutter_scout/lib/src/cli_session_recovery.dart",
+      "../packages/flutter_scout/lib/src/cli_supervisor.dart",
+      "../packages/flutter_scout/test/launch_lease_test.dart",
+      "../packages/flutter_scout/test/lifecycle_safety_test.dart",
+      "../packages/flutter_scout/test/flutter_scout_test.dart"
+    ],
+    "P-STORAGE": [
+      "../packages/flutter_scout/lib/src/cli_storage.dart",
+      "../packages/flutter_scout/test/storage_safety_test.dart",
+      "../packages/flutter_scout_helper/test/runtime_recorder_storage_test.dart"
+    ],
+    "P-RETENTION": [
+      "../packages/flutter_scout/lib/src/cli_storage.dart",
+      "../packages/flutter_scout/lib/src/cli_session.dart",
+      "../packages/flutter_scout/lib/src/cli_annotations.dart",
+      "../packages/flutter_scout/lib/src/cli_evidence.dart",
+      "../packages/flutter_scout/lib/src/cli_record.dart",
+      "../packages/flutter_scout/test/artifact_retention_test.dart",
+      "../packages/flutter_scout/test/storage_safety_test.dart",
+      "../SECURITY.md"
+    ],
+    "P-TEMP-RECOVERY": [
+      "../packages/flutter_scout/lib/src/cli_temporary_helper.dart",
+      "../packages/flutter_scout/lib/src/cli_temporary_helper_storage.dart",
+      "../packages/flutter_scout/test/temporary_helper_recovery_test.dart"
+    ],
+    "P-NONINTERFERENCE": [
+      "../packages/flutter_scout_helper/lib/src/runtime_actions.dart",
+      "../packages/flutter_scout_helper/test/observation_noninterference_test.dart"
+    ],
+    "P-PHASE-TIMINGS": [
+      "../packages/flutter_scout/lib/src/cli_timings.dart",
+      "../packages/flutter_scout/test/phase_timings_test.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_timings.dart",
+      "../packages/flutter_scout_helper/test/protocol_hardening_test.dart",
+      "../docs/production-phase-timings.md",
+      "../docs/production-phase-timing-inventory.md"
+    ],
+    "P-PERFORMANCE": [
+      "PERFORMANCE.md",
+      "lib/src/performance/performance_config.dart",
+      "lib/src/performance/performance_sample.dart",
+      "lib/src/performance/performance_report.dart",
+      "schemas/v1/performance_config.schema.json",
+      "schemas/v1/performance_sample.schema.json",
+      "schemas/v1/performance_report.schema.json",
+      "test/performance_evidence_test.dart",
+      "test/performance_cli_test.dart",
+      "test/performance_schema_test.dart"
+    ],
+    "P-ENDURANCE": [
+      "ENDURANCE.md",
+      "lib/src/endurance/endurance_archive.dart",
+      "lib/src/endurance/endurance_config.dart",
+      "lib/src/endurance/endurance_contract.dart",
+      "lib/src/endurance/endurance_runner.dart",
+      "schemas/v1/endurance_archive.schema.json",
+      "schemas/v1/endurance_config.schema.json",
+      "test/endurance_archive_test.dart",
+      "test/endurance_config_schema_test.dart",
+      "test/endurance_runner_test.dart"
+    ],
+    "P-FUZZ": [
+      "../packages/flutter_scout_helper/FUZZING.md",
+      "../packages/flutter_scout_helper/test/seeded_property_support.dart",
+      "../packages/flutter_scout_helper/test/resolution_property_fuzz_test.dart",
+      "../packages/flutter_scout_helper/test/snapshot_state_property_fuzz_test.dart",
+      "../packages/flutter_scout_helper/test/protocol_property_fuzz_test.dart"
+    ],
+    "P-PRIVACY": [
+      "../packages/flutter_scout/lib/src/cli_privacy.dart",
+      "../packages/flutter_scout/lib/src/cli_secret_ingress.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_privacy.dart",
+      "../packages/flutter_scout/test/privacy_redaction_test.dart",
+      "../packages/flutter_scout/test/protected_secret_ingress_test.dart",
+      "../packages/flutter_scout/test/dart_define_ingress_test.dart",
+      "../packages/flutter_scout/test/adversarial_privacy_corpus_test.dart",
+      "../packages/flutter_scout_helper/test/adversarial_privacy_corpus_test.dart",
+      "../security/adversarial_privacy_corpus.json",
+      "../security/adversarial_privacy_coverage.json"
+    ],
+    "P-SECURE-INGRESS": [
+      "../packages/flutter_scout/lib/src/cli_vm_transport.dart",
+      "../packages/flutter_scout/lib/src/cli_secret_ingress.dart",
+      "../packages/flutter_scout/test/vm_transport_security_test.dart",
+      "../packages/flutter_scout/test/dart_define_ingress_test.dart",
+      "lib/src/tool_simulator/scout_process_executor.dart",
+      "lib/src/tool_simulator/vm_supplier_oracle_client.dart",
+      "bin/run_tool_simulator_episode.dart",
+      "test/scout_process_executor_test.dart",
+      "test/vm_supplier_oracle_client_test.dart"
+    ],
+    "P-NO-EGRESS": [
+      "../security/network_egress_policy.v1.json",
+      "test/network_egress_policy_test.dart"
+    ],
+    "P-SERVE": [
+      "../packages/flutter_scout/lib/src/cli_serve.dart",
+      "../packages/flutter_scout/test/flutter_scout_test.dart"
+    ],
+    "P-PROTOCOL-ARTIFACTS": [
+      "../protocol/schemas/v1/cli-event.schema.json",
+      "../protocol/schemas/v1/cli-heartbeat.schema.json",
+      "../protocol/schemas/v1/cli-response.schema.json",
+      "../protocol/schemas/v1/mutation-outcome.schema.json",
+      "../protocol/schemas/v1/mutation-request.schema.json",
+      "../protocol/schemas/v1/navigation-response.schema.json",
+      "../protocol/schemas/v1/persistent-call.schema.json",
+      "../protocol/schemas/v1/persistent-methods.json",
+      "../protocol/schemas/v1/response.schema.json"
+    ],
+    "P-CROSS-VERSION": [
+      "../protocol/compatibility-matrix.v1.json",
+      "../protocol/schemas/v1/response.schema.json",
+      "../packages/flutter_scout/lib/src/cli_protocol.dart",
+      "../packages/flutter_scout/test/cross_version_compatibility_test.dart",
+      "../packages/flutter_scout_helper/lib/src/runtime_protocol.dart",
+      "../packages/flutter_scout_helper/test/cross_version_compatibility_test.dart",
+      "../COMPATIBILITY.md"
+    ],
+    "P-DEBUG-BUILD": [
+      "../tool/verify_debug_only_build.dart",
+      "../.github/workflows/ci.yml",
+      "../apps/scout_test_app/test/evaluation_oracle_test.dart"
+    ],
+    "P-RELEASE": [
+      "../tool/release/generate_release_evidence.dart",
+      "../tool/release/release_evidence.dart",
+      "../tool/release/release_evidence_self_check.dart",
+      "../RELEASING.md",
+      "../COMPATIBILITY.md",
+      "../packages/flutter_scout/CHANGELOG.md",
+      "../packages/flutter_scout_helper/CHANGELOG.md"
+    ],
+    "P-RELEASE-SUPPLY-CHAIN": [
+      "../tool/release/release_contract.dart",
+      "../tool/release/release-contracts.v1.json",
+      "../tool/release/release_evidence.dart",
+      "../tool/release/release_evidence_self_check.dart",
+      "../protocol/CHANGELOG.md",
+      "../RELEASING.md"
+    ],
+    "P-CI": [
+      "../.github/workflows/ci.yml",
+      "test/release_ci_policy_test.dart"
+    ],
+    "P-OPERABILITY": [
+      "../packages/flutter_scout/lib/src/cli_operability.dart",
+      "../packages/flutter_scout/test/operability_contract_test.dart",
+      "../packages/flutter_scout/test/goldens/operability_observed.json",
+      "../packages/flutter_scout/test/goldens/operability_unavailable.json",
+      "../packages/flutter_scout_helper/test/operability_identity_test.dart",
+      "../docs/operability-contract.md"
+    ],
+    "P-TOOL-SIM": [
+      "../apps/scout_test_app/lib/evaluation_oracle/supplier_workflow_oracle.dart",
+      "../apps/scout_test_app/test/evaluation_oracle_test.dart",
+      "lib/src/tool_simulator/tool_simulator_episode_runner.dart",
+      "schemas/v1/tool_simulator_plan.schema.json",
+      "schemas/v1/supplier_oracle_observation.schema.json",
+      "tool_simulator/fixtures/supplier_add_manifest.v1.json",
+      "tool_simulator/fixtures/supplier_add_plan.v1.json",
+      "test/tool_simulator_episode_runner_test.dart",
+      "test/tool_simulator_schema_test.dart",
+      "test/vm_supplier_oracle_client_test.dart",
+      "test/scout_process_executor_test.dart"
+    ],
+    "P-APP-FAULTS": [
+      "../apps/scout_test_app/lib/screens/fault_injection_screen.dart",
+      "../apps/scout_test_app/test/widget_test.dart"
+    ]
+  },
+  "entries": [
+    {
+      "id": "QS-NORTH-1",
+      "source": "QUALITY_STANDARD.md:15-41",
+      "requirements": [
+        "Scout acts as trustworthy instrumentation: perceive actionable state, dispatch exactly one intended interaction, and report resulting state/hard failures or explicit ambiguity, staleness, unsupported, unavailable, or unknown outcomes.",
+        "Priority is truthfulness, then actuation safety, recoverability, completeness, efficiency, and speed; precise refusal beats plausible false success.",
+        "Core loop remains attach/launch, inspect, act, wait stable, return delta and hard signals, replay; subjective layers remain optional above the deterministic core."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-ORACLE", "P-REPORT", "P-CLI-PROTOCOL", "P-HELPER-PROTOCOL", "P-PERCEPTION", "P-RESOLUTION", "P-STABILITY-SIGNALS"],
+      "missingProof": [
+        "End-to-end simulator evidence for the full core loop and exactly-one intended interaction.",
+        "Product-level proof for explicit uncertainty and optional-layer separation."
+      ],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-1.1",
+      "source": "QUALITY_STANDARD.md:45-63",
+      "requirements": [
+        "Distinguish observed facts, heuristic inference, unavailable evidence, unsupported capability, stale evidence, and unknown outcome.",
+        "Never present inference as ground truth; numeric confidence is calibrated or labelled only as a heuristic score.",
+        "Never claim visual quality without pixels; CustomPaint and opaque platform views disclose a perception gap and focused capture recommendation."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-CLI-PROTOCOL", "P-PERCEPTION", "P-CHANGED-CAPTURE"],
+      "missingProof": ["Independent labelled simulator perception and confidence-calibration episodes remain absent; visual-quality attainment is not claimed."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-1.2",
+      "source": "QUALITY_STANDARD.md:65-97",
+      "requirements": [
+        "Transport ok never silently means business success; every mutation reports independent transport, dispatch, observation, postcondition, and runtime-health dimensions using the required closed outcomes.",
+        "A timeout after dispatch reports dispatch_outcome_unknown and is never represented as a safe failure or blindly retried."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-ORACLE", "P-FAILURE", "P-CLI-PROTOCOL", "P-HELPER-PROTOCOL", "P-BOUNDED-INPUT"],
+      "missingProof": ["Closed product envelopes, timeout reconciliation, and aggregate batch/replay no-false-pass semantics have deterministic contract tests; retained simulator fault-injection episodes for every outcome remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-1.3",
+      "source": "QUALITY_STANDARD.md:99-103",
+      "requirements": ["Every compact mode preserves fresh blockers, failed expectations, unknown dispatch, ambiguity, stale identity, and missing observation."],
+      "status": "implemented_proof",
+      "proof": ["P-CLI-PROTOCOL"],
+      "missingProof": [],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-2.1",
+      "source": "QUALITY_STANDARD.md:107-132",
+      "requirements": [
+        "Snapshots implement the canonical run/screen/surface/region/row/control hierarchy.",
+        "When observable they expose distinct route/screen/surface, tab/navigator, modal/overlay/keyboard, scroll facts, visibility/occlusion/hit testing, control/validation state, redacted fields, handle provenance, coordinate systems/insets/orientation/scaling, and coverage/degradation/blind spots."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-PERCEPTION", "P-HELPER-PROTOCOL"],
+      "missingProof": ["Widget contracts cover hierarchy, provenance, geometry, limitations, and selected degradation paths; a labelled simulator corpus covering every field remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-2.2",
+      "source": "QUALITY_STANDARD.md:134-141",
+      "requirements": [
+        "Every runtime exposes monotonic state generation plus a collision-resistant digest of all agent-relevant observed state.",
+        "Short hashes/control counts may correlate output but never authorize mutation."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-HELPER-PROTOCOL", "P-CLI-PROTOCOL", "P-PERCEPTION", "P-FUZZ"],
+      "missingProof": ["Generation/digest, mutation preflight, canonical-order, volatile-field, and 104 seeded state/property cases are deterministic; cryptographic collision proof, broader scale, and retained simulator authorization episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-2.3",
+      "source": "QUALITY_STANDARD.md:143-159",
+      "requirements": [
+        "Handle derivation follows stable-key, semantics, text, type/state, context, then geometry reliability order.",
+        "Every handle is scoped to run/runtime/generation and stale re-resolution validates identity.",
+        "Duplicate/ambiguous identities are never unique; Scout abstains and returns ranked candidates with evidence."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-RESOLUTION", "P-PERCEPTION", "P-CLI-PROTOCOL", "P-FUZZ"],
+      "missingProof": ["Deterministic duplicate, stale, ambiguity, safe-point, Unicode/normalization, permutation, and 44 seeded resolution cases exist; larger-scale handle campaigns and labelled simulator corpora remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-2.4",
+      "source": "QUALITY_STANDARD.md:161-165",
+      "requirements": ["A malformed element, semantics node, platform view, or capture backend degrades only affected evidence and returns the remaining trustworthy snapshot with structured limits."],
+      "status": "partial_proof",
+      "proof": ["P-PERCEPTION", "P-CHANGED-CAPTURE"],
+      "missingProof": ["Deterministic source/widget contracts now isolate malformed elements and semantics nodes, exercise the real capture-backend probe failure, and disclose opaque platform views as native-pixel gaps without inventing pixel claims; retained real platform-view and backend-failure simulator episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-3.1",
+      "source": "QUALITY_STANDARD.md:169-192",
+      "requirements": [
+        "Immediately before mutation validate unique target, expected run/runtime/generation, active surface, sufficient visibility, enabled/hit-testable, unobscured safe point, and same logical control.",
+        "Any failed check abstains with evidence, candidates, and safe recovery.",
+        "Never first-match generic/repeated controls, cross modal barriers, substitute stale controls, silently fall back to coordinates, use unsafe centers, or retry uncertain mutations without deduplication."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-RESOLUTION", "P-PERCEPTION", "P-CLI-PROTOCOL"],
+      "missingProof": ["Pre-dispatch abstention contracts cover duplicate, stale, modal, occlusion, and safe-point cases; the 3,000 labelled simulator opportunities are not retained."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-3.2",
+      "source": "QUALITY_STANDARD.md:194-237",
+      "requirements": [
+        "Every mutation carries commandId, idempotencyKey, runId, runtimeInstanceId, expectedStateGeneration, and deadline.",
+        "Helper deduplicates idempotency keys and returns the original outcome; only deduplicated mutations retry.",
+        "Exactly-once identity survives short-lived CLI processes and persistent reconnects; normal commands and authenticated /v1/call accept caller keys and generate one when omitted.",
+        "Before dispatch the CLI atomically commits an owner-only receipt with a canonical business fingerprint and exact invocation identity, but no raw business parameter, input value, or secret; equal requests reconcile/replay and conflicting requests abstain.",
+        "Uncertain, replaced-runtime, integrity-failed, or pruned receipts report dispatch_outcome_unknown and never redispatch; batch/replay derive stable child keys.",
+        "CLI receipts and helper memory are bounded; pruning leaves fail-safe tombstones and capacity exhaustion rejects rather than forgetting mutation identity.",
+        "Helper fingerprints exclude volatile retry metadata while retaining method, business parameters, run, and runtime identity.",
+        "One mutation executes per runtime; held drag exclusively owns and safely cancels its pointer lifecycle."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-CLI-PROTOCOL", "P-HELPER-PROTOCOL", "P-IDEMPOTENCY", "P-BOUNDED-INPUT", "P-PROTOCOL-ARTIFACTS"],
+      "missingProof": ["Deterministic source contracts cover durable receipts, conflict/unknown abstention, stable batch/replay child keys, full preflight before mutation, bounded tombstones, and volatile-field fingerprints; the final unrestricted CLI suite and retained cross-process reconnect/crash simulator episodes remain pending."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-3.3",
+      "source": "QUALITY_STANDARD.md:239-243",
+      "requirements": ["Coordinate actions are explicit and return logical/physical points, DPR, viewport, safe areas, and immediate pre-dispatch hit-test target."],
+      "status": "partial_proof",
+      "proof": ["P-RESOLUTION", "P-PERCEPTION", "P-CLI-PROTOCOL", "P-NATIVE-MOBILE", "P-CHANGED-CAPTURE"],
+      "missingProof": ["Safe-point, hit-test, landscape inset, scaling, native screenshot validation, and scoped crop-coordinate contracts are tested; retained cross-device DPR/orientation simulator evidence remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-4",
+      "source": "QUALITY_STANDARD.md:245-276",
+      "requirements": [
+        "Every action is one transaction: fresh snapshot, resolve, dispatch once, observe, settle, delta, fresh runtime/log signals.",
+        "Response includes all required identities, selector/resolution/provenance/candidates/safe point, dispatch/activity/stability, semantic and geometry deltas, postcondition, cursors, timings, and requested capture identity.",
+        "Return-to-start activity differs from no-op and dispatch alone never proves intended effect."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-ORACLE", "P-REPORT", "P-CLI-PROTOCOL", "P-HELPER-PROTOCOL", "P-STABILITY-SIGNALS", "P-CHANGED-CAPTURE"],
+      "missingProof": ["Typed action transaction fields and state transitions have deterministic contract tests, including a snapshot-bound changed-region capture transaction with a post-raster identity recheck; complete end-to-end simulator transactions remain unretained."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-5.1",
+      "source": "QUALITY_STANDARD.md:278-287",
+      "requirements": ["Provide bounded deterministic where/locate/reveal/since-snapshot navigation primitives."],
+      "status": "implemented_proof",
+      "proof": ["P-NAVIGATION", "P-PROTOCOL-ARTIFACTS"],
+      "missingProof": [],
+      "releaseImpact": "advisory"
+    },
+    {
+      "id": "QS-5.2",
+      "source": "QUALITY_STANDARD.md:289-300",
+      "requirements": ["Locate/reveal reports query/scope, region/direction, starting generation, all bounds, progress, attempted scroll regions, loop/end detection, exact stopping reason, and restoration after failure."],
+      "status": "partial_proof",
+      "proof": ["P-NAVIGATION"],
+      "missingProof": ["Bounded progress, loop/end reasons, region choice, and restoration are widget-tested; retained nested/lazy simulator traces remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-5.3",
+      "source": "QUALITY_STANDARD.md:302-308",
+      "requirements": [
+        "Support orientation facts for nested navigators, tabs, split panes, modals, lazy/nested scrolling, expansion, moving targets, and keyboard layout.",
+        "AI remains planner; broad exploration is optional and never weakens deterministic core."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-NAVIGATION", "P-PERCEPTION"],
+      "missingProof": ["Orientation facts for panes, scroll positions, frames, and modal surfaces are contract-tested; a complex-app corpus and explicit optional-explorer evidence remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-6.1",
+      "source": "QUALITY_STANDARD.md:312-326",
+      "requirements": [
+        "Stability means actionable/semantic quiescence, not merely no scheduled frame.",
+        "Distinguish stable, settling, background animation with actionable UI, never settling, app/runtime loss, and observation unavailable.",
+        "All waits are bounded and disclose stopping reason."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-STABILITY-SIGNALS", "P-HELPER-PROTOCOL"],
+      "missingProof": ["Stable, transient, continuous-animation, never-settling, initially unavailable observation, and runtime loss after a trustworthy sample are deterministic; retained app/process/VM-loss simulator episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-6.2",
+      "source": "QUALITY_STANDARD.md:328-346",
+      "requirements": [
+        "Hard-signal detection covers Flutter/Dart/platform errors, ErrorWidget, overflow, image/request/permission/log failures, disconnect/death, and build/hot-update rejection.",
+        "Every signal includes provenance, time, severity, blocking, phase, age/staleness, dedupe identity, and cursor; old signals are never fresh-attributed."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-STABILITY-SIGNALS", "P-CLI-PROTOCOL", "P-APP-FAULTS"],
+      "missingProof": ["Source hooks, classifiers, and verification-app fixtures cover every listed hard-signal category plus provenance, freshness, severity, blocking, phase, dedupe identity, and cursor contracts; labelled precision/recall/latency simulator episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-7.1",
+      "source": "QUALITY_STANDARD.md:350-354",
+      "requirements": ["Attach preserves app/simulator/navigation/data and never relaunches, resets, clears, or assumes process ownership without explicit request."],
+      "status": "partial_proof",
+      "proof": ["P-LIFECYCLE", "P-SECURE-INGRESS"],
+      "missingProof": ["Attach, exact loopback capability ingress, and ownership contracts are tested at the CLI layer; retained state-preservation simulator episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-7.2",
+      "source": "QUALITY_STANDARD.md:356-363",
+      "requirements": [
+        "Concurrent ensure produces one owned runner; named sessions never cross-read/cross-act.",
+        "Session metadata/registries/recordings/evidence indexes are transactional and crash-safe.",
+        "All run/runtime/isolate/protocol/source/log/supervisor/process ownership stays explicit through lifecycle transitions."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-LIFECYCLE", "P-STORAGE", "P-RETENTION", "P-TEMP-RECOVERY"],
+      "missingProof": ["Ensure races, session separation, locking, transactional storage, and exact artifact-retention registries have deterministic tests; multi-device crash/reconnect simulator evidence remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-7.3",
+      "source": "QUALITY_STANDARD.md:365-372",
+      "requirements": ["Process ownership checks run token, executable, command, start time, project, device, parentage, and supervisor; stop kills only exact ownership and uncertainty means do not kill."],
+      "status": "implemented_proof",
+      "proof": ["P-LIFECYCLE"],
+      "missingProof": [],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-7.4",
+      "source": "QUALITY_STANDARD.md:374-386",
+      "requirements": [
+        "All listed VM/daemon/metadata/disk/permission/runner/PID faults recover deterministically and within bounds.",
+        "Reload/restart requires Flutter acknowledgement and expected runtime transition, never merely an old inspectable isolate.",
+        "Temporary helper restores all tracked inputs and interruption leaves a discoverable repair record."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-LIFECYCLE", "P-STORAGE", "P-RETENTION", "P-TEMP-RECOVERY"],
+      "missingProof": ["Deterministic ownership, metadata, interruption, exact retention cleanup, corrupt-registry abstention, and recovery contracts exist; the full VM/daemon/disk/permission simulator fault suite remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-8.1",
+      "source": "QUALITY_STANDARD.md:390-396",
+      "requirements": ["Normal profile/release builds register no Scout extensions/hooks/recorders/overlays/listeners; benchmark instrumentation is specifically guarded and cannot change normal builds."],
+      "status": "partial_proof",
+      "proof": ["P-DEBUG-BUILD", "P-CI"],
+      "missingProof": ["CI and the build verifier encode debug-positive and profile/release-forbidden sentinels; no retained successful binary-inspection run or runtime-absence episode is registered."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-8.2",
+      "source": "QUALITY_STANDARD.md:398-419",
+      "requirements": [
+        "All listed secrets and obscureText redact at earliest source across summaries, states/deltas, events/logs, recording/replay, evidence/capture metadata, errors/diagnostics/heartbeats, histories, and process arguments.",
+        "Obscured fields expose neither plaintext nor length; protected input is preferred and replay retains placeholders then requests values at execution."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-PRIVACY", "P-SECURE-INGRESS", "P-STORAGE", "P-BOUNDED-INPUT"],
+      "missingProof": ["A machine adversarial corpus tests CLI/helper redaction, protected input/replay/VM/deeplink ingress, bounded replay placeholders, logs, records, and artifacts; retained screenshot/OCR and cross-platform process-boundary episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-8.3",
+      "source": "QUALITY_STANDARD.md:421-431",
+      "requirements": [
+        "Persistent transport is loopback/owner-only socket plus ephemeral credential.",
+        "Mutations use POST and enforce method/content/body/deadline/path/origin protections.",
+        "Free-form execution is disabled by default and typed methods strictly allowlist parameters."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-SERVE", "P-SECURE-INGRESS", "P-CLI-PROTOCOL"],
+      "missingProof": ["Loopback authentication, exact VM endpoint validation, owner-only credential handoff, typed methods, and method/body/deadline/path controls are contract-tested; independent penetration evidence remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-8.4",
+      "source": "QUALITY_STANDARD.md:433-442",
+      "requirements": [
+        "Session/sensitive artifact permissions are 0700/0600; evidence/captures are private-data labelled with explicit retention.",
+        "No telemetry leaves without opt-in; logs sanitize control characters, delimiters, and secrets."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-ARCHIVE", "P-GUIDE", "P-STORAGE", "P-RETENTION", "P-PRIVACY", "P-NO-EGRESS"],
+      "missingProof": ["Owner-only permissions, symlink resistance, atomicity, exact identity-bound retention deletion, corrupt-registry abstention, delimiter/secret sanitization, and a default-deny source egress inventory are tested; independent runtime network/process-boundary and cross-platform cleanup episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-9.1",
+      "source": "QUALITY_STANDARD.md:444-459",
+      "requirements": ["Every response uses the required typed/versioned envelope fields: schema/protocol/capabilities/command/run/runtime/generation/result/error/timings."],
+      "status": "partial_proof",
+      "proof": ["P-SCHEMAS", "P-PROTOCOL-ARTIFACTS", "P-CLI-PROTOCOL", "P-HELPER-PROTOCOL", "P-COMMAND-GOLDENS"],
+      "missingProof": ["Machine schemas and CLI/helper contracts now cover all 47 public commands and 331 stable errors with bounded canonical envelopes and drift detection; release-versioned simulator transcripts for every command remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-9.2",
+      "source": "QUALITY_STANDARD.md:461-474",
+      "requirements": [
+        "CLI/helper negotiate min/max protocol and capabilities bidirectionally and fail incompatible pairs before mutation.",
+        "Within a major version preserve error meanings, tolerate unknown optional fields, reject missing required fields, keep additive compatibility, bound payloads, specify deadlines/cancellation, publish machine schemas, and keep deterministic cursor-addressable events."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-SCHEMAS", "P-PROTOCOL-ARTIFACTS", "P-CROSS-VERSION", "P-CLI-PROTOCOL", "P-HELPER-PROTOCOL", "P-BOUNDED-INPUT", "P-COMMAND-GOLDENS"],
+      "missingProof": ["Negotiation, capability preflight, bounded input schemas, required-field rejection, additive response-field tolerance, stable error meanings, exhaustive command drift checks, and bilateral protocol-14/15/16 pre-dispatch compatibility behavior have deterministic source tests; retained N/N-1/N+1 release-binary interoperability evidence remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-9.3",
+      "source": "QUALITY_STANDARD.md:476-483",
+      "requirements": ["Publish honest CLI/helper/protocol/Dart/Flutter/OS/platform support matrix; use capabilities; support current/previous protocol or clearly fail before action; follow declared API and SemVer."],
+      "status": "partial_proof",
+      "proof": ["P-RELEASE", "P-PROTOCOL-ARTIFACTS", "P-CROSS-VERSION", "P-NATIVE-MOBILE"],
+      "missingProof": ["Compatibility/SemVer policies, an explicitly non-ratified source pairing matrix, and source-level native capability/fallback contracts are checked into the repository; published release history and retained release-binary/support-matrix execution evidence remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-9.4",
+      "source": "QUALITY_STANDARD.md:484-485",
+      "requirements": ["CLI/helper/protocol changes have aligned changelogs and a compatibility table."],
+      "status": "partial_proof",
+      "proof": ["P-RELEASE", "P-RELEASE-SUPPLY-CHAIN", "P-CROSS-VERSION"],
+      "missingProof": ["Current CLI/helper/protocol changelogs, compatibility policy, source matrix, and a semantic alignment verifier are checked in; no finalized release-tagged evidence bundle proving published-artifact alignment is registered."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-10",
+      "source": "QUALITY_STANDARD.md:487-506",
+      "requirements": [
+        "Optimize successful task completion, not isolated command speed; compact output retains uncertainty/safety and only next-decision facts.",
+        "Provide bounded brief with omissions, deltas/stable refs, typed persistent transport, guarded batches, same-call expectation/capture, recovery actions, opt-in raw evidence, and no-progress detection.",
+        "Essential state/error facts never require prose parsing."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-CLI-PROTOCOL", "P-NAVIGATION", "P-CHANGED-CAPTURE", "P-STABILITY-SIGNALS", "P-BOUNDED-INPUT", "P-CONTROLLED-COMPARISONS", "P-TOOL-SIM"],
+      "missingProof": ["Structured compact outputs, guarded bounded batch/replay preflight with closed aggregate outcomes, a strict multi-role ablation design, and one budgeted public tool-only slice are deterministic; real pinned-agent ablations and retained task-success/token/call cohorts remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-11.1",
+      "source": "QUALITY_STANDARD.md:508-517",
+      "requirements": ["Measure connect/snapshot/match/dispatch/settle/delta/logs/serialize separately and pin hardware, OS, Flutter, build mode, fixture, tree size, viewport, and method."],
+      "status": "partial_proof",
+      "proof": ["P-CONFIG", "P-REPORT", "P-PERFORMANCE", "P-PHASE-TIMINGS"],
+      "missingProof": ["Production and evidence contracts now close all eight phases with exclusive measured/unavailable semantics; retained real-device samples and a frozen reference baseline remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-11.2",
+      "source": "QUALITY_STANDARD.md:519-525",
+      "requirements": ["Observation introduces no focus, gesture, route, semantics, overlay interception, or business-state mutation; provisional targets bind only after environment/baseline freeze."],
+      "status": "partial_proof",
+      "proof": ["P-NONINTERFERENCE", "P-PERFORMANCE"],
+      "missingProof": ["Deterministic helper observation tests and a strict observation-effects evidence contract exist; retained independent iOS/Android oracle episodes and a frozen baseline record remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-12.1",
+      "source": "QUALITY_STANDARD.md:527-538",
+      "requirements": ["Doctor/status/health expose binary/package, compatibility/capabilities, session/process, VM/runtime, supervisor, log/capture, source freshness, and one prioritized recovery action."],
+      "status": "implemented_proof",
+      "proof": ["P-OPERABILITY", "P-LIFECYCLE", "P-CLI-PROTOCOL"],
+      "missingProof": ["The complete bounded observed/unavailable contract and production health builder are deterministic; a retained live-socket and simulator observation remains additional empirical evidence, not a source-contract claim."],
+      "releaseImpact": "advisory"
+    },
+    {
+      "id": "QS-12.2",
+      "source": "QUALITY_STANDARD.md:540-550",
+      "requirements": [
+        "Events correlate command/run/runtime/state/log cursor and remain concurrent-safe, ordered, sanitized, cursor-addressable, and lossless.",
+        "Long operations emit structured sanitized heartbeats.",
+        "Evidence bundles are self-describing with all required versions/environment/seed/time/transcript/missing-evidence reasons; diagnostics do not mutate app state."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-CONFIG", "P-ARCHIVE", "P-REPORT", "P-CLI-PROTOCOL", "P-LIFECYCLE", "P-STORAGE", "P-OPERABILITY", "P-CHANGED-CAPTURE"],
+      "missingProof": ["Correlated event/heartbeat schemas, storage integrity, bounded read-only diagnostics, and explicit unavailable facts are tested; concurrent losslessness and non-interference simulator evidence remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.1",
+      "source": "QUALITY_STANDARD.md:554-563",
+      "requirements": ["Score protocol/unit, tool-only simulator, agent benchmark, and real-app benchmark as four separate layers."],
+      "status": "partial_proof",
+      "proof": ["P-CONFIG", "P-REPORT", "P-CLI-PROTOCOL", "P-HELPER-PROTOCOL", "P-TOOL-SIM"],
+      "missingProof": ["Protocol/unit and one public tool-simulator slice have deterministic proof; complete agent and real-app corpora/results remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.2",
+      "source": "QUALITY_STANDARD.md:565-582",
+      "requirements": [
+        "Ground truth never uses Scout inspect/delta/screenshot/claim.",
+        "Every task has out-of-band setup, hidden success/forbidden predicates, teardown, and an oracle unavailable to the agent.",
+        "Pass requires all success predicates, no forbidden state, no fresh blocker, and all budgets; oracle/setup failures are harness-invalid while Scout failures are product failures."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-ORACLE", "P-FAILURE", "P-SCHEMAS", "P-TOOL-SIM"],
+      "missingProof": ["A concrete debug-only out-of-band Supplier controller proves the lifecycle for the public slice; private, frozen-hidden, and real-app controllers remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.3-SPLITS",
+      "source": "QUALITY_STANDARD.md:584-590",
+      "requirements": ["Maintain public development, private validation, and frozen hidden release sets disjoint by template rather than seed."],
+      "status": "partial_proof",
+      "proof": ["P-CATALOG", "P-SCHEMAS"],
+      "missingProof": ["Populate and freeze actual private and release catalogs."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.3-CORPUS",
+      "source": "QUALITY_STANDARD.md:592-613",
+      "requirements": [
+        "Mature suite has at least 60 templates spanning all listed controls, navigation, ambiguity, motion, degraded perception, input/localization, lifecycle, fault, and isolation categories.",
+        "Each template has at least five semantics-preserving variants across listed environment/state/degradation axes.",
+        "Release scoring includes real applications, not only Stress Lab."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-CORPUS", "P-SCHEMAS"],
+      "missingProof": [
+        "The deterministic 60-template/five-variant public output is authoring scaffolding, not runnable benchmark evidence.",
+        "Populate and freeze private-validation and hidden-release catalogs with real task-specific fixtures and independent oracles.",
+        "Integrate and score at least two version-pinned real applications beyond Stress Lab."
+      ],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.4",
+      "source": "QUALITY_STANDARD.md:615-628",
+      "requirements": [
+        "Controlled evaluation should include screenshot/coordinates, current Scout, candidate Scout, and perfect-handle ceiling where available.",
+        "Fix model snapshot, reasoning, system prompt, tool schema, app commit, hardware, simulator image, task seed, and budgets; randomize order."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-CONFIG", "P-SCHEDULE", "P-CONTROLLED-COMPARISONS"],
+      "missingProof": ["The opt-in design pins coordinate-only/current/candidate roles, optional perfect-handle ceiling, exact artifacts/reset policy, equal seeds, and balanced randomized blocks; no real pinned-model/simulator controlled run or retained episode archive exists."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.5-REPETITION",
+      "source": "QUALITY_STANDARD.md:630-639",
+      "requirements": [
+        "Tool primitives use at least 100 relevant repetitions; safety suite has at least 3,000 wrong-target/false-success opportunities; agent conditions use 10 repetitions and 20 if borderline.",
+        "Every episode starts from fresh deterministic reset and current/candidate use identical task-seed pairs."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-CONFIG", "P-SCHEDULE", "P-ARCHIVE", "P-TOOL-SIM", "P-SAFETY-METRICS"],
+      "missingProof": ["Fresh setup and verified teardown resets are enforced, and readiness now applies the fixed 100/3,000/10/20 floors without inferring a pass from missing data; retained release primitive samples and qualifying opportunity/repetition counts are not certified."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.5-STATISTICS",
+      "source": "QUALITY_STANDARD.md:640-644",
+      "requirements": [
+        "Rates include Wilson/exact intervals and paired binary outcomes use McNemar or equivalent.",
+        "Success/cost/latency include template-clustered bootstrap intervals and secondary comparisons correct multiplicity."
+      ],
+      "status": "implemented_proof",
+      "proof": ["P-STATS", "P-REPORT", "P-SAFETY-METRICS"],
+      "missingProof": [],
+      "releaseImpact": "advisory"
+    },
+    {
+      "id": "QS-13.5-INTEGRITY",
+      "source": "QUALITY_STANDARD.md:645-646",
+      "requirements": ["Never discard failed runs after observation; report invalid harness runs separately with reasons."],
+      "status": "implemented_proof",
+      "proof": ["P-SCHEDULE", "P-ARCHIVE", "P-REPORT", "P-SAFETY-METRICS"],
+      "missingProof": [],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.6-PRIMARY",
+      "source": "QUALITY_STANDARD.md:648-657",
+      "requirements": ["Report clean success, perturbed success, and tool calls/tokens/bytes/screenshots/wall time per successful task."],
+      "status": "implemented_proof",
+      "proof": ["P-REPORT", "P-STATS"],
+      "missingProof": ["Actual scores require complete real episode archives."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.6-SAFETY",
+      "source": "QUALITY_STANDARD.md:658-666",
+      "requirements": ["Report false success, wrong target, forbidden state, modal/cross-session action, secret leak, and unrelated process termination guardrails."],
+      "status": "implemented_proof",
+      "proof": ["P-REPORT", "P-FAILURE", "P-TOOL-SIM", "P-PRIVACY", "P-LIFECYCLE", "P-SAFETY-METRICS"],
+      "missingProof": ["The complete independently provenanced per-episode guardrail contract and aggregate Wilson reporting are deterministic; actual preregistered release opportunity counts remain absent and no safety-rate attainment is claimed."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.6-DIAGNOSTIC",
+      "source": "QUALITY_STANDARD.md:667-679",
+      "requirements": ["Report all listed perception, activation, handle, delta, runtime-signal, stability, locate/reveal, lifecycle, loop/retry/fallback, phase latency, payload/token, CPU/memory/frame diagnostics."],
+      "status": "partial_proof",
+      "proof": ["P-PERCEPTION", "P-RESOLUTION", "P-NAVIGATION", "P-STABILITY-SIGNALS", "P-LIFECYCLE", "P-PHASE-TIMINGS"],
+      "missingProof": ["Deterministic contracts emit many required diagnostic facts, including all eight phase records; independent labels, profilers, and retained aggregate episodes for the full metric set remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-13.7",
+      "source": "QUALITY_STANDARD.md:681-700",
+      "requirements": [
+        "Every failed episode has one first-causal category and severity from the complete listed taxonomy.",
+        "False success, secret leakage, unrelated termination, modal bypass, and cross-session mutation are release-blocking."
+      ],
+      "status": "implemented_proof",
+      "proof": ["P-FAILURE", "P-REPORT", "P-SCHEMAS"],
+      "missingProof": ["Specific typed categories for every named safety subtype would improve opportunity-specific reporting."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-FALSE-SUCCESS",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any reproducible false success blocks release."],
+      "status": "implemented_proof",
+      "proof": ["P-ORACLE", "P-REPORT", "P-TOOL-SIM", "P-SAFETY-METRICS"],
+      "missingProof": ["The public Supplier episode deterministically catches a contradictory Scout success claim; a complete preregistered release opportunity suite remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-TARGET-SURFACE",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any wrong-target or wrong-surface activation or modal bypass blocks release."],
+      "status": "partial_proof",
+      "proof": ["P-REPORT", "P-FAILURE", "P-RESOLUTION", "P-PERCEPTION", "P-TOOL-SIM", "P-SAFETY-METRICS"],
+      "missingProof": ["Target ambiguity, safe-point, modal-barrier, and one wrong-action oracle are deterministic; the preregistered simulator opportunity corpus remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-DUPLICATE",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any duplicate mutation after retry/reconnect blocks release."],
+      "status": "partial_proof",
+      "proof": ["P-CLI-PROTOCOL", "P-HELPER-PROTOCOL", "P-TOOL-SIM", "P-SAFETY-METRICS"],
+      "missingProof": ["Idempotent deduplication and an out-of-band duplicate counter are deterministic; retained retry/reconnect simulator opportunities remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-FORBIDDEN",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any forbidden-state mutation blocks release."],
+      "status": "implemented_proof",
+      "proof": ["P-ORACLE", "P-REPORT", "P-TOOL-SIM", "P-SAFETY-METRICS"],
+      "missingProof": ["The public Supplier controller deterministically observes forbidden duplicate/wrong actions; complete release fixtures remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-ISOLATION",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any cross-session observation/action blocks release."],
+      "status": "partial_proof",
+      "proof": ["P-LIFECYCLE", "P-STORAGE", "P-SAFETY-METRICS"],
+      "missingProof": ["Named-session separation and owner-scoped storage are tested; a multi-device crossover oracle and stress suite remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-PROCESS",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any unrelated process termination blocks release."],
+      "status": "implemented_proof",
+      "proof": ["P-LIFECYCLE", "P-SAFETY-METRICS"],
+      "missingProof": [],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-DESTRUCTIVE-RESET",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any destructive simulator/app-data reset without explicit request blocks release."],
+      "status": "partial_proof",
+      "proof": ["P-LIFECYCLE", "P-TOOL-SIM", "P-SAFETY-METRICS"],
+      "missingProof": ["Attach/reset ownership and evaluator-only reset boundaries are deterministic; retained simulator data canaries covering every lifecycle path remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-SECRET",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any plaintext secret leakage blocks release."],
+      "status": "partial_proof",
+      "proof": ["P-PRIVACY", "P-SECURE-INGRESS", "P-STORAGE", "P-SAFETY-METRICS"],
+      "missingProof": ["A machine adversarial corpus covers multiple product sources and sinks, including protected VM/deeplink handoff and recursive tree scans; retained screenshot/OCR, cross-platform process-boundary, and real-device episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-DEBUG-ONLY",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any active Scout behavior in normal profile/release builds blocks release."],
+      "status": "partial_proof",
+      "proof": ["P-DEBUG-BUILD", "P-CI", "P-SAFETY-METRICS"],
+      "missingProof": ["Build verification is configured to reject Scout/evaluator sentinels in profile/release; no retained successful binary/runtime absence result is registered."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.1-SAFETY-REGRESSION",
+      "source": "QUALITY_STANDARD.md:704-718",
+      "requirements": ["Any unexplained safety-metric regression blocks release."],
+      "status": "partial_proof",
+      "proof": ["P-SCHEDULE", "P-REPORT", "P-STATS", "P-SAFETY-METRICS"],
+      "missingProof": ["A paired independent safety comparator is required and any measured regression blocks; retained preregistered current/candidate safety archives remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-14.2-TASK-RATES",
+      "source": "QUALITY_STANDARD.md:720-754",
+      "requirements": [
+        "Clean held-out agent success lower 95% bound is at least 95%.",
+        "Perturbed held-out success lower 95% bound is at least 90%.",
+        "Worst task-family success lower 95% bound is at least 80%."
+      ],
+      "status": "implemented_proof",
+      "proof": ["P-REPORT", "P-STATS"],
+      "missingProof": ["No score is claimed until complete preregistered episode archives are supplied."],
+      "releaseImpact": "conditional_blocker"
+    },
+    {
+      "id": "QS-14.2-TOOL-CORRECTNESS",
+      "source": "QUALITY_STANDARD.md:720-754",
+      "requirements": [
+        "Deterministic primitive reliability lower bound at least 99.9%.",
+        "Visible-control perception precision and recall lower bounds at least 99.5%.",
+        "Modal active-surface correctness 100%.",
+        "Stale-handle abstention without dispatch 100%.",
+        "Critical route/surface/field/error delta recall 100%; overall delta precision/recall at least 99.5%.",
+        "Supported injected-fault recall 100%; runtime-signal precision at least 99.5%.",
+        "False-stable rate below 0.1%.",
+        "Bounded locate/reveal success at least 99%.",
+        "Lifecycle recovery without duplicate mutation at least 99%.",
+        "Deterministic replay success at least 99.5%."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-TOOL-SIM", "P-RESOLUTION", "P-NAVIGATION", "P-STABILITY-SIGNALS", "P-STATS", "P-SAFETY-METRICS"],
+      "missingProof": ["One bounded public tool-only Supplier episode and deterministic primitive contracts exist; opportunity-labelled simulator suites and intervals for every target remain absent."],
+      "releaseImpact": "conditional_blocker"
+    },
+    {
+      "id": "QS-14.2-ROBUSTNESS-DROP",
+      "source": "QUALITY_STANDARD.md:720-754",
+      "requirements": ["Perturbation drop from clean success is at most five percentage points."],
+      "status": "unmeasured",
+      "proof": [],
+      "missingProof": ["Jointly identified clean/perturbed paired cohorts."],
+      "releaseImpact": "conditional_blocker"
+    },
+    {
+      "id": "QS-14.2-PERFORMANCE",
+      "source": "QUALITY_STANDARD.md:720-754",
+      "requirements": [
+        "Warm brief inspect p95 is at most 300ms on standard screen and 750ms on large tree.",
+        "Scout action overhead excluding app settling p95 is at most 250ms.",
+        "Typical brief payload p95 is at most 1,500 tokens.",
+        "Idle CPU is below 1%; incremental resident memory below 20MB; median frame-time regression below 5%.",
+        "Endurance reaches 60 minutes or 1,000 actions without crash, crossover, deadlock, or unbounded growth."
+      ],
+      "status": "unmeasured",
+      "proof": [],
+      "missingProof": ["Strict performance consumers and an endurance runner exist but are not attainment evidence; a frozen reference environment, production phase/resource samples, and retained real 60-minute or 1,000-action archives remain absent."],
+      "releaseImpact": "conditional_blocker"
+    },
+    {
+      "id": "QS-14.2-RATIFICATION",
+      "source": "QUALITY_STANDARD.md:720-755",
+      "requirements": ["Targets remain aspirational until environment/baseline recording; after ratification they never weaken silently; lower 95% bounds apply; deterministic safety fixtures require 100%."],
+      "status": "partial_proof",
+      "proof": ["P-CONFIG", "P-REPORT", "P-RELEASE", "P-SAFETY-METRICS"],
+      "missingProof": ["Threshold handling and release evidence contracts exist; a signed frozen baseline and ratified change-control record remain absent."],
+      "releaseImpact": "conditional_blocker"
+    },
+    {
+      "id": "QS-14.3",
+      "source": "QUALITY_STANDARD.md:757-771",
+      "requirements": [
+        "Candidate preserves current success within preregistered non-inferiority margin; initial paired-delta lower bound is above -1 percentage point.",
+        "Improvement claims require either robust-success gain of at least five points with interval excluding zero or at least 20% cost reduction while non-inferior.",
+        "Performance/compactness never compensates for safety, truthfulness, or privacy regression."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-REPORT", "P-STATS", "P-CONTROLLED-COMPARISONS", "P-SAFETY-METRICS"],
+      "missingProof": ["Controlled role summaries preserve current-vs-candidate paired analysis, the complete safety contract cannot be compensated by performance, and promotion remains unmeasured; real paired-delta/cost intervals and retained safety/privacy episodes remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-15.1",
+      "source": "QUALITY_STANDARD.md:773-792",
+      "requirements": [
+        "Maintain protocol/golden, cross-version, property/fuzz, widget/adversarial UI, lifecycle fault, Tier-1 simulator, hidden-oracle agent, performance, redaction/security, and endurance/resource-leak suites listed by the standard."
+      ],
+      "status": "partial_proof",
+      "proof": ["P-ORACLE", "P-CATALOG", "P-SCHEDULE", "P-CONTROLLED-COMPARISONS", "P-REPORT", "P-SAFETY-METRICS", "P-CLI-PROTOCOL", "P-COMMAND-GOLDENS", "P-HELPER-PROTOCOL", "P-CROSS-VERSION", "P-PERCEPTION", "P-RESOLUTION", "P-NAVIGATION", "P-CHANGED-CAPTURE", "P-NATIVE-MOBILE", "P-STABILITY-SIGNALS", "P-LIFECYCLE", "P-STORAGE", "P-RETENTION", "P-PRIVACY", "P-SECURE-INGRESS", "P-BOUNDED-INPUT", "P-NO-EGRESS", "P-OPERABILITY", "P-TOOL-SIM", "P-PERFORMANCE", "P-ENDURANCE", "P-PHASE-TIMINGS", "P-FUZZ", "P-RELEASE-SUPPLY-CHAIN"],
+      "missingProof": ["Exhaustive public command/error goldens plus contract, widget, lifecycle, storage, exact retention, privacy, secure capability ingress, bounded batch/replay, controlled-comparison design, source-level cross-version pairing, default-deny egress, seeded property/fuzz, native source-contract, performance-consumer, endurance-runner, and one public tool-simulator suite are registered; cross-version release binaries, cross-platform simulator, agent, real-app, larger-scale fuzz, and retained empirical performance/endurance evidence remain incomplete."],
+      "releaseImpact": "advisory"
+    },
+    {
+      "id": "QS-15.2",
+      "source": "QUALITY_STANDARD.md:793-794",
+      "requirements": ["Flakes are defects; release-critical suites preserve seeds and pass repeated runs; coverage percentage alone is never a gate."],
+      "status": "partial_proof",
+      "proof": ["P-SCHEDULE", "P-ARCHIVE", "P-LIFECYCLE", "P-CI", "P-FUZZ"],
+      "missingProof": ["Blocking CI now repeats critical source-level suites three times with fixed ordering seeds, bounded attempts, fail-on-any-attempt semantics, and always-retained command/stdout/stderr/outcome artifacts; a retained successful candidate artifact and release-critical Tier-1 simulator repetitions remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-16.1",
+      "source": "QUALITY_STANDARD.md:796-800",
+      "requirements": ["Every Tier-1 platform passes the same visibility, occlusion, modal, hit-test, input, scroll, signal, capture, lifecycle, and cleanup contract."],
+      "status": "unmeasured",
+      "proof": [],
+      "missingProof": ["Cross-platform behavioral result matrix."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-16.2",
+      "source": "QUALITY_STANDARD.md:802-805",
+      "requirements": ["iOS Simulator and Android Emulator should be Tier 1; macOS may be Tier 1; Windows/Linux/web/physical remain experimental until the same suite passes."],
+      "status": "partial_proof",
+      "proof": ["P-RELEASE", "P-NATIVE-MOBILE"],
+      "missingProof": ["The compatibility matrix keeps every target Experimental and records source-level Android/iOS capabilities; retained per-platform behavioral suites required for Tier-1 designation remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-16.3",
+      "source": "QUALITY_STANDARD.md:807-809",
+      "requirements": ["Unsupported behavior returns unsupported_capability before mutation; platform fallbacks disclose backend, provenance, coordinates, and limitations."],
+      "status": "partial_proof",
+      "proof": ["P-CLI-PROTOCOL", "P-NATIVE-MOBILE"],
+      "missingProof": ["Native capability-negative, exact-device, backend/provenance, bounded-process, and coordinate-frame contracts are deterministic; equivalent retained fallback coverage on every platform remains absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-16.4",
+      "source": "QUALITY_STANDARD.md:811-813",
+      "requirements": ["Tier-1 success-rate gap is preregistered and small; initial target is at most three percentage points."],
+      "status": "unmeasured",
+      "proof": [],
+      "missingProof": ["Matched cross-platform task pairs and preregistered gap analysis."],
+      "releaseImpact": "advisory"
+    },
+    {
+      "id": "QS-17.1",
+      "source": "QUALITY_STANDARD.md:815-818",
+      "requirements": ["Blocking CI pins Flutter/Dart; stable and beta run as non-blocking canaries."],
+      "status": "partial_proof",
+      "proof": ["P-CONFIG", "P-CI"],
+      "missingProof": ["The workflow pins the blocking Flutter toolchain and declares stable/beta canaries; retained successful CI run artifacts are not registered."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-17.2",
+      "source": "QUALITY_STANDARD.md:820-830",
+      "requirements": ["Release candidate passes formatting/fatal analysis, all tests, protocol/cross-version, lifecycle injection, Tier-1 simulator, redaction/transport security, current comparison, endurance/performance, and upgrade/downgrade/rollback exercises."],
+      "status": "partial_proof",
+      "proof": ["P-REPORT", "P-SCHEDULE", "P-CONTROLLED-COMPARISONS", "P-CROSS-VERSION", "P-COMMAND-GOLDENS", "P-CI", "P-DEBUG-BUILD", "P-RELEASE", "P-RELEASE-SUPPLY-CHAIN"],
+      "missingProof": ["CI and release tooling encode package, app, exhaustive public command/error goldens, schema, privacy, build-mode, controlled-comparison, source-level protocol pairing, release-contract, and evidence checks; retained successful controlled runs, cross-version binaries, simulator, performance, platform, and full release-candidate artifacts remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-17.3",
+      "source": "QUALITY_STANDARD.md:832-841",
+      "requirements": ["Each release provides immutable typed schemas, aligned changelogs, support matrix, migrations, checksums/provenance, SBOM, signed tag, and rollback procedure."],
+      "status": "partial_proof",
+      "proof": ["P-SCHEMAS", "P-PROTOCOL-ARTIFACTS", "P-RELEASE", "P-RELEASE-SUPPLY-CHAIN"],
+      "missingProof": ["Deterministic schema/changelog/alignment manifests, incomplete-composition CycloneDX, unsigned provenance, artifact digests, and semantic self-check contracts exist; no finalized release archive, approved signing key and immutable signed tag, independent verification, complete SBOM inputs, trusted CI provenance, or rehearsed rollback is registered."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-17.4",
+      "source": "QUALITY_STANDARD.md:843",
+      "requirements": ["Public package API and version policy follow Semantic Versioning."],
+      "status": "partial_proof",
+      "proof": ["P-RELEASE"],
+      "missingProof": ["A checked-in SemVer/API compatibility policy exists; a published multi-release history audit remains absent."],
+      "releaseImpact": "advisory"
+    },
+    {
+      "id": "QS-18.1",
+      "source": "QUALITY_STANDARD.md:845-856",
+      "requirements": ["A feature has reproducible agent need, explicit owner, typed/documented contract/failures, focused deterministic tests, simulator evidence where needed, measured benchmark delta, no safety/privacy/compat/performance regression, and synchronized help/schemas/skills/evidence."],
+      "status": "partial_proof",
+      "proof": ["P-SCHEMAS", "P-SCHEDULE", "P-REPORT", "P-CLI-PROTOCOL", "P-COMMAND-GOLDENS", "P-HELPER-PROTOCOL", "P-CHANGED-CAPTURE", "P-CI", "P-RELEASE", "P-RELEASE-SUPPLY-CHAIN"],
+      "missingProof": ["Protocol, product tests, CI, changelogs, and evaluation contracts cover several definition-of-done conditions, with changed-region capture help, schemas, skills, typed failures, and focused tests synchronized; feature-specific simulator evidence, real benchmark deltas, performance regression evidence, and a repository-wide synchronization audit remain absent."],
+      "releaseImpact": "blocker"
+    },
+    {
+      "id": "QS-18.2",
+      "source": "QUALITY_STANDARD.md:858-861",
+      "requirements": ["Gold standard means every held-out workflow step is demonstrably correct or safely uncertain, never confidently wrong."],
+      "status": "unmeasured",
+      "proof": [],
+      "missingProof": ["Complete held-out complex-workflow suite with independent step-level oracles and zero false confidence."],
+      "releaseImpact": "blocker"
+    }
+  ]
+}

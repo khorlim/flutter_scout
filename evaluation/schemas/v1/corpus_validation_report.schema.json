@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/corpus_validation_report.schema.json",
+  "title": "Flutter Scout corpus validation report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "valid",
+    "releaseEligible",
+    "taskCount",
+    "templateCount",
+    "descriptorTemplateCount",
+    "appIdentityCount",
+    "realApplicationIdentityCount",
+    "splitTemplateCounts",
+    "familyTemplateCounts",
+    "issues"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "valid": { "type": "boolean" },
+    "releaseEligible": { "type": "boolean" },
+    "taskCount": { "type": "integer", "minimum": 0 },
+    "templateCount": { "type": "integer", "minimum": 0 },
+    "descriptorTemplateCount": { "type": "integer", "minimum": 0 },
+    "appIdentityCount": { "type": "integer", "minimum": 0 },
+    "realApplicationIdentityCount": { "type": "integer", "minimum": 0 },
+    "splitTemplateCounts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "familyTemplateCounts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "severity", "message"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "severity": { "enum": ["invalid", "release_blocker"] },
+          "message": { "type": "string", "minLength": 1 },
+          "templateId": { "$ref": "#/$defs/id" },
+          "taskId": { "$ref": "#/$defs/id" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    }
+  }
+}

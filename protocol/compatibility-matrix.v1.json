@@ -1,0 +1,162 @@
+{
+  "artifactKind": "flutter_scout_source_protocol_compatibility_matrix",
+  "formatVersion": 1,
+  "evidenceScope": {
+    "kind": "current_source_contract",
+    "releaseBinariesExercised": false,
+    "simulatorOrDeviceExercised": false,
+    "releaseRatified": false,
+    "qualification": "This matrix proves deterministic behavior of the current source gates and fixtures only. It is not evidence that separately built or published N, N-1, or N+1 artifacts interoperate."
+  },
+  "currentContract": {
+    "cliPackage": {
+      "name": "flutter_scout",
+      "version": "2.0.0-dev.1",
+      "releaseState": "unreleased_prerelease"
+    },
+    "helperPackage": {
+      "name": "flutter_scout_helper",
+      "version": "0.2.0-dev.1",
+      "releaseState": "unreleased_prerelease"
+    },
+    "schemaVersion": 1,
+    "protocolVersion": 15,
+    "cliSupportedProtocolRange": {
+      "minimum": 15,
+      "maximum": 15
+    },
+    "helperSupportedProtocolRange": {
+      "minimum": 15,
+      "maximum": 15
+    },
+    "requiredHelperMutationCapabilities": [
+      "heldDragExclusion",
+      "idempotencyTombstonesV1",
+      "idempotentMutations",
+      "phaseTimingsV1",
+      "runtimeErrorCursor",
+      "serializedMutations",
+      "sourceRedaction",
+      "stableIdempotencyFingerprintV1",
+      "stateDigestSha256",
+      "stateGeneration",
+      "strictMutationEnvelope",
+      "typedEnvelopeV1"
+    ],
+    "helperAdvertisedCapabilities": [
+      "activeRuntimeSignalsV1",
+      "boundedHelperPayloadsV1",
+      "boundedHelperRequestsV1",
+      "boundedNavigation",
+      "changedRegionCaptureV1",
+      "heldDragExclusion",
+      "idempotencyTombstonesV1",
+      "idempotentMutations",
+      "observationNonInterferenceV1",
+      "overlayExplicitOptInV1",
+      "phaseTimingsV1",
+      "runtimeErrorCursor",
+      "runtimeSignalProvenanceV1",
+      "semanticStabilityV1",
+      "serializedMutations",
+      "snapshotRelativeDeltas",
+      "sourceRedaction",
+      "stableIdempotencyFingerprintV1",
+      "stateDigestSha256",
+      "stateGeneration",
+      "strictMutationEnvelope",
+      "strictTypedParametersV1",
+      "typedEnvelopeV1"
+    ],
+    "requiredMutationEnvelopeParameters": [
+      "clientProtocolMax",
+      "clientProtocolMin",
+      "commandId",
+      "deadlineEpochMs",
+      "expectedStateGeneration",
+      "idempotencyKey",
+      "runId",
+      "runtimeInstanceId",
+      "schemaVersion"
+    ]
+  },
+  "pairings": [
+    {
+      "id": "cli_n_helper_n",
+      "cliProtocolRange": {"minimum": 15, "maximum": 15},
+      "helperProtocolRange": {"minimum": 15, "maximum": 15},
+      "expectedCompatibility": "compatible",
+      "expectedMutationDispatch": "permitted_after_all_preconditions",
+      "expectedErrorCode": null,
+      "sourceProofs": [
+        "packages/flutter_scout/test/cross_version_compatibility_test.dart:current protocol 15 dispatches after compatible preflight",
+        "packages/flutter_scout_helper/test/cross_version_compatibility_test.dart:current protocol 15 enters the mutation handler once"
+      ]
+    },
+    {
+      "id": "cli_n_helper_n_minus_1",
+      "cliProtocolRange": {"minimum": 15, "maximum": 15},
+      "helperProtocolRange": {"minimum": 14, "maximum": 14},
+      "expectedCompatibility": "incompatible",
+      "expectedMutationDispatch": "not_dispatched",
+      "expectedErrorCode": "incompatible_helper_protocol",
+      "sourceProofs": [
+        "packages/flutter_scout/test/cross_version_compatibility_test.dart:protocol 14-only helper is rejected before mutation dispatch"
+      ]
+    },
+    {
+      "id": "cli_n_minus_1_helper_n",
+      "cliProtocolRange": {"minimum": 14, "maximum": 14},
+      "helperProtocolRange": {"minimum": 15, "maximum": 15},
+      "expectedCompatibility": "incompatible",
+      "expectedMutationDispatch": "not_dispatched",
+      "expectedErrorCode": "incompatible_protocol",
+      "sourceProofs": [
+        "packages/flutter_scout_helper/test/cross_version_compatibility_test.dart:protocol 14-only client is rejected before mutation handler entry"
+      ]
+    },
+    {
+      "id": "cli_n_helper_n_plus_1",
+      "cliProtocolRange": {"minimum": 15, "maximum": 15},
+      "helperProtocolRange": {"minimum": 16, "maximum": 16},
+      "expectedCompatibility": "incompatible",
+      "expectedMutationDispatch": "not_dispatched",
+      "expectedErrorCode": "incompatible_helper_protocol",
+      "sourceProofs": [
+        "packages/flutter_scout/test/cross_version_compatibility_test.dart:protocol 16-only helper is rejected before mutation dispatch"
+      ]
+    },
+    {
+      "id": "cli_n_plus_1_helper_n",
+      "cliProtocolRange": {"minimum": 16, "maximum": 16},
+      "helperProtocolRange": {"minimum": 15, "maximum": 15},
+      "expectedCompatibility": "incompatible",
+      "expectedMutationDispatch": "not_dispatched",
+      "expectedErrorCode": "incompatible_protocol",
+      "sourceProofs": [
+        "packages/flutter_scout_helper/test/cross_version_compatibility_test.dart:protocol 16-only client is rejected before mutation handler entry"
+      ]
+    }
+  ],
+  "additiveEvolution": {
+    "unknownOptionalHelperResponseFields": "accepted_within_schema_1",
+    "unknownMutationRequestFields": "rejected_before_dispatch",
+    "missingRequiredHelperResponseFields": "rejected_before_dispatch",
+    "missingRequiredMutationRequestFields": "rejected_before_dispatch"
+  },
+  "stableErrorSemantics": {
+    "cliRejectsHelperSchema": "incompatible_helper_schema",
+    "cliRejectsHelperProtocolRange": "incompatible_helper_protocol",
+    "cliRejectsMalformedRequiredResponseField": "invalid_helper_envelope",
+    "cliRejectsMissingRequiredCapability": "missing_mutation_capability",
+    "helperRejectsClientSchema": "incompatible_schema",
+    "helperRejectsClientProtocolRange": "incompatible_protocol",
+    "helperRejectsMissingMutationEnvelope": "missing_mutation_envelope",
+    "helperRejectsUnknownRequestField": "unknown_parameter"
+  },
+  "remainingReleaseEvidenceBlockers": [
+    "Build and retain immutable CLI/helper artifacts representing the actual N, N-1, and N+1 release candidates.",
+    "Run the matrix against those separate artifacts rather than source-configured fakes.",
+    "Retain simulator or device evidence proving incompatible pairs abstain before application mutation and the compatible pair completes a guarded action."
+  ]
+}

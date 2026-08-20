@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:scout_test_app/main.dart';
 
@@ -91,6 +91,72 @@ void main() {
     expect(find.byKey(const ValueKey('lab_long_list')), findsOneWidget);
     expect(find.byKey(const ValueKey('lab_mega_form')), findsOneWidget);
   });
+
+  testWidgets(
+    'fault lab labels destructive fixtures and requires confirmation',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(const ScoutTestApp());
+
+      await tester.tap(find.byKey(const ValueKey('stress_lab')));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('lab_fault_injection')),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.byKey(const ValueKey('lab_fault_injection')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Fault injection'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('fault_framework_error')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('fault_permission_denied')),
+        findsOneWidget,
+      );
+
+      for (final key in <String>[
+        'fault_platform_error',
+        'fault_error_widget',
+        'fault_render_overflow',
+        'fault_image_failure',
+        'fault_high_severity_log',
+        'fault_request_failure',
+        'fault_hot_update_rejected',
+        'fault_disconnect_vm_service',
+      ]) {
+        await tester.scrollUntilVisible(
+          find.byKey(ValueKey(key)),
+          200,
+          scrollable: find.byType(Scrollable).first,
+        );
+        expect(find.byKey(ValueKey(key)), findsOneWidget, reason: key);
+      }
+
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('fault_terminate_process')),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(find.byKey(const ValueKey('fault_terminate_process')));
+      await tester.pumpAndSettle();
+      expect(find.text('Terminate fixture app?'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('fault_confirm_terminate')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('fault_cancel_terminate')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Terminate fixture app?'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('fault_lab_status'), skipOffstage: false),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('mega form opens and accepts input', (WidgetTester tester) async {
     await tester.pumpWidget(const ScoutTestApp());

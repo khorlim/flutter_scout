@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.dev/protocol/schemas/v1/mutation-request.schema.json",
+  "title": "Flutter Scout v15 mutation request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["method", "params"],
+  "properties": {
+    "method": {
+      "type": "string",
+      "enum": [
+        "ext.flutter_scout.annotations",
+        "ext.flutter_scout.back",
+        "ext.flutter_scout.dismiss",
+        "ext.flutter_scout.dragCancel",
+        "ext.flutter_scout.dragEnd",
+        "ext.flutter_scout.dragMove",
+        "ext.flutter_scout.dragStart",
+        "ext.flutter_scout.fill",
+        "ext.flutter_scout.input",
+        "ext.flutter_scout.longPress",
+        "ext.flutter_scout.record",
+        "ext.flutter_scout.reveal",
+        "ext.flutter_scout.scroll",
+        "ext.flutter_scout.scrollTo",
+        "ext.flutter_scout.swipe",
+        "ext.flutter_scout.tap",
+        "ext.flutter_scout.tapText"
+      ]
+    },
+    "params": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "clientProtocolMin",
+        "clientProtocolMax",
+        "commandId",
+        "idempotencyKey",
+        "runId",
+        "runtimeInstanceId",
+        "expectedStateGeneration",
+        "deadlineEpochMs"
+      ],
+      "properties": {
+        "schemaVersion": {"const": "1"},
+        "clientProtocolMin": {"const": "15"},
+        "clientProtocolMax": {"const": "15"},
+        "commandId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "idempotencyKey": {"type": "string", "minLength": 1, "maxLength": 256},
+        "runId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "runtimeInstanceId": {"type": "string", "minLength": 1, "maxLength": 256},
+        "expectedStateGeneration": {"type": "string", "pattern": "^[0-9]+$"},
+        "deadlineEpochMs": {"type": "string", "pattern": "^[0-9]+$"},
+        "errorCursor": {"type": "string", "pattern": "^[0-9]+$"}
+      },
+      "additionalProperties": {"type": "string"}
+    }
+  }
+}

@@ -1,0 +1,235 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/endurance_config.schema.json",
+  "title": "Flutter Scout endurance runner configuration",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "enduranceRunId",
+    "mode",
+    "testOnlyReason",
+    "condition",
+    "environment",
+    "sessionName",
+    "harness",
+    "collectors",
+    "plan",
+    "limits"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "enduranceRunId": { "$ref": "#/$defs/identifier" },
+    "mode": { "enum": ["test_only", "release_evidence"] },
+    "testOnlyReason": { "type": ["string", "null"], "minLength": 1 },
+    "condition": {
+      "$ref": "performance_config.schema.json#/$defs/condition"
+    },
+    "environment": {
+      "$ref": "performance_config.schema.json#/$defs/environment"
+    },
+    "sessionName": { "$ref": "#/$defs/identifier" },
+    "harness": { "$ref": "#/$defs/harness" },
+    "collectors": { "$ref": "#/$defs/collectors" },
+    "plan": { "$ref": "#/$defs/plan" },
+    "limits": { "$ref": "#/$defs/limits" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "test_only" } } },
+      "then": {
+        "properties": { "testOnlyReason": { "type": "string", "minLength": 1 } }
+      },
+      "else": {
+        "properties": {
+          "testOnlyReason": { "type": "null" },
+          "limits": {
+            "allOf": [
+              { "$ref": "#/$defs/limits" },
+              {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "minimumDurationMs": { "minimum": 3600000 }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "minimumActions": { "minimum": 1000 }
+                    }
+                  }
+                ]
+              },
+              {
+                "properties": {
+                  "maximumPositiveRssGrowthBytes": { "maximum": 20971520 }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "harness": {
+      "type": "object",
+      "required": [
+        "controllerId",
+        "controllerVersion",
+        "controllerBuildSha256",
+        "setupFixtureSha256",
+        "teardownFixtureSha256"
+      ],
+      "properties": {
+        "controllerId": { "$ref": "#/$defs/identifier" },
+        "controllerVersion": { "type": "string", "minLength": 1 },
+        "controllerBuildSha256": { "$ref": "#/$defs/sha256" },
+        "setupFixtureSha256": { "$ref": "#/$defs/sha256" },
+        "teardownFixtureSha256": { "$ref": "#/$defs/sha256" }
+      },
+      "additionalProperties": false
+    },
+    "collector": {
+      "type": "object",
+      "required": ["source", "method", "collectorVersion", "target"],
+      "properties": {
+        "source": { "type": "string", "minLength": 1 },
+        "method": { "type": "string", "minLength": 1 },
+        "collectorVersion": { "type": "string", "minLength": 1 },
+        "target": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "collectors": {
+      "type": "object",
+      "required": ["cpu", "memory", "frameTime"],
+      "properties": {
+        "cpu": { "$ref": "#/$defs/collector" },
+        "memory": { "$ref": "#/$defs/collector" },
+        "frameTime": { "$ref": "#/$defs/collector" }
+      },
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "required": [
+        "actionId",
+        "arguments",
+        "mutating",
+        "requiresProgress",
+        "timeoutMs"
+      ],
+      "properties": {
+        "actionId": { "$ref": "#/$defs/identifier" },
+        "arguments": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "type": "string", "minLength": 1, "maxLength": 4096 }
+        },
+        "mutating": { "type": "boolean" },
+        "requiresProgress": { "type": "boolean" },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600000
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "requiresProgress": { "const": true } } },
+          "then": { "properties": { "mutating": { "const": true } } }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "required": ["seed", "algorithm", "actions"],
+      "properties": {
+        "seed": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+        "algorithm": { "const": "fixed_cycle_v1" },
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/action" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "required": [
+        "minimumDurationMs",
+        "minimumActions",
+        "maximumDurationMs",
+        "maximumActions",
+        "maximumConsecutiveNoProgress",
+        "maximumPositiveRssGrowthBytes",
+        "maximumTailSlopeBytesPerAction",
+        "memoryWindowSamples",
+        "harnessHookTimeoutMs",
+        "maximumCommandOutputBytes",
+        "maximumArchiveBytes"
+      ],
+      "properties": {
+        "minimumDurationMs": { "type": "integer", "minimum": 0 },
+        "minimumActions": { "type": "integer", "minimum": 0 },
+        "maximumDurationMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000
+        },
+        "maximumActions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "maximumConsecutiveNoProgress": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "maximumPositiveRssGrowthBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maximumTailSlopeBytesPerAction": {
+          "type": "number",
+          "minimum": 0
+        },
+        "memoryWindowSamples": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 512
+        },
+        "harnessHookTimeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600000
+        },
+        "maximumCommandOutputBytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 4194304
+        },
+        "maximumArchiveBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 4294967296
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

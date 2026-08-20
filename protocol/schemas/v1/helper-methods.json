@@ -1,0 +1,2483 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": 15,
+  "maximumEncodedResponseBytes": 4194304,
+  "maximumPayloadDepth": 64,
+  "maximumPayloadNodes": 131072,
+  "requestLimits": {
+    "maximumParameterCount": 64,
+    "maximumParameterNameUtf8Bytes": 128,
+    "maximumTotalParameterUtf8Bytes": 1048576,
+    "defaultMaximumValueUtf8Bytes": 65536,
+    "bulkMaximumValueUtf8Bytes": 524288,
+    "bulkParameters": [
+      "records",
+      "value",
+      "values"
+    ],
+    "identifierMaximumUtf8Bytes": {
+      "commandId": 256,
+      "runId": 128,
+      "runtimeInstanceId": 128
+    },
+    "idempotencyKey": {
+      "minimumLength": 1,
+      "maximumLength": 128,
+      "allowedPattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    }
+  },
+  "commonEnvelopeParameters": [
+    "clientProtocolMax",
+    "clientProtocolMin",
+    "commandId",
+    "deadlineEpochMs",
+    "errorCursor",
+    "errorsSinceCursor",
+    "expectedStateGeneration",
+    "idempotencyKey",
+    "runId",
+    "runtimeInstanceId",
+    "schemaVersion"
+  ],
+  "compatibilityAliases": {
+    "errorsSinceCursor": {
+      "canonical": "errorCursor",
+      "migrationWindow": "helper protocol 15 only"
+    },
+    "ext.flutter_scout.tapText.target": {
+      "canonical": "text",
+      "migrationWindow": "helper protocol 15 only"
+    }
+  },
+  "methods": {
+    "ext.flutter_scout.annotations": {
+      "operation": "mixed",
+      "parameters": [
+        "action",
+        "id",
+        "ids",
+        "note",
+        "records",
+        "slot",
+        "status"
+      ],
+      "parameterDescriptors": {
+        "action": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "list",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "list",
+            "targets",
+            "enable",
+            "disable",
+            "clear",
+            "delete",
+            "restore",
+            "resolve",
+            "dismiss",
+            "reopen",
+            "check",
+            "mark-fixed",
+            "get-crop",
+            "signal-handoff"
+          ]
+        },
+        "id": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "ids": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "format": "comma-list"
+        },
+        "note": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        },
+        "records": {
+          "encoding": "string",
+          "semanticType": "array",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 524288,
+          "secrecy": "sensitive"
+        },
+        "slot": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "before",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "before",
+            "after"
+          ]
+        },
+        "status": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": [
+          [
+            "id",
+            "ids"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.back": {
+      "operation": "mutation",
+      "parameters": [
+        "waitMs"
+      ],
+      "parameterDescriptors": {
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.capture": {
+      "operation": "read",
+      "parameters": [
+        "annotate",
+        "annotateFilter",
+        "mode",
+        "native",
+        "padding",
+        "pixelRatio",
+        "rect",
+        "since"
+      ],
+      "parameterDescriptors": {
+        "annotate": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "annotateFilter": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "all",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "all",
+            "buttons",
+            "fields"
+          ]
+        },
+        "mode": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "screen",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "screen",
+            "crop",
+            "changed-region"
+          ]
+        },
+        "native": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "auto",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "auto",
+            "on",
+            "off"
+          ]
+        },
+        "padding": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": "0",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 256
+        },
+        "pixelRatio": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0.01,
+          "maximum": 16
+        },
+        "rect": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 7,
+          "maximumUtf8Bytes": 256,
+          "secrecy": "public",
+          "format": "logical-rect"
+        },
+        "since": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.dismiss": {
+      "operation": "mutation",
+      "parameters": [
+        "lateWaitMs",
+        "waitMs"
+      ],
+      "parameterDescriptors": {
+        "lateWaitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.dragCancel": {
+      "operation": "mutation",
+      "parameters": [
+        "waitMs"
+      ],
+      "parameterDescriptors": {
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.dragEnd": {
+      "operation": "mutation",
+      "parameters": [
+        "by",
+        "to",
+        "toX",
+        "toY",
+        "waitMs",
+        "x",
+        "y"
+      ],
+      "parameterDescriptors": {
+        "by": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "to": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "toX": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "toY": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "x": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "y": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [
+          [
+            "x",
+            "y"
+          ],
+          [
+            "toX",
+            "toY"
+          ]
+        ],
+        "mutuallyExclusive": [
+          [
+            "to",
+            "by"
+          ],
+          [
+            "to",
+            "toX"
+          ],
+          [
+            "to",
+            "x"
+          ],
+          [
+            "by",
+            "toX"
+          ],
+          [
+            "by",
+            "x"
+          ],
+          [
+            "toX",
+            "x"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.dragMove": {
+      "operation": "mutation",
+      "parameters": [
+        "by",
+        "to",
+        "toX",
+        "toY",
+        "x",
+        "y"
+      ],
+      "parameterDescriptors": {
+        "by": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "to": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "toX": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "toY": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "x": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "y": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [
+          [
+            "to",
+            "by",
+            "toX",
+            "x"
+          ]
+        ],
+        "exactlyOneOf": [],
+        "requiredTogether": [
+          [
+            "x",
+            "y"
+          ],
+          [
+            "toX",
+            "toY"
+          ]
+        ],
+        "mutuallyExclusive": [
+          [
+            "to",
+            "by"
+          ],
+          [
+            "to",
+            "toX"
+          ],
+          [
+            "to",
+            "x"
+          ],
+          [
+            "by",
+            "toX"
+          ],
+          [
+            "by",
+            "x"
+          ],
+          [
+            "toX",
+            "x"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.dragStart": {
+      "operation": "mutation",
+      "parameters": [
+        "point",
+        "target",
+        "x",
+        "y"
+      ],
+      "parameterDescriptors": {
+        "point": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "x": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "y": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [
+          [
+            "x",
+            "y"
+          ]
+        ],
+        "mutuallyExclusive": [
+          [
+            "target",
+            "point"
+          ],
+          [
+            "target",
+            "x"
+          ],
+          [
+            "point",
+            "x"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.dragStatus": {
+      "operation": "read",
+      "parameters": [],
+      "parameterDescriptors": {},
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.fill": {
+      "operation": "mutation",
+      "parameters": [
+        "capture",
+        "expectField",
+        "expectGone",
+        "expectScreen",
+        "expectSelected",
+        "expectTarget",
+        "expectText",
+        "expectTimeoutMs",
+        "expectView",
+        "pollMs",
+        "values",
+        "waitMs"
+      ],
+      "parameterDescriptors": {
+        "expectText": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectGone": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectTarget": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectSelected": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectScreen": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectView": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectField": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        },
+        "expectTimeoutMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "5000",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "pollMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "150",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 16,
+          "maximum": 2000
+        },
+        "capture": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "values": {
+          "encoding": "string",
+          "semanticType": "object",
+          "required": true,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 524288,
+          "secrecy": "secret",
+          "additionalPropertyType": "string"
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.input": {
+      "operation": "mutation",
+      "parameters": [
+        "capture",
+        "expectField",
+        "expectGone",
+        "expectScreen",
+        "expectSelected",
+        "expectTarget",
+        "expectText",
+        "expectTimeoutMs",
+        "expectView",
+        "pollMs",
+        "target",
+        "value",
+        "waitMs"
+      ],
+      "parameterDescriptors": {
+        "expectText": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectGone": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectTarget": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectSelected": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectScreen": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectView": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectField": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        },
+        "expectTimeoutMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "5000",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "pollMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "150",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 16,
+          "maximum": 2000
+        },
+        "capture": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "focused",
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "value": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": true,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 524288,
+          "secrecy": "secret"
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.inspect": {
+      "operation": "read",
+      "parameters": [
+        "brief",
+        "contains",
+        "maxCandidates",
+        "maxItems",
+        "maxResponseBytes",
+        "navigationAction",
+        "sections",
+        "since",
+        "surfaceOnly",
+        "target",
+        "text",
+        "within"
+      ],
+      "parameterDescriptors": {
+        "brief": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "contains": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "maxCandidates": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "20",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "maxItems": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "20",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "maxResponseBytes": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "65536",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 4096,
+          "maximum": 1048576
+        },
+        "navigationAction": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "where",
+            "locate"
+          ]
+        },
+        "sections": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "since": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "surfaceOnly": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "text": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "within": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": [
+          [
+            "since",
+            "brief"
+          ],
+          [
+            "since",
+            "surfaceOnly"
+          ],
+          [
+            "since",
+            "sections"
+          ],
+          [
+            "since",
+            "maxItems"
+          ],
+          [
+            "text",
+            "target"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.longPress": {
+      "operation": "mutation",
+      "parameters": [
+        "durationMs",
+        "target",
+        "waitMs",
+        "x",
+        "y"
+      ],
+      "parameterDescriptors": {
+        "durationMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "600",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 600000
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "x": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "y": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [
+          [
+            "target",
+            "x"
+          ]
+        ],
+        "exactlyOneOf": [],
+        "requiredTogether": [
+          [
+            "x",
+            "y"
+          ]
+        ],
+        "mutuallyExclusive": [
+          [
+            "target",
+            "x"
+          ],
+          [
+            "target",
+            "y"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.record": {
+      "operation": "mixed",
+      "parameters": [
+        "action",
+        "discard",
+        "feature",
+        "name",
+        "title"
+      ],
+      "parameterDescriptors": {
+        "action": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "status",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "start",
+            "stop",
+            "pause",
+            "resume",
+            "undo",
+            "status",
+            "steps"
+          ]
+        },
+        "discard": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "feature": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        },
+        "name": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        },
+        "title": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.reveal": {
+      "operation": "mutation",
+      "parameters": [
+        "contains",
+        "direction",
+        "distance",
+        "maxActions",
+        "maxDistance",
+        "maxResponseBytes",
+        "target",
+        "text",
+        "timeoutMs",
+        "within"
+      ],
+      "parameterDescriptors": {
+        "contains": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "direction": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "down",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        "distance": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "maxActions": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "8",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "maxDistance": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "maxResponseBytes": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "65536",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 4096,
+          "maximum": 1048576
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "text": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "timeoutMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "8000",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 100,
+          "maximum": 12000
+        },
+        "within": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [
+          [
+            "text",
+            "target"
+          ]
+        ],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.scroll": {
+      "operation": "mutation",
+      "parameters": [
+        "direction",
+        "distance",
+        "point",
+        "target",
+        "to",
+        "toX",
+        "toY",
+        "waitMs",
+        "x",
+        "y"
+      ],
+      "parameterDescriptors": {
+        "direction": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "down",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        "distance": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": "280",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "point": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "to": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "toX": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "toY": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "x": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "y": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [
+          [
+            "x",
+            "y"
+          ],
+          [
+            "toX",
+            "toY"
+          ]
+        ],
+        "mutuallyExclusive": [
+          [
+            "target",
+            "point"
+          ],
+          [
+            "target",
+            "x"
+          ],
+          [
+            "point",
+            "x"
+          ],
+          [
+            "to",
+            "toX"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.scrollTo": {
+      "operation": "mutation",
+      "parameters": [
+        "direction",
+        "distance",
+        "maxScrolls",
+        "target",
+        "waitMs"
+      ],
+      "parameterDescriptors": {
+        "direction": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "down",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        "distance": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "maxScrolls": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "20",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": true,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.swipe": {
+      "operation": "mutation",
+      "parameters": [
+        "direction",
+        "distance",
+        "point",
+        "target",
+        "to",
+        "toX",
+        "toY",
+        "waitMs",
+        "x",
+        "y"
+      ],
+      "parameterDescriptors": {
+        "direction": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "left",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "up",
+            "down",
+            "left",
+            "right"
+          ]
+        },
+        "distance": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": "320",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "point": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "to": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 3,
+          "maximumUtf8Bytes": 128,
+          "secrecy": "public",
+          "format": "finite-pair"
+        },
+        "toX": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "toY": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "x": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "y": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [
+          [
+            "x",
+            "y"
+          ],
+          [
+            "toX",
+            "toY"
+          ]
+        ],
+        "mutuallyExclusive": [
+          [
+            "target",
+            "point"
+          ],
+          [
+            "target",
+            "x"
+          ],
+          [
+            "point",
+            "x"
+          ],
+          [
+            "to",
+            "toX"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.tap": {
+      "operation": "mutation",
+      "parameters": [
+        "capture",
+        "expectField",
+        "expectGone",
+        "expectScreen",
+        "expectSelected",
+        "expectTarget",
+        "expectText",
+        "expectTimeoutMs",
+        "expectView",
+        "lateWaitMs",
+        "pollMs",
+        "target",
+        "waitMs",
+        "x",
+        "y"
+      ],
+      "parameterDescriptors": {
+        "expectText": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectGone": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectTarget": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectSelected": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectScreen": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectView": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectField": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        },
+        "expectTimeoutMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "5000",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "pollMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "150",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 16,
+          "maximum": 2000
+        },
+        "capture": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "lateWaitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "x": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "y": {
+          "encoding": "string",
+          "semanticType": "number",
+          "required": false,
+          "default": null,
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": -100000,
+          "maximum": 100000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [
+          [
+            "target",
+            "x"
+          ]
+        ],
+        "exactlyOneOf": [],
+        "requiredTogether": [
+          [
+            "x",
+            "y"
+          ]
+        ],
+        "mutuallyExclusive": [
+          [
+            "target",
+            "x"
+          ],
+          [
+            "target",
+            "y"
+          ]
+        ]
+      }
+    },
+    "ext.flutter_scout.tapText": {
+      "operation": "mutation",
+      "parameters": [
+        "allowMismatch",
+        "capture",
+        "contains",
+        "expectField",
+        "expectGone",
+        "expectScreen",
+        "expectSelected",
+        "expectTarget",
+        "expectText",
+        "expectTimeoutMs",
+        "expectView",
+        "lateWaitMs",
+        "pollMs",
+        "target",
+        "text",
+        "waitMs"
+      ],
+      "parameterDescriptors": {
+        "expectText": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectGone": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectTarget": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectSelected": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectScreen": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectView": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "expectField": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        },
+        "expectTimeoutMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "5000",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "pollMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "150",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 16,
+          "maximum": 2000
+        },
+        "capture": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "allowMismatch": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "contains": {
+          "encoding": "string",
+          "semanticType": "boolean",
+          "required": false,
+          "default": "false",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "lateWaitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "text": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "waitMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1500",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [
+          [
+            "text",
+            "target"
+          ]
+        ],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.waitFor": {
+      "operation": "read",
+      "parameters": [
+        "field",
+        "gone",
+        "pollMs",
+        "screen",
+        "selected",
+        "target",
+        "text",
+        "timeoutMs",
+        "view"
+      ],
+      "parameterDescriptors": {
+        "field": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "sensitive"
+        },
+        "gone": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "pollMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "150",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 16,
+          "maximum": 2000
+        },
+        "screen": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "selected": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "target": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "text": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
+        "timeoutMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "5000",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        },
+        "view": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [
+          [
+            "text",
+            "gone",
+            "target",
+            "selected",
+            "screen",
+            "view",
+            "field"
+          ]
+        ],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
+    "ext.flutter_scout.waitStable": {
+      "operation": "read",
+      "parameters": [
+        "timeoutMs"
+      ],
+      "parameterDescriptors": {
+        "timeoutMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "3000",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 600000
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    }
+  },
+  "contractKind": "canonical_typed_helper_methods",
+  "commonParameterDescriptors": {
+    "schemaVersion": {
+      "encoding": "string",
+      "semanticType": "integer",
+      "required": false,
+      "default": null,
+      "minimumLength": 0,
+      "maximumUtf8Bytes": 65536,
+      "secrecy": "public",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "clientProtocolMin": {
+      "encoding": "string",
+      "semanticType": "integer",
+      "required": false,
+      "default": null,
+      "minimumLength": 0,
+      "maximumUtf8Bytes": 65536,
+      "secrecy": "public",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "clientProtocolMax": {
+      "encoding": "string",
+      "semanticType": "integer",
+      "required": false,
+      "default": null,
+      "minimumLength": 0,
+      "maximumUtf8Bytes": 65536,
+      "secrecy": "public",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "commandId": {
+      "encoding": "string",
+      "semanticType": "string",
+      "required": false,
+      "default": null,
+      "minimumLength": 1,
+      "maximumUtf8Bytes": 256,
+      "secrecy": "public"
+    },
+    "deadlineEpochMs": {
+      "encoding": "string",
+      "semanticType": "integer",
+      "required": false,
+      "default": null,
+      "minimumLength": 0,
+      "maximumUtf8Bytes": 65536,
+      "secrecy": "public",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "errorCursor": {
+      "encoding": "string",
+      "semanticType": "integer",
+      "required": false,
+      "default": null,
+      "minimumLength": 0,
+      "maximumUtf8Bytes": 65536,
+      "secrecy": "public",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "errorsSinceCursor": {
+      "encoding": "string",
+      "semanticType": "integer",
+      "required": false,
+      "default": null,
+      "minimumLength": 0,
+      "maximumUtf8Bytes": 65536,
+      "secrecy": "public",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "expectedStateGeneration": {
+      "encoding": "string",
+      "semanticType": "integer",
+      "required": false,
+      "default": null,
+      "minimumLength": 0,
+      "maximumUtf8Bytes": 65536,
+      "secrecy": "public",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "idempotencyKey": {
+      "encoding": "string",
+      "semanticType": "string",
+      "required": false,
+      "default": null,
+      "minimumLength": 1,
+      "maximumUtf8Bytes": 128,
+      "secrecy": "public"
+    },
+    "runId": {
+      "encoding": "string",
+      "semanticType": "string",
+      "required": false,
+      "default": null,
+      "minimumLength": 1,
+      "maximumUtf8Bytes": 128,
+      "secrecy": "public"
+    },
+    "runtimeInstanceId": {
+      "encoding": "string",
+      "semanticType": "string",
+      "required": false,
+      "default": null,
+      "minimumLength": 1,
+      "maximumUtf8Bytes": 128,
+      "secrecy": "public"
+    }
+  }
+}

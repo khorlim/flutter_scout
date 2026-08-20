@@ -1,0 +1,4 @@
+# CLI integration tests intentionally exercise process-global state such as
+# Directory.current, IOOverrides, and session registries. Test files must not
+# overlap those mutations in one Dart test runner process.
+concurrency: 1

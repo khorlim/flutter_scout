@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
@@ -11,6 +12,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:crypto/crypto.dart' as crypto;
 
 import 'icon_names.g.dart';
 
@@ -19,6 +21,12 @@ part 'annotation_overlay.dart';
 part 'models.dart';
 part 'runtime_annotations.dart';
 part 'runtime_actions.dart';
+part 'runtime_privacy.dart';
+part 'runtime_timings.dart';
+part 'runtime_typed_methods.dart';
+part 'runtime_protocol.dart';
+part 'runtime_resolution.dart';
+part 'runtime_navigation.dart';
 part 'runtime_snapshot.dart';
 part 'runtime_nodes.dart';
 part 'runtime_internals.dart';
@@ -30,12 +38,19 @@ part 'runtime_recorder.dart';
 /// silently keeps executing old code. Bump when the CLI starts depending on
 /// new helper behavior; keep in sync with the CLI's
 /// `_expectedHelperProtocolVersion`.
-const int scoutHelperProtocolVersion = 14;
+const int scoutHelperProtocolVersion = 15;
+const int scoutHelperMinSupportedProtocolVersion = 15;
+const int scoutHelperMaxSupportedProtocolVersion = 15;
+const int scoutHelperSchemaVersion = 1;
+const String scoutHelperPackageVersion = '0.2.0-dev.1';
 
 class FlutterScoutBinding {
   FlutterScoutBinding._();
 
   static void ensureInitialized() {
+    // The helper must be a true no-op outside debug, including not choosing or
+    // initializing the application's binding as a side effect.
+    if (!kDebugMode) return;
     WidgetsFlutterBinding.ensureInitialized();
     FlutterScoutHelper.ensureRegistered();
   }
@@ -62,12 +77,38 @@ class FlutterScoutHelper {
 }
 
 class FlutterScoutRuntime {
+  static const String _compiledRunId = String.fromEnvironment(
+    'FLUTTER_SCOUT_RUN_ID',
+  );
+
   final List<Map<String, Object?>> _errors = <Map<String, Object?>>[];
   final List<ScoutAnnotation> _annotations = <ScoutAnnotation>[];
   final ValueNotifier<int> _annotationRevision = ValueNotifier<int>(0);
   final DateTime _installedAt = DateTime.now();
   late final String _runtimeInstanceId =
       '${_installedAt.microsecondsSinceEpoch}-${identityHashCode(this)}';
+  late final int _sensitiveValueSalt = math.Random.secure().nextInt(0x7fffffff);
+  final Set<String> _knownSensitiveValues = <String>{};
+  final LinkedHashMap<String, _MutationRecord> _mutationRecords =
+      LinkedHashMap<String, _MutationRecord>();
+  Future<void> _mutationTail = Future<void>.value();
+  String? _boundRunId = _compiledRunId.isEmpty ? null : _compiledRunId;
+  String? _lastStateDigest;
+  int _stateGeneration = 0;
+  int _errorCursor = 0;
+  // Runtime-error events remain cursor-addressed and immutable. This map is a
+  // separate current-state view for blocking error surfaces that remain
+  // visible across requests, so they are not falsely reported as either new
+  // action-caused errors or a clean runtime.
+  final Map<String, int> _activeVisibleErrorSignalCursors = <String, int>{};
+  bool _observingStateForResponse = false;
+  // Test-only fault gate for proving that stability never invents a result
+  // when semantic observation is unavailable. Production keeps this true.
+  bool _stabilityObservationEnabled = true;
+  // Incremented only when Scout itself advances the Flutter pipeline. This is
+  // exposed to tests so observation commands can prove they never reach the
+  // mutation-settling machinery, including while engine frames are disabled.
+  int _manualMutationFrameAdvanceCount = 0;
   int _nextSyntheticPointer = 1000000;
   int _nextAnnotationId = 1;
   int _annotationHandoffSeq = 0;
@@ -145,6 +186,10 @@ class FlutterScoutRuntime {
   // host Overlay is disposed without removing its entries.
   OverlayState? _annotationOverlayHost;
   bool _annotationOverlayInstallScheduled = false;
+  // The overlay is intentionally absent after install. It becomes eligible
+  // only through an explicit annotation/recording UI opt-in and is removed as
+  // soon as neither mode is active. Observation must never install chrome.
+  bool _annotationOverlayOptedIn = false;
   FlutterExceptionHandler? _previousFlutterError;
   ui.ErrorCallback? _previousPlatformError;
 
@@ -154,9 +199,21 @@ class FlutterScoutRuntime {
   @visibleForTesting
   void Function(Element element)? debugSnapshotNodeProbe;
 
+  /// Test-only capture-backend fault injector. The production backend probe
+  /// calls this at its normal failure boundary so tests can prove that capture
+  /// loss remains local to pixel evidence while the widget snapshot survives.
+  @visibleForTesting
+  void Function()? debugCaptureBackendProbe;
+
+  /// Test-only runtime-liveness seam for the bounded stability observer.
+  /// Production observes root-element availability directly.
+  @visibleForTesting
+  bool Function()? debugRuntimeAvailabilityProbe;
+
   void install() {
     _installErrorHooks();
-    _registerExtension('ext.flutter_scout.inspect', _handleInspect);
+    _registerExtension('ext.flutter_scout.inspect', _handleNavigationInspect);
+    _registerExtension('ext.flutter_scout.reveal', _handleReveal);
     _registerExtension('ext.flutter_scout.annotations', _handleAnnotations);
     _registerExtension('ext.flutter_scout.capture', _handleCapture);
     _registerExtension('ext.flutter_scout.tap', _handleTap);
@@ -179,7 +236,6 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.record', _handleRecord);
     _installRecorderRoute();
     _broadcastVmUri();
-    _scheduleAnnotationOverlayInstall();
   }
 
   int get _activeAnnotationCount =>
@@ -256,12 +312,22 @@ class FlutterScoutRuntime {
     _recordLateMs = late;
   }
 
-  /// Test-only: (re)insert the overlay entry into the current tree's Overlay.
-  /// Real apps install once at startup into the app's persistent Overlay; tests
-  /// rebuild the tree per case, so the shared runtime's stale entry must be
-  /// re-homed before asserting on launcher/menu chrome.
+  /// Test-only explicit UI opt-in. Tests rebuild the tree per case, so this
+  /// also re-homes a stale entry before asserting on launcher/menu chrome.
   @visibleForTesting
-  void debugEnsureOverlayInstalled() => _scheduleAnnotationOverlayInstall();
+  void debugEnsureOverlayInstalled() {
+    _annotationOverlayOptedIn = true;
+    _scheduleAnnotationOverlayInstall(forceForTesting: true);
+  }
+
+  @visibleForTesting
+  bool get debugOverlayInstalled =>
+      _annotationOverlayEntry != null &&
+      (_annotationOverlayHost?.mounted ?? false);
+
+  @visibleForTesting
+  int get debugManualMutationFrameAdvanceCount =>
+      _manualMutationFrameAdvanceCount;
 
   @visibleForTesting
   List<ScoutAnnotationTarget> debugVisibleAnnotationTargets() =>
@@ -270,16 +336,265 @@ class FlutterScoutRuntime {
   @visibleForTesting
   ScoutSnapshot debugSnapshot() => _snapshot();
 
+  /// Test-only entry point for the same bounded semantic stability observer
+  /// used by actions and `wait stable`.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugObserveStability({
+    int timeoutMs = 500,
+    bool Function()? stopWhen,
+  }) async {
+    final observation = await _waitStable(
+      frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
+      timeout: Duration(milliseconds: timeoutMs),
+      stopWhen: stopWhen,
+    );
+    return <String, Object?>{
+      'stable': observation.stable,
+      'stability': observation.toJson(),
+      'timings': <String, Object?>{'settleMs': observation.elapsedMs},
+      'observationEffects': _observationEffects(
+        _FrameAdvancePolicy.observeOnly,
+      ),
+    };
+  }
+
+  @visibleForTesting
+  void debugSetStabilityObservationEnabled(bool enabled) {
+    _stabilityObservationEnabled = enabled;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugInspect({bool brief = true}) async {
+    final response = await _handleInspect('debugInspect', {'brief': '$brief'});
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugWhere() async {
+    final response = await _handleWhere('debugWhere', const {});
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugLocate(Map<String, String> params) async {
+    final response = await _handleLocate('debugLocate', params);
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugReveal(Map<String, String> params) async {
+    final response = await _handleReveal('debugReveal', params);
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugInspectSince(String snapshotId) async {
+    final response = await _handleInspectSince('debugInspectSince', {
+      'since': snapshotId,
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test/public-debug entry point for the exact helper request used by
+  /// `flutter-scout crop --changed-since`. The raster is returned only while
+  /// the retained baseline and capture-time snapshot identities remain bound.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugCaptureChangedSince(
+    String snapshotId, {
+    double padding = 12,
+  }) async {
+    final response = await _handleCapture('debugCaptureChangedSince', {
+      'mode': 'changed-region',
+      'since': snapshotId,
+      'padding': '$padding',
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugWaitStable({int timeoutMs = 250}) async {
+    final response = await _handleWaitStable('debugWaitStable', {
+      'timeoutMs': '$timeoutMs',
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugWaitFor(Map<String, String> params) async {
+    final response = await _handleWaitFor('debugWaitFor', params);
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugDragStatus() async {
+    final response = await _handleDragStatus('debugDragStatus', const {});
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugAnnotationsRead({
+    String action = 'list',
+  }) async {
+    assert(action == 'list' || action == 'targets' || action == 'get-crop');
+    final response = await _handleAnnotations('debugAnnotationsRead', {
+      'action': action,
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugRecordRead({
+    String action = 'status',
+  }) async {
+    assert(action == 'status' || action == 'steps');
+    final response = await _handleRecord('debugRecordRead', {'action': action});
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test-only transport-equivalent entry points for proving that mixed
+  /// read/write subcommands retain truthful request-local phase ownership.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugProtocolAnnotations(
+    Map<String, String> params,
+  ) async {
+    const method = 'ext.flutter_scout.annotations';
+    final response = await _dispatchProtocolRequest(
+      extensionName: method,
+      method: method,
+      params: params,
+      callback: _handleAnnotations,
+    );
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugProtocolRecord(
+    Map<String, String> params,
+  ) async {
+    const method = 'ext.flutter_scout.record';
+    final response = await _dispatchProtocolRequest(
+      extensionName: method,
+      method: method,
+      params: params,
+      callback: _handleRecord,
+    );
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  String get debugRuntimeInstanceId => _runtimeInstanceId;
+
+  @visibleForTesting
+  int get debugErrorCursor => _errorCursor;
+
+  /// Exercises the production protocol gate without registering a VM service
+  /// extension. Existing action-specific debug hooks intentionally bypass the
+  /// gate so their focused widget tests do not need transport boilerplate.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugProtocolMutation(
+    Map<String, String> params,
+    FutureOr<Map<String, Object?>> Function() mutation, {
+    String method = 'ext.flutter_scout.debugMutation',
+  }) async {
+    final response = await _dispatchProtocolRequest(
+      extensionName: method,
+      method: method,
+      params: params,
+      callback: (_, _) async => _ok(await Future.sync(mutation)),
+      mutationOverride: true,
+      validateTypedParameters: method != 'ext.flutter_scout.debugMutation',
+    );
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  Future<Map<String, Object?>> debugProtocolRead(
+    Map<String, String> params, {
+    String method = 'ext.flutter_scout.debugRead',
+  }) async {
+    final response = await _dispatchProtocolRequest(
+      extensionName: method,
+      method: method,
+      params: params,
+      callback: (_, _) async => _ok({'recentErrors': _recentErrors()}),
+      mutationOverride: false,
+      validateTypedParameters: method != 'ext.flutter_scout.debugRead',
+    );
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  @visibleForTesting
+  bool debugIsMutationRequest(
+    String extensionName,
+    Map<String, String> params,
+  ) => _isMutatingRequest(extensionName, params);
+
+  @visibleForTesting
+  Map<String, Object?> debugProtocolParameterContract() => <String, Object?>{
+    'maximumEncodedResponseBytes': _maxProtocolResponseBytes,
+    'maximumPayloadDepth': _maxProtocolPayloadDepth,
+    'maximumPayloadNodes': _maxProtocolPayloadNodes,
+    'requestLimits': <String, Object?>{
+      'maximumParameterCount': _maxProtocolRequestParameters,
+      'maximumParameterNameUtf8Bytes': _maxProtocolRequestParameterNameBytes,
+      'maximumTotalParameterUtf8Bytes': _maxProtocolRequestTotalBytes,
+      'defaultMaximumValueUtf8Bytes': _maxProtocolRequestValueBytes,
+      'bulkMaximumValueUtf8Bytes': _maxProtocolRequestBulkValueBytes,
+      'bulkParameters': _bulkProtocolParameters.toList()..sort(),
+      'identifierMaximumUtf8Bytes': const <String, int>{
+        'commandId': _maxProtocolCommandIdBytes,
+        'runId': _maxProtocolRunIdBytes,
+        'runtimeInstanceId': _maxProtocolRuntimeIdBytes,
+      },
+      'idempotencyKey': const <String, Object?>{
+        'minimumLength': 1,
+        'maximumLength': 128,
+        'allowedPattern': r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
+      },
+    },
+    'commonEnvelopeParameters': _commonProtocolParameters.toList()..sort(),
+    'commonParameterDescriptors': <String, Object?>{
+      for (final entry in _commonHelperParameterContracts.entries)
+        entry.key: entry.value.toJson(),
+    },
+    'methods': _helperTypedMethodCatalog(),
+  };
+
+  /// Test-only view of the helper side of the source compatibility contract.
+  /// It is intentionally not evidence about a compiled release artifact.
+  @visibleForTesting
+  Map<String, Object?> debugProtocolCompatibilityContract() =>
+      <String, Object?>{
+        'schemaVersion': scoutHelperSchemaVersion,
+        'protocolVersion': scoutHelperProtocolVersion,
+        'minSupportedProtocolVersion': scoutHelperMinSupportedProtocolVersion,
+        'maxSupportedProtocolVersion': scoutHelperMaxSupportedProtocolVersion,
+        'capabilities': <String, bool>{..._scoutProtocolCapabilities},
+        'requiredMutationEnvelopeParameters':
+            _requiredMutationEnvelopeParameters.toList()..sort(),
+      };
+
   /// Test-only: resolve the drag origin that `scroll-to` would use.
   @visibleForTesting
   Offset? debugScrollStartFor(String direction, {String? target}) {
     final snapshot = _snapshot();
+    final resolution = target == null
+        ? null
+        : _resolveTarget(snapshot, target, safety: _TargetSafety.identify);
     return _scrollStartFor(
       snapshot,
       direction,
-      target: target == null ? null : snapshot.findNode(target),
+      target: resolution?.isUnique == true ? resolution!.node : null,
     );
   }
+
+  /// Test-only view of the production resolver, including ranked abstention
+  /// evidence and the snapshot/run/runtime scope bound to returned handles.
+  @visibleForTesting
+  Map<String, Object?> debugResolveTarget(
+    String target, {
+    bool fieldOnly = false,
+  }) => _resolveTarget(_snapshot(), target, fieldOnly: fieldOnly).toJson();
 
   /// Test-only: dispatch a synthetic tap exactly as agent actions do,
   /// including the chrome-transparency window.
@@ -308,6 +623,54 @@ class FlutterScoutRuntime {
       'lateWaitMs': '0',
     });
     return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test-only: resolve visible text through the production uniqueness gate and
+  /// dispatch only when exactly one safe logical control owns the match.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugTapTextTarget(
+    String text, {
+    bool contains = false,
+  }) async {
+    final response = await _handleTapText('debugTapTextTarget', {
+      'text': text,
+      'contains': '$contains',
+      'waitMs': '0',
+      'lateWaitMs': '0',
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test-only: enter text through the same extension handler used by the CLI.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugInputTarget(
+    String target,
+    String value,
+  ) async {
+    final response = await _handleInput('debugInputTarget', {
+      'target': target,
+      'value': value,
+      'waitMs': '0',
+      'lateWaitMs': '0',
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test-only error injection for privacy and runtime-signal coverage.
+  @visibleForTesting
+  void debugRecordError(String message) {
+    _recordError(type: 'test_error', message: message);
+  }
+
+  /// Test-only active non-blocking signal injection. This protects the
+  /// distinction between factual active signals and active *blocking* signals.
+  @visibleForTesting
+  void debugRecordActiveWarning(String message) {
+    final warning = _recordError(type: 'test_warning', message: message);
+    final cursor = warning['cursor'];
+    if (cursor is int) {
+      _activeVisibleErrorSignalCursors['debug-warning:$cursor'] = cursor;
+    }
   }
 
   Future<Map<String, Object?>> debugActionCapturePayload() =>
@@ -340,6 +703,9 @@ class FlutterScoutRuntime {
           ? 'completed_same_state'
           : 'activated_no_observed_change',
       'stable': tracked.stable,
+      'stability': tracked.stability.toJson(),
+      'timings': <String, Object?>{'settleMs': tracked.stability.elapsedMs},
+      'delta': _delta(before, tracked.snapshot),
       'waitTimedOut': tracked.waitTimedOut,
       'transientViewSignatures': tracked.transientViewSignatures,
     };
@@ -370,6 +736,30 @@ class FlutterScoutRuntime {
   @visibleForTesting
   bool get debugHeldDragActive => _heldDrag != null;
 
+  /// Test-only protocol-gate fixture. Real pointer lifecycle behavior is
+  /// covered by [debugDragStart]/[debugDragMove]/[debugDragEnd]; this hook lets
+  /// exactly-once tests assert exclusion without leaving a pointer down while
+  /// the widget-test fake clock is paused.
+  @visibleForTesting
+  void debugSetHeldDragGate(bool active) {
+    _heldDragExpiry?.cancel();
+    _heldDragExpiry = null;
+    if (!active) {
+      _heldDrag = null;
+      return;
+    }
+    final snapshot = _snapshot();
+    _heldDrag = _HeldDragState(
+      pointer: -1,
+      viewId: _primaryViewId,
+      start: Offset.zero,
+      position: Offset.zero,
+      startedAt: DateTime.now(),
+      before: snapshot,
+      path: <Map<String, Object?>>[],
+    );
+  }
+
   /// Test-only view of wait-for condition evaluation against a snapshot.
   /// [conditions] uses wait-for param names: text, gone, target, selected,
   /// screen, field (`<handle>=<value>`).
@@ -377,12 +767,12 @@ class FlutterScoutRuntime {
   bool debugWaitForConditionsMet(Map<String, String> conditions) =>
       _waitForConditionsMet(snapshot: _snapshot(), params: conditions);
 
-  /// Test-only: run deferred frames with an advancing clock, as the
-  /// observation windows do on a backgrounded desktop window.
+  /// Test-only: run the explicit post-mutation deferred-frame settler with an
+  /// advancing clock on a backgrounded desktop window.
   @visibleForTesting
   Future<void> debugDrainDeferredFrames({
     Duration budget = const Duration(milliseconds: 1500),
-  }) => _drainDeferredFrames(budget: budget);
+  }) => _drainDeferredMutationFrames(budget: budget);
 
   /// Test-only: the tap-text match id for [text], optionally loose.
   @visibleForTesting
@@ -446,6 +836,27 @@ class FlutterScoutRuntime {
     return jsonDecode(response.result!) as Map<String, Object?>;
   }
 
+  /// Runs the expectation handler inside the real request/mutation protocol
+  /// context so tests can prove that the outer mutation deadline bounds every
+  /// inner wait and that failure envelopes retain observed stability/timings.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugProtocolActionExpectation(
+    Map<String, String> params,
+  ) async {
+    final response = await _dispatchProtocolRequest(
+      extensionName: 'ext.flutter_scout.debugExpectation',
+      method: 'ext.flutter_scout.debugExpectation',
+      params: params,
+      callback: (_, requestParams) => _respondWithExpectation(requestParams, {
+        'action': 'debug',
+        'result': 'changed',
+      }),
+      mutationOverride: true,
+      validateTypedParameters: false,
+    );
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
   void _installErrorHooks() {
     _previousFlutterError = FlutterError.onError;
     FlutterError.onError = (FlutterErrorDetails details) {
@@ -464,35 +875,109 @@ class FlutterScoutRuntime {
     };
   }
 
-  void _recordError({
+  Map<String, Object?> _recordError({
     required String type,
     required String message,
     String? library,
+    String? identityQualifier,
   }) {
-    final timestamp = DateTime.now();
+    _rememberSensitiveValuesFromTree();
+    final timestamp = DateTime.now().toUtc();
     final severity = _errorSeverity(type: type, message: message);
+    final sanitizedMessage = _redactSensitiveText(message);
+    final sanitizedLibrary = library == null
+        ? null
+        : _redactSensitiveText(library);
+    final cursor = ++_errorCursor;
+    final context = _requestContext;
+    final observedDuringRequest = context != null;
+    final observedDuringMutation = context == null
+        ? null
+        : _isMutatingRequest(context.extensionName, context.params);
+    final runId = _boundRunId ?? context?.runId;
+    final snapshotId = _lastStateDigest == null
+        ? null
+        : 'g$_stateGeneration:$_lastStateDigest';
+    final recorderSignal = type.startsWith('recorder_');
     final error = <String, Object?>{
+      'cursor': cursor,
+      'errorCursor': cursor,
+      'logCursor': null,
+      'actionCommandId': context?.commandId,
+      'identity': _runtimeSignalIdentity(
+        type: type,
+        message: identityQualifier == null
+            ? sanitizedMessage
+            : '$sanitizedMessage|$identityQualifier',
+        library: sanitizedLibrary,
+      ),
       'type': type,
-      'message': message,
+      'message': sanitizedMessage,
       'timestamp': timestamp.toIso8601String(),
       'severity': severity,
       'blocking': severity == 'blocking',
-      'phase': timestamp.difference(_installedAt) < const Duration(seconds: 10)
+      'phase': observedDuringRequest
+          ? observedDuringMutation == true
+                ? 'mutation_request'
+                : 'observation_request'
+          : timestamp.difference(_installedAt.toUtc()) <
+                const Duration(seconds: 10)
           ? 'startup'
           : 'runtime',
+      'provenance': <String, Object?>{
+        'source': switch (type) {
+          'flutter_error' => 'FlutterError.onError',
+          'platform_error' => 'PlatformDispatcher.onError',
+          'visible_error_surface' => 'flutter_widget_tree',
+          _ when recorderSignal => 'flutter_scout_recorder',
+          _ => 'flutter_scout_runtime',
+        },
+        'captureMechanism': switch (type) {
+          'flutter_error' => 'framework_error_hook',
+          'platform_error' => 'platform_dispatcher_error_hook',
+          'visible_error_surface' => 'visible_error_widget_probe',
+          _ when recorderSignal => 'guarded_recorder_boundary',
+          _ => 'explicit_runtime_report',
+        },
+        'observedBy': 'flutter_scout_helper',
+      },
+      'correlation': <String, Object?>{
+        'status': observedDuringRequest
+            ? 'observed_during_request'
+            : 'unattributed_runtime',
+        'causalAttribution': 'not_established',
+        'commandId': context?.commandId,
+        'method': context?.extensionName,
+        'requestErrorCursor': context?.errorCursor,
+      },
+      'runId': runId,
+      'runtimeInstanceId': _runtimeInstanceId,
+      'stateGeneration': _stateGeneration,
+      'snapshotId': snapshotId,
+      'stateIdentityStatus': snapshotId == null
+          ? 'observation_unavailable'
+          : 'last_observed',
     };
-    if (library != null) {
-      error['library'] = library;
+    if (sanitizedLibrary != null) {
+      error['library'] = sanitizedLibrary;
     }
     _errors.add(error);
-    if (_errors.length > 30) {
-      _errors.removeRange(0, _errors.length - 30);
+    while (_errors.length > 30) {
+      final activeCursors = _activeVisibleErrorSignalCursors.values.toSet();
+      final removable = _errors.indexWhere(
+        (candidate) => !activeCursors.contains(candidate['cursor']),
+      );
+      if (removable < 0) break;
+      _errors.removeAt(removable);
     }
+    return error;
   }
 
   String _errorSeverity({required String type, required String message}) {
     final lower = message.toLowerCase();
-    if (type == 'flutter_error') return 'blocking';
+    if (type == 'flutter_error' || type == 'visible_error_surface') {
+      return 'blocking';
+    }
     if (lower.contains('renderflex overflow') ||
         lower.contains('failed assertion') ||
         lower.contains('setstate()') ||
@@ -509,18 +994,65 @@ class FlutterScoutRuntime {
     return 'warning';
   }
 
-  List<Map<String, Object?>> _recentErrors() {
-    final now = DateTime.now();
+  List<Map<String, Object?>> _recentErrors({
+    int? sinceCursor,
+    bool useRequestCursor = true,
+  }) {
+    _rememberSensitiveValuesFromTree();
+    final now = DateTime.now().toUtc();
+    final effectiveCursor =
+        sinceCursor ?? (useRequestCursor ? _requestContext?.errorCursor : null);
     return [
       for (final error in _errors)
-        {
-          ...error,
-          if (DateTime.tryParse(error['timestamp']?.toString() ?? '')
-              case final timestamp?) ...{
-            'ageMs': now.difference(timestamp).inMilliseconds,
-            'stale': now.difference(timestamp) > const Duration(seconds: 30),
+        if ((error['cursor'] as int? ?? 0) > (effectiveCursor ?? -1))
+          _redactSensitiveMap(() {
+            final timestamp = DateTime.tryParse(
+              error['timestamp']?.toString() ?? '',
+            );
+            final ageMs = timestamp == null
+                ? null
+                : math.max(0, now.difference(timestamp.toUtc()).inMilliseconds);
+            final stale = ageMs == null || ageMs > 30000;
+            return <String, Object?>{
+              ...error,
+              'observedSinceCursor': effectiveCursor != null,
+              'timestampStatus': timestamp == null
+                  ? 'unavailable'
+                  : 'observed_in_runtime',
+              'ageStatus': ageMs == null ? 'unknown' : 'measured',
+              'freshness': ageMs == null
+                  ? 'unknown'
+                  : stale
+                  ? 'stale'
+                  : 'fresh',
+              'stale': stale,
+              'ageMs': ageMs,
+            };
+          }()),
+    ];
+  }
+
+  List<Map<String, Object?>> _activeBlockingRuntimeSignals() {
+    if (_activeVisibleErrorSignalCursors.isEmpty) {
+      return const <Map<String, Object?>>[];
+    }
+    final activeCursors = _activeVisibleErrorSignalCursors.values.toSet();
+    final observedAt = DateTime.now().toUtc();
+    return <Map<String, Object?>>[
+      for (final error in _recentErrors(useRequestCursor: false))
+        if (activeCursors.contains(error['cursor']) &&
+            error['blocking'] == true)
+          <String, Object?>{
+            ...error,
+            'active': true,
+            'activeStatus': 'currently_observed',
+            'lastObservedAt': observedAt.toIso8601String(),
+            'activeDurationMs': error['ageMs'],
+            'freshness': 'currently_active',
+            'stale': false,
+            'ageStatus': 'measured_since_first_observation',
+            'causalAttribution': 'not_established',
           },
-        },
     ];
   }
 
@@ -533,7 +1065,15 @@ class FlutterScoutRuntime {
     callback,
   ) {
     try {
-      developer.registerExtension(name, callback);
+      developer.registerExtension(
+        name,
+        (method, params) => _dispatchProtocolRequest(
+          extensionName: name,
+          method: method,
+          params: params,
+          callback: callback,
+        ),
+      );
     } catch (_) {
       // Hot restart/reassemble and multiple test bindings can try to register
       // again. Keeping this idempotent matters more than surfacing the duplicate.
@@ -557,7 +1097,6 @@ class FlutterScoutRuntime {
     Map<String, String> params,
   ) async {
     try {
-      await _waitForFrame();
       final brief = params['brief'] == 'true';
       final requestedMaxItems = int.tryParse(params['maxItems'] ?? '');
       final maxItems = (requestedMaxItems ?? 20).clamp(1, 100).toInt();
@@ -566,14 +1105,17 @@ class FlutterScoutRuntime {
           .map((section) => section.trim())
           .where((section) => section.isNotEmpty)
           .toSet();
-      return _ok(
-        _inspectPayload(
+      return _ok(<String, Object?>{
+        ..._inspectPayload(
           brief: brief,
           maxItems: maxItems,
           sections: sections,
           surfaceOnly: params['surfaceOnly'] == 'true',
         ),
-      );
+        'observationEffects': _observationEffects(
+          _FrameAdvancePolicy.observeOnly,
+        ),
+      });
     } catch (error) {
       return _fail('inspect_failed', error.toString());
     }
@@ -639,6 +1181,7 @@ class FlutterScoutRuntime {
     }
     final payload = <String, Object?>{
       'screen': snapshot.screen,
+      'screenEvidence': snapshot.screenEvidence,
       'routeGuess': snapshot.routeGuess,
       if (snapshot.activeSurface != null)
         'activeSurface': brief
@@ -662,14 +1205,85 @@ class FlutterScoutRuntime {
           'anchorOrdinal': ?surfaceAnchorOrdinal,
         },
       'viewSignature': snapshot.viewSignature,
+      'stateGeneration': snapshot.stateGeneration,
+      'stateDigest': snapshot.stateDigest,
       'snapshotId': snapshot.snapshotId,
       'visibleTextHash': snapshot.visibleTextHash,
       'idle': snapshot.idle,
+      'viewport': snapshot.viewportJson(),
+      // Perception limitations are safety evidence, not optional detail. Keep
+      // them in brief, surface-only, and sectioned payloads so compaction can
+      // never turn a known blind spot into apparent full coverage.
+      'perception': <String, Object?>{
+        'observationKind': 'widget_tree_and_render_geometry',
+        'pixelEvidence': 'not_included_in_inspect',
+        'visualStatus': snapshot.perceptionGaps.isEmpty
+            ? 'pixels_not_observed'
+            : 'known_perception_gaps',
+        'captureBackend': <String, Object?>{
+          'status': snapshot.captureBackend['status'],
+          'backend': snapshot.captureBackend['backend'],
+          if (snapshot.captureBackend['reason'] != null)
+            'reason': snapshot.captureBackend['reason'],
+          if (snapshot.captureBackend['provenance'] != null)
+            'provenance': snapshot.captureBackend['provenance'],
+          if (snapshot.captureBackend['coverage'] case final Map coverage) ...{
+            'platformViewPixels': coverage['platformViewPixels'],
+            'texturePixels': coverage['texturePixels'],
+          },
+          if (snapshot.captureBackend['nativeFallback']
+              case final Map nativeFallback)
+            'nativeFallbackStatus': nativeFallback['status'],
+        },
+        'limitationCount': snapshot.perceptionGaps.length,
+        if (snapshot.perceptionGaps.isNotEmpty)
+          'limitations': snapshot.perceptionGaps,
+        if (snapshot.degradedNodes > 0)
+          'degradedElementCount': snapshot.degradedNodes,
+      },
+      'keyboard': <String, Object?>{
+        'visible':
+            snapshot.viewMetricsAvailable && snapshot.viewInsets.bottom > 0.5,
+        'logicalInsetBottom': snapshot.viewMetricsAvailable
+            ? snapshot.viewInsets.bottom
+            : null,
+        'source': snapshot.viewMetricsAvailable
+            ? 'flutter_view_metrics'
+            : 'observation_unavailable',
+      },
       if (snapshot.degradedNodes > 0) 'degradedNodes': snapshot.degradedNodes,
       if (snapshot.recentErrors.isNotEmpty)
         'recentErrors': snapshot.recentErrors,
       if (_annotationMode) 'annotationMode': true,
     };
+    if (!brief && (sections.isNotEmpty || surfaceOnly)) {
+      const detailSections = <String>[
+        'text',
+        'interactables',
+        'fields',
+        'textTargets',
+        'scrollables',
+        'overlays',
+        'visualTree',
+        'controlGroups',
+        'rows',
+        'annotations',
+        'semantics',
+        'geometry',
+        'perception',
+      ];
+      payload['omittedSections'] = <String, Object?>{
+        'reason': sections.isNotEmpty
+            ? 'explicit_section_selection'
+            : 'surface_only_mode',
+        'sections': <String>[
+          for (final section in detailSections)
+            if (!sections.contains(section)) section,
+        ],
+        if (sections.isNotEmpty) 'included': sections.toList()..sort(),
+        'recoverWith': 'inspect --sections <name>',
+      };
+    }
     if (brief) {
       final briefInteractables = [
         for (final node in interactables)
@@ -736,11 +1350,50 @@ class FlutterScoutRuntime {
             for (final scrollable in snapshot.scrollables.take(6))
               {
                 'id': scrollable['id'],
+                'scopedId': scrollable['scopedId'],
+                'baseId': scrollable['baseId'],
+                'identity': scrollable['identity'],
                 'axis': scrollable['axis'],
                 'axisDirection': scrollable['axisDirection'],
                 if (scrollable['key'] != null) 'key': scrollable['key'],
+                'parentId': scrollable['parentId'],
+                'nestingDepth': scrollable['nestingDepth'],
+                'scopePath': scrollable['scopePath'],
+                'logicalBounds': scrollable['logicalBounds'],
+                'physicalBounds': scrollable['physicalBounds'],
+                'visibleFraction': scrollable['visibleFraction'],
+                'visibilityEvidence': scrollable['visibilityEvidence'],
+                'geometryEvidence': scrollable['geometryEvidence'],
+                'positionAvailable': scrollable['positionAvailable'],
+                'metricsAvailable': scrollable['metricsAvailable'],
+                'positionEvidence': scrollable['positionEvidence'],
+                'pixels': scrollable['pixels'],
+                'minScrollExtent': scrollable['minScrollExtent'],
+                'maxScrollExtent': scrollable['maxScrollExtent'],
+                'viewportDimension': scrollable['viewportDimension'],
+                'approximateNormalizedPosition':
+                    scrollable['approximateNormalizedPosition'],
+                'normalizedPositionEvidence':
+                    scrollable['normalizedPositionEvidence'],
+                'atStart': scrollable['atStart'],
+                'atEnd': scrollable['atEnd'],
+                'endpointEvidence': scrollable['endpointEvidence'],
               },
           ],
+        'omittedSections': <String, Object?>{
+          'reason': 'brief_mode',
+          'sections': const <String>[
+            'textTargets',
+            'overlays',
+            'visualTree',
+            'controlGroups',
+            'annotations',
+          ],
+          if (snapshot.scrollables.length > 6)
+            'scrollableItems': snapshot.scrollables.length - 6,
+          'recoverWith':
+              'inspect --sections textTargets,scrollables,overlays,visualTree,controlGroups,annotations',
+        },
         if (visibleText.length > briefVisibleText.length ||
             hitTestableText.length > briefHitTestableText.length ||
             snapshot.offscreenText.length > briefOffscreenText.length ||
@@ -765,7 +1418,7 @@ class FlutterScoutRuntime {
           },
         if (briefFields.isNotEmpty)
           'fieldValues': {
-            for (final field in briefFields) field.id: field.value,
+            for (final field in briefFields) field.id: field.serializedValue,
           },
       });
     }
@@ -781,7 +1434,9 @@ class FlutterScoutRuntime {
         },
         'fields' => {
           'fields': [for (final node in fields) node.toJson()],
-          'fieldValues': {for (final field in fields) field.id: field.value},
+          'fieldValues': {
+            for (final field in fields) field.id: field.serializedValue,
+          },
         },
         'textTargets' => {
           'textTargets': [for (final node in textTargets) node.toJson()],
@@ -795,7 +1450,7 @@ class FlutterScoutRuntime {
           'annotations': _annotationJsonList(liveTargets: _annotationTargets()),
         },
         'semantics' => {
-          'semanticQuality': _semanticQuality(
+          'semanticCoverageHeuristic': _semanticCoverageHeuristic(
             snapshot,
             scopedInteractables: interactables,
             scopedFields: fields,
@@ -808,6 +1463,7 @@ class FlutterScoutRuntime {
             snapshot.logicalSize.width,
             snapshot.logicalSize.height,
           ],
+          'viewport': snapshot.viewportJson(),
         },
         'perception' => {'perception': snapshot.perceptionJson()},
         _ => {'unknownSections': '$section (ignored)'},
@@ -820,6 +1476,11 @@ class FlutterScoutRuntime {
     if (surface['kind'] != null) 'kind': surface['kind'],
     if (surface['label'] != null) 'label': surface['label'],
     if (surface['screen'] != null) 'screen': surface['screen'],
+    if (surface['source'] != null) 'source': surface['source'],
+    if (surface['heuristicScore'] != null)
+      'heuristicScore': surface['heuristicScore'],
+    if (surface['scoreKind'] != null) 'scoreKind': surface['scoreKind'],
+    if (surface['provenance'] != null) 'provenance': surface['provenance'],
   };
 
   bool _sameStringLists(List<String> first, List<String> second) {
@@ -843,7 +1504,7 @@ class FlutterScoutRuntime {
     };
   }
 
-  Map<String, Object?> _semanticQuality(
+  Map<String, Object?> _semanticCoverageHeuristic(
     ScoutSnapshot snapshot, {
     int anonymousGenericTargetsOmitted = 0,
     List<ScoutNode>? scopedInteractables,
@@ -863,7 +1524,7 @@ class FlutterScoutRuntime {
       for (final node in interactables)
         if (!node.hitTestable && node.enabled) node,
     ];
-    final lowConfidence = [
+    final lowHeuristicScore = [
       for (final node in interactables)
         if (node.confidence < 0.7) node,
     ];
@@ -904,11 +1565,11 @@ class FlutterScoutRuntime {
           'hint':
               'Visible enabled controls should usually be reachable at their suggested tap point.',
         },
-      if (lowConfidence.isNotEmpty)
+      if (lowHeuristicScore.isNotEmpty)
         {
-          'code': 'low_confidence_targets',
+          'code': 'low_heuristic_score_targets',
           'severity': 'low',
-          'count': lowConfidence.length,
+          'count': lowHeuristicScore.length,
           'hint':
               'Prefer explicit keys or Semantics labels for inferred targets.',
         },
@@ -927,25 +1588,27 @@ class FlutterScoutRuntime {
     );
     score -= (duplicates * 3).clamp(0, 15);
     score -= (disabledHitTargets.length * 4).clamp(0, 20);
-    score -= (lowConfidence.length * 2).clamp(0, 10);
+    score -= (lowHeuristicScore.length * 2).clamp(0, 10);
     if (snapshot.degradedNodes > 0) score -= 10;
     score = score.clamp(0, 100);
     return {
-      'score': score,
-      'grade': score >= 90
-          ? 'excellent'
+      'heuristicScore': score,
+      'scoreKind': 'uncalibrated_heuristic',
+      'heuristicBand': score >= 90
+          ? 'high_coverage'
           : score >= 75
-          ? 'good'
+          ? 'moderate_coverage'
           : score >= 60
-          ? 'fair'
-          : 'poor',
+          ? 'low_coverage'
+          : 'very_low_coverage',
+      'formulaVersion': 1,
       'metrics': {
         'visibleInteractables': interactables.length,
         'unlabeledInteractables': unlabeled.length,
         'anonymousGenericTargetsOmitted': anonymousGenericTargetsOmitted,
         'duplicateLabelInstances': duplicates,
         'nonHitTestableActions': disabledHitTargets.length,
-        'lowConfidenceTargets': lowConfidence.length,
+        'lowHeuristicScoreTargets': lowHeuristicScore.length,
         'fields': (scopedFields ?? snapshot.fields).length,
         'structuredRows': snapshot.structuredRows.length,
       },
@@ -999,10 +1662,13 @@ class FlutterScoutRuntime {
           if (node.enabled && !node.hitTestable)
             nodeJson(node, 'visible and enabled but has no safe tap point'),
       ],
-      'lowConfidenceControls': [
+      'lowHeuristicScoreControls': [
         for (final node in visible)
           if (node.confidence < 0.7)
-            nodeJson(node, 'inferred handle confidence ${node.confidence}'),
+            nodeJson(
+              node,
+              'uncalibrated inferred-handle heuristic ${node.confidence}',
+            ),
       ],
       if (duplicates.isNotEmpty) 'duplicateLabels': duplicates,
     };
@@ -1059,7 +1725,8 @@ class FlutterScoutRuntime {
     return [
       for (final node in nodes)
         if (node.hitTestable &&
-            (anchorOrdinal == null || node.ordinal >= anchorOrdinal))
+            (anchorOrdinal == null ||
+                (node._treeOrdinal ?? -1) >= anchorOrdinal))
           if (surfaceRect == null)
             node
           else if (node.rect case final rect?)

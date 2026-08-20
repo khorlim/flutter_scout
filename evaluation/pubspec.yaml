@@ -1,0 +1,13 @@
+name: flutter_scout_evaluation
+description: Independent evaluation foundations for Flutter Scout benchmarks.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  crypto: ^3.0.7
+
+dev_dependencies:
+  test: ^1.25.6

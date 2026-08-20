@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "benchmarkId": "fixture-performance-comparison",
+  "conditions": {
+    "baseline": {
+      "conditionId": "baseline",
+      "scoutGitCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "cliVersion": "1.0.0",
+      "helperVersion": "0.1.0",
+      "protocolVersion": "15"
+    },
+    "candidate": {
+      "conditionId": "candidate",
+      "scoutGitCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "cliVersion": "2.0.0-dev.1",
+      "helperVersion": "0.2.0-dev.1",
+      "protocolVersion": "15"
+    }
+  },
+  "environment": {
+    "hardware": {
+      "model": "Deterministic fixture host",
+      "cpu": "Fixture CPU",
+      "memoryBytes": 17179869184
+    },
+    "hostOs": {
+      "name": "FixtureOS",
+      "version": "1.0",
+      "architecture": "arm64"
+    },
+    "toolchains": {
+      "flutterVersion": "3.44.2",
+      "dartVersion": "3.12.2",
+      "platformSdkVersion": "FixtureSDK 1.0"
+    },
+    "buildMode": "debug",
+    "fixture": {
+      "appId": "scout-test-app",
+      "appGitCommit": "cccccccccccccccccccccccccccccccccccccccc",
+      "fixtureId": "large-tree-reference",
+      "scenario": "action_overhead",
+      "treeSizeNodes": 1200
+    },
+    "viewport": {
+      "logicalWidth": 390.0,
+      "logicalHeight": 844.0,
+      "devicePixelRatio": 3.0
+    },
+    "device": {
+      "platform": "ios-simulator",
+      "model": "Fixture Phone",
+      "osImage": "FixtureOS 1.0 image A"
+    },
+    "measurement": {
+      "clock": "monotonic-process-stopwatch",
+      "method": "deterministic-fixture-only",
+      "collector": "flutter-scout-evaluation",
+      "collectorVersion": "1.0.0-fixture",
+      "tokenEstimator": "utf8_bytes_divisor_ceiling",
+      "estimatedUtf8BytesPerToken": 4.0
+    }
+  },
+  "warmupIterations": 3,
+  "repetitions": 2,
+  "thresholds": {
+    "status": "provisional",
+    "ratificationId": null,
+    "frozenEnvironmentSha256": null,
+    "warmBriefInspectStandardP95Us": 300000,
+    "warmBriefInspectLargeTreeP95Us": 750000,
+    "actionOverheadP95Us": 250000,
+    "payloadP95EstimatedTokens": 1500,
+    "idleCpuMaxPercent": 1.0,
+    "incrementalRssMaxBytes": 20971520,
+    "frameTimeMedianRegressionMaxPercent": 5.0,
+    "enduranceMinDurationMs": 3600000,
+    "enduranceMinActions": 1000,
+    "enduranceMaxGrowthBytes": 4194304,
+    "comparisonTolerancePercent": 5.0
+  }
+}

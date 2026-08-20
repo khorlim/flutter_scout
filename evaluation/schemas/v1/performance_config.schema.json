@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/performance_config.schema.json",
+  "title": "Flutter Scout performance benchmark config v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmarkId",
+    "conditions",
+    "environment",
+    "warmupIterations",
+    "repetitions",
+    "thresholds"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "benchmarkId": { "$ref": "#/$defs/id" },
+    "conditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline", "candidate"],
+      "properties": {
+        "baseline": { "$ref": "#/$defs/condition" },
+        "candidate": { "$ref": "#/$defs/condition" }
+      }
+    },
+    "environment": { "$ref": "#/$defs/environment" },
+    "warmupIterations": { "type": "integer", "minimum": 1 },
+    "repetitions": { "type": "integer", "minimum": 2 },
+    "thresholds": { "$ref": "#/$defs/thresholds" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "thresholds": {
+            "properties": { "status": { "const": "ratified" } }
+          }
+        }
+      },
+      "then": { "properties": { "repetitions": { "minimum": 100 } } }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "commit": {
+      "type": "string",
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+    },
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conditionId",
+        "scoutGitCommit",
+        "cliVersion",
+        "helperVersion",
+        "protocolVersion"
+      ],
+      "properties": {
+        "conditionId": { "$ref": "#/$defs/id" },
+        "scoutGitCommit": { "$ref": "#/$defs/commit" },
+        "cliVersion": { "$ref": "#/$defs/nonEmpty" },
+        "helperVersion": { "$ref": "#/$defs/nonEmpty" },
+        "protocolVersion": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hardware",
+        "hostOs",
+        "toolchains",
+        "buildMode",
+        "fixture",
+        "viewport",
+        "device",
+        "measurement"
+      ],
+      "properties": {
+        "hardware": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "cpu", "memoryBytes"],
+          "properties": {
+            "model": { "$ref": "#/$defs/nonEmpty" },
+            "cpu": { "$ref": "#/$defs/nonEmpty" },
+            "memoryBytes": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "hostOs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "architecture"],
+          "properties": {
+            "name": { "$ref": "#/$defs/nonEmpty" },
+            "version": { "$ref": "#/$defs/nonEmpty" },
+            "architecture": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
+        "toolchains": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "flutterVersion",
+            "dartVersion",
+            "platformSdkVersion"
+          ],
+          "properties": {
+            "flutterVersion": { "$ref": "#/$defs/nonEmpty" },
+            "dartVersion": { "$ref": "#/$defs/nonEmpty" },
+            "platformSdkVersion": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
+        "buildMode": { "const": "debug" },
+        "fixture": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "appId",
+            "appGitCommit",
+            "fixtureId",
+            "scenario",
+            "treeSizeNodes"
+          ],
+          "properties": {
+            "appId": { "$ref": "#/$defs/id" },
+            "appGitCommit": { "$ref": "#/$defs/commit" },
+            "fixtureId": { "$ref": "#/$defs/id" },
+            "scenario": {
+              "enum": [
+                "warm_brief_inspect_standard",
+                "warm_brief_inspect_large_tree",
+                "action_overhead"
+              ]
+            },
+            "treeSizeNodes": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "viewport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "logicalWidth",
+            "logicalHeight",
+            "devicePixelRatio"
+          ],
+          "properties": {
+            "logicalWidth": { "type": "number", "exclusiveMinimum": 0 },
+            "logicalHeight": { "type": "number", "exclusiveMinimum": 0 },
+            "devicePixelRatio": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "device": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["platform", "model", "osImage"],
+          "properties": {
+            "platform": { "$ref": "#/$defs/nonEmpty" },
+            "model": { "$ref": "#/$defs/nonEmpty" },
+            "osImage": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
+        "measurement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "clock",
+            "method",
+            "collector",
+            "collectorVersion",
+            "tokenEstimator",
+            "estimatedUtf8BytesPerToken"
+          ],
+          "properties": {
+            "clock": { "$ref": "#/$defs/nonEmpty" },
+            "method": { "$ref": "#/$defs/nonEmpty" },
+            "collector": { "$ref": "#/$defs/nonEmpty" },
+            "collectorVersion": { "$ref": "#/$defs/nonEmpty" },
+            "tokenEstimator": { "const": "utf8_bytes_divisor_ceiling" },
+            "estimatedUtf8BytesPerToken": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "ratificationId",
+        "frozenEnvironmentSha256",
+        "warmBriefInspectStandardP95Us",
+        "warmBriefInspectLargeTreeP95Us",
+        "actionOverheadP95Us",
+        "payloadP95EstimatedTokens",
+        "idleCpuMaxPercent",
+        "incrementalRssMaxBytes",
+        "frameTimeMedianRegressionMaxPercent",
+        "enduranceMinDurationMs",
+        "enduranceMinActions",
+        "enduranceMaxGrowthBytes",
+        "comparisonTolerancePercent"
+      ],
+      "properties": {
+        "status": { "enum": ["provisional", "ratified"] },
+        "ratificationId": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "frozenEnvironmentSha256": {
+          "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "warmBriefInspectStandardP95Us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000
+        },
+        "warmBriefInspectLargeTreeP95Us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 750000
+        },
+        "actionOverheadP95Us": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 250000
+        },
+        "payloadP95EstimatedTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1500
+        },
+        "idleCpuMaxPercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "incrementalRssMaxBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20971520
+        },
+        "frameTimeMedianRegressionMaxPercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "enduranceMinDurationMs": {
+          "type": "integer",
+          "minimum": 3600000
+        },
+        "enduranceMinActions": { "type": "integer", "minimum": 1000 },
+        "enduranceMaxGrowthBytes": { "type": "integer", "minimum": 0 },
+        "comparisonTolerancePercent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 5
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "ratified" } } },
+          "then": {
+            "properties": {
+              "ratificationId": { "type": "string", "minLength": 1 },
+              "frozenEnvironmentSha256": { "$ref": "#/$defs/sha256" }
+            }
+          },
+          "else": {
+            "properties": {
+              "ratificationId": { "type": "null" },
+              "frozenEnvironmentSha256": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,5 +1,7 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'fault_injection_screen.dart';
 import 'stress_lab_screens.dart';
 
 /// A destination in the stress lab.
@@ -104,6 +106,14 @@ final List<_Destination> _destinations = [
     icon: Icons.expand_more,
     builder: (_) => const ExpansionScreen(),
   ),
+  if (kDebugMode)
+    _Destination(
+      id: 'fault_injection',
+      title: 'Fault injection',
+      subtitle: 'Runtime, log, disconnect, and process-death signals',
+      icon: Icons.warning_amber,
+      builder: (_) => const FaultInjectionScreen(),
+    ),
 ];
 
 /// Hub linking to every stress screen. Rendered as a card grid so the hub is

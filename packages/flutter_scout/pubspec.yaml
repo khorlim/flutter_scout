@@ -1,6 +1,6 @@
 name: flutter_scout
 description: CLI for Flutter Scout, an agent-oriented eyes-and-hands bridge for Flutter simulator apps.
-version: 1.2.0
+version: 2.0.0-dev.1
 repository: https://github.com/khorlim/flutter_scout
 
 environment:
@@ -8,6 +8,7 @@ environment:
 
 dependencies:
   args: ^2.7.0
+  crypto: ^3.0.7
   image: ^4.8.0
   path: ^1.9.0
   vm_service: ^15.0.0

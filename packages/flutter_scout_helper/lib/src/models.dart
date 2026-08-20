@@ -6,11 +6,21 @@ part of 'flutter_scout_binding.dart';
 class ScoutSnapshot {
   const ScoutSnapshot({
     required this.screen,
+    this.screenEvidence = const <String, Object?>{
+      'kind': 'heuristic_inference',
+      'source': 'unspecified',
+      'scoreKind': 'uncalibrated_heuristic',
+    },
     required this.activeSurface,
     required this.routeGuess,
     required this.idle,
     required this.devicePixelRatio,
     required this.logicalSize,
+    this.physicalSize = Size.zero,
+    this.padding = EdgeInsets.zero,
+    this.viewPadding = EdgeInsets.zero,
+    this.viewInsets = EdgeInsets.zero,
+    this.viewMetricsAvailable = false,
     required this.visibleText,
     required this.hitTestableText,
     required this.offscreenText,
@@ -18,21 +28,34 @@ class ScoutSnapshot {
     required this.fields,
     required this.textTargets,
     required this.scrollables,
+    this.perceptionGaps = const <Map<String, Object?>>[],
+    this.captureBackend = const <String, Object?>{
+      'status': 'observation_unavailable',
+      'reason': 'capture_backend_not_probed',
+    },
     required this.overlays,
     required this.visualTree,
     required this.controlGroups,
     required this.structuredRows,
     required this.suggestedActions,
     required this.recentErrors,
+    this.stateGeneration = 0,
+    this.stateDigest = '',
     this.degradedNodes = 0,
   });
 
   final String screen;
+  final Map<String, Object?> screenEvidence;
   final Map<String, Object?>? activeSurface;
   final String? routeGuess;
   final bool idle;
   final double devicePixelRatio;
   final Size logicalSize;
+  final Size physicalSize;
+  final EdgeInsets padding;
+  final EdgeInsets viewPadding;
+  final EdgeInsets viewInsets;
+  final bool viewMetricsAvailable;
   final List<String> visibleText;
   final List<String> hitTestableText;
   final List<String> offscreenText;
@@ -40,12 +63,25 @@ class ScoutSnapshot {
   final List<ScoutNode> fields;
   final List<ScoutNode> textTargets;
   final List<Map<String, Object?>> scrollables;
+
+  /// Visible regions whose pixels or semantics are not fully represented by
+  /// the widget-tree observation. These are factual limitations, not guesses
+  /// about what the region contains.
+  final List<Map<String, Object?>> perceptionGaps;
+
+  /// Availability and coverage of the in-app raster capture backend at the
+  /// time of this snapshot. Native host capture is selected by the CLI and
+  /// therefore cannot be claimed available by the helper.
+  final Map<String, Object?> captureBackend;
+
   final List<Map<String, Object?>> overlays;
   final Map<String, Object?>? visualTree;
   final List<Map<String, Object?>> controlGroups;
   final List<Map<String, Object?>> structuredRows;
   final List<Map<String, Object?>> suggestedActions;
   final List<Map<String, Object?>> recentErrors;
+  final int stateGeneration;
+  final String stateDigest;
 
   /// Elements the snapshot walk skipped because collecting them threw. One
   /// misbehaving widget must degrade only itself, never the whole inspect.
@@ -56,14 +92,24 @@ class ScoutSnapshot {
     List<Map<String, Object?>>? controlGroups,
     List<Map<String, Object?>>? structuredRows,
     List<Map<String, Object?>>? suggestedActions,
+    List<Map<String, Object?>>? perceptionGaps,
+    Map<String, Object?>? captureBackend,
+    int? stateGeneration,
+    String? stateDigest,
   }) {
     return ScoutSnapshot(
       screen: screen,
+      screenEvidence: screenEvidence,
       activeSurface: activeSurface,
       routeGuess: routeGuess,
       idle: idle,
       devicePixelRatio: devicePixelRatio,
       logicalSize: logicalSize,
+      physicalSize: physicalSize,
+      padding: padding,
+      viewPadding: viewPadding,
+      viewInsets: viewInsets,
+      viewMetricsAvailable: viewMetricsAvailable,
       visibleText: visibleText,
       hitTestableText: hitTestableText,
       offscreenText: offscreenText,
@@ -71,12 +117,16 @@ class ScoutSnapshot {
       fields: fields,
       textTargets: textTargets,
       scrollables: scrollables,
+      perceptionGaps: perceptionGaps ?? this.perceptionGaps,
+      captureBackend: captureBackend ?? this.captureBackend,
       overlays: overlays,
       visualTree: visualTree ?? this.visualTree,
       controlGroups: controlGroups ?? this.controlGroups,
       structuredRows: structuredRows ?? this.structuredRows,
       suggestedActions: suggestedActions ?? this.suggestedActions,
       recentErrors: recentErrors,
+      stateGeneration: stateGeneration ?? this.stateGeneration,
+      stateDigest: stateDigest ?? this.stateDigest,
       degradedNodes: degradedNodes,
     );
   }
@@ -121,10 +171,10 @@ class ScoutSnapshot {
     return hash.toRadixString(16).padLeft(8, '0');
   }
 
-  /// Compact identity for querying or correlating one observed UI state
-  /// without repeating its full widget-derived payload.
-  String get snapshotId =>
-      '$visibleTextHash-${interactables.length}-${fields.length}';
+  /// Authoritative identity for one observation. The generation prevents a
+  /// state that changed away and later returned from masquerading as the old
+  /// observation; the SHA-256 digest guards the canonical redacted contents.
+  String get snapshotId => 'g$stateGeneration:$stateDigest';
 
   ScoutNode? findNode(String target) {
     final normalized = target.trim();
@@ -190,14 +240,18 @@ class ScoutSnapshot {
   Map<String, Object?> summaryJson() {
     return {
       'screen': screen,
+      'screenEvidence': screenEvidence,
       if (activeSurface != null) 'activeSurface': activeSurface,
       'routeGuess': routeGuess,
       'viewSignature': viewSignature,
+      'stateGeneration': stateGeneration,
+      'stateDigest': stateDigest,
       'snapshotId': snapshotId,
       'visibleTextHash': visibleTextHash,
       'idle': idle,
       'devicePixelRatio': devicePixelRatio,
       'logicalSize': [logicalSize.width, logicalSize.height],
+      'viewport': viewportJson(),
       'perception': perceptionJson(),
       'visibleText': visibleText,
       'hitTestableText': hitTestableText,
@@ -208,12 +262,14 @@ class ScoutSnapshot {
       if (suggestedActions.isNotEmpty) 'suggestedActions': suggestedActions,
       if (scrollables.isNotEmpty) 'scrollables': scrollables,
       if (degradedNodes > 0) 'degradedNodes': degradedNodes,
-      'fieldValues': {for (final field in fields) field.id: field.value},
+      'fieldValues': {
+        for (final field in fields) field.id: field.serializedValue,
+      },
       'fieldsById': {
         for (final field in fields)
           field.id: {
             'label': field.label,
-            'value': field.value,
+            ...field.serializedFieldState,
             if (field.validationMessage != null)
               'validationMessage': field.validationMessage,
             'baseId': field.baseId,
@@ -238,34 +294,122 @@ class ScoutSnapshot {
       if (controlGroups.isNotEmpty) 'controlGroups': controlGroups,
       if (structuredRows.isNotEmpty) 'structuredRows': structuredRows,
       if (suggestedActions.isNotEmpty) 'suggestedActions': suggestedActions,
-      'keyboard': {'visible': false},
+      'keyboard': {
+        'visible': viewMetricsAvailable && viewInsets.bottom > 0.5,
+        'logicalInsetBottom': viewMetricsAvailable ? viewInsets.bottom : null,
+        'source': viewMetricsAvailable
+            ? 'flutter_view_metrics'
+            : 'observation_unavailable',
+      },
       'recentErrors': recentErrors,
     };
   }
 
   Map<String, Object?> perceptionJson() {
+    final hasUnavailableCapture = captureBackend['status'] != 'available';
     return {
+      'observationKind': 'widget_tree_and_render_geometry',
+      'pixelEvidence': 'not_included_in_inspect',
       'text': {
+        'status': 'observed',
         'source': 'flutter_widget_tree',
         'visibleCount': visibleText.length,
         'hitTestableCount': hitTestableText.length,
         'offscreenCount': offscreenText.length,
       },
       'semantics': {
+        'status': 'partially_observed',
         'source': 'widget_properties_and_semantics',
         'usedForLabels': true,
+        'limitation':
+            'Malformed, absent, or custom-painted semantics can leave an affected region undescribed.',
       },
       'geometry': {
+        'status': viewMetricsAvailable ? 'observed' : 'partially_observed',
         'source': 'render_box_bounds',
         'devicePixelRatio': devicePixelRatio,
         'logicalSize': [logicalSize.width, logicalSize.height],
+        'physicalSize': viewMetricsAvailable
+            ? [physicalSize.width, physicalSize.height]
+            : null,
+        'viewMetricsAvailable': viewMetricsAvailable,
       },
       'visual': {
         'screenshotInPayload': false,
         'ocrInPayload': false,
+        'status': perceptionGaps.isEmpty
+            ? 'pixels_not_observed'
+            : 'known_perception_gaps',
+        'gapCount': perceptionGaps.length,
         'fallback':
             'Use `flutter-scout screenshot` or `flutter-scout crop <target>` when pixel-level visual confirmation is needed.',
       },
+      'captureBackend': captureBackend,
+      if (perceptionGaps.isNotEmpty) 'limitations': perceptionGaps,
+      if (degradedNodes > 0) 'degradedElementCount': degradedNodes,
+      'coverage': <String, Object?>{
+        'widgetTree': degradedNodes == 0
+            ? 'observed'
+            : 'observed_with_local_degradation',
+        'renderGeometry': viewMetricsAvailable
+            ? 'observed'
+            : 'observation_unavailable',
+        'pixels': 'not_observed_in_this_snapshot',
+        'focusedPixelCapture': hasUnavailableCapture
+            ? 'observation_unavailable'
+            : 'available_for_flutter_layers',
+      },
+    };
+  }
+
+  Map<String, Object?> viewportJson() {
+    List<double> insets(EdgeInsets value) => <double>[
+      value.left,
+      value.top,
+      value.right,
+      value.bottom,
+    ];
+
+    return <String, Object?>{
+      'available': viewMetricsAvailable,
+      'orientation': logicalSize.width > logicalSize.height
+          ? 'landscape'
+          : logicalSize.height > logicalSize.width
+          ? 'portrait'
+          : 'square',
+      'logicalSize': <double>[logicalSize.width, logicalSize.height],
+      'physicalSize': viewMetricsAvailable
+          ? <double>[physicalSize.width, physicalSize.height]
+          : null,
+      'devicePixelRatio': devicePixelRatio,
+      'logicalToPhysicalScale': viewMetricsAvailable ? devicePixelRatio : null,
+      'physicalToLogicalScale': viewMetricsAvailable && devicePixelRatio > 0
+          ? 1 / devicePixelRatio
+          : null,
+      'padding': viewMetricsAvailable ? insets(padding) : null,
+      'viewPadding': viewMetricsAvailable ? insets(viewPadding) : null,
+      'viewInsets': viewMetricsAvailable ? insets(viewInsets) : null,
+      'safeArea': viewMetricsAvailable
+          ? <String, Object?>{
+              'left': padding.left,
+              'top': padding.top,
+              'right': padding.right,
+              'bottom': padding.bottom,
+            }
+          : null,
+      'coordinateConvention': <String, Object?>{
+        'logical': 'origin_top_left_logical_points',
+        'physical': 'origin_top_left_physical_pixels',
+      },
+      'windowScaling': <String, Object?>{
+        'status': viewMetricsAvailable ? 'observed' : 'observation_unavailable',
+        'source': viewMetricsAvailable
+            ? 'flutter_view_device_pixel_ratio'
+            : 'flutter_view_unavailable',
+        'logicalToPhysical': viewMetricsAvailable ? devicePixelRatio : null,
+      },
+      if (!viewMetricsAvailable)
+        'unavailableReason': 'flutter_view_metrics_not_captured',
     };
   }
 }
@@ -278,7 +422,7 @@ class ScoutNode {
     required this.fallbackId,
     required this.kind,
     required this.label,
-    required this.value,
+    required String? value,
     required this.validationMessage,
     required this.widgetType,
     required this.key,
@@ -289,12 +433,28 @@ class ScoutNode {
     required this.hitTestable,
     required this.enabled,
     required this.confidence,
+    this.coordinateDevicePixelRatio,
     this.selected,
     this.altIds = const [],
     this.textColor,
     this.enclosingTarget,
     this.obscured = false,
-  });
+    this.redacted = false,
+    this.isEmpty,
+    Object? valueToken,
+    RenderObject? renderObject,
+    EditableTextState? editableState,
+    int? treeOrdinal,
+  }) : value = redacted ? null : value,
+       // Public parameter names avoid exposing private implementation details.
+       // ignore: prefer_initializing_formals
+       _valueToken = valueToken,
+       // ignore: prefer_initializing_formals
+       _renderObject = renderObject,
+       // ignore: prefer_initializing_formals
+       _editableState = editableState,
+       // ignore: prefer_initializing_formals
+       _treeOrdinal = treeOrdinal;
 
   final String id;
   final String baseId;
@@ -313,6 +473,7 @@ class ScoutNode {
   final bool hitTestable;
   final bool enabled;
   final double confidence;
+  final double? coordinateDevicePixelRatio;
 
   /// Selection/toggle state (tab selected, switch on, checkbox checked) when
   /// determinable from the widget or its semantics; null when unknown. Lets
@@ -337,9 +498,60 @@ class ScoutNode {
   final List<String> altIds;
 
   /// Whether this field's editable is `obscureText: true` (password-style).
-  /// The recorder redacts obscured values — `value` holds Flutter's raw
-  /// plaintext (obscuring is render-only), so this flag is the reliable signal.
+  /// Kept separately from [redacted] so diagnostics can distinguish an explicit
+  /// Flutter obscuring contract from a password/PIN/token heuristic.
   final bool obscured;
+
+  /// Whether this field's value is sensitive. [value] is always null when this
+  /// is true; callers get only [isEmpty]/[hasValue] and never plaintext/length.
+  final bool redacted;
+
+  /// Safe presence metadata for fields. Null for non-field nodes.
+  final bool? isEmpty;
+  bool? get hasValue => isEmpty == null ? null : !isEmpty!;
+
+  /// Process-local comparison token. It lets deltas and recording detect a
+  /// non-empty secret changing to another non-empty secret without retaining or
+  /// serializing the plaintext. The per-runtime salt never leaves the helper.
+  final Object? _valueToken;
+
+  /// Runtime-only references used to prove that a freshly resolved point still
+  /// hits this exact control immediately before dispatch. They never serialize.
+  final RenderObject? _renderObject;
+  final EditableTextState? _editableState;
+
+  /// Original widget-walk position. Unlike [ordinal], which disambiguates equal
+  /// handles, this is global and can prove modal-surface ownership.
+  final int? _treeOrdinal;
+
+  Object? get serializedValue => redacted
+      ? <String, Object?>{
+          'redacted': true,
+          'isEmpty': isEmpty ?? true,
+          'hasValue': hasValue ?? false,
+        }
+      : value;
+
+  Map<String, Object?> get serializedFieldState => redacted
+      ? <String, Object?>{
+          'redacted': true,
+          'isEmpty': isEmpty ?? true,
+          'hasValue': hasValue ?? false,
+        }
+      : <String, Object?>{'value': value};
+
+  bool hasSameFieldValue(ScoutNode other) {
+    if (redacted || other.redacted) {
+      return redacted == other.redacted &&
+          isEmpty == other.isEmpty &&
+          _valueToken == other._valueToken;
+    }
+    return value == other.value;
+  }
+
+  bool matchesFieldValue(String expected, Object expectedToken) {
+    return redacted ? _valueToken == expectedToken : (value ?? '') == expected;
+  }
 
   ScoutNode copyWith({
     String? id,
@@ -351,6 +563,7 @@ class ScoutNode {
     String? value,
     String? validationMessage,
     double? confidence,
+    int? treeOrdinal,
   }) {
     return ScoutNode(
       id: id ?? this.id,
@@ -370,11 +583,18 @@ class ScoutNode {
       hitTestable: hitTestable,
       enabled: enabled,
       confidence: confidence ?? this.confidence,
+      coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: selected,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
       obscured: obscured,
+      redacted: redacted,
+      isEmpty: isEmpty,
+      valueToken: _valueToken,
+      renderObject: _renderObject,
+      editableState: _editableState,
+      treeOrdinal: treeOrdinal ?? _treeOrdinal,
     );
   }
 
@@ -399,11 +619,18 @@ class ScoutNode {
       hitTestable: hitTestable,
       enabled: enabled,
       confidence: confidence,
+      coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: value,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
       obscured: obscured,
+      redacted: redacted,
+      isEmpty: isEmpty,
+      valueToken: _valueToken,
+      renderObject: _renderObject,
+      editableState: _editableState,
+      treeOrdinal: _treeOrdinal,
     );
   }
 
@@ -427,11 +654,18 @@ class ScoutNode {
       hitTestable: hitTestable,
       enabled: enabled,
       confidence: confidence ?? this.confidence,
+      coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: selected,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
       obscured: obscured,
+      redacted: redacted,
+      isEmpty: isEmpty,
+      valueToken: _valueToken,
+      renderObject: _renderObject,
+      editableState: _editableState,
+      treeOrdinal: _treeOrdinal,
     );
   }
 
@@ -455,10 +689,18 @@ class ScoutNode {
       hitTestable: hitTestable,
       enabled: enabled,
       confidence: confidence,
+      coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: selected,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: target,
+      obscured: obscured,
+      redacted: redacted,
+      isEmpty: isEmpty,
+      valueToken: _valueToken,
+      renderObject: _renderObject,
+      editableState: _editableState,
+      treeOrdinal: _treeOrdinal,
     );
   }
 
@@ -487,11 +729,18 @@ class ScoutNode {
       hitTestable: hitTestable,
       enabled: enabled,
       confidence: confidence,
+      coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: selected,
       altIds: merged.toList(growable: false),
       textColor: textColor,
       enclosingTarget: enclosingTarget,
       obscured: obscured,
+      redacted: redacted,
+      isEmpty: isEmpty,
+      valueToken: _valueToken,
+      renderObject: _renderObject,
+      editableState: _editableState,
+      treeOrdinal: _treeOrdinal,
     );
   }
 
@@ -527,7 +776,7 @@ class ScoutNode {
       'fallbackId': fallbackId,
       'kind': kind,
       'label': label,
-      if (kind == 'field') 'value': value,
+      if (kind == 'field') ...serializedFieldState,
       if (kind == 'field' && validationMessage != null)
         'validationMessage': validationMessage,
       'widgetType': widgetType,
@@ -549,9 +798,37 @@ class ScoutNode {
       'suggestedTapPoint': suggestedTapPoint == null
           ? null
           : [suggestedTapPoint!.dx, suggestedTapPoint!.dy],
+      'physicalRect': rect == null || coordinateDevicePixelRatio == null
+          ? null
+          : [
+              rect!.left * coordinateDevicePixelRatio!,
+              rect!.top * coordinateDevicePixelRatio!,
+              rect!.width * coordinateDevicePixelRatio!,
+              rect!.height * coordinateDevicePixelRatio!,
+            ],
+      'physicalSuggestedTapPoint':
+          suggestedTapPoint == null || coordinateDevicePixelRatio == null
+          ? null
+          : [
+              suggestedTapPoint!.dx * coordinateDevicePixelRatio!,
+              suggestedTapPoint!.dy * coordinateDevicePixelRatio!,
+            ],
+      'geometryCoordinateSpaces': coordinateDevicePixelRatio == null
+          ? const <String, Object?>{
+              'logical': 'available',
+              'physical': 'unavailable',
+              'reason': 'view_metrics_not_captured',
+            }
+          : <String, Object?>{
+              'logical': 'logical_flutter_points',
+              'physical': 'physical_pixels',
+              'devicePixelRatio': coordinateDevicePixelRatio,
+            },
       'hitTestable': hitTestable,
       'enabled': enabled,
-      'confidence': confidence,
+      'heuristicScore': confidence,
+      'scoreKind': 'uncalibrated_heuristic',
+      'heuristicMeaning': 'target_label_and_handle_quality',
       if (selected != null) 'selected': selected,
       if (altIds.isNotEmpty) 'altIds': altIds,
       if (enclosingTarget != null) 'enclosingTarget': enclosingTarget,
@@ -744,13 +1021,6 @@ class _CaptureResult {
   final String? error;
 }
 
-class _EditableCandidate {
-  const _EditableCandidate({required this.node, required this.state});
-
-  final ScoutNode node;
-  final EditableTextState state;
-}
-
 class _TextTargetMatch {
   const _TextTargetMatch({required this.text, required this.actionable});
 
@@ -797,8 +1067,11 @@ class _CustomInputSurface {
       'layout': 'grid',
       if (bounds != null)
         'rect': [bounds.left, bounds.top, bounds.width, bounds.height],
-      if (currentValue != null && currentValue!.isNotEmpty)
-        'currentValue': currentValue,
+      'currentValue': <String, Object?>{
+        'redacted': true,
+        'isEmpty': currentValue == null || currentValue!.isEmpty,
+        'hasValue': currentValue != null && currentValue!.isNotEmpty,
+      },
       'acceptedCharacters': 'digits',
       'targetMatched': targetMatched,
       'children': [
@@ -851,10 +1124,185 @@ class _CustomInputSurface {
   }
 }
 
+enum _StabilityState {
+  stable('stable'),
+  transient('transient'),
+  continuousAnimation('continuous_animation'),
+  neverSettling('never_settling'),
+  runtimeLost('runtime_lost'),
+  observationUnavailable('observation_unavailable');
+
+  const _StabilityState(this.wireName);
+
+  final String wireName;
+}
+
+/// A bounded, agent-relevant observation of UI quiescence.
+///
+/// This is deliberately richer than SchedulerBinding's `hasScheduledFrame`.
+/// A spinner can schedule frames forever while the actionable widget tree is
+/// unchanged; conversely, an async load can change semantics without a frame
+/// being scheduled at the exact instant Scout samples it.
+class _StabilityObservation {
+  const _StabilityObservation({
+    required this.state,
+    required this.actionable,
+    required this.stoppingReason,
+    required this.elapsedMs,
+    required this.budgetMs,
+    required this.deadlineEpochMs,
+    required this.sampleCount,
+    required this.semanticChangeCount,
+    required this.distinctSemanticStates,
+    required this.quietWindowMs,
+    required this.quietForMs,
+    required this.scheduledFrameSamples,
+    required this.transientCallbackSamples,
+    required this.maxTransientCallbacks,
+    required this.disabledFrameSamples,
+    required this.lastHasScheduledFrame,
+    required this.lastTransientCallbackCount,
+    required this.lastSchedulerPhase,
+    required this.initialStateGeneration,
+    required this.initialStateDigest,
+    required this.initialSnapshotId,
+    required this.finalStateGeneration,
+    required this.finalStateDigest,
+    required this.finalSnapshotId,
+    this.expectationMet = false,
+    this.boundedByRequestDeadline = false,
+    this.limitations = const <String>[],
+  });
+
+  final _StabilityState state;
+  final bool actionable;
+  final String stoppingReason;
+  final int elapsedMs;
+  final int budgetMs;
+  final int deadlineEpochMs;
+  final int sampleCount;
+  final int semanticChangeCount;
+  final int distinctSemanticStates;
+  final int quietWindowMs;
+  final int quietForMs;
+  final int scheduledFrameSamples;
+  final int transientCallbackSamples;
+  final int maxTransientCallbacks;
+  final int disabledFrameSamples;
+  final bool? lastHasScheduledFrame;
+  final int? lastTransientCallbackCount;
+  final String? lastSchedulerPhase;
+  final int? initialStateGeneration;
+  final String? initialStateDigest;
+  final String? initialSnapshotId;
+  final int? finalStateGeneration;
+  final String? finalStateDigest;
+  final String? finalSnapshotId;
+  final bool expectationMet;
+  final bool boundedByRequestDeadline;
+  final List<String> limitations;
+
+  bool get stable => switch (state) {
+    _StabilityState.stable => true,
+    _StabilityState.transient ||
+    _StabilityState.continuousAnimation ||
+    _StabilityState.neverSettling ||
+    _StabilityState.runtimeLost ||
+    _StabilityState.observationUnavailable => false,
+  };
+
+  bool get exhausted =>
+      stoppingReason.startsWith('budget_exhausted') ||
+      stoppingReason == 'request_deadline_reached';
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'state': state.wireName,
+    'actionable': actionable,
+    'stoppingReason': stoppingReason,
+    'elapsedMs': elapsedMs,
+    'budgetMs': budgetMs,
+    'deadlineEpochMs': deadlineEpochMs,
+    'bounded': true,
+    if (boundedByRequestDeadline) 'boundedByRequestDeadline': true,
+    if (expectationMet) 'expectationMet': true,
+    'samples': <String, Object?>{
+      'count': sampleCount,
+      'semanticChangeCount': semanticChangeCount,
+      'distinctSemanticStates': distinctSemanticStates,
+      'quietWindowMs': quietWindowMs,
+      'quietForMs': quietForMs,
+    },
+    'frames': <String, Object?>{
+      'scheduledFrameSamples': scheduledFrameSamples,
+      'transientCallbackSamples': transientCallbackSamples,
+      'maxTransientCallbacks': maxTransientCallbacks,
+      'disabledFrameSamples': disabledFrameSamples,
+      'lastHasScheduledFrame': lastHasScheduledFrame,
+      'lastTransientCallbackCount': lastTransientCallbackCount,
+      'lastSchedulerPhase': lastSchedulerPhase,
+    },
+    'initial': <String, Object?>{
+      'stateGeneration': initialStateGeneration,
+      'stateDigest': initialStateDigest,
+      'snapshotId': initialSnapshotId,
+    },
+    'final': <String, Object?>{
+      'stateGeneration': finalStateGeneration,
+      'stateDigest': finalStateDigest,
+      'snapshotId': finalSnapshotId,
+    },
+    'limitations': limitations,
+  };
+}
+
+class _ConditionWaitOutcome {
+  const _ConditionWaitOutcome({
+    required this.met,
+    required this.blocked,
+    required this.waitedMs,
+    required this.budgetMs,
+    required this.deadlineEpochMs,
+    required this.polls,
+    required this.visibleText,
+    required this.initialSnapshot,
+    required this.finalSnapshot,
+    required this.semanticChangeCount,
+    required this.distinctSemanticStates,
+    required this.quietForMs,
+    required this.scheduledFrameSamples,
+    required this.transientCallbackSamples,
+    required this.maxTransientCallbacks,
+    required this.disabledFrameSamples,
+    required this.lastHasScheduledFrame,
+    required this.lastTransientCallbackCount,
+    required this.lastSchedulerPhase,
+  });
+
+  final bool met;
+  final bool blocked;
+  final int waitedMs;
+  final int budgetMs;
+  final int deadlineEpochMs;
+  final int polls;
+  final List<String> visibleText;
+  final ScoutSnapshot initialSnapshot;
+  final ScoutSnapshot finalSnapshot;
+  final int semanticChangeCount;
+  final int distinctSemanticStates;
+  final int quietForMs;
+  final int scheduledFrameSamples;
+  final int transientCallbackSamples;
+  final int maxTransientCallbacks;
+  final int disabledFrameSamples;
+  final bool lastHasScheduledFrame;
+  final int lastTransientCallbackCount;
+  final String lastSchedulerPhase;
+}
+
 class _ActionSnapshotResult {
   const _ActionSnapshotResult({
     required this.snapshot,
-    required this.stable,
+    required this.stability,
     this.lateChangeObserved = false,
     this.activityObserved = false,
     this.transientViewSignatures = const [],
@@ -862,11 +1310,13 @@ class _ActionSnapshotResult {
   });
 
   final ScoutSnapshot snapshot;
-  final bool stable;
+  final _StabilityObservation stability;
   final bool lateChangeObserved;
   final bool activityObserved;
   final List<String> transientViewSignatures;
   final bool waitTimedOut;
+
+  bool get stable => stability.stable;
 }
 
 String _scoutSlug(String value) {

@@ -13,23 +13,31 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   ) async {
     try {
       final action = params['action'] ?? 'list';
+      if (action != 'list' && action != 'targets' && action != 'get-crop') {
+        _markRequestPhaseUnavailable(
+          'match',
+          'not_applicable:annotation_tool_state_mutation_has_no_widget_selector',
+        );
+      }
       switch (action) {
         case 'enable':
-          _setAnnotationMode(true);
+          _inRequestPhase('dispatch', () => _setAnnotationMode(true));
           break;
         case 'disable':
-          _setAnnotationMode(false);
+          _inRequestPhase('dispatch', () => _setAnnotationMode(false));
           break;
         case 'clear':
-          final status = params['status'];
-          if (status == null || status.isEmpty) {
-            _annotations.clear();
-          } else {
-            _annotations.removeWhere(
-              (annotation) => annotation.status == status,
-            );
-          }
-          _bumpAnnotationRevision();
+          _inRequestPhase('dispatch', () {
+            final status = params['status'];
+            if (status == null || status.isEmpty) {
+              _annotations.clear();
+            } else {
+              _annotations.removeWhere(
+                (annotation) => annotation.status == status,
+              );
+            }
+            _bumpAnnotationRevision();
+          });
           break;
         case 'delete':
           final ids = _annotationDeleteIds(params);
@@ -41,52 +49,73 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
           }
           final removed = <String>[];
           final notFound = <String>[];
-          for (final id in ids) {
-            (removeAnnotation(id) ? removed : notFound).add(id);
-          }
-          await _waitForFrame();
+          _inRequestPhase('dispatch', () {
+            for (final id in ids) {
+              (removeAnnotation(id) ? removed : notFound).add(id);
+            }
+          });
+          await _settleMutationFrames();
           return _ok({
             ..._annotationsStateJson(),
             'removed': removed,
             'notFound': notFound,
           });
         case 'restore':
-          final restored = restoreAnnotations(params['records']);
-          await _waitForFrame();
+          final restored = _inRequestPhase(
+            'dispatch',
+            () => restoreAnnotations(params['records']),
+          );
+          await _settleMutationFrames();
           return _ok({..._annotationsStateJson(), 'restored': restored});
         case 'resolve':
-          final updated = _updateAnnotationStatus(
-            id: params['id'],
-            status: 'resolved',
-            note: params['note'],
+          final updated = _inRequestPhase(
+            'dispatch',
+            () => _updateAnnotationStatus(
+              id: params['id'],
+              status: 'resolved',
+              note: params['note'],
+            ),
           );
           if (!updated) return _annotationMissing(params['id']);
           break;
         case 'dismiss':
-          final updated = _updateAnnotationStatus(
-            id: params['id'],
-            status: 'dismissed',
-            note: params['note'],
+          final updated = _inRequestPhase(
+            'dispatch',
+            () => _updateAnnotationStatus(
+              id: params['id'],
+              status: 'dismissed',
+              note: params['note'],
+            ),
           );
           if (!updated) return _annotationMissing(params['id']);
           break;
         case 'reopen':
-          final updated = _updateAnnotationStatus(
-            id: params['id'],
-            status: 'open',
-            note: params['note'],
+          final updated = _inRequestPhase(
+            'dispatch',
+            () => _updateAnnotationStatus(
+              id: params['id'],
+              status: 'open',
+              note: params['note'],
+            ),
           );
           if (!updated) return _annotationMissing(params['id']);
           break;
         case 'check':
-          _refreshStaleAnnotationStatuses(_annotationTargets());
+          final targets = _annotationTargets();
+          _inRequestPhase(
+            'dispatch',
+            () => _refreshStaleAnnotationStatuses(targets),
+          );
           break;
         case 'mark-fixed':
           final id = params['id'];
-          final updated = _updateAnnotationStatus(
-            id: id,
-            status: 'pending_review',
-            note: params['note'],
+          final updated = _inRequestPhase(
+            'dispatch',
+            () => _updateAnnotationStatus(
+              id: id,
+              status: 'pending_review',
+              note: params['note'],
+            ),
           );
           if (!updated) return _annotationMissing(id);
           final annotation = _annotations.firstWhere(
@@ -105,7 +134,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
             params['slot'] ?? 'before',
           );
         case 'signal-handoff':
-          _signalAnnotationHandoff();
+          _inRequestPhase('dispatch', _signalAnnotationHandoff);
           break;
         case 'list':
         case 'targets':
@@ -116,8 +145,16 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
             'Unknown annotations action `$action`.',
           );
       }
-      await _waitForFrame();
-      return _ok(_annotationsStateJson(includeTargets: action == 'targets'));
+      if (action != 'list' && action != 'targets') {
+        await _settleMutationFrames();
+      }
+      return _ok({
+        ..._annotationsStateJson(includeTargets: action == 'targets'),
+        if (action == 'list' || action == 'targets')
+          'observationEffects': _observationEffects(
+            _FrameAdvancePolicy.observeOnly,
+          ),
+      });
     } catch (error) {
       return _fail('annotations_failed', error.toString());
     }
@@ -228,6 +265,9 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     return _ok({
       'id': id,
       'slot': slot,
+      'observationEffects': _observationEffects(
+        _FrameAdvancePolicy.observeOnly,
+      ),
       'hasCrop': bytes != null,
       'needsNative': needsNative,
       'rect': ?rect,
@@ -285,10 +325,14 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   }
 
   void _setAnnotationMode(bool enabled) {
-    if (_annotationMode == enabled) return;
-    _annotationMode = enabled;
-    _bumpAnnotationRevision();
-    _scheduleAnnotationOverlayInstall();
+    if (_annotationMode != enabled) {
+      _annotationMode = enabled;
+      _bumpAnnotationRevision();
+    }
+    if (enabled) {
+      _annotationOverlayOptedIn = true;
+    }
+    _reconcileAnnotationOverlay();
   }
 
   void _bumpAnnotationRevision() {
@@ -356,23 +400,35 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     // then capture synchronously and restore immediately — the chrome is absent
     // for ~one frame in a small rect, not a full-screen multi-frame blank.
     ui.Image? image;
-    _captureClearRects.add(bounds);
-    _bumpAnnotationRevision();
+    final clearScoutChrome =
+        _annotationOverlayEntry != null &&
+        (_annotationOverlayHost?.mounted ?? false);
+    if (clearScoutChrome) {
+      _captureClearRects.add(bounds);
+      _bumpAnnotationRevision();
+    }
     try {
-      // Wait two frames, not one: `endOfFrame` can resolve against a frame that
-      // was already in flight when we added the clear rect (capture is usually
-      // triggered right after another revision bump). The first await drains any
-      // such in-flight frame; the second guarantees a frame built *with* the
-      // clear rect has been composited before the synchronous raster reads it —
-      // otherwise chrome could intermittently bleed into the crop.
-      await _waitForFrame();
-      await _waitForFrame();
+      if (clearScoutChrome) {
+        // Wait two frames, not one: `endOfFrame` can resolve against a frame
+        // that was already in flight when we added the clear rect. The first
+        // await drains that frame; the second guarantees a frame built with
+        // the clear rect has been composited before rasterization.
+        await _settleMutationFrames();
+        await _settleMutationFrames();
+      }
       image = layer.toImageSync(physicalBounds, pixelRatio: 1.0);
     } catch (_) {
       // image stays null; handled below.
     } finally {
-      _captureClearRects.remove(bounds);
-      _bumpAnnotationRevision();
+      if (clearScoutChrome) {
+        _captureClearRects.remove(bounds);
+        _bumpAnnotationRevision();
+        // Restore the Scout overlay before the caller takes its mandatory
+        // post-raster identity snapshot. Otherwise Scout's own scheduled
+        // restoration frame changes `idle` and creates a false app-state race.
+        await _settleMutationFrames();
+        await _settleMutationFrames();
+      }
     }
     if (image == null) {
       return _CaptureResult.failure(
@@ -509,6 +565,9 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
   ) async {
     try {
       final mode = params['mode'] ?? 'screen';
+      if (mode == 'changed-region') {
+        return _handleChangedRegionCapture(params);
+      }
       final native = params['native'] ?? 'auto';
       Rect? rect;
       if (mode == 'crop') {
@@ -583,6 +642,385 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     }
   }
 
+  Future<developer.ServiceExtensionResponse> _handleChangedRegionCapture(
+    Map<String, String> params,
+  ) async {
+    const maximumRegions = 16;
+    const maximumPaddingLogical = 256.0;
+    const maximumUnionAreaRatio = 0.50;
+    const maximumOutputPixels = 4 * 1024 * 1024;
+    const maximumOutputDimension = 4096;
+    if (params['annotate'] == 'true') {
+      return _fail(
+        'changed_region_annotation_unsupported',
+        'Changed-region capture cannot add marks because the marks would not be part of the snapshot-relative evidence.',
+      );
+    }
+    if ((params['pixelRatio'] ?? '').isNotEmpty) {
+      return _fail(
+        'changed_region_pixel_ratio_override_unsupported',
+        'Changed-region capture must use the current snapshot device pixel ratio.',
+      );
+    }
+    if (params['native'] == 'on') {
+      return _fail(
+        'changed_region_native_capture_unsupported',
+        'Native changed-region capture cannot be atomically bound to one Flutter snapshot. Use an in-app changed-region crop or a full native screenshot.',
+        extra: const <String, Object?>{
+          'nativeFallback': <String, Object?>{
+            'status': 'unsupported',
+            'reason': 'atomic_snapshot_binding_unavailable',
+          },
+        },
+      );
+    }
+    final rawPadding = params['padding'] ?? '12';
+    final padding = double.tryParse(rawPadding);
+    if (padding == null ||
+        !padding.isFinite ||
+        padding < 0 ||
+        padding > maximumPaddingLogical) {
+      return _fail(
+        'invalid_changed_region_padding',
+        'Changed-region padding must be a finite logical-pixel value from 0 through 256.',
+      );
+    }
+
+    final current = _snapshot();
+    final lookup = _lookupNavigationSnapshot(
+      current: current,
+      requestedSnapshotId: params['since'] ?? '',
+    );
+    if (!lookup.ok) {
+      return _fail(
+        lookup.errorCode!,
+        lookup.errorMessage!,
+        extra: <String, Object?>{
+          ..._navigationHistoryEvidence(current),
+          'requestedSnapshotId': lookup.requestedSnapshotId,
+          'reason': lookup.reason,
+          'operation': 'capture_changed_region',
+        },
+      );
+    }
+    final baseline = lookup.baseline;
+    final delta = _delta(baseline, current);
+    final rawCoverage = delta['changedRegionCoverage'];
+    final coverage = rawCoverage is Map
+        ? <String, Object?>{
+            for (final entry in rawCoverage.entries)
+              entry.key.toString(): entry.value,
+          }
+        : const <String, Object?>{};
+    final rawRegions = delta['changedRegions'];
+    final regions = rawRegions is List
+        ? rawRegions
+              .whereType<Map>()
+              .map((region) {
+                return <String, Object?>{
+                  for (final entry in region.entries)
+                    entry.key.toString(): entry.value,
+                };
+              })
+              .toList(growable: false)
+        : const <Map<String, Object?>>[];
+    final issues = coverage['issues'] is List
+        ? (coverage['issues']! as List).map((issue) => issue.toString()).toSet()
+        : const <String>{};
+    String? coverageErrorCode;
+    String? coverageErrorMessage;
+    if (issues.contains('coordinate_frame_changed_or_unavailable')) {
+      coverageErrorCode = 'changed_region_coordinate_frame_unavailable';
+      coverageErrorMessage =
+          'The baseline and current snapshots do not share one trustworthy logical/physical coordinate frame.';
+    } else if (issues.contains('screen_or_route_changed')) {
+      coverageErrorCode = 'changed_region_scope_ambiguous';
+      coverageErrorMessage =
+          'The screen or route changed, so a local crop would not truthfully represent the changed surface. Use a full screenshot.';
+    } else if (issues.contains('ambiguous_geometry')) {
+      coverageErrorCode = 'changed_region_geometry_ambiguous';
+      coverageErrorMessage =
+          'At least one changed semantic identity maps to ambiguous geometry.';
+    } else if (issues.contains('unavailable_geometry') ||
+        issues.contains('region_list_truncated')) {
+      coverageErrorCode = 'changed_region_geometry_unavailable';
+      coverageErrorMessage =
+          'Complete geometry is unavailable for every changed visible semantic region.';
+    } else if (issues.contains('no_visible_changed_region') ||
+        regions.isEmpty) {
+      coverageErrorCode = 'changed_region_unavailable';
+      coverageErrorMessage =
+          'No visible semantic changed region exists for the requested snapshot baseline.';
+    }
+    if (coverage['status'] != 'complete' || coverageErrorCode != null) {
+      return _fail(
+        coverageErrorCode ?? 'changed_region_geometry_unavailable',
+        coverageErrorMessage ??
+            'Changed-region geometry coverage is incomplete.',
+        extra: <String, Object?>{
+          'operation': 'capture_changed_region',
+          'requestedSnapshotId': lookup.requestedSnapshotId,
+          'baselineScope': <String, Object?>{
+            'runId': lookup.baselineRecord!.runId,
+            'runtimeInstanceId': lookup.baselineRecord!.runtimeInstanceId,
+            'stateGeneration': baseline.stateGeneration,
+            'snapshotId': baseline.snapshotId,
+          },
+          'currentScope': _targetScope(current),
+          'changedRegionCoverage': coverage,
+        },
+      );
+    }
+    final reportedTotal = coverage['totalRegionCount'];
+    if (reportedTotal is! int ||
+        reportedTotal != regions.length ||
+        reportedTotal > maximumRegions) {
+      return _fail(
+        'changed_region_count_exceeded',
+        'Changed-region capture is limited to $maximumRegions complete regions.',
+        extra: <String, Object?>{
+          'regionCount': reportedTotal,
+          'returnedRegionCount': regions.length,
+          'maximumRegions': maximumRegions,
+          'changedRegionCoverage': coverage,
+        },
+      );
+    }
+    final viewport = Offset.zero & current.logicalSize;
+    Rect? union;
+    for (final region in regions) {
+      final rect = _changedRegionRectFromJson(region['logicalRect']);
+      if (rect == null ||
+          !_validChangedRegionRect(rect) ||
+          rect.left < viewport.left ||
+          rect.top < viewport.top ||
+          rect.right > viewport.right ||
+          rect.bottom > viewport.bottom) {
+        return _fail(
+          'changed_region_geometry_unavailable',
+          'A reported changed region is outside the exact current Flutter viewport.',
+          extra: <String, Object?>{
+            'region': region,
+            'logicalViewport': <double>[
+              viewport.left,
+              viewport.top,
+              viewport.width,
+              viewport.height,
+            ],
+          },
+        );
+      }
+      union = union == null ? rect : union.expandToInclude(rect);
+    }
+    if (union == null || !_validChangedRegionRect(union)) {
+      return _fail(
+        'changed_region_unavailable',
+        'The changed regions do not form a usable logical crop.',
+      );
+    }
+    final paddedUnion = union.inflate(padding).intersect(viewport);
+    final viewportArea = viewport.width * viewport.height;
+    final unionAreaRatio = viewportArea <= 0
+        ? double.infinity
+        : (paddedUnion.width * paddedUnion.height) / viewportArea;
+    if (!unionAreaRatio.isFinite || unionAreaRatio > maximumUnionAreaRatio) {
+      return _fail(
+        'changed_region_union_too_large',
+        'The padded changed-region union exceeds 50% of the current viewport. Use a full screenshot.',
+        extra: <String, Object?>{
+          'unionAreaRatio': unionAreaRatio.isFinite ? unionAreaRatio : null,
+          'maximumUnionAreaRatio': maximumUnionAreaRatio,
+          'logicalUnionRect': _rectToList(union),
+          'logicalPaddedRect': _rectToList(paddedUnion),
+        },
+      );
+    }
+    final dpr = current.devicePixelRatio;
+    final outputWidth = (paddedUnion.width * dpr).ceil();
+    final outputHeight = (paddedUnion.height * dpr).ceil();
+    final outputPixels = outputWidth * outputHeight;
+    if (outputWidth <= 0 ||
+        outputHeight <= 0 ||
+        outputWidth > maximumOutputDimension ||
+        outputHeight > maximumOutputDimension ||
+        outputPixels > maximumOutputPixels) {
+      return _fail(
+        'changed_region_output_too_large',
+        'The changed-region raster exceeds its bounded output dimensions or pixel count.',
+        extra: <String, Object?>{
+          'predictedPhysicalSize': <int>[outputWidth, outputHeight],
+          'predictedOutputPixels': outputPixels,
+          'maximumOutputDimension': maximumOutputDimension,
+          'maximumOutputPixels': maximumOutputPixels,
+        },
+      );
+    }
+    if (current.captureBackend['status'] != 'available') {
+      return _fail(
+        'changed_region_capture_backend_unavailable',
+        'The in-app capture backend was unavailable in the scoped current snapshot.',
+        extra: <String, Object?>{
+          'captureBackend': current.captureBackend,
+          'currentScope': _targetScope(current),
+        },
+      );
+    }
+
+    final result = await _captureRegion(rect: union, padding: padding);
+    final verified = _snapshot();
+    if (verified.snapshotId != current.snapshotId) {
+      return _fail(
+        'changed_region_snapshot_changed_during_capture',
+        'The app changed while the region was rasterized, so Scout discarded the image.',
+        extra: <String, Object?>{
+          'requestedSnapshotId': lookup.requestedSnapshotId,
+          'captureStartScope': _targetScope(current),
+          'captureEndScope': _targetScope(verified),
+          'captureStartIdle': current.idle,
+          'captureEndIdle': verified.idle,
+          'captureStartBackend': current.captureBackend,
+          'captureEndBackend': verified.captureBackend,
+          'captureStateDelta': _delta(current, verified),
+          'dispatch': 'not_applicable_read_only',
+        },
+      );
+    }
+    if (result.needsNative) {
+      return _fail(
+        'changed_region_native_capture_required',
+        'A platform view overlaps the changed region. Scout will not guess or race a native crop outside the snapshot-bound helper request.',
+        extra: <String, Object?>{
+          'requestedSnapshotId': lookup.requestedSnapshotId,
+          'currentScope': _targetScope(current),
+          'logicalPaddedRect': _rectToList(paddedUnion),
+          'nativeFallback': const <String, Object?>{
+            'status': 'unsupported',
+            'reason': 'atomic_snapshot_binding_unavailable',
+            'nextBestAction': 'capture_full_native_screenshot',
+          },
+        },
+      );
+    }
+    if (result.bytes == null ||
+        result.bounds == null ||
+        !_sameRect(result.bounds, paddedUnion) ||
+        (result.pixelRatio - dpr).abs() > 0.000001) {
+      return _fail(
+        'changed_region_capture_failed',
+        'The in-app raster did not preserve the validated changed-region coordinate contract.',
+        extra: <String, Object?>{
+          'captureError': result.error,
+          'expectedLogicalRect': _rectToList(paddedUnion),
+          'actualLogicalRect': result.bounds == null
+              ? null
+              : _rectToList(result.bounds!),
+          'expectedDevicePixelRatio': dpr,
+          'actualDevicePixelRatio': result.pixelRatio,
+        },
+      );
+    }
+    final physicalRect = <double>[
+      result.bounds!.left * dpr,
+      result.bounds!.top * dpr,
+      result.bounds!.width * dpr,
+      result.bounds!.height * dpr,
+    ];
+    final captureIdentity = crypto.sha256
+        .convert(
+          utf8.encode(
+            <String>[
+              baseline.snapshotId,
+              current.snapshotId,
+              ..._rectToList(result.bounds!).map((value) => '$value'),
+              '$dpr',
+              'in_app_capture',
+            ].join('|'),
+          ),
+        )
+        .toString();
+    return _ok(<String, Object?>{
+      'operation': 'capture_changed_region',
+      'mode': 'changed-region',
+      'requestedSnapshotId': lookup.requestedSnapshotId,
+      'baselineScope': <String, Object?>{
+        'runId': lookup.baselineRecord!.runId,
+        'runtimeInstanceId': lookup.baselineRecord!.runtimeInstanceId,
+        'stateGeneration': baseline.stateGeneration,
+        'snapshotId': baseline.snapshotId,
+      },
+      'currentScope': _targetScope(current),
+      'captureVerifiedScope': _targetScope(verified),
+      'semanticChanged': _changed(baseline, current),
+      'changedRegions': regions,
+      'changedRegionCoverage': coverage,
+      'regionSelection': <String, Object?>{
+        'strategy': 'bounded_union',
+        'regionCount': regions.length,
+        'logicalUnionRect': _rectToList(union),
+        'logicalPaddedRect': _rectToList(result.bounds!),
+        'physicalPaddedRect': physicalRect,
+        'paddingLogical': padding,
+        'unionAreaRatio': unionAreaRatio,
+        'predictedOutputPixels': outputPixels,
+        'bounds': const <String, Object?>{
+          'maximumRegions': maximumRegions,
+          'maximumPaddingLogical': maximumPaddingLogical,
+          'maximumUnionAreaRatio': maximumUnionAreaRatio,
+          'maximumOutputPixels': maximumOutputPixels,
+          'maximumOutputDimension': maximumOutputDimension,
+        },
+      },
+      'coordinateFrame': _changedRegionCoordinateFrame(current),
+      'backend': 'in_app_capture',
+      'captureBackend': current.captureBackend,
+      'captureIdentity': captureIdentity,
+      'needsNative': false,
+      'bytes': base64Encode(result.bytes!),
+      'width': result.width,
+      'height': result.height,
+      'pixelRatio': result.pixelRatio,
+      'rect': _rectToList(result.bounds!),
+      'limitations': const <String>[
+        'Changed regions use semantic/render geometry rather than pixel differencing.',
+        'Native fallback is unavailable because it cannot be atomically bound to this helper snapshot.',
+      ],
+    });
+  }
+
+  List<double> _rectToList(Rect value) => <double>[
+    value.left,
+    value.top,
+    value.width,
+    value.height,
+  ];
+
+  Map<String, Object?> _changedRegionCoordinateFrame(
+    ScoutSnapshot snapshot,
+  ) => <String, Object?>{
+    'primarySpace': 'logical_flutter_points',
+    'origin': 'flutter_view_top_left',
+    'xDirection': 'right',
+    'yDirection': 'down',
+    'logicalViewport': <double>[
+      0,
+      0,
+      snapshot.logicalSize.width,
+      snapshot.logicalSize.height,
+    ],
+    'physicalViewport': <double>[
+      0,
+      0,
+      snapshot.physicalSize.width,
+      snapshot.physicalSize.height,
+    ],
+    'devicePixelRatio': snapshot.devicePixelRatio,
+    'logicalToPhysicalScale': snapshot.devicePixelRatio,
+    'viewMetricsAvailable': snapshot.viewMetricsAvailable,
+    'provenance':
+        'baseline_and_current_snapshot_render_geometry_with_current_flutter_view_metrics',
+    'nativeImageContract': 'unsupported_for_snapshot_bound_changed_region',
+  };
+
   Rect? _parseRectParam(String? value) {
     if (value == null || value.isEmpty) return null;
     final parts = value.split(',');
@@ -599,6 +1037,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       'annotationMode': _annotationMode,
       'handoffSeq': _annotationHandoffSeq,
       'screen': snapshot.screen,
+      'screenEvidence': snapshot.screenEvidence,
       'routeGuess': snapshot.routeGuess,
       'annotations': _annotationJsonList(liveTargets: liveTargets),
       if (includeTargets)
@@ -872,8 +1311,19 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     return _annotationTargets();
   }
 
-  void _scheduleAnnotationOverlayInstall() {
-    if (!kDebugMode) return;
+  bool get _annotationOverlayUiActive => _annotationMode || _recording;
+
+  void _reconcileAnnotationOverlay() {
+    if (_annotationOverlayOptedIn && _annotationOverlayUiActive) {
+      _scheduleAnnotationOverlayInstall();
+      return;
+    }
+    _removeAnnotationOverlay();
+  }
+
+  void _scheduleAnnotationOverlayInstall({bool forceForTesting = false}) {
+    if (!kDebugMode || !_annotationOverlayOptedIn) return;
+    if (!_annotationOverlayUiActive && !forceForTesting) return;
     if (_annotationOverlayEntry != null) {
       if (_annotationOverlayHost?.mounted ?? false) return;
       // The Overlay that hosted the entry is gone (the app replaced its root
@@ -887,23 +1337,28 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     _annotationOverlayInstallScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _annotationOverlayInstallScheduled = false;
-      _installAnnotationOverlayIfPossible();
+      _installAnnotationOverlayIfPossible(forceForTesting: forceForTesting);
     });
     // A post-frame callback alone never fires if the app is idle (no frames
     // scheduled) — common right after attach or in tests. Ask for one.
     WidgetsBinding.instance.scheduleFrame();
   }
 
-  void _installAnnotationOverlayIfPossible() {
-    if (!kDebugMode || _annotationOverlayEntry != null) return;
+  void _installAnnotationOverlayIfPossible({bool forceForTesting = false}) {
+    if (!kDebugMode ||
+        !_annotationOverlayOptedIn ||
+        (!_annotationOverlayUiActive && !forceForTesting) ||
+        _annotationOverlayEntry != null) {
+      return;
+    }
     final root = WidgetsBinding.instance.rootElement;
     if (root == null) {
-      _scheduleAnnotationOverlayInstall();
+      _scheduleAnnotationOverlayInstall(forceForTesting: forceForTesting);
       return;
     }
     final overlay = _findRootOverlay(root);
     if (overlay == null) {
-      _scheduleAnnotationOverlayInstall();
+      _scheduleAnnotationOverlayInstall(forceForTesting: forceForTesting);
       return;
     }
     _annotationOverlayEntry = OverlayEntry(
@@ -911,6 +1366,20 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     );
     _annotationOverlayHost = overlay;
     overlay.insert(_annotationOverlayEntry!);
+  }
+
+  void _removeAnnotationOverlay() {
+    final entry = _annotationOverlayEntry;
+    _annotationOverlayEntry = null;
+    _annotationOverlayHost = null;
+    if (entry == null) return;
+    try {
+      entry.remove();
+      entry.dispose();
+    } catch (_) {
+      // A root replacement can dispose the host before Scout observes it.
+      // Clearing our references is sufficient; the dead host owns cleanup.
+    }
   }
 
   OverlayState? _findRootOverlay(Element root) {

@@ -2,6 +2,13 @@ part of 'flutter_scout_cli.dart';
 
 // part: session lifecycle commands: launch, attach, ensure, status, doctor, stop.
 
+// POSIX advisory locks are process-scoped on some platforms, so a second
+// Scout command served inside the same long-lived process needs an explicit
+// in-process guard in addition to the kernel lease.
+final Set<String> _heldLaunchLeasePaths = <String>{};
+
+String get _launchLockInfoFile => '$_launchLockFile.info.json';
+
 extension _CliSession on FlutterScoutCli {
   Future<int> _launch(List<String> args) async {
     final parser = ArgParser()
@@ -20,8 +27,20 @@ extension _CliSession on FlutterScoutCli {
       )
       ..addOption('helper-path')
       ..addFlag('replace', defaultsTo: false, negatable: false)
-      ..addMultiOption('dart-define')
-      ..addMultiOption('dart-define-from-file')
+      ..addMultiOption(
+        'dart-define',
+        splitCommas: false,
+        help:
+            'Deprecated for inline values and rejected when secret-looking. '
+            'Prefer --dart-define-from-file.',
+      )
+      ..addMultiOption(
+        'dart-define-from-file',
+        splitCommas: false,
+        help:
+            'Read Flutter defines from a bounded, strict-UTF-8, regular '
+            'non-symlink file that is exactly 0600 on POSIX.',
+      )
       ..addOption(
         'launch-timeout',
         help:
@@ -72,11 +91,18 @@ extension _CliSession on FlutterScoutCli {
       device: device,
       name: parsed.option('name'),
     );
+    _TemporaryHelperSetup? temporarySetup;
+    var preserveTemporarySetupForOwnedRun = false;
     try {
       // A normally exited macOS worker leaves an inactive launchd job loaded.
       // Once this launch owns the session lease, unload the previous exact job
       // before replacing its metadata with the new run.
       await _stopRunnerSupervisor(previousSessionMeta);
+      // The detached worker writes a newly discovered, validated capability
+      // URL to this single designated store. Remove any stale predecessor
+      // before it starts so the parent cannot adopt a credential from an older
+      // runtime while polling for this launch.
+      _clearVmUriFile();
       final instanceName = parsed.option('name');
       if (instanceName != null && instanceName.isNotEmpty) {
         // Session files live in the cwd; register it so `--app <name>` can
@@ -91,6 +117,13 @@ extension _CliSession on FlutterScoutCli {
           'No connected Flutter device exactly matched `$device`.',
         );
       }
+      // Capture app/toolchain identity before temporary-helper preparation
+      // writes any Scout-owned generated target or pub metadata.
+      final flutterExecutable = await _resolveFlutterExecutable();
+      final launchProvenance = await _collectLaunchProvenance(
+        project: project,
+        flutterExecutable: flutterExecutable,
+      );
 
       _ensureSessionDir();
       final runLogFile = p.join(
@@ -99,8 +132,7 @@ extension _CliSession on FlutterScoutCli {
         launchLease.runId,
         'logs.txt',
       );
-      Directory(p.dirname(runLogFile)).createSync(recursive: true);
-      File(runLogFile).writeAsStringSync('');
+      _writePrivateSessionString(runLogFile, '');
       _writeSessionMeta({
         'mode': 'scout_owned_flutter_run',
         'state': 'building',
@@ -109,10 +141,11 @@ extension _CliSession on FlutterScoutCli {
         'project': project,
         'device': resolvedDevice.id,
         'logFile': runLogFile,
+        ...launchProvenance,
         'createdAt': launchLease.startedAt.toIso8601String(),
         'updatedAt': DateTime.now().toIso8601String(),
       });
-      final temporarySetup = parsed.flag('temporary-helper')
+      temporarySetup = parsed.flag('temporary-helper')
           ? await _prepareTemporaryHelper(
               project: project,
               originalTarget: parsed.option('target') ?? 'lib/main.dart',
@@ -120,6 +153,15 @@ extension _CliSession on FlutterScoutCli {
               runId: launchLease.runId,
             )
           : null;
+      if (temporarySetup != null) {
+        // Commit the discoverable repair association before the detached
+        // runner is started; session_meta is supplementary to the project WAL.
+        _writeSessionMeta({
+          ...?_readSessionMeta(),
+          'temporarySetup': temporarySetup.toJson(),
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+        });
+      }
       final flutterArgs = <String>[
         'run',
         '-d',
@@ -136,14 +178,10 @@ extension _CliSession on FlutterScoutCli {
           '--flavor',
           parsed.option('flavor')!,
         ],
-        for (final value in parsed.multiOption('dart-define')) ...[
-          '--dart-define',
-          value,
-        ],
-        for (final value in parsed.multiOption('dart-define-from-file')) ...[
-          '--dart-define-from-file',
-          value,
-        ],
+        ..._prepareDartDefineFlutterArgs(
+          inline: parsed.multiOption('dart-define'),
+          files: parsed.multiOption('dart-define-from-file'),
+        ),
         if (parsed.option('name')?.isNotEmpty ?? false) ...[
           '--dart-define',
           '$kScoutInstanceDefine=${parsed.option('name')}',
@@ -153,6 +191,10 @@ extension _CliSession on FlutterScoutCli {
         // iOS-sim sandbox can't reach it, so the CLI persists from the ext there).
         '--dart-define',
         '$kScoutProjectDefine=${Directory(project).absolute.path}',
+        // Scope helper responses and mutation envelopes to this exact owned
+        // run. Attach-only sessions bind their generated run id in requests.
+        '--dart-define',
+        '$kScoutRunIdDefine=${launchLease.runId}',
         if (parsed.flag('verbose')) '--verbose',
       ];
 
@@ -192,40 +234,55 @@ extension _CliSession on FlutterScoutCli {
         launchLease.runId,
         'supervisor_state.json',
       );
-      final flutterExecutable = await _resolveFlutterExecutable();
-      File(workerConfigFile).writeAsStringSync(
-        jsonEncode({
-          'project': project,
-          'flutterExecutable': flutterExecutable,
-          'flutterArgs': flutterArgs,
-          'logFile': runLogFile,
-          'runId': launchLease.runId,
-          'exitFile': workerExitFile,
-          'stateFile': supervisorStateFile,
-          'persistentConfig': Platform.isMacOS,
-          'supervised': Platform.isMacOS,
-        }),
-      );
+      _writePrivateSessionJson(workerConfigFile, {
+        'project': project,
+        'device': resolvedDevice.id,
+        'flutterExecutable': flutterExecutable,
+        'flutterArgs': flutterArgs,
+        'logFile': runLogFile,
+        'vmUriFile': _vmUriFile,
+        'sessionDirectory': _sessionDir.path,
+        'runId': launchLease.runId,
+        'exitFile': workerExitFile,
+        'stateFile': supervisorStateFile,
+        'persistentConfig': Platform.isMacOS,
+        'supervised': Platform.isMacOS,
+      });
+      // launchd opens this path itself; pre-creating it under the private
+      // session boundary preserves 0600 even before the first log line.
+      _writePrivateSessionString(supervisorOutputFile, '');
       final supervisor = await _startFlutterRunnerSupervisor(
         configFile: workerConfigFile,
         runId: launchLease.runId,
         outputFile: supervisorOutputFile,
       );
-      File(_deviceFile).writeAsStringSync(resolvedDevice.id);
+      final supervisorOwnershipMeta = <String, dynamic>{
+        'mode': 'scout_owned_flutter_run',
+        'runId': launchLease.runId,
+        'project': project,
+        'device': resolvedDevice.id,
+        'supervisor': supervisor.toJson(),
+        'supervisorStateFile': supervisorStateFile,
+      };
+      _writePrivateSessionString(_deviceFile, resolvedDevice.id);
       _writeDeviceInfo(resolvedDevice);
       final initialWorkerPid = supervisor.workerPid;
       if (initialWorkerPid != null) {
-        File(_pidFile).writeAsStringSync(initialWorkerPid.toString());
+        _writePrivateSessionString(_pidFile, initialWorkerPid.toString());
       }
       _writeSessionMeta({
         ...?_readSessionMeta(),
+        ...launchProvenance,
         'supervisor': supervisor.toJson(),
         'exitFile': workerExitFile,
         'supervisorStateFile': supervisorStateFile,
         'workerPid': ?initialWorkerPid,
         'updatedAt': DateTime.now().toIso8601String(),
       });
-      final signalSubscriptions = _installRunnerSignalHandlers(supervisor);
+      final signalSubscriptions = _installRunnerSignalHandlers(
+        supervisor,
+        supervisorOwnershipMeta,
+      );
 
       final lines = <String>[];
       void handleLine(String line) {
@@ -259,6 +316,10 @@ extension _CliSession on FlutterScoutCli {
             vmUri ??= _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
           }
           readLineCount = currentLines.length;
+          vmUri ??= _readVmUri();
+          if (vmUri != null) {
+            _writeProgress('vm_service_found');
+          }
           if (vmUri != null) break;
         }
         final now = DateTime.now();
@@ -289,39 +350,44 @@ extension _CliSession on FlutterScoutCli {
       }
 
       if (vmUri == null) {
-        await _stopRunnerSupervisor({'supervisor': supervisor.toJson()});
+        await _stopRunnerSupervisor(supervisorOwnershipMeta);
         if (temporarySetup != null) {
           await _cleanupTemporaryHelper(temporarySetup);
+          temporarySetup = null;
         }
         _writeSessionMeta({
           ...?_readSessionMeta(),
           'state': 'failed',
           'updatedAt': DateTime.now().toIso8601String(),
         });
-        stdout.writeln(
-          jsonEncode({
-            'launched': false,
-            'reason': 'vm_service_uri_not_found',
-            // Which of the three ways the wait ended. A hard_timeout or
-            // idle_timeout means Scout stopped a runner that may still have
-            // been building; raise --launch-timeout / --launch-idle-timeout
-            // rather than assuming the build itself failed.
-            'failureMode': stopReason,
-            'launchTimeoutSeconds': launchTimeout.inSeconds,
-            'launchIdleTimeoutSeconds': launchIdleTimeout.inSeconds,
-            'pid': supervisor.workerPid,
-            'supervisor': supervisor.toJson(),
-            'timing': launchTiming.toJson(completedAt: DateTime.now()),
-            'tailLogLines': lines.length > 20
-                ? lines.sublist(lines.length - 20)
-                : lines,
-          }),
-        );
+        _printJson({
+          'ok': false,
+          'launched': false,
+          'reason': 'vm_service_uri_not_found',
+          'error': <String, Object?>{
+            'code': 'vm_service_uri_not_found',
+            'message':
+                'Flutter Scout did not observe a VM service URI before the bounded launch wait ended.',
+          },
+          // Which of the three ways the wait ended. A hard_timeout or
+          // idle_timeout means Scout stopped a runner that may still have
+          // been building; raise --launch-timeout / --launch-idle-timeout
+          // rather than assuming the build itself failed.
+          'failureMode': stopReason,
+          'launchTimeoutSeconds': launchTimeout.inSeconds,
+          'launchIdleTimeoutSeconds': launchIdleTimeout.inSeconds,
+          'pid': supervisor.workerPid,
+          'supervisor': supervisor.toJson(),
+          'timing': launchTiming.toJson(completedAt: DateTime.now()),
+          'tailLogLines': lines.length > 20
+              ? lines.sublist(lines.length - 20)
+              : lines,
+        }, success: false);
         return 1;
       }
 
       final wsUri = _normalizeVmUri(vmUri);
-      File(_vmUriFile).writeAsStringSync(wsUri);
+      _persistValidatedVmUri(wsUri);
       final flutterToolPid =
           await _findScoutFlutterToolPid(
             project: project,
@@ -329,26 +395,47 @@ extension _CliSession on FlutterScoutCli {
           ) ??
           initialWorkerPid;
       if (flutterToolPid == null) {
-        await _stopRunnerSupervisor({'supervisor': supervisor.toJson()});
+        await _stopRunnerSupervisor(supervisorOwnershipMeta);
         throw const ScoutCliException(
           'flutter_runner_pid_not_found',
           'The supervised Flutter runner became ready but its process id '
               'could not be verified.',
         );
       }
-      File(_pidFile).writeAsStringSync('$flutterToolPid');
+      final flutterProcessIdentity = await _readProcessOwnershipIdentity(
+        flutterToolPid,
+        role: _flutterRunProcessRole,
+      );
+      _writePrivateSessionString(_pidFile, '$flutterToolPid');
       final vmLogListenerPid = await _startVmLogListener(
         vmUri: wsUri,
         logFile: runLogFile,
         ownerPid: flutterToolPid,
       );
+      final vmLogListenerIdentity = vmLogListenerPid == null
+          ? null
+          : await _readProcessOwnershipIdentity(
+              vmLogListenerPid,
+              role: _vmLogListenerProcessRole,
+            );
       _writeSessionMeta({
         'mode': 'scout_owned_flutter_run',
         'state': 'ready',
         'runId': launchLease.runId,
         'name': ?instanceName,
         'pid': flutterToolPid,
+        'processIdentity': ?flutterProcessIdentity,
+        'processIdentityUnavailable': flutterProcessIdentity == null,
         'vmLogListenerPid': ?vmLogListenerPid,
+        if (vmLogListenerPid != null && vmLogListenerIdentity != null)
+          'vmLogListener': {
+            'pid': vmLogListenerPid,
+            'processIdentity': vmLogListenerIdentity,
+            'ownerPid': flutterToolPid,
+            'ownerProcessIdentity': flutterProcessIdentity,
+            'runId': launchLease.runId,
+            'sessionDirectory': _sessionDir.path,
+          },
         'supervisor': supervisor.toJson(),
         'exitFile': workerExitFile,
         'supervisorStateFile': supervisorStateFile,
@@ -356,150 +443,40 @@ extension _CliSession on FlutterScoutCli {
         'logFile': runLogFile,
         'project': project,
         'device': resolvedDevice.id,
+        ...launchProvenance,
         'createdAt': launchLease.startedAt.toIso8601String(),
         'updatedAt': DateTime.now().toIso8601String(),
         if (temporarySetup != null) 'temporarySetup': temporarySetup.toJson(),
       });
+      preserveTemporarySetupForOwnedRun = temporarySetup != null;
       _writeProgress('verify_vm_service', {'vmServiceUri': wsUri});
       final ready = await _waitScoutReady(wsUri);
       launchTiming.readyAt = DateTime.now();
-      stdout.writeln(
-        jsonEncode({
-          'launched': true,
-          'ready': ready.ready,
-          if (!ready.ready) 'reason': ready.reason,
-          if (!ready.ready) 'expected': ready.expected,
-          'device': resolvedDevice.id,
-          'deviceName': resolvedDevice.name,
-          'deviceCategory': resolvedDevice.category,
-          'project': project,
-          'pid': flutterToolPid,
-          'vmLogListenerPid': ?vmLogListenerPid,
-          'supervisor': supervisor.toJson(),
-          'vmServiceUri': wsUri,
-          'logFile': runLogFile,
-          'timing': launchTiming.toJson(completedAt: launchTiming.readyAt),
-        }),
-      );
+      _printJson({
+        'launched': true,
+        'ready': ready.ready,
+        if (!ready.ready) 'reason': ready.reason,
+        if (!ready.ready) 'expected': ready.expected,
+        'device': resolvedDevice.id,
+        'deviceName': resolvedDevice.name,
+        'deviceCategory': resolvedDevice.category,
+        'project': project,
+        'sourceIdentity': launchProvenance['sourceIdentity'],
+        'flutterToolchain': launchProvenance['flutterToolchain'],
+        'runId': launchLease.runId,
+        'pid': flutterToolPid,
+        'vmLogListenerPid': ?vmLogListenerPid,
+        'supervisor': supervisor.toJson(),
+        'vmServiceUri': wsUri,
+        'logFile': runLogFile,
+        'timing': launchTiming.toJson(completedAt: launchTiming.readyAt),
+      });
       return ready.ready ? 0 : 1;
     } finally {
+      if (temporarySetup != null && !preserveTemporarySetupForOwnedRun) {
+        await _cleanupTemporaryHelper(temporarySetup);
+      }
       launchLease.release();
-    }
-  }
-
-  Future<_TemporaryHelperSetup> _prepareTemporaryHelper({
-    required String project,
-    required String originalTarget,
-    required String? helperPath,
-    required String runId,
-  }) async {
-    final pubspec = File(p.join(project, 'pubspec.yaml'));
-    if (!pubspec.existsSync()) {
-      throw const ScoutCliException(
-        'temporary_helper_pubspec_missing',
-        'Temporary helper setup requires a Flutter pubspec.yaml.',
-      );
-    }
-    final target = p.isAbsolute(originalTarget)
-        ? p.normalize(originalTarget)
-        : p.normalize(p.join(project, originalTarget));
-    if (!File(target).existsSync()) {
-      throw ScoutCliException(
-        'temporary_helper_target_missing',
-        'The original Flutter target does not exist: $target',
-      );
-    }
-    final resolvedHelper = helperPath ?? await _discoverBundledHelperPath();
-    if (resolvedHelper == null ||
-        !File(p.join(resolvedHelper, 'pubspec.yaml')).existsSync()) {
-      throw const ScoutCliException(
-        'temporary_helper_path_missing',
-        'Could not locate flutter_scout_helper. Pass '
-            '`--helper-path <path-to-flutter_scout_helper>`.',
-      );
-    }
-
-    final originalPubspec = pubspec.readAsBytesSync();
-    final lockFile = File(p.join(project, 'pubspec.lock'));
-    final lockExisted = lockFile.existsSync();
-    final originalLock = lockExisted ? lockFile.readAsBytesSync() : null;
-    final generatedDir = Directory(p.join(project, '.flutter_scout'))
-      ..createSync(recursive: true);
-    File? lockBackup;
-    if (originalLock != null) {
-      lockBackup = File(
-        p.join(generatedDir.path, 'bootstrap_$runId.lock.backup'),
-      )..writeAsBytesSync(originalLock);
-    }
-    final pubspecText = utf8.decode(originalPubspec);
-    var dependencyInjected = false;
-    try {
-      if (!RegExp(
-        r'^\s*flutter_scout_helper\s*:',
-        multiLine: true,
-      ).hasMatch(pubspecText)) {
-        final dependencies = RegExp(
-          r'^dependencies:\s*$',
-          multiLine: true,
-        ).firstMatch(pubspecText);
-        if (dependencies == null) {
-          throw const ScoutCliException(
-            'temporary_helper_dependencies_missing',
-            'pubspec.yaml has no top-level dependencies section.',
-          );
-        }
-        final quotedPath = resolvedHelper.replaceAll("'", "''");
-        final insertion = "\n  flutter_scout_helper:\n    path: '$quotedPath'";
-        final updated = pubspecText.replaceRange(
-          dependencies.end,
-          dependencies.end,
-          insertion,
-        );
-        pubspec.writeAsStringSync(updated);
-        dependencyInjected = true;
-      }
-
-      final pubGet = await Process.run('flutter', const [
-        'pub',
-        'get',
-      ], workingDirectory: project);
-      if (pubGet.exitCode != 0) {
-        throw ScoutCliException(
-          'temporary_helper_pub_get_failed',
-          'flutter pub get failed during temporary helper setup: '
-              '${pubGet.stderr}',
-        );
-      }
-
-      final generatedTarget = File(
-        p.join(generatedDir.path, 'bootstrap_$runId.dart'),
-      );
-      final relativeTarget = p
-          .relative(target, from: generatedDir.path)
-          .split(p.separator)
-          .join('/');
-      generatedTarget.writeAsStringSync('''
-import 'package:flutter_scout_helper/flutter_scout_helper.dart';
-import '$relativeTarget' as app;
-
-Future<void> main() async {
-  FlutterScoutBinding.ensureInitialized();
-  await Future<void>.sync(app.main);
-}
-''');
-      return _TemporaryHelperSetup(
-        project: project,
-        targetPath: generatedTarget.path,
-        lockExisted: lockExisted,
-        lockBackupPath: lockBackup?.path,
-      );
-    } finally {
-      if (dependencyInjected) pubspec.writeAsBytesSync(originalPubspec);
-      if (originalLock != null) {
-        lockFile.writeAsBytesSync(originalLock);
-      } else if (!lockExisted && lockFile.existsSync()) {
-        lockFile.deleteSync();
-      }
     }
   }
 
@@ -527,6 +504,8 @@ Future<void> main() async {
     final logFile = config['logFile']?.toString();
     final exitFile = config['exitFile']?.toString();
     final stateFile = config['stateFile']?.toString();
+    final vmUriFile = config['vmUriFile']?.toString();
+    final sessionDirectory = config['sessionDirectory']?.toString();
     final flutterArgs = config['flutterArgs'];
     if (project == null ||
         project.isEmpty ||
@@ -540,12 +519,51 @@ Future<void> main() async {
         'The Flutter worker configuration is incomplete.',
       );
     }
+    final flutterArgv = flutterArgs
+        .map((value) => value.toString())
+        .toList(growable: false);
+    _preflightWorkerDartDefineFiles(flutterArgv, workingDirectory: project);
 
-    Directory(p.dirname(logFile)).createSync(recursive: true);
+    if ((vmUriFile == null) != (sessionDirectory == null)) {
+      throw const ScoutCliException(
+        'invalid_worker_config',
+        'The Flutter worker capability handoff configuration is incomplete.',
+      );
+    }
+    if (vmUriFile != null && sessionDirectory != null) {
+      final expected = _absoluteNormalized(
+        p.join(sessionDirectory, 'vm_uri.txt'),
+      );
+      if (_absoluteNormalized(vmUriFile) != expected) {
+        throw const ScoutCliException(
+          'invalid_worker_config',
+          'The Flutter worker capability handoff must use the designated '
+              'session credential store.',
+        );
+      }
+    }
+
     final writer = _LockedLogWriter(logFile);
     Future<void> writeLine(String stream, String line) {
       final timestamp = DateTime.now().toUtc().toIso8601String();
-      final sanitized = _redactSensitiveLogText(_stripLogAnsi(line));
+      final plain = _stripLogAnsi(line);
+      final discovered =
+          _extractVmUri(plain) ?? _extractFlutterToolVmUri(plain);
+      if (discovered != null && vmUriFile != null && sessionDirectory != null) {
+        try {
+          final validated = _validatedVmServiceUri(discovered);
+          _atomicWritePrivateString(
+            vmUriFile,
+            validated.normalized,
+            boundary: sessionDirectory,
+          );
+        } on ScoutCliException {
+          // The URI was registered before this log sink and is therefore
+          // redacted below, but an invalid/remote endpoint is never handed to
+          // the parent and can never trigger a connection.
+        }
+      }
+      final sanitized = _redactActiveSensitiveText(plain);
       return writer.write('[$timestamp] [FLUTTER_$stream] $sanitized');
     }
 
@@ -564,20 +582,23 @@ Future<void> main() async {
     void writeState(Map<String, Object?> state) {
       if (stateFile == null || stateFile.isEmpty) return;
       final file = File(stateFile);
-      file.parent.createSync(recursive: true);
-      final temporary = File('${file.path}.$pid.tmp');
-      temporary.writeAsStringSync(jsonEncode(state), flush: true);
-      temporary.renameSync(file.path);
+      _atomicWritePrivateJson(file.path, state, boundary: file.parent.path);
     }
 
     final previousState = readState();
     final launchCount = (previousState['launchCount'] as num?)?.toInt() ?? 0;
     final workerStartedAt = DateTime.now().toUtc().toIso8601String();
+    final workerProcessIdentity = await _readProcessOwnershipIdentity(
+      pid,
+      role: _flutterWorkerProcessRole,
+    );
     var supervisorState = <String, Object?>{
       'runId': ?config['runId']?.toString(),
       'launchCount': launchCount + 1,
       'workerPid': pid,
       'workerStartedAt': workerStartedAt,
+      'workerProcessIdentity': ?workerProcessIdentity,
+      'workerProcessIdentityUnavailable': workerProcessIdentity == null,
       if (previousState['workerPid'] != null)
         'previousWorkerPid': previousState['workerPid'],
       if (previousState['workerStartedAt'] != null)
@@ -593,12 +614,43 @@ Future<void> main() async {
       final String value => int.tryParse(value),
       _ => null,
     };
+    final recoveryMeta = <String, dynamic>{
+      'mode': 'scout_owned_flutter_run',
+      'runId': config['runId'],
+      'project': project,
+      'device': config['device'],
+      'processIdentity': previousState['flutterProcessIdentity'],
+    };
     final recoverExistingFlutter =
         config['supervised'] == true &&
         launchCount > 0 &&
         previousState['workerExitingNormally'] != true &&
         previousFlutterPid != null &&
-        await _looksLikeScoutFlutterRun(previousFlutterPid);
+        await _matchesOwnedFlutterRun(previousFlutterPid, recoveryMeta);
+    final previousFlutterIdentityUncertain =
+        config['supervised'] == true &&
+        launchCount > 0 &&
+        previousState['workerExitingNormally'] != true &&
+        previousFlutterPid != null &&
+        !recoverExistingFlutter &&
+        await _processExists(previousFlutterPid);
+    if (previousFlutterIdentityUncertain) {
+      // Starting another Flutter tool while a process still occupies the
+      // recorded PID can duplicate app launches and mutations. A stale or
+      // reparented identity is not authority to adopt or terminate it, so the
+      // supervisor records the repair state and exits successfully to prevent
+      // launchd from repeatedly creating competing runners.
+      supervisorState = {
+        ...supervisorState,
+        'ownershipUncertain': true,
+        'uncertainFlutterPid': previousFlutterPid,
+        'reason': 'previous_flutter_process_identity_mismatch',
+        'workerExitingNormally': true,
+      };
+      writeState(supervisorState);
+      await writer.close();
+      return 0;
+    }
     if (recoverExistingFlutter) {
       supervisorState = {
         ...supervisorState,
@@ -608,24 +660,36 @@ Future<void> main() async {
       };
       writeState(supervisorState);
       String? requestedSignal;
+
+      Future<bool> stillOwnsRecoveredFlutter() =>
+          _matchesOwnedFlutterRun(previousFlutterPid, recoveryMeta);
+
+      void forwardSignal(ProcessSignal signal) {
+        unawaited(() async {
+          if (await stillOwnsRecoveredFlutter()) {
+            Process.killPid(previousFlutterPid, signal);
+          }
+        }());
+      }
+
       final signalSubscriptions = <StreamSubscription<ProcessSignal>>[
-        ProcessSignal.sigusr1.watch().listen(
-          (_) => Process.killPid(previousFlutterPid, ProcessSignal.sigusr1),
-        ),
-        ProcessSignal.sigusr2.watch().listen(
-          (_) => Process.killPid(previousFlutterPid, ProcessSignal.sigusr2),
-        ),
+        ProcessSignal.sigusr1.watch().listen((_) {
+          forwardSignal(ProcessSignal.sigusr1);
+        }),
+        ProcessSignal.sigusr2.watch().listen((_) {
+          forwardSignal(ProcessSignal.sigusr2);
+        }),
         ProcessSignal.sigterm.watch().listen((_) {
           requestedSignal = ProcessSignal.sigterm.toString();
-          Process.killPid(previousFlutterPid);
+          forwardSignal(ProcessSignal.sigterm);
         }),
         ProcessSignal.sigint.watch().listen((_) {
           requestedSignal = ProcessSignal.sigint.toString();
-          Process.killPid(previousFlutterPid, ProcessSignal.sigint);
+          forwardSignal(ProcessSignal.sigint);
         }),
       ];
       try {
-        while (await _processExists(previousFlutterPid)) {
+        while (await stillOwnsRecoveredFlutter()) {
           await Future<void>.delayed(const Duration(milliseconds: 500));
         }
         final exitedAt = DateTime.now().toUtc().toIso8601String();
@@ -639,8 +703,11 @@ Future<void> main() async {
         };
         if (exitFile != null && exitFile.isNotEmpty) {
           final file = File(exitFile);
-          file.parent.createSync(recursive: true);
-          file.writeAsStringSync(jsonEncode(exitInfo), flush: true);
+          _atomicWritePrivateJson(
+            file.path,
+            exitInfo,
+            boundary: file.parent.path,
+          );
         }
         supervisorState = {
           ...supervisorState,
@@ -659,11 +726,28 @@ Future<void> main() async {
 
     final child = await Process.start(
       flutterExecutable,
-      flutterArgs.map((value) => value.toString()).toList(growable: false),
+      flutterArgv,
       workingDirectory: project,
+      environment: _flutterToolEnvironment(),
     );
-    supervisorState = {...supervisorState, 'flutterPid': child.pid};
+    final childIdentity = await _readProcessOwnershipIdentity(
+      child.pid,
+      role: _flutterRunProcessRole,
+    );
+    supervisorState = {
+      ...supervisorState,
+      'flutterPid': child.pid,
+      'flutterProcessIdentity': ?childIdentity,
+      'flutterProcessIdentityUnavailable': childIdentity == null,
+    };
     writeState(supervisorState);
+    final childOwnershipMeta = <String, dynamic>{
+      'mode': 'scout_owned_flutter_run',
+      'runId': config['runId'],
+      'project': project,
+      'device': config['device'],
+      'processIdentity': childIdentity,
+    };
     final outputDrains = <Future<void>>[
       child.stdout
           .transform(utf8.decoder)
@@ -677,20 +761,28 @@ Future<void> main() async {
           .drain<void>(),
     ];
     String? requestedSignal;
+    void forwardChildSignal(ProcessSignal signal) {
+      unawaited(() async {
+        if (await _matchesOwnedFlutterRun(child.pid, childOwnershipMeta)) {
+          if (Process.killPid(child.pid, signal)) {
+            requestedSignal = signal.toString();
+          }
+        }
+      }());
+    }
+
     final signalSubscriptions = <StreamSubscription<ProcessSignal>>[
       ProcessSignal.sigusr1.watch().listen(
-        (_) => child.kill(ProcessSignal.sigusr1),
+        (_) => forwardChildSignal(ProcessSignal.sigusr1),
       ),
       ProcessSignal.sigusr2.watch().listen(
-        (_) => child.kill(ProcessSignal.sigusr2),
+        (_) => forwardChildSignal(ProcessSignal.sigusr2),
       ),
       ProcessSignal.sigterm.watch().listen((_) {
-        requestedSignal = ProcessSignal.sigterm.toString();
-        child.kill();
+        forwardChildSignal(ProcessSignal.sigterm);
       }),
       ProcessSignal.sigint.watch().listen((_) {
-        requestedSignal = ProcessSignal.sigint.toString();
-        child.kill(ProcessSignal.sigint);
+        forwardChildSignal(ProcessSignal.sigint);
       }),
     ];
     try {
@@ -707,8 +799,11 @@ Future<void> main() async {
       };
       if (exitFile != null && exitFile.isNotEmpty) {
         final file = File(exitFile);
-        file.parent.createSync(recursive: true);
-        file.writeAsStringSync(jsonEncode(exitInfo), flush: true);
+        _atomicWritePrivateJson(
+          file.path,
+          exitInfo,
+          boundary: file.parent.path,
+        );
       }
       supervisorState = {
         ...supervisorState,
@@ -771,58 +866,106 @@ Future<void> main() async {
     return null;
   }
 
+  String _newAttachRunId() {
+    final timestamp = DateTime.now().toUtc().toIso8601String().replaceAll(
+      RegExp(r'[^0-9]'),
+      '',
+    );
+    final entropy = Random.secure().nextInt(0x100000000);
+    return 'attach-$timestamp-$pid-${entropy.toRadixString(16).padLeft(8, '0')}';
+  }
+
   Future<_LaunchLease> _acquireLaunchLease({
     required String project,
     required String device,
     required String? name,
   }) async {
     _ensureSessionDir();
-    final file = File(_launchLockFile);
-    if (file.existsSync()) {
-      final info = _readLaunchInfo();
-      final ownerPid = int.tryParse('${info?['ownerPid'] ?? ''}');
-      final active = ownerPid != null && await _processExists(ownerPid);
-      if (active) {
-        throw ScoutCliException(
-          'launch_in_progress',
-          'A Flutter Scout launch is already in progress'
-              '${info?['name'] == null ? '' : ' for `${info?['name']}`'}. '
-              'Use `ensure` to join it, or wait for it to become ready.',
-        );
-      }
-      try {
-        file.deleteSync();
-      } catch (_) {}
-    }
     final startedAt = DateTime.now();
     final runId =
         '${startedAt.toUtc().toIso8601String().replaceAll(RegExp(r'[^0-9]'), '')}-$pid';
-    try {
-      file.createSync(recursive: true, exclusive: true);
-    } on FileSystemException {
-      throw const ScoutCliException(
-        'launch_in_progress',
-        'Another Flutter Scout launch acquired this session concurrently. '
-            'Use `ensure` to join it.',
-      );
+    final file = File(_launchLockFile);
+    final infoFile = File(_launchLockInfoFile);
+    final normalizedLockPath = _absoluteNormalized(file.path);
+    if (!_heldLaunchLeasePaths.add(normalizedLockPath)) {
+      throw _launchInProgress(_readLaunchInfo());
     }
-    file.writeAsStringSync(
-      jsonEncode({
+
+    RandomAccessFile? handle;
+    var locked = false;
+    try {
+      _assertPrivateFilePath(file.path, boundary: _sessionDir.path);
+      if (!file.existsSync()) {
+        try {
+          file.createSync(exclusive: true);
+        } on FileSystemException {
+          // A concurrent process may have created the stable control inode.
+          // Its object and permissions are checked immediately below.
+        }
+      }
+      _securePrivateFile(file.path, boundary: _sessionDir.path);
+      handle = file.openSync(mode: FileMode.append);
+      try {
+        // `exclusive` is intentionally non-blocking. A launch command must
+        // abstain instead of waiting behind a possibly minutes-long build.
+        handle.lockSync(FileLock.exclusive);
+        locked = true;
+      } on FileSystemException {
+        throw _launchInProgress(_readLaunchInfo());
+      }
+
+      // Old versions stored owner JSON directly in launch.lock. Clear those
+      // bytes only after acquiring the stable inode's exclusive kernel lease.
+      handle.truncateSync(0);
+      handle.flushSync();
+      _atomicWritePrivateJson(infoFile.path, <String, Object?>{
+        'schemaVersion': 1,
+        'lease': 'kernel_exclusive',
         'ownerPid': pid,
         'runId': runId,
         'name': ?name,
         'project': project,
         'device': device,
         'startedAt': startedAt.toIso8601String(),
-      }),
-    );
-    return _LaunchLease(file: file, runId: runId, startedAt: startedAt);
+      }, boundary: _sessionDir.path);
+      return _LaunchLease(
+        controlFile: file,
+        infoFile: infoFile,
+        handle: handle,
+        runId: runId,
+        startedAt: startedAt,
+      );
+    } catch (_) {
+      if (locked) {
+        try {
+          handle?.unlockSync();
+        } catch (_) {}
+      }
+      try {
+        handle?.closeSync();
+      } catch (_) {}
+      _heldLaunchLeasePaths.remove(normalizedLockPath);
+      rethrow;
+    }
   }
 
   Map<String, dynamic>? _readLaunchInfo() {
-    final file = File(_launchLockFile);
-    if (!file.existsSync()) return null;
+    final file = File(_launchLockInfoFile);
+    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return null;
+    if (type != FileSystemEntityType.file) {
+      _unsafeStoragePath(
+        file.path,
+        'launch lease metadata is not a regular file',
+      );
+    }
     try {
+      _assertPrivateFilePath(
+        file.path,
+        boundary: _sessionDir.path,
+        allowMissing: false,
+      );
+      if (file.statSync().size > 64 * 1024) return null;
       final decoded = jsonDecode(file.readAsStringSync());
       return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
     } catch (_) {
@@ -830,24 +973,64 @@ Future<void> main() async {
     }
   }
 
+  ScoutCliException _launchInProgress(Map<String, dynamic>? info) {
+    return ScoutCliException(
+      'launch_in_progress',
+      'Another Flutter Scout launch holds this session lease. '
+          'Use `ensure` to join it, or wait for it to become ready.',
+      details: <String, Object?>{
+        'leaseStatus': 'held',
+        'ownerPid': info?['ownerPid'],
+        'runId': info?['runId'],
+        'startedAt': info?['startedAt'],
+      },
+    );
+  }
+
+  Future<bool> _launchLeaseIsHeld() async {
+    final file = File(_launchLockFile);
+    final normalizedLockPath = _absoluteNormalized(file.path);
+    if (_heldLaunchLeasePaths.contains(normalizedLockPath)) return true;
+    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return false;
+    if (type != FileSystemEntityType.file) return true;
+
+    RandomAccessFile? handle;
+    try {
+      _assertPrivateFilePath(
+        file.path,
+        boundary: _sessionDir.path,
+        allowMissing: false,
+      );
+      handle = file.openSync(mode: FileMode.append);
+      handle.lockSync(FileLock.exclusive);
+      handle.unlockSync();
+      return false;
+    } on FileSystemException {
+      // Contention and unexpected filesystem failures both fail closed.
+      return true;
+    } finally {
+      try {
+        handle?.closeSync();
+      } catch (_) {}
+    }
+  }
+
   Future<void> _joinLaunchIfNeeded(
     void Function(String stage, [Map<String, Object?> extra]) progress,
   ) async {
+    if (!await _launchLeaseIsHeld()) return;
     final info = _readLaunchInfo();
-    final ownerPid = int.tryParse('${info?['ownerPid'] ?? ''}');
-    if (ownerPid == null || !await _processExists(ownerPid)) return;
     progress('join_launch', {
       'runId': info?['runId'],
-      'ownerPid': ownerPid,
+      'ownerPid': info?['ownerPid'],
       'startedAt': info?['startedAt'],
     });
     final deadline = DateTime.now().add(const Duration(minutes: 5));
     while (DateTime.now().isBefore(deadline)) {
       final uri = _readVmUri();
       if (uri != null && (await _validateVmUri(uri)).ok) return;
-      final current = _readLaunchInfo();
-      final currentPid = int.tryParse('${current?['ownerPid'] ?? ''}');
-      if (currentPid == null || !await _processExists(currentPid)) return;
+      if (!await _launchLeaseIsHeld()) return;
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
     throw const ScoutCliException(
@@ -859,51 +1042,67 @@ Future<void> main() async {
   Future<int> _attach(List<String> args) async {
     final parser = ArgParser()
       ..addOption('debug-url')
+      ..addOption('debug-url-file')
+      ..addFlag('debug-url-stdin', defaultsTo: false, negatable: false)
       ..addOption('device')
       ..addFlag('json', defaultsTo: true);
     final parsed = parser.parse(args);
-    final explicit = parsed.option('debug-url');
+    final explicit = _protectedVmUriInput(parsed);
     final discovered = await _discoverAttachVmUri(
       explicit: explicit,
       device: parsed.option('device'),
     );
     if (discovered.uri == null || discovered.uri!.isEmpty) {
-      stdout.writeln(
-        jsonEncode({
-          'attached': false,
-          'reason': discovered.reason ?? 'vm_service_uri_not_found',
-          if (discovered.staleUri != null)
-            'staleVmServiceUri': discovered.staleUri,
-          if (discovered.staleCleared) 'staleCleared': true,
-          'nextBestActions': [
-            'Run the app in debug/profile mode and copy the VM Service URL',
-            'flutter-scout attach --debug-url <url>',
-            'flutter-scout launch --device <simulator-id> --project .',
-          ],
-        }),
-      );
+      _printJson({
+        'attached': false,
+        'reason': discovered.reason ?? 'vm_service_uri_not_found',
+        if (discovered.staleUri != null)
+          'staleVmServiceUri': discovered.staleUri,
+        if (discovered.staleCleared) 'staleCleared': true,
+        'nextBestActions': [
+          'Run the app in debug/profile mode and copy the VM Service URL',
+          'flutter-scout attach --debug-url-file <owner-only-0600-file>',
+          'flutter-scout launch --device <simulator-id> --project .',
+        ],
+      });
       return 1;
     }
 
     final wsUri = discovered.uri!;
+    final previousVmUri = _readVmUri();
     _ensureSessionDir();
-    File(_vmUriFile).writeAsStringSync(wsUri);
+    _persistValidatedVmUri(wsUri);
     final previousMeta = _readSessionMeta();
     final previousPid =
         _readPid() ?? int.tryParse('${previousMeta?['pid'] ?? ''}');
     final ownedLogUri = _discoverVmUriFromScoutLog();
     final preservesOwnedRun =
         previousPid != null &&
-        await _looksLikeScoutFlutterRun(previousPid) &&
+        await _matchesOwnedFlutterRun(previousPid, previousMeta) &&
         ownedLogUri != null &&
         _normalizeVmUri(ownedLogUri) == _normalizeVmUri(wsUri);
     final now = DateTime.now().toIso8601String();
+    final reusesAttachedRun =
+        previousMeta?['mode'] == 'attach_only' &&
+        previousMeta?['runId'] != null &&
+        previousVmUri != null &&
+        _normalizeVmUri(previousVmUri) == _normalizeVmUri(wsUri);
+    final attachRunId = reusesAttachedRun
+        ? previousMeta!['runId']!.toString()
+        : _newAttachRunId();
+    final ownedRunId = previousMeta == null
+        ? null
+        : previousMeta['runId']?.toString();
+    final effectiveRunId = preservesOwnedRun
+        ? ownedRunId ?? _newAttachRunId()
+        : attachRunId;
     if (preservesOwnedRun) {
-      File(_pidFile).writeAsStringSync('$previousPid');
+      _writePrivateSessionString(_pidFile, '$previousPid');
       _writeSessionMeta({
         ...?previousMeta,
         'mode': 'scout_owned_flutter_run',
         'state': 'ready',
+        'runId': effectiveRunId,
         'vmServiceUri': wsUri,
         'pid': previousPid,
         if (parsed.option('device') != null) 'device': parsed.option('device'),
@@ -912,9 +1111,14 @@ Future<void> main() async {
       });
       await _ensureVmLogListenerForCurrentSession(wsUri);
     } else {
+      // An attach-only session never inherits process ownership from whatever
+      // session occupied this directory previously.
+      _deleteFileIfExists(_pidFile);
+      _deleteFileIfExists(_vmLogListenerPidFile);
       _writeSessionMeta({
         'mode': 'attach_only',
         'state': 'ready',
+        'runId': attachRunId,
         'vmServiceUri': wsUri,
         if (parsed.option('device') != null) 'device': parsed.option('device'),
         'createdAt': now,
@@ -925,13 +1129,14 @@ Future<void> main() async {
       'attached': true,
       'reusedRunningApp': true,
       'vmServiceUri': wsUri,
+      'runId': effectiveRunId,
       'appStatePreserved': true,
       'attachOnly': !preservesOwnedRun,
       if (preservesOwnedRun) 'sessionOwnershipPreserved': true,
     };
     final device = parsed.option('device');
     if (device != null && device.isNotEmpty) {
-      File(_deviceFile).writeAsStringSync(device);
+      _writePrivateSessionString(_deviceFile, device);
       final resolvedDevice = await _resolveFlutterDevice(device);
       if (resolvedDevice != null) {
         _writeDeviceInfo(resolvedDevice);
@@ -951,13 +1156,15 @@ Future<void> main() async {
     if (device != null) {
       output['device'] = device;
     }
-    stdout.writeln(jsonEncode(output));
+    _printJson(output);
     return ready.ready ? 0 : 1;
   }
 
   Future<int> _ensure(List<String> args) async {
     final parser = ArgParser()
       ..addOption('debug-url')
+      ..addOption('debug-url-file')
+      ..addFlag('debug-url-stdin', defaultsTo: false, negatable: false)
       ..addOption('device')
       ..addOption('project', defaultsTo: Directory.current.path)
       ..addOption('target')
@@ -965,8 +1172,20 @@ Future<void> main() async {
       ..addOption('name')
       ..addFlag('temporary-helper', defaultsTo: false, negatable: false)
       ..addOption('helper-path')
-      ..addMultiOption('dart-define')
-      ..addMultiOption('dart-define-from-file')
+      ..addMultiOption(
+        'dart-define',
+        splitCommas: false,
+        help:
+            'Deprecated for inline values and rejected when secret-looking. '
+            'Prefer --dart-define-from-file.',
+      )
+      ..addMultiOption(
+        'dart-define-from-file',
+        splitCommas: false,
+        help:
+            'Read Flutter defines from a bounded, strict-UTF-8, regular '
+            'non-symlink file that is exactly 0600 on POSIX.',
+      )
       ..addOption(
         'launch-timeout',
         help:
@@ -983,13 +1202,7 @@ Future<void> main() async {
     final parsed = parser.parse(args);
     final device = parsed.option('device');
     void progress(String stage, [Map<String, Object?> extra = const {}]) {
-      stdout.writeln(
-        jsonEncode({
-          'progress': stage,
-          'timestamp': DateTime.now().toIso8601String(),
-          ...extra,
-        }),
-      );
+      _writeHeartbeat(stage, extra, false);
     }
 
     final instanceName = parsed.option('name');
@@ -1003,7 +1216,7 @@ Future<void> main() async {
     // a structured error instead.
     final discovered =
         await _discoverAttachVmUri(
-          explicit: parsed.option('debug-url'),
+          explicit: _protectedVmUriInput(parsed),
           device: device,
         ).timeout(
           const Duration(seconds: 60),
@@ -1025,13 +1238,20 @@ Future<void> main() async {
       }
       if (ready.ready) {
         _ensureSessionDir();
-        File(_vmUriFile).writeAsStringSync(discovered.uri!);
+        _persistValidatedVmUri(discovered.uri!);
         await _reconcileReachableSessionOwnership(discovered.uri!);
         final ownershipLost = _sessionOwnershipWasLost();
         final pid = _readPid();
-        final scoutOwned = pid != null && await _looksLikeScoutFlutterRun(pid);
         final previousMeta = _readSessionMeta();
+        final scoutOwned =
+            pid != null && await _matchesOwnedFlutterRun(pid, previousMeta);
         final now = DateTime.now().toIso8601String();
+        if (!scoutOwned) {
+          // Reusing a reachable human-owned app must drop stale ownership
+          // artifacts before any later `stop` command inspects the session.
+          _deleteFileIfExists(_pidFile);
+          _deleteFileIfExists(_vmLogListenerPidFile);
+        }
         _writeSessionMeta(
           scoutOwned
               ? {
@@ -1052,6 +1272,7 @@ Future<void> main() async {
                   ...?previousMeta,
                   'mode': 'attach_only',
                   'state': 'ready',
+                  'runId': previousMeta?['runId'] ?? _newAttachRunId(),
                   'vmServiceUri': discovered.uri,
                   'device': ?device,
                   'updatedAt': now,
@@ -1059,6 +1280,7 @@ Future<void> main() async {
               : {
                   'mode': 'attach_only',
                   'state': 'ready',
+                  'runId': _newAttachRunId(),
                   'vmServiceUri': discovered.uri,
                   'device': ?device,
                   'createdAt': now,
@@ -1066,7 +1288,7 @@ Future<void> main() async {
                 },
         );
         if (device != null && device.isNotEmpty) {
-          File(_deviceFile).writeAsStringSync(device);
+          _writePrivateSessionString(_deviceFile, device);
           final resolvedDevice = await _resolveFlutterDevice(device);
           if (resolvedDevice != null) {
             _writeDeviceInfo(resolvedDevice);
@@ -1074,19 +1296,18 @@ Future<void> main() async {
             _deleteFileIfExists(_deviceInfoFile);
           }
         }
-        stdout.writeln(
-          jsonEncode({
-            'ensured': true,
-            'reusedRunningApp': true,
-            'appStatePreserved': true,
-            'ready': true,
-            'vmServiceUri': discovered.uri,
-            'device': ?device,
-            'attachOnly': !scoutOwned,
-            if (ownershipLost) 'sessionOwnershipLost': true,
-            'hotUpdate': await _hotUpdateCapability(discovered.uri!),
-          }),
-        );
+        _printJson({
+          'ensured': true,
+          'reusedRunningApp': true,
+          'appStatePreserved': true,
+          'ready': true,
+          'vmServiceUri': discovered.uri,
+          'runId': ?_currentRunIdFromSession(),
+          'device': ?device,
+          'attachOnly': !scoutOwned,
+          if (ownershipLost) 'sessionOwnershipLost': true,
+          'hotUpdate': await _hotUpdateCapability(discovered.uri!),
+        });
         return 0;
       }
     } else {
@@ -1143,7 +1364,16 @@ Future<void> main() async {
   }
 
   Future<int> _status() async {
-    stdout.writeln(jsonEncode(await _statusPayload()));
+    final payload = await _statusPayload();
+    final project =
+        _readSessionMeta()?['project']?.toString() ?? Directory.current.path;
+    final temporaryHelper = Directory(project).existsSync()
+        ? await _recoverTemporaryHelperProject(project, preserveLive: true)
+        : const <String, Object?>{'status': 'not_applicable'};
+    _printJson(<String, Object?>{
+      ...payload,
+      'temporaryHelperRecovery': temporaryHelper,
+    });
     return 0;
   }
 
@@ -1151,8 +1381,11 @@ Future<void> main() async {
     if (args.isNotEmpty) {
       throw const ScoutCliException('usage', 'Usage: flutter-scout devices');
     }
-    final result = await Process.run('flutter', ['devices', '--machine'])
-        .timeout(
+    final result =
+        await Process.run('flutter', [
+          'devices',
+          '--machine',
+        ], environment: _flutterToolEnvironment()).timeout(
           const Duration(seconds: 20),
           onTimeout: () => ProcessResult(0, 1, '', 'flutter devices timed out'),
         );
@@ -1169,24 +1402,22 @@ Future<void> main() async {
         'flutter devices --machine returned an unexpected payload.',
       );
     }
-    stdout.writeln(
-      jsonEncode({
-        'ok': true,
-        'devices': [
-          for (final item in decoded)
-            if (item is Map && item['isSupported'] != false)
-              {
-                'id': item['id'],
-                'name': item['name'],
-                'platform': item['targetPlatform'],
-                'emulator': item['emulator'] == true,
-                'screenshot': item['capabilities'] is Map
-                    ? (item['capabilities'] as Map)['screenshot'] == true
-                    : false,
-              },
-        ],
-      }),
-    );
+    _printJson({
+      'ok': true,
+      'devices': [
+        for (final item in decoded)
+          if (item is Map && item['isSupported'] != false)
+            {
+              'id': item['id'],
+              'name': item['name'],
+              'platform': item['targetPlatform'],
+              'emulator': item['emulator'] == true,
+              'screenshot': item['capabilities'] is Map
+                  ? (item['capabilities'] as Map)['screenshot'] == true
+                  : false,
+            },
+      ],
+    });
     return 0;
   }
 
@@ -1217,21 +1448,19 @@ Future<void> main() async {
       }
       _writeScoutRegistry(registry);
     }
-    stdout.writeln(
-      jsonEncode({
-        'ok': true,
-        if (parsed.flag('prune')) 'pruned': missing.length,
-        'sessions': [
-          for (final entry in registry.entries)
-            if (parsed.flag('all') || Directory(entry.value).existsSync())
-              {
-                'name': entry.key,
-                'directory': entry.value,
-                'exists': Directory(entry.value).existsSync(),
-              },
-        ],
-      }),
-    );
+    _printJson({
+      'ok': true,
+      if (parsed.flag('prune')) 'pruned': missing.length,
+      'sessions': [
+        for (final entry in registry.entries)
+          if (parsed.flag('all') || Directory(entry.value).existsSync())
+            {
+              'name': entry.key,
+              'directory': entry.value,
+              'exists': Directory(entry.value).existsSync(),
+            },
+      ],
+    });
     return 0;
   }
 
@@ -1240,8 +1469,10 @@ Future<void> main() async {
     if (vmUri == null) {
       final recovered = await _recoverMissingOwnedVmUri();
       if (recovered != null) {
+        final runtimeObservation = await _observeRuntimeOperability();
         return {
           'running': true,
+          'appReachable': runtimeObservation['appReachability'] == 'reachable',
           'vmServiceUri': recovered.uri,
           'missingVmServiceUriRestored': true,
           'refreshSource': recovered.source,
@@ -1249,23 +1480,32 @@ Future<void> main() async {
           if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
           'session': _sessionModeInfo(),
           'hotUpdate': await _hotUpdateCapability(recovered.uri),
+          'runtimeObservation': runtimeObservation,
+          'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
         };
       }
       final meta = _readSessionMeta();
       final recordedOwner = int.tryParse('${meta?['pid'] ?? ''}');
       if (meta?['mode'] == 'scout_owned_flutter_run' &&
           meta?['state'] == 'ready' &&
-          (recordedOwner == null || !await _processExists(recordedOwner))) {
+          (recordedOwner == null ||
+              !await _matchesOwnedFlutterRun(recordedOwner, meta))) {
         await _markSessionStopped('owner_process_exited');
       }
       final launch = _readLaunchInfo();
-      final ownerPid = int.tryParse('${launch?['ownerPid'] ?? ''}');
-      final launching = ownerPid != null && await _processExists(ownerPid);
+      final launching = await _launchLeaseIsHeld();
       return {
         'running': false,
+        'appReachable': false,
         if (launching) 'launching': true,
         if (launching) 'launch': launch,
         'session': _sessionModeInfo(),
+        if (_readDevice() != null) 'device': _readDevice(),
+        if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
+        'runtimeObservation': _unavailableRuntimeOperability(
+          launching ? 'launch_in_progress' : 'vm_service_uri_unavailable',
+        ),
+        'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
       };
     }
     final stale = await _validateVmUri(vmUri);
@@ -1273,24 +1513,28 @@ Future<void> main() async {
       await _reconcileReachableSessionOwnership(vmUri);
       final ownershipLost = _sessionOwnershipWasLost();
       await _ensureVmLogListenerForCurrentSession(vmUri);
+      final runtimeObservation = await _observeRuntimeOperability();
       return {
         'running': true,
-        'appReachable': true,
+        'appReachable': runtimeObservation['appReachability'] == 'reachable',
         'vmServiceUri': vmUri,
         if (ownershipLost) 'sessionOwnershipLost': true,
         if (_readDevice() != null) 'device': _readDevice(),
         if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
         'session': _sessionModeInfo(),
         'hotUpdate': await _hotUpdateCapability(vmUri),
+        'runtimeObservation': runtimeObservation,
+        'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
       };
     }
     final refreshed = await _refreshStaleVmUri(staleUri: vmUri);
     if (refreshed != null) {
       await _reconcileReachableSessionOwnership(refreshed.uri);
       final ownershipLost = _sessionOwnershipWasLost();
+      final runtimeObservation = await _observeRuntimeOperability();
       return {
         'running': true,
-        'appReachable': true,
+        'appReachable': runtimeObservation['appReachability'] == 'reachable',
         'vmServiceUri': refreshed.uri,
         'staleVmServiceUri': vmUri,
         'staleRefreshed': true,
@@ -1300,36 +1544,48 @@ Future<void> main() async {
         if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
         'session': _sessionModeInfo(),
         'hotUpdate': await _hotUpdateCapability(refreshed.uri),
+        'runtimeObservation': runtimeObservation,
+        'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
       };
     }
     _clearVmUriFile();
     await _markSessionStopped('stale_vm_service');
     return {
       'running': false,
+      'appReachable': false,
       'staleVmServiceUri': vmUri,
       'staleCleared': true,
       'session': _sessionModeInfo(),
+      if (_readDevice() != null) 'device': _readDevice(),
+      if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
+      'runtimeObservation': _unavailableRuntimeOperability(
+        'stale_vm_service_unreachable',
+      ),
+      'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
       if (stale.error != null) 'reason': stale.error,
     };
   }
 
   Future<void> _markSessionStopped(String reason) async {
+    final meta = _readSessionMeta();
     final listenerPid = _readVmLogListenerPid();
     if (listenerPid != null) {
-      final command = await _processCommand(listenerPid);
-      if (command != null && _commandLooksLikeScoutVmLogListener(command)) {
+      if (await _matchesOwnedVmLogListener(listenerPid, meta)) {
         Process.killPid(listenerPid);
       }
       _deleteFileIfExists(_vmLogListenerPidFile);
     }
-    final meta = _readSessionMeta();
     if (meta != null) {
-      _writeSessionMeta({
-        ...meta,
-        'state': 'stopped',
-        'stopReason': reason,
-        'updatedAt': DateTime.now().toUtc().toIso8601String(),
-      });
+      final stopped =
+          <String, Object?>{
+              ...meta,
+              'state': 'stopped',
+              'stopReason': reason,
+              'updatedAt': DateTime.now().toUtc().toIso8601String(),
+            }
+            ..remove('vmLogListenerPid')
+            ..remove('vmLogListener');
+      _writeSessionMeta(stopped);
     }
   }
 
@@ -1346,17 +1602,25 @@ Future<void> main() async {
     final resolvedDevice = device == null || device.isEmpty
         ? null
         : await _resolveFlutterDevice(device);
+    final temporaryHelperRecovery = projectDir.existsSync()
+        ? await _recoverTemporaryHelperProject(project, preserveLive: true)
+        : const <String, Object?>{'status': 'not_applicable'};
     final vmUri = _readVmUri();
     final session = vmUri == null
         ? const _VmUriValidation(ok: false, error: 'no_session_vm_uri')
         : await _validateVmUri(vmUri);
 
+    var runtimeObservation = _unavailableRuntimeOperability(
+      session.error ?? 'vm_service_unavailable',
+    );
     var helperExtensionRegistered = false;
     String? helperExtensionError;
     if (session.ok && vmUri != null) {
-      final ready = await _waitScoutReady(vmUri);
-      helperExtensionRegistered = ready.ready;
-      helperExtensionError = ready.ready ? null : ready.reason;
+      runtimeObservation = await _observeRuntimeOperability();
+      helperExtensionRegistered = runtimeObservation['status'] == 'observed';
+      helperExtensionError = helperExtensionRegistered
+          ? null
+          : _nonEmptyString(runtimeObservation['reason']);
     }
 
     final pubspecText = pubspec.existsSync() ? pubspec.readAsStringSync() : '';
@@ -1365,55 +1629,59 @@ Future<void> main() async {
       project,
       'flutter_scout_helper',
     );
-    stdout.writeln(
-      const JsonEncoder.withIndent('  ').convert({
-        'ok': true,
-        'cli': {
-          'available': true,
-          'version': FlutterScoutCli.packageVersion,
-          'helperProtocolExpected':
-              FlutterScoutCli.expectedHelperProtocolVersion,
-          'sessionDir': _sessionDir.path,
-          'executable': Platform.resolvedExecutable,
-          'script': Platform.script.toString(),
+    _printJson({
+      'ok': true,
+      'cli': {
+        'available': true,
+        'version': FlutterScoutCli.packageVersion,
+        'helperProtocolExpected': FlutterScoutCli.expectedHelperProtocolVersion,
+        'sessionDir': _sessionDir.path,
+        'executable': Platform.resolvedExecutable,
+        'script': Platform.script.toString(),
+      },
+      'project': {
+        'path': project,
+        'exists': projectDir.existsSync(),
+        'pubspecExists': pubspec.existsSync(),
+        'mainExists': mainFile.existsSync(),
+        'hasHelperDependency': pubspecText.contains('flutter_scout_helper'),
+        'hasBindingInitializer': mainText.contains(
+          'FlutterScoutBinding.ensureInitialized',
+        ),
+        'hasRegistrationInitializer': mainText.contains(
+          'FlutterScoutHelper.ensureRegistered',
+        ),
+        'resolvedHelper': resolvedHelper,
+        'temporaryHelper': {
+          'supported': true,
+          'trackedFilesRemainClean': true,
+          'crashSafeTransaction': true,
+          'recovery': temporaryHelperRecovery,
+          'command':
+              'flutter-scout ensure --temporary-helper --device <device> --project $project --name <session>',
         },
-        'project': {
-          'path': project,
-          'exists': projectDir.existsSync(),
-          'pubspecExists': pubspec.existsSync(),
-          'mainExists': mainFile.existsSync(),
-          'hasHelperDependency': pubspecText.contains('flutter_scout_helper'),
-          'hasBindingInitializer': mainText.contains(
-            'FlutterScoutBinding.ensureInitialized',
-          ),
-          'hasRegistrationInitializer': mainText.contains(
-            'FlutterScoutHelper.ensureRegistered',
-          ),
-          'resolvedHelper': resolvedHelper,
-          'temporaryHelper': {
-            'supported': true,
-            'trackedFilesRemainClean': true,
-            'command':
-                'flutter-scout ensure --temporary-helper --device <device> --project $project --name <session>',
-          },
-        },
-        'device': {
-          'requested': device,
-          'resolved': resolvedDevice?.toJson(),
-          if (device != null && device.isNotEmpty)
-            'exactMatch': resolvedDevice != null,
-        },
-        'session': {
-          'vmServiceUri': vmUri,
-          'valid': session.ok,
-          if (session.error != null) 'error': session.error,
-          'helperExtensionRegistered': helperExtensionRegistered,
-          ...helperExtensionError == null
-              ? const <String, Object?>{}
-              : {'helperExtensionError': helperExtensionError},
-        },
-      }),
-    );
+      },
+      'device': {
+        'requested': device,
+        'resolved': resolvedDevice?.toJson(),
+        if (device != null && device.isNotEmpty)
+          'exactMatch': resolvedDevice != null,
+      },
+      'session': {
+        'vmServiceUri': vmUri,
+        'valid': session.ok,
+        if (session.error != null) 'error': session.error,
+        'helperExtensionRegistered': helperExtensionRegistered,
+        ...helperExtensionError == null
+            ? const <String, Object?>{}
+            : {'helperExtensionError': helperExtensionError},
+      },
+      'sessionState': _sessionModeInfo(),
+      if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
+      'appReachable': runtimeObservation['appReachability'] == 'reachable',
+      'runtimeObservation': runtimeObservation,
+      'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
+    });
     return 0;
   }
 
@@ -1468,155 +1736,593 @@ Future<void> main() async {
         ? null
         : await _pidForListeningVmPort(vmUri);
     final vmLogListenerPid = _readVmLogListenerPid();
-    final supervisorStop = await _stopRunnerSupervisor(sessionMeta);
+    final ownsFlutterRun = sessionMeta?['mode'] == 'scout_owned_flutter_run';
     var stopped = false;
     var processExisted = false;
     String? pidKillSkippedReason;
-    if (pid != null) {
-      final trustedPid =
-          listenerPid == pid || await _looksLikeScoutFlutterRun(pid);
-      if (trustedPid) {
-        processExisted = Process.killPid(pid);
-        stopped = processExisted;
-      } else {
-        processExisted = await _processExists(pid);
-        pidKillSkippedReason = processExisted
-            ? 'pid_identity_mismatch'
-            : 'process_not_found';
-      }
-    }
-    var listenerExisted = false;
-    if (listenerPid != null && listenerPid != pid) {
-      listenerExisted = Process.killPid(listenerPid);
-      stopped = stopped || listenerExisted;
-    }
+    final trustedPid =
+        pid != null &&
+        ownsFlutterRun &&
+        await _matchesOwnedFlutterRun(pid, sessionMeta);
+
+    // Stop Scout's auxiliary children while the exact Flutter owner is still
+    // live and can participate in their ownership proof. A PID, descendant
+    // relation, or recognizable command alone is never authority to signal.
     var vmLogListenerExisted = false;
-    var vmLogListenerKillSkippedReason = <String, Object?>{};
+    String? vmLogListenerKillSkippedReason;
     if (vmLogListenerPid != null &&
         vmLogListenerPid != pid &&
         vmLogListenerPid != listenerPid) {
-      if (await _looksLikeScoutVmLogListener(vmLogListenerPid)) {
+      if (await _matchesOwnedVmLogListener(vmLogListenerPid, sessionMeta)) {
         vmLogListenerExisted = Process.killPid(vmLogListenerPid);
         stopped = stopped || vmLogListenerExisted;
-      } else {
-        final exists = await _processExists(vmLogListenerPid);
-        if (exists) {
-          vmLogListenerKillSkippedReason = {
-            'vmLogListenerKillSkippedReason': 'pid_identity_mismatch',
-          };
-        }
+      } else if (await _processExists(vmLogListenerPid)) {
+        vmLogListenerKillSkippedReason = 'pid_identity_mismatch';
       }
     }
+
     var serveExisted = false;
+    String? serveKillSkippedReason;
     if (servePid != null &&
         servePid != pid &&
         servePid != listenerPid &&
         servePid != vmLogListenerPid) {
-      final command = await _processCommand(servePid);
-      if (command != null &&
-          _commandLooksLikeScoutCli(command) &&
-          RegExp(r'(?:^|\s)serve(?:\s|$)').hasMatch(command)) {
+      if (await _matchesOwnedServeProcess(servePid, serve)) {
         serveExisted = Process.killPid(servePid);
         stopped = stopped || serveExisted;
+      } else if (await _processExists(servePid)) {
+        serveKillSkippedReason = 'pid_identity_mismatch';
       }
     }
-    _deleteFileIfExists(_pidFile);
-    _deleteFileIfExists(_vmLogListenerPidFile);
-    var registryPruned = const <String>[];
-    if (parsed.flag('clear-session')) {
-      _clearVmUriFile();
-      _deleteFileIfExists(_deviceFile);
-      _deleteFileIfExists(_deviceInfoFile);
-      _deleteFileIfExists(_sessionFile);
-      _deleteFileIfExists(_eventsFile);
-      _deleteFileIfExists(_sessionMetaFile);
-      registryPruned = _pruneScoutRegistryFor(_sessionDir.path);
+
+    if (pid != null) {
+      // Revalidate immediately before signaling while its exact supervisor
+      // and parent association are still live. Stop the supervisor only after
+      // the owned Flutter tool has received termination.
+      final stillTrusted =
+          trustedPid && await _matchesOwnedFlutterRun(pid, sessionMeta);
+      if (stillTrusted) {
+        processExisted = Process.killPid(pid);
+        stopped = stopped || processExisted;
+      } else {
+        processExisted = await _processExists(pid);
+        pidKillSkippedReason = !ownsFlutterRun
+            ? 'session_does_not_own_process'
+            : processExisted
+            ? 'pid_identity_mismatch'
+            : 'process_not_found';
+      }
     }
+    final supervisorStop = await _stopRunnerSupervisor(
+      ownsFlutterRun ? sessionMeta : null,
+    );
+    stopped = stopped || supervisorStop['stopped'] == true;
+    // The VM-service listener is an app/runtime process, not a Scout-owned
+    // daemon. Terminating the exact Flutter tool is the supported lifecycle
+    // operation; a separately surviving app is intentionally left untouched.
+    const listenerExisted = false;
+    String? listenerKillSkippedReason;
+    if (listenerPid != null && listenerPid != pid) {
+      listenerKillSkippedReason = ownsFlutterRun
+          ? 'managed_by_flutter_runner_not_signaled_separately'
+          : 'session_does_not_own_process';
+    }
+    // `--clear-session` delegates these exact paths to the symlink-safe
+    // managed cleanup below. The ordinary stop path retains its historical
+    // lightweight PID-file cleanup behavior.
+    if (!parsed.flag('clear-session')) {
+      _deleteFileIfExists(_pidFile);
+      _deleteFileIfExists(_vmLogListenerPidFile);
+    }
+    var registryPruned = const <String>[];
     final temporaryCleanup = temporarySetup == null
         ? null
         : await _cleanupTemporaryHelper(temporarySetup);
-    if (!parsed.flag('quiet')) {
-      stdout.writeln(
-        jsonEncode({
-          'ok': true,
-          'pid': pid,
-          'vmServiceListenerPid': listenerPid,
-          'vmLogListenerPid': vmLogListenerPid,
-          'processExisted': processExisted,
-          'vmServiceListenerExisted': listenerExisted,
-          'vmLogListenerExisted': vmLogListenerExisted,
-          'servePid': ?servePid,
-          'serveExisted': serveExisted,
-          'supervisor': supervisorStop,
-          'stopped': stopped,
-          'pidKillSkippedReason': ?pidKillSkippedReason,
-          ...vmLogListenerKillSkippedReason,
-          'pidFileCleared': true,
-          'vmLogListenerPidFileCleared': true,
-          if (parsed.flag('clear-session')) 'sessionCleared': true,
-          if (registryPruned.isNotEmpty) 'registryPruned': registryPruned,
-          'temporaryHelperCleanup': ?temporaryCleanup,
-        }),
-      );
-    }
-    return 0;
-  }
-
-  _TemporaryHelperSetup? _temporarySetupFromMeta() {
-    final value = _readSessionMeta()?['temporarySetup'];
-    if (value is! Map) return null;
-    final project = value['project']?.toString();
-    final targetPath = value['targetPath']?.toString();
-    if (project == null ||
-        project.isEmpty ||
-        targetPath == null ||
-        targetPath.isEmpty) {
-      return null;
-    }
-    return _TemporaryHelperSetup(
-      project: project,
-      targetPath: targetPath,
-      lockExisted: value['lockExisted'] == true,
-      lockBackupPath: value['lockBackupPath']?.toString(),
-    );
-  }
-
-  Future<Map<String, Object?>> _cleanupTemporaryHelper(
-    _TemporaryHelperSetup setup,
-  ) async {
-    var targetRemoved = false;
-    final allowedRoot = p.normalize(p.join(setup.project, '.flutter_scout'));
-    final target = p.normalize(setup.targetPath);
-    if (p.isWithin(allowedRoot, target) &&
-        p.basename(target).startsWith('bootstrap_')) {
-      final file = File(target);
-      if (file.existsSync()) {
-        file.deleteSync();
-        targetRemoved = true;
+    final temporaryCleanupComplete =
+        temporaryCleanup == null ||
+        const <String>{
+          'repaired',
+          'legacy_cleanup_completed',
+        }.contains(temporaryCleanup['status']);
+    Map<String, Object?>? retentionCleanup;
+    Map<String, Object?>? managedSessionCleanup;
+    ScoutCliException? sessionCleanupError;
+    var sessionClearComplete = true;
+    if (parsed.flag('clear-session')) {
+      try {
+        retentionCleanup = _cleanupPrivateArtifacts(
+          now: DateTime.now().toUtc(),
+          includeSession: true,
+          trigger: 'stop_clear_session',
+        );
+      } on ScoutCliException catch (error) {
+        sessionCleanupError = error;
+        retentionCleanup = <String, Object?>{
+          'ok': false,
+          'trigger': 'stop_clear_session',
+          'registry': error.code == 'retention_registry_invalid'
+              ? 'invalid'
+              : 'unavailable',
+          'cleanup': error.code == 'retention_registry_invalid'
+              ? 'not_performed'
+              : 'completion_unknown',
+          'error': <String, Object?>{
+            'code': error.code,
+            'message': error.message,
+            if (error.details.isNotEmpty) 'details': error.details,
+          },
+        };
+      } catch (_) {
+        sessionCleanupError = const ScoutCliException(
+          'retention_cleanup_unavailable',
+          'Private-artifact cleanup ended without a trustworthy completion '
+              'result. Retained artifacts and controls require inspection.',
+        );
+        retentionCleanup = const <String, Object?>{
+          'ok': false,
+          'trigger': 'stop_clear_session',
+          'registry': 'unavailable',
+          'cleanup': 'completion_unknown',
+          'error': <String, Object?>{
+            'code': 'retention_cleanup_unavailable',
+            'message':
+                'Private-artifact cleanup ended without a trustworthy '
+                'completion result.',
+          },
+        };
+      }
+      if (sessionCleanupError == null) {
+        // A valid registry can contain one caller-modified artifact. Preserve
+        // that exact entry, but still clean independently owned credentials,
+        // logs, and temporary state before reporting the overall failure.
+        try {
+          managedSessionCleanup = _cleanupManagedSessionInternals(
+            temporaryHelperCleanupComplete: temporaryCleanupComplete,
+            serveCredentialPath: serve is Map
+                ? serve['credentialFile']?.toString()
+                : null,
+          );
+        } on ScoutCliException catch (error) {
+          sessionCleanupError = error;
+          managedSessionCleanup = <String, Object?>{
+            'ok': false,
+            'cleanup': 'completion_unknown',
+            'error': <String, Object?>{
+              'code': error.code,
+              'message': error.message,
+              if (error.details.isNotEmpty) 'details': error.details,
+            },
+          };
+        } catch (_) {
+          sessionCleanupError = const ScoutCliException(
+            'managed_session_cleanup_unavailable',
+            'Managed session cleanup ended without a trustworthy completion '
+                'result. Session residue requires inspection.',
+          );
+          managedSessionCleanup = const <String, Object?>{
+            'ok': false,
+            'cleanup': 'completion_unknown',
+            'error': <String, Object?>{
+              'code': 'managed_session_cleanup_unavailable',
+              'message':
+                  'Managed session cleanup ended without a trustworthy '
+                  'completion result.',
+            },
+          };
+        }
+      } else {
+        // Without a trustworthy registry snapshot the allowlist cannot prove
+        // which session paths must be preserved, so no residue cleanup runs.
+        managedSessionCleanup = const <String, Object?>{
+          'ok': false,
+          'cleanup': 'not_performed',
+          'skippedReason': 'retention_control_state_unavailable',
+        };
+      }
+      sessionClearComplete =
+          retentionCleanup['ok'] == true &&
+          managedSessionCleanup['ok'] == true &&
+          sessionCleanupError == null;
+      if (sessionClearComplete) {
+        registryPruned = _pruneScoutRegistryFor(_sessionDir.path);
       }
     }
-    final pubGet = await Process.run('flutter', const [
-      'pub',
-      'get',
-    ], workingDirectory: setup.project);
-    final lockFile = File(p.join(setup.project, 'pubspec.lock'));
-    final backupPath = setup.lockBackupPath;
-    var lockRestored = false;
-    if (setup.lockExisted &&
-        backupPath != null &&
-        File(backupPath).existsSync()) {
-      lockFile.writeAsBytesSync(File(backupPath).readAsBytesSync());
-      File(backupPath).deleteSync();
-      lockRestored = true;
-    } else if (!setup.lockExisted && lockFile.existsSync()) {
-      lockFile.deleteSync();
-      lockRestored = true;
+    final commandOk = !parsed.flag('clear-session') || sessionClearComplete;
+    if (!parsed.flag('quiet') || !commandOk) {
+      _printJson({
+        'ok': commandOk,
+        if (!commandOk)
+          'error': <String, Object?>{
+            'code': sessionCleanupError?.code ?? 'session_cleanup_incomplete',
+            'message':
+                'The process was stopped, but unexpected or unsafe session '
+                'residue was preserved. Inspect the cleanup report.',
+          },
+        'pid': pid,
+        'vmServiceListenerPid': listenerPid,
+        'vmLogListenerPid': vmLogListenerPid,
+        'processExisted': processExisted,
+        'vmServiceListenerExisted': listenerExisted,
+        'vmServiceListenerKillSkippedReason': ?listenerKillSkippedReason,
+        'vmLogListenerExisted': vmLogListenerExisted,
+        'servePid': ?servePid,
+        'serveExisted': serveExisted,
+        'serveKillSkippedReason': ?serveKillSkippedReason,
+        'supervisor': supervisorStop,
+        'stopped': stopped,
+        'pidKillSkippedReason': ?pidKillSkippedReason,
+        'vmLogListenerKillSkippedReason': ?vmLogListenerKillSkippedReason,
+        'pidFileCleared':
+            FileSystemEntity.typeSync(_pidFile, followLinks: false) ==
+            FileSystemEntityType.notFound,
+        'vmLogListenerPidFileCleared':
+            FileSystemEntity.typeSync(
+              _vmLogListenerPidFile,
+              followLinks: false,
+            ) ==
+            FileSystemEntityType.notFound,
+        if (parsed.flag('clear-session'))
+          'sessionCleared': sessionClearComplete,
+        'privateArtifactRetentionCleanup': ?retentionCleanup,
+        'managedSessionCleanup': ?managedSessionCleanup,
+        if (registryPruned.isNotEmpty) 'registryPruned': registryPruned,
+        'temporaryHelperCleanup': ?temporaryCleanup,
+      }, success: commandOk);
     }
-    return {
-      'targetRemoved': targetRemoved,
-      'packageConfigRestored': pubGet.exitCode == 0,
-      'lockRestored': lockRestored,
-      if (pubGet.exitCode != 0) 'pubGetError': pubGet.stderr.toString(),
+    return commandOk ? 0 : 1;
+  }
+
+  Future<bool> _matchesOwnedFlutterRun(
+    int processId,
+    Map<String, dynamic>? meta,
+  ) async {
+    if (meta?['mode'] != 'scout_owned_flutter_run') return false;
+    final runId = meta?['runId']?.toString();
+    final project = meta?['project']?.toString();
+    final expectedIdentity = meta?['processIdentity'];
+    if (runId == null || runId.isEmpty || project == null || project.isEmpty) {
+      return false;
+    }
+    // A PID and matching command line are not an ownership identity: the PID
+    // may have been reused, and a different run can contain similar tokens.
+    // New owned sessions record an immutable process-start tuple. Older or
+    // partial metadata therefore fails closed and is deliberately not killed.
+    if (expectedIdentity is! Map) return false;
+    final currentIdentity = await _readProcessOwnershipIdentity(
+      processId,
+      role: _flutterRunProcessRole,
+    );
+    if (currentIdentity == null ||
+        !_sameProcessOwnershipIdentity(expectedIdentity, currentIdentity)) {
+      return false;
+    }
+    if (!await _matchesFlutterSupervisorAssociation(meta!, expectedIdentity)) {
+      return false;
+    }
+    final command = await _processCommand(processId);
+    if (command == null) return false;
+    final lower = command.toLowerCase();
+    final hasFlutterTool =
+        lower.contains('flutter_tools') ||
+        RegExp(r'(^|[/\s])flutter(\s|$)').hasMatch(lower);
+    final hasRunCommand = RegExp(r'(^|\s)run(\s|$)').hasMatch(lower);
+    final ownsRun = command.contains('$kScoutRunIdDefine=$runId');
+    final ownsProject = command.contains(
+      '$kScoutProjectDefine=${Directory(project).absolute.path}',
+    );
+    final device = meta['device']?.toString();
+    final ownsDevice =
+        device == null ||
+        device.isEmpty ||
+        RegExp(
+          '(?:^|\\s)(?:-d|--device)\\s+${RegExp.escape(device)}(?:\\s|\$)',
+        ).hasMatch(command);
+    return hasFlutterTool &&
+        hasRunCommand &&
+        ownsRun &&
+        ownsProject &&
+        ownsDevice;
+  }
+
+  Future<bool> _matchesOwnedVmLogListener(
+    int processId,
+    Map<String, dynamic>? meta,
+  ) async {
+    if (meta?['mode'] != 'scout_owned_flutter_run') return false;
+    final listener = meta?['vmLogListener'];
+    if (listener is! Map) return false;
+    final listenerPid = int.tryParse('${listener['pid'] ?? ''}');
+    final ownerPid = int.tryParse('${listener['ownerPid'] ?? ''}');
+    final runId = meta?['runId']?.toString();
+    final expectedIdentity = listener['processIdentity'];
+    if (listenerPid != processId ||
+        ownerPid == null ||
+        ownerPid != _readPid() ||
+        runId == null ||
+        runId.isEmpty ||
+        listener['runId']?.toString() != runId ||
+        listener['sessionDirectory']?.toString() != _sessionDir.path ||
+        expectedIdentity is! Map) {
+      return false;
+    }
+    final currentIdentity = await _readProcessOwnershipIdentity(
+      processId,
+      role: _vmLogListenerProcessRole,
+    );
+    if (currentIdentity == null ||
+        !_sameProcessOwnershipIdentity(expectedIdentity, currentIdentity)) {
+      return false;
+    }
+    final command = await _processCommand(processId);
+    if (command == null ||
+        !_commandLooksLikeScoutVmLogListener(command) ||
+        !command.contains(_sessionDir.path) ||
+        !RegExp(
+          '(?:^|\\s)--owner-pid\\s+${RegExp.escape('$ownerPid')}(?:\\s|\$)',
+        ).hasMatch(command)) {
+      return false;
+    }
+    final ownerIdentity = listener['ownerProcessIdentity'];
+    if (ownerIdentity is! Map ||
+        meta?['processIdentity'] is! Map ||
+        !_sameProcessOwnershipIdentity(
+          Map<Object?, Object?>.from(ownerIdentity),
+          Map<String, Object?>.from(meta!['processIdentity'] as Map),
+        )) {
+      return false;
+    }
+    return _matchesOwnedFlutterRun(ownerPid, meta);
+  }
+
+  Future<Map<String, Object?>> _collectLaunchProvenance({
+    required String project,
+    required String flutterExecutable,
+  }) async {
+    final capturedAt = DateTime.now().toUtc().toIso8601String();
+    final sourceIdentity = await _projectSourceIdentity(project);
+    final flutterToolchain = _flutterToolchainIdentity(flutterExecutable);
+    return <String, Object?>{
+      'provenanceCapturedAt': capturedAt,
+      'sourceIdentity': sourceIdentity,
+      if (sourceIdentity['commit'] != null)
+        'appCommit': sourceIdentity['commit'],
+      if (sourceIdentity['workingTreeDirty'] != null)
+        'appWorkingTreeDirty': sourceIdentity['workingTreeDirty'],
+      if (sourceIdentity['workingTreeStatusDigest'] != null)
+        'appWorkingTreeStatusDigest': sourceIdentity['workingTreeStatusDigest'],
+      'flutterToolchain': flutterToolchain,
+      if (flutterToolchain['frameworkVersion'] != null)
+        'flutterVersion': flutterToolchain['frameworkVersion'],
     };
+  }
+
+  Future<Map<String, Object?>> _projectSourceIdentity(String project) async {
+    try {
+      final revision = await Process.run('git', <String>[
+        '-C',
+        project,
+        'rev-parse',
+        '--verify',
+        'HEAD',
+      ]);
+      final commit = '${revision.stdout}'.trim();
+      if (revision.exitCode != 0 ||
+          !RegExp(r'^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$').hasMatch(commit)) {
+        return const <String, Object?>{
+          'status': 'unavailable',
+          'reason': 'project_not_at_a_resolvable_git_commit',
+          'excludedToolPaths': <String>['.flutter_scout/'],
+        };
+      }
+      final status = await Process.run('git', <String>[
+        '-C',
+        project,
+        'status',
+        '--porcelain=v1',
+        '--untracked-files=normal',
+        '--',
+        '.',
+        ':(exclude).flutter_scout',
+        ':(exclude).flutter_scout/**',
+      ]);
+      if (status.exitCode != 0) {
+        return <String, Object?>{
+          'status': 'partial',
+          'commit': commit.toLowerCase(),
+          'workingTreeStatus': 'unavailable',
+          'reason': 'git_status_failed',
+          'excludedToolPaths': const <String>['.flutter_scout/'],
+        };
+      }
+      final statusText = '${status.stdout}';
+      final statusBytes = utf8.encode(statusText);
+      if (statusBytes.length > 4 * 1024 * 1024) {
+        return <String, Object?>{
+          'status': 'partial',
+          'commit': commit.toLowerCase(),
+          'workingTreeStatus': 'unavailable',
+          'reason': 'git_status_exceeded_4_mib_bound',
+          'excludedToolPaths': const <String>['.flutter_scout/'],
+        };
+      }
+      final entryCount = const LineSplitter()
+          .convert(statusText)
+          .where((line) => line.isNotEmpty)
+          .length;
+      final dirty = entryCount > 0;
+      return <String, Object?>{
+        'status': dirty ? 'dirty_worktree' : 'clean_commit',
+        'commit': commit.toLowerCase(),
+        'workingTreeDirty': dirty,
+        'workingTreeEntryCount': entryCount,
+        'workingTreeStatusDigest': crypto.sha256
+            .convert(statusBytes)
+            .toString(),
+        'statusDigestAlgorithm': 'sha256',
+        'statusPathsPersisted': false,
+        'excludedToolPaths': const <String>['.flutter_scout/'],
+      };
+    } catch (_) {
+      return const <String, Object?>{
+        'status': 'unavailable',
+        'reason': 'git_identity_probe_failed',
+        'excludedToolPaths': <String>['.flutter_scout/'],
+      };
+    }
+  }
+
+  Map<String, Object?> _flutterToolchainIdentity(String executable) {
+    String? readBounded(String path) {
+      try {
+        final file = File(path);
+        if (!file.existsSync() || file.lengthSync() > 4096) return null;
+        final value = file.readAsStringSync().trim();
+        return value.isEmpty ? null : value;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    try {
+      final resolvedExecutable = File(executable).resolveSymbolicLinksSync();
+      final sdkRoot = p.dirname(p.dirname(resolvedExecutable));
+      final frameworkVersion = readBounded(p.join(sdkRoot, 'version'));
+      final engineRevision = readBounded(
+        p.join(sdkRoot, 'bin', 'internal', 'engine.version'),
+      );
+      final dartSdkVersion = readBounded(
+        p.join(sdkRoot, 'bin', 'cache', 'dart-sdk', 'version'),
+      );
+      if (frameworkVersion == null &&
+          engineRevision == null &&
+          dartSdkVersion == null) {
+        return const <String, Object?>{
+          'status': 'unavailable',
+          'reason': 'flutter_sdk_identity_files_unavailable',
+        };
+      }
+      return <String, Object?>{
+        'status': 'observed',
+        'source': 'flutter_sdk_identity_files',
+        'frameworkVersion': frameworkVersion,
+        'engineRevision': engineRevision,
+        'dartSdkVersion': dartSdkVersion,
+      };
+    } catch (_) {
+      return const <String, Object?>{
+        'status': 'unavailable',
+        'reason': 'flutter_sdk_identity_probe_failed',
+      };
+    }
+  }
+}
+
+/// Reads the minimum immutable tuple needed to distinguish a live process from
+/// a later process that reused the same numeric PID.
+///
+/// This intentionally does not persist the full command line because Flutter
+/// arguments can contain application secrets. Command tokens needed for
+/// ownership are validated directly at termination time.
+const String _flutterRunProcessRole = 'flutter_run';
+const String _flutterWorkerProcessRole = 'flutter_run_worker';
+const String _vmLogListenerProcessRole = 'vm_log_listener';
+const String _serveProcessRole = 'serve_daemon';
+
+Future<Map<String, Object?>?> _readProcessOwnershipIdentity(
+  int pid, {
+  required String role,
+}) async {
+  if (pid <= 0 || (!Platform.isMacOS && !Platform.isLinux)) return null;
+
+  Future<String?> field(String name) async {
+    try {
+      final result = await Process.run('ps', ['-p', '$pid', '-o', '$name='])
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => ProcessResult(pid, 1, '', ''),
+          );
+      if (result.exitCode != 0) return null;
+      final value = '${result.stdout}'.trim();
+      return value.isEmpty ? null : value;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  final values = await Future.wait([
+    field('ppid'),
+    field('lstart'),
+    field('comm'),
+  ]);
+  final parentPid = int.tryParse(values[0] ?? '');
+  final startedAt = values[1];
+  final executable = values[2];
+  if (parentPid == null || startedAt == null || executable == null) return null;
+  return {
+    'pid': pid,
+    'parentPid': parentPid,
+    'startedAt': startedAt,
+    'executable': executable,
+    // The complete command line is intentionally not persisted because Dart
+    // defines and launch arguments may contain application secrets. The
+    // exact, non-secret role-specific command tokens are re-read and checked
+    // immediately before every signal; this field makes the stored command
+    // identity explicit and prevents one process kind being substituted for
+    // another even when the immutable OS tuple happens to match.
+    'commandIdentity': role,
+  };
+}
+
+bool _sameProcessOwnershipIdentity(
+  Map<Object?, Object?> expected,
+  Map<String, Object?> current,
+) {
+  final expectedPid = int.tryParse('${expected['pid'] ?? ''}');
+  final expectedParentPid = int.tryParse('${expected['parentPid'] ?? ''}');
+  final expectedStartedAt = expected['startedAt']?.toString();
+  final expectedExecutable = expected['executable']?.toString();
+  final expectedCommandIdentity = expected['commandIdentity']?.toString();
+  return expectedPid != null &&
+      expectedPid == current['pid'] &&
+      expectedParentPid != null &&
+      expectedParentPid == current['parentPid'] &&
+      expectedStartedAt != null &&
+      expectedStartedAt == current['startedAt'] &&
+      expectedExecutable != null &&
+      expectedExecutable == current['executable'] &&
+      expectedCommandIdentity != null &&
+      expectedCommandIdentity == current['commandIdentity'];
+}
+
+/// Narrow process-level test seam for proving launch-lease contention and
+/// crash recovery without starting Flutter or touching the user's sessions.
+extension FlutterScoutCliLaunchLeaseTesting on FlutterScoutCli {
+  Future<T> debugWithLaunchLease<T>({
+    required String sessionDirectory,
+    required String project,
+    required String device,
+    String? name,
+    required Future<T> Function(Map<String, Object?> lease) body,
+  }) async {
+    final previousSessionDirectory = FlutterScoutCli._sessionDirectoryOverride;
+    FlutterScoutCli._sessionDirectoryOverride = sessionDirectory;
+    _LaunchLease? lease;
+    try {
+      lease = await _acquireLaunchLease(
+        project: project,
+        device: device,
+        name: name,
+      );
+      return await body(<String, Object?>{
+        'runId': lease.runId,
+        'startedAt': lease.startedAt.toIso8601String(),
+        'controlPath': lease.controlFile.path,
+        'infoPath': lease.infoFile.path,
+        'metadata': _readLaunchInfo(),
+      });
+    } finally {
+      lease?.release();
+      FlutterScoutCli._sessionDirectoryOverride = previousSessionDirectory;
+    }
   }
 }

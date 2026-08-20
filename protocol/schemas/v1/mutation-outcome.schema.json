@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.dev/protocol/schemas/v1/mutation-outcome.schema.json",
+  "title": "Flutter Scout v15 CLI mutation outcome",
+  "type": "object",
+  "required": [
+    "ok",
+    "schemaVersion",
+    "protocolVersion",
+    "minSupportedProtocolVersion",
+    "maxSupportedProtocolVersion",
+    "capabilities",
+    "capabilitySource",
+    "commandId",
+    "runId",
+    "runtimeInstanceId",
+    "stateGeneration",
+    "identityStatus",
+    "result",
+    "structuredError",
+    "timings",
+    "stable",
+    "stability",
+    "errorCursor",
+    "errorsSinceCursor",
+    "transport",
+    "dispatch",
+    "observation",
+    "postcondition",
+    "runtimeHealth"
+  ],
+  "properties": {
+    "ok": {"type": "boolean"},
+    "schemaVersion": {"const": 1},
+    "protocolVersion": {"const": 15},
+    "minSupportedProtocolVersion": {"type": "integer", "minimum": 1},
+    "maxSupportedProtocolVersion": {"type": "integer", "minimum": 15},
+    "capabilities": {"type": "object"},
+    "capabilitySource": {"enum": ["cli", "negotiated"]},
+    "commandId": {"type": "string", "minLength": 1},
+    "runId": {"type": ["string", "null"]},
+    "runtimeInstanceId": {"type": ["string", "null"]},
+    "stateGeneration": {"type": ["integer", "null"], "minimum": 0},
+    "identityStatus": {
+      "enum": ["validated", "validated_pre_dispatch", "unavailable"]
+    },
+    "result": {},
+    "structuredError": {"type": ["object", "null"]},
+    "timings": {
+      "type": "object",
+      "required": ["totalMs", "status", "phases"],
+      "properties": {
+        "totalMs": {"type": ["integer", "null"], "minimum": 0},
+        "status": {
+          "enum": ["measured", "partial", "unavailable", "in_progress"]
+        },
+        "phases": {
+          "type": "object",
+          "required": [
+            "connect",
+            "snapshot",
+            "match",
+            "dispatch",
+            "settle",
+            "delta",
+            "logs",
+            "serialize"
+          ],
+          "maxProperties": 32,
+          "additionalProperties": {"$ref": "#/$defs/timingPhase"}
+        },
+        "actionOverheadExcludingSettle": {"type": "object"},
+        "actionOverheadExcludingSettleMs": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "stable": {"type": "boolean"},
+    "stability": {
+      "type": "object",
+      "required": [
+        "state",
+        "actionable",
+        "stoppingReason",
+        "elapsedMs",
+        "budgetMs",
+        "deadlineEpochMs",
+        "bounded",
+        "samples",
+        "frames",
+        "initial",
+        "final",
+        "limitations"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "stable",
+            "transient",
+            "continuous_animation",
+            "never_settling",
+            "runtime_lost",
+            "observation_unavailable"
+          ]
+        },
+        "actionable": {"type": "boolean"},
+        "stoppingReason": {"type": "string", "minLength": 1},
+        "elapsedMs": {"type": ["integer", "null"], "minimum": 0},
+        "budgetMs": {"type": ["integer", "null"], "minimum": 0},
+        "deadlineEpochMs": {"type": ["integer", "null"], "minimum": 0},
+        "bounded": {"type": "boolean"},
+        "samples": {"type": "object"},
+        "frames": {"type": "object"},
+        "initial": {"type": "object"},
+        "final": {"type": "object"},
+        "limitations": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "errorCursor": {"type": ["integer", "null"], "minimum": 0},
+    "errorsSinceCursor": {"type": ["array", "null"]},
+    "transport": {"enum": ["ok", "timeout", "failed", "invalid_response"]},
+    "dispatch": {
+      "enum": ["not_dispatched", "dispatched", "dispatch_outcome_unknown"]
+    },
+    "observation": {
+      "enum": [
+        "changed",
+        "completed_same_state",
+        "no_effect",
+        "observation_unavailable"
+      ]
+    },
+    "postcondition": {
+      "enum": [
+        "postcondition_met",
+        "postcondition_not_met",
+        "postcondition_not_requested"
+      ]
+    },
+    "runtimeHealth": {
+      "enum": ["runtime_clean", "runtime_blocked", "runtime_health_unknown"]
+    },
+    "runtimeHealthScope": {
+      "enum": ["fresh_since_cursor_and_currently_active"]
+    },
+    "activeBlockingSignals": {"type": "array"},
+    "idempotencyKey": {"type": "string", "minLength": 1, "maxLength": 128},
+    "idempotencyKeyDigest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "idempotency": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": ["committed", "replayed", "outcome_unknown"]
+        },
+        "durability": {"const": "cross_process_receipt"},
+        "keySource": {"enum": ["caller", "generated"]},
+        "businessFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "idempotencyKeyDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "originalCommandId": {"type": "string", "minLength": 1}
+      },
+      "required": ["status", "durability", "keySource", "idempotencyKeyDigest"],
+      "additionalProperties": true
+    },
+    "expectedStateGeneration": {"type": ["integer", "null"], "minimum": 0},
+    "deadlineEpochMs": {"type": ["integer", "null"], "minimum": 0},
+    "beforeStateGeneration": {"type": "integer", "minimum": 0},
+    "afterStateGeneration": {"type": "integer", "minimum": 0},
+    "beforeSnapshotId": {"type": "string"},
+    "afterSnapshotId": {"type": "string"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"ok": {"const": true}}},
+      "then": {"properties": {"structuredError": {"type": "null"}}}
+    },
+    {
+      "if": {"properties": {"ok": {"const": false}}},
+      "then": {"properties": {"structuredError": {"type": "object"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "dispatch": {"enum": ["dispatched", "dispatch_outcome_unknown"]}
+        }
+      },
+      "then": {
+        "required": [
+          "idempotencyKey",
+          "idempotencyKeyDigest",
+          "expectedStateGeneration",
+          "deadlineEpochMs"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "timingPhase": {
+      "type": "object",
+      "required": ["status", "elapsedMs"],
+      "properties": {
+        "status": {"enum": ["measured", "unavailable"]},
+        "elapsedMs": {"type": ["integer", "null"], "minimum": 0},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "measured"},
+            "elapsedMs": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "required": ["reason"],
+          "properties": {
+            "status": {"const": "unavailable"},
+            "elapsedMs": {"type": "null"}
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

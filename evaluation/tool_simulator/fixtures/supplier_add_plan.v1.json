@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "episodeId": "supplier-public-episode-1",
+  "condition": "candidate",
+  "agentClaimedSuccess": true,
+  "reportedTokens": 0,
+  "actions": [
+    { "arguments": ["tap", "btn.add_supplier"] },
+    {
+      "arguments": [
+        "input",
+        "field.supplier_name",
+        "Benchmark Supplier"
+      ]
+    },
+    { "arguments": ["tap", "btn.save_supplier"] }
+  ]
+}

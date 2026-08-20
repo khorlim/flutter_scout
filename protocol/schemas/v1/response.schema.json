@@ -1,0 +1,337 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.dev/protocol/schemas/v1/response.schema.json",
+  "title": "Flutter Scout v15 helper response",
+  "type": "object",
+  "required": [
+    "ok",
+    "schemaVersion",
+    "protocolVersion",
+    "minSupportedProtocolVersion",
+    "maxSupportedProtocolVersion",
+    "capabilities",
+    "commandId",
+    "runtimeInstanceId",
+    "stateGeneration",
+    "result",
+    "structuredError",
+    "timings",
+    "errorCursor",
+    "errorsSinceCursor",
+    "activeBlockingSignals"
+  ],
+  "properties": {
+    "ok": {"type": "boolean"},
+    "schemaVersion": {"const": 1},
+    "protocolVersion": {"const": 15},
+    "minSupportedProtocolVersion": {"type": "integer", "minimum": 1},
+    "maxSupportedProtocolVersion": {"type": "integer", "minimum": 15},
+    "capabilities": {
+      "type": "object",
+      "required": [
+        "typedEnvelopeV1",
+        "stateGeneration",
+        "stateDigestSha256",
+        "strictMutationEnvelope",
+        "serializedMutations",
+        "idempotentMutations",
+        "stableIdempotencyFingerprintV1",
+        "idempotencyTombstonesV1",
+        "runtimeErrorCursor",
+        "heldDragExclusion",
+        "sourceRedaction",
+        "phaseTimingsV1"
+      ],
+      "properties": {
+        "typedEnvelopeV1": {"const": true},
+        "stateGeneration": {"const": true},
+        "stateDigestSha256": {"const": true},
+        "strictMutationEnvelope": {"const": true},
+        "serializedMutations": {"const": true},
+        "idempotentMutations": {"const": true},
+        "stableIdempotencyFingerprintV1": {"const": true},
+        "idempotencyTombstonesV1": {"const": true},
+        "runtimeErrorCursor": {"const": true},
+        "heldDragExclusion": {"const": true},
+        "sourceRedaction": {"const": true},
+        "boundedNavigation": {"const": true},
+        "snapshotRelativeDeltas": {"const": true},
+        "changedRegionCaptureV1": {"const": true},
+        "semanticStabilityV1": {"const": true},
+        "runtimeSignalProvenanceV1": {"const": true},
+        "activeRuntimeSignalsV1": {"const": true},
+        "strictTypedParametersV1": {"const": true},
+        "boundedHelperRequestsV1": {"const": true},
+        "boundedHelperPayloadsV1": {"const": true},
+        "phaseTimingsV1": {"const": true}
+      },
+      "additionalProperties": {"type": "boolean"}
+    },
+    "commandId": {"type": "string", "minLength": 1},
+    "runId": {"type": ["string", "null"]},
+    "runtimeInstanceId": {"type": "string", "minLength": 1},
+    "stateGeneration": {"type": "integer", "minimum": 0},
+    "stateDigest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "snapshotId": {"type": "string", "pattern": "^g[0-9]+:[a-f0-9]{64}$"},
+    "stable": {"type": "boolean"},
+    "stability": {"$ref": "#/$defs/stability"},
+    "result": {},
+    "structuredError": {
+      "oneOf": [
+        {"$ref": "#/$defs/structuredError"},
+        {"type": "null"}
+      ]
+    },
+    "error": {"$ref": "#/$defs/structuredError"},
+    "timings": {
+      "type": "object",
+      "required": ["totalMs", "phases"],
+      "properties": {
+        "totalMs": {"type": ["integer", "null"], "minimum": 0},
+        "status": {"enum": ["measured", "partial", "unavailable"]},
+        "phases": {
+          "type": "object",
+          "required": [
+            "connect",
+            "snapshot",
+            "match",
+            "dispatch",
+            "settle",
+            "delta",
+            "logs",
+            "serialize"
+          ],
+          "maxProperties": 32,
+          "additionalProperties": {"$ref": "#/$defs/timingPhase"}
+        }
+      },
+      "additionalProperties": {"type": ["integer", "number", "null"]}
+    },
+    "errorCursor": {"type": "integer", "minimum": 0},
+    "errorsSinceCursor": {"type": "array"},
+    "activeBlockingSignals": {"type": "array"},
+    "operation": {"type": "string"},
+    "requestedSnapshotId": {"type": "string", "pattern": "^g[0-9]+:[a-f0-9]{64}$"},
+    "baselineScope": {"$ref": "#/$defs/snapshotScope"},
+    "currentScope": {"$ref": "#/$defs/snapshotScope"},
+    "captureVerifiedScope": {"$ref": "#/$defs/snapshotScope"},
+    "changedRegions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/changedRegion"}
+    },
+    "changedRegionCoverage": {"$ref": "#/$defs/changedRegionCoverage"},
+    "regionSelection": {"$ref": "#/$defs/changedRegionSelection"},
+    "coordinateFrame": {"type": "object"},
+    "captureIdentity": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "backend": {"type": "string"},
+    "bytes": {"type": "string", "maxLength": 4194304},
+    "payloadBounds": {
+      "type": "object",
+      "properties": {
+        "status": {"enum": ["within_bound", "failed_closed"]},
+        "maximumEncodedBytes": {"const": 4194304},
+        "originalEncodedBytes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "safetyEvidenceStatus": {"enum": ["complete", "truncated"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"ok": {"const": true}}},
+      "then": {"properties": {"structuredError": {"type": "null"}}},
+      "else": {
+        "properties": {
+          "structuredError": {"$ref": "#/$defs/structuredError"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "ok": {"const": true},
+          "operation": {"const": "capture_changed_region"}
+        },
+        "required": ["operation"]
+      },
+      "then": {
+        "required": [
+          "requestedSnapshotId",
+          "baselineScope",
+          "currentScope",
+          "captureVerifiedScope",
+          "changedRegions",
+          "changedRegionCoverage",
+          "regionSelection",
+          "coordinateFrame",
+          "captureIdentity",
+          "backend",
+          "bytes"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "snapshotScope": {
+      "type": "object",
+      "required": ["runtimeInstanceId", "stateGeneration", "snapshotId"],
+      "properties": {
+        "runId": {"type": ["string", "null"]},
+        "runtimeInstanceId": {"type": "string", "minLength": 1},
+        "stateGeneration": {"type": "integer", "minimum": 0},
+        "snapshotId": {"type": "string", "pattern": "^g[0-9]+:[a-f0-9]{64}$"}
+      },
+      "additionalProperties": true
+    },
+    "rect": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"type": "number"}
+    },
+    "changedRegion": {
+      "type": "object",
+      "required": ["logicalRect", "physicalRect", "reasons", "geometryProvenance"],
+      "properties": {
+        "logicalRect": {"$ref": "#/$defs/rect"},
+        "physicalRect": {"$ref": "#/$defs/rect"},
+        "reasons": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"type": "string"}},
+        "sourceIdentities": {"type": "array", "maxItems": 8, "items": {"type": "string"}},
+        "geometryProvenance": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "changedRegionCoverage": {
+      "type": "object",
+      "required": [
+        "status",
+        "basis",
+        "baselineSnapshotId",
+        "currentSnapshotId",
+        "totalRegionCount",
+        "omittedRegionCount",
+        "ambiguousGeometryCount",
+        "unavailableGeometryCount",
+        "issues",
+        "limitations"
+      ],
+      "properties": {
+        "status": {"enum": ["complete", "incomplete"]},
+        "basis": {"const": "snapshot_relative_agent_observable_semantic_geometry"},
+        "baselineSnapshotId": {"type": "string", "pattern": "^g[0-9]+:[a-f0-9]{64}$"},
+        "currentSnapshotId": {"type": "string", "pattern": "^g[0-9]+:[a-f0-9]{64}$"},
+        "totalRegionCount": {"type": "integer", "minimum": 0},
+        "omittedRegionCount": {"type": "integer", "minimum": 0},
+        "ambiguousGeometryCount": {"type": "integer", "minimum": 0},
+        "unavailableGeometryCount": {"type": "integer", "minimum": 0},
+        "issues": {"type": "array", "items": {"type": "string"}},
+        "limitations": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "changedRegionSelection": {
+      "type": "object",
+      "required": [
+        "strategy",
+        "regionCount",
+        "logicalUnionRect",
+        "logicalPaddedRect",
+        "physicalPaddedRect",
+        "paddingLogical",
+        "unionAreaRatio",
+        "predictedOutputPixels",
+        "bounds"
+      ],
+      "properties": {
+        "strategy": {"const": "bounded_union"},
+        "regionCount": {"type": "integer", "minimum": 1, "maximum": 16},
+        "logicalUnionRect": {"$ref": "#/$defs/rect"},
+        "logicalPaddedRect": {"$ref": "#/$defs/rect"},
+        "physicalPaddedRect": {"$ref": "#/$defs/rect"},
+        "paddingLogical": {"type": "number", "minimum": 0, "maximum": 256},
+        "unionAreaRatio": {"type": "number", "minimum": 0, "maximum": 0.5},
+        "predictedOutputPixels": {"type": "integer", "minimum": 1, "maximum": 4194304},
+        "bounds": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "structuredError": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "message": {"type": "string"},
+        "details": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "stability": {
+      "type": "object",
+      "required": [
+        "state",
+        "actionable",
+        "stoppingReason",
+        "elapsedMs",
+        "budgetMs",
+        "deadlineEpochMs",
+        "bounded",
+        "samples",
+        "frames",
+        "initial",
+        "final",
+        "limitations"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "stable",
+            "transient",
+            "continuous_animation",
+            "never_settling",
+            "runtime_lost",
+            "observation_unavailable"
+          ]
+        },
+        "actionable": {"type": "boolean"},
+        "stoppingReason": {"type": "string", "minLength": 1},
+        "elapsedMs": {"type": ["integer", "null"], "minimum": 0},
+        "budgetMs": {"type": ["integer", "null"], "minimum": 0},
+        "deadlineEpochMs": {"type": ["integer", "null"], "minimum": 0},
+        "bounded": {"type": "boolean"},
+        "samples": {"type": "object"},
+        "frames": {"type": "object"},
+        "initial": {"type": "object"},
+        "final": {"type": "object"},
+        "limitations": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": true
+    },
+    "timingPhase": {
+      "type": "object",
+      "required": ["status", "elapsedMs"],
+      "properties": {
+        "status": {"enum": ["measured", "unavailable"]},
+        "elapsedMs": {"type": ["integer", "null"], "minimum": 0},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "measured"},
+            "elapsedMs": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "required": ["reason"],
+          "properties": {
+            "status": {"const": "unavailable"},
+            "elapsedMs": {"type": "null"}
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

@@ -96,14 +96,14 @@ extension _CliSessionRecovery on FlutterScoutCli {
     final meta = _readSessionMeta();
     if (meta?['mode'] != 'scout_owned_flutter_run') return null;
     var ownerPid = _readPid() ?? int.tryParse('${meta?['pid'] ?? ''}');
-    if (ownerPid == null || !await _looksLikeScoutFlutterRun(ownerPid)) {
+    if (ownerPid == null || !await _matchesOwnedFlutterRun(ownerPid, meta)) {
       final project = meta?['project']?.toString();
       if (project == null || project.isEmpty) return null;
       ownerPid = await _findScoutFlutterToolPid(
         project: project,
         instanceName: meta?['name']?.toString(),
       );
-      if (ownerPid == null || !await _looksLikeScoutFlutterRun(ownerPid)) {
+      if (ownerPid == null || !await _matchesOwnedFlutterRun(ownerPid, meta)) {
         return null;
       }
     }
@@ -112,8 +112,8 @@ extension _CliSessionRecovery on FlutterScoutCli {
     final uri = _normalizeVmUri(discovered);
     final validation = await _validateVmUri(uri);
     if (!validation.ok) return null;
-    File(_pidFile).writeAsStringSync('$ownerPid');
-    File(_vmUriFile).writeAsStringSync(uri);
+    _writePrivateSessionString(_pidFile, '$ownerPid');
+    _persistValidatedVmUri(uri);
     final now = DateTime.now().toUtc().toIso8601String();
     _writeSessionMeta({
       ...?meta,
@@ -133,7 +133,7 @@ extension _CliSessionRecovery on FlutterScoutCli {
     if (meta?['mode'] != 'scout_owned_flutter_run') return false;
 
     var ownerPid = _readPid() ?? int.tryParse('${meta?['pid'] ?? ''}');
-    if (ownerPid != null && await _looksLikeScoutFlutterRun(ownerPid)) {
+    if (ownerPid != null && await _matchesOwnedFlutterRun(ownerPid, meta)) {
       return false;
     }
 
@@ -143,8 +143,8 @@ extension _CliSessionRecovery on FlutterScoutCli {
         project: project,
         instanceName: meta?['name']?.toString(),
       );
-      if (ownerPid != null && await _looksLikeScoutFlutterRun(ownerPid)) {
-        File(_pidFile).writeAsStringSync('$ownerPid');
+      if (ownerPid != null && await _matchesOwnedFlutterRun(ownerPid, meta)) {
+        _writePrivateSessionString(_pidFile, '$ownerPid');
         _writeSessionMeta({...?meta, 'pid': ownerPid});
         return false;
       }
@@ -152,7 +152,7 @@ extension _CliSessionRecovery on FlutterScoutCli {
 
     final listenerPid = _readVmLogListenerPid();
     if (listenerPid != null &&
-        await _looksLikeScoutVmLogListener(listenerPid)) {
+        await _matchesOwnedVmLogListener(listenerPid, meta)) {
       Process.killPid(listenerPid);
     }
     _deleteFileIfExists(_pidFile);
@@ -171,7 +171,9 @@ extension _CliSessionRecovery on FlutterScoutCli {
             'updatedAt': now,
           }
           ..remove('pid')
-          ..remove('vmLogListenerPid');
+          ..remove('vmLogListenerPid')
+          ..remove('vmLogListener')
+          ..remove('processIdentity');
     _writeSessionMeta(reconciled);
     return true;
   }

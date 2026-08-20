@@ -9,40 +9,97 @@ extension _CliAnnotations on FlutterScoutCli {
     final target =
         parsed.option('target') ??
         (parsed.rest.isEmpty ? null : parsed.rest.first);
+    if (target != null && target.isNotEmpty) {
+      final observation = await _locateUniqueReadNode(target: target);
+      final node = observation.node;
+      final dpr = _nodeDevicePixelRatio(node);
+      if (dpr == null) {
+        throw ScoutCliException(
+          'target_geometry_scale_unavailable',
+          'The uniquely resolved target does not include a trustworthy '
+              'logical-to-physical scale.',
+          details: const <String, Object?>{
+            'dispatch': 'not_applicable_read_only',
+          },
+          additional: <String, Object?>{'scope': observation.scope},
+        );
+      }
+      _printJson({
+        'ok': true,
+        'target': target,
+        'devicePixelRatio': dpr,
+        'bounds': _observedBoundsForNode(node),
+        'targetScope': observation.scope,
+        'coordinateFrame': observation.coordinateFrame,
+      });
+      return 0;
+    }
     final inspect = await _call('ext.flutter_scout.inspect');
     final nodes = [
       ..._nodesFromInspect(inspect, 'interactables'),
       ..._nodesFromInspect(inspect, 'fields'),
       ..._nodesFromInspect(inspect, 'textTargets'),
     ];
-    final dpr = (inspect['devicePixelRatio'] as num?)?.toDouble() ?? 1;
-    if (target != null && target.isNotEmpty) {
-      final node = _findNodeInInspect(inspect, target);
-      if (node == null) {
-        throw ScoutCliException(
-          'target_not_found',
-          'No inspect target matched `$target`.',
-        );
-      }
-      stdout.writeln(
-        const JsonEncoder.withIndent('  ').convert({
-          'ok': true,
-          'target': target,
-          'devicePixelRatio': dpr,
-          'bounds': _boundsForNode(node, dpr),
-        }),
-      );
-      return 0;
-    }
-    stdout.writeln(
-      const JsonEncoder.withIndent('  ').convert({
-        'ok': true,
-        'devicePixelRatio': dpr,
-        'logicalSize': inspect['logicalSize'],
-        'bounds': [for (final node in nodes) _boundsForNode(node, dpr)],
-      }),
-    );
+    final viewport = inspect['viewport'];
+    final rawDpr = viewport is Map && viewport['available'] == true
+        ? viewport['logicalToPhysicalScale']
+        : null;
+    final parsedDpr = rawDpr is num ? rawDpr.toDouble() : null;
+    final dpr = parsedDpr != null && parsedDpr.isFinite && parsedDpr > 0
+        ? parsedDpr
+        : null;
+    _printJson({
+      'ok': true,
+      'devicePixelRatio': dpr,
+      'logicalSize': inspect['logicalSize'],
+      if (viewport is Map) 'viewport': viewport,
+      'bounds': [for (final node in nodes) _observedBoundsForNode(node)],
+    });
     return 0;
+  }
+
+  Map<String, Object?> _observedBoundsForNode(Map<String, dynamic> node) {
+    final dpr = _nodeDevicePixelRatio(node);
+    if (dpr != null) {
+      return <String, Object?>{
+        ..._boundsForNode(node, dpr),
+        'geometryCoordinateSpaces': node['geometryCoordinateSpaces'],
+      };
+    }
+    final rect = node['rect'];
+    if (rect is! List ||
+        rect.length < 4 ||
+        rect.take(4).any((value) => value is! num)) {
+      return <String, Object?>{
+        'id': node['id'],
+        'label': node['label'],
+        'kind': node['kind'],
+        'rect': null,
+        'pixelRect': null,
+        'geometryCoordinateSpaces': node['geometryCoordinateSpaces'],
+      };
+    }
+    final left = (rect[0] as num).toDouble();
+    final top = (rect[1] as num).toDouble();
+    final width = (rect[2] as num).toDouble();
+    final height = (rect[3] as num).toDouble();
+    return <String, Object?>{
+      'id': node['id'],
+      'fallbackId': node['fallbackId'],
+      'label': node['label'],
+      'kind': node['kind'],
+      'enabled': node['enabled'],
+      'rect': <double>[left, top, width, height],
+      'center': <double>[left + width / 2, top + height / 2],
+      'pixelRect': null,
+      'geometryCoordinateSpaces':
+          node['geometryCoordinateSpaces'] ??
+          const <String, Object?>{
+            'logical': 'available',
+            'physical': 'unavailable',
+            'reason': 'view_metrics_not_captured',
+          },
+    };
   }
 
   Future<int> _annotations(List<String> args) async {
@@ -174,7 +231,13 @@ extension _CliAnnotations on FlutterScoutCli {
       await _attachCropPaths(annotations);
       _writeAnnotationManifest(annotations);
     }
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
+    if (_isMutatingExtension('ext.flutter_scout.annotations', params)) {
+      result = _commitActionEvidence(
+        method: 'ext.flutter_scout.annotations',
+        result: result,
+      );
+    }
+    _printJson(result);
     return result['ok'] == false ? 1 : 0;
   }
 
@@ -193,10 +256,25 @@ extension _CliAnnotations on FlutterScoutCli {
     }
     final records = _restorableAnnotationRecords();
     if (records.isEmpty) return result;
-    final restored = await _call('ext.flutter_scout.annotations', {
+    final restoreParams = <String, String>{
       'action': 'restore',
       'records': jsonEncode(records),
-    });
+    };
+    final scope = _activeCallerIdempotencyKey;
+    final restored = scope == null
+        ? await _call('ext.flutter_scout.annotations', restoreParams)
+        : await _withCallerIdempotencyKey<Map<String, dynamic>>(
+            _derivedStepIdempotencyKey(
+              scope: scope,
+              step: 0,
+              businessRequest: <String, Object?>{
+                'kind': 'annotation-session-restore',
+                'runtimeInstanceId': result['runtimeInstanceId'],
+                'params': restoreParams,
+              },
+            ),
+            () => _call('ext.flutter_scout.annotations', restoreParams),
+          );
     if (restored['ok'] != false) {
       restored['restoredFromSession'] = records.length;
     }
@@ -257,18 +335,16 @@ extension _CliAnnotations on FlutterScoutCli {
     ];
     final file = _annotationManifestFile;
     if (records.isEmpty) {
-      if (file.existsSync()) file.deleteSync();
+      _assertPrivateFilePath(file.path, boundary: _sessionDir.path);
+      final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+      if (type == FileSystemEntityType.file) file.deleteSync();
       return;
     }
-    final temporary = File('${file.path}.tmp');
-    temporary.writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert({
-        'schemaVersion': 1,
-        'updatedAt': DateTime.now().toIso8601String(),
-        'annotations': records,
-      }),
-    );
-    temporary.renameSync(file.path);
+    _writePrivateSessionJson(file.path, <String, Object?>{
+      'schemaVersion': 1,
+      'updatedAt': DateTime.now().toIso8601String(),
+      'annotations': records,
+    });
   }
 
   Future<int> _annotationsWait(ArgResults parsed) async {
@@ -283,7 +359,7 @@ extension _CliAnnotations on FlutterScoutCli {
     });
     initial = await _restoreAnnotationsIfNeeded(initial, 'list');
     if (initial['ok'] == false) {
-      stdout.writeln(const JsonEncoder.withIndent('  ').convert(initial));
+      _printJson(initial);
       return 1;
     }
     final baseline = (initial['handoffSeq'] as num?)?.toInt() ?? 0;
@@ -305,11 +381,7 @@ extension _CliAnnotations on FlutterScoutCli {
       if (seq > baseline) {
         final annotations = state['annotations'];
         if (annotations is List) await _attachCropPaths(annotations);
-        stdout.writeln(
-          const JsonEncoder.withIndent(
-            '  ',
-          ).convert({...state, 'handoff': true, 'timedOut': false}),
-        );
+        _printJson({...state, 'handoff': true, 'timedOut': false});
         return 0;
       }
     }
@@ -320,16 +392,12 @@ extension _CliAnnotations on FlutterScoutCli {
     // The app may have disconnected during the wait; don't report a clean
     // timeout (exit 0) on top of an error payload.
     if (timeoutState['ok'] == false) {
-      stdout.writeln(const JsonEncoder.withIndent('  ').convert(timeoutState));
+      _printJson(timeoutState);
       return 1;
     }
     final annotations = timeoutState['annotations'];
     if (annotations is List) await _attachCropPaths(annotations);
-    stdout.writeln(
-      const JsonEncoder.withIndent(
-        '  ',
-      ).convert({...timeoutState, 'handoff': false, 'timedOut': true}),
-    );
+    _printJson({...timeoutState, 'handoff': false, 'timedOut': true});
     return 0;
   }
 
@@ -402,10 +470,14 @@ extension _CliAnnotations on FlutterScoutCli {
       });
       final bytes = res['bytes'];
       if (res['ok'] != false && bytes is String && bytes.isNotEmpty) {
-        Directory(p.dirname(outPath)).createSync(recursive: true);
-        File(outPath).writeAsBytesSync(base64Decode(bytes));
+        _writePrivateArtifactBytes(outPath, base64Decode(bytes));
+        _writePrivateArtifactMetadata(outPath, 'session');
         return outPath;
       }
+    } on ScoutCliException {
+      // A crop without a committed retention record is not a successful
+      // durable materialization; let the command surface the typed failure.
+      rethrow;
     } catch (_) {
       // Fall through; caller may try a native capture.
     }
@@ -432,9 +504,12 @@ extension _CliAnnotations on FlutterScoutCli {
           (inspect['devicePixelRatio'] as num?)?.toDouble() ??
           _inferDevicePixelRatio(inspect, source);
       final crop = _cropPngBytes(source, rectLogical, dpr, 12);
-      Directory(p.dirname(outPath)).createSync(recursive: true);
-      File(outPath).writeAsBytesSync(crop.bytes);
+      _writePrivateArtifactBytes(outPath, crop.bytes);
+      _writePrivateArtifactMetadata(outPath, 'session');
       return outPath;
+    } on ScoutCliException {
+      // Retention registration is part of the durable crop commit.
+      rethrow;
     } catch (_) {
       return null;
     } finally {

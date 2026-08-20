@@ -1,0 +1,175 @@
+{
+  "contractVersion": 1,
+  "command": "status",
+  "binary": {
+    "status": "observed",
+    "cli": {
+      "package": "flutter_scout",
+      "packageVersion": "2.0.0-dev.1"
+    },
+    "helper": {
+      "status": "observed",
+      "package": "flutter_scout_helper",
+      "packageVersion": "0.2.0-dev.1",
+      "packageVersionStatus": "observed"
+    }
+  },
+  "protocol": {
+    "status": "compatible",
+    "cliSupported": {
+      "schemaVersion": 1,
+      "minimum": 15,
+      "maximum": 15,
+      "capabilities": [
+        "activeRuntimeSignalsV1",
+        "boundedCliPayloadsV1",
+        "callerIdempotencyKeysV1",
+        "cliResponseEnvelopeV1",
+        "closedMutationOutcomes",
+        "correlatedEventCursorsV1",
+        "durableIdempotencyReceiptsV1",
+        "heldDragExclusion",
+        "idempotencyTombstonesV1",
+        "idempotentMutations",
+        "phaseTimingsV1",
+        "runtimeErrorCursor",
+        "runtimeSignalProvenanceV1",
+        "semanticStabilityV1",
+        "serializedMutations",
+        "sourceRedaction",
+        "stableIdempotencyFingerprintV1",
+        "stateDigestSha256",
+        "stateGeneration",
+        "strictMutationEnvelope",
+        "structuredHeartbeatsV1",
+        "typedEnvelopeV1"
+      ]
+    },
+    "helperObserved": {
+      "schemaVersion": 1,
+      "protocolVersion": 15,
+      "minimum": 15,
+      "maximum": 15,
+      "capabilities": [
+        "inAppCapture",
+        "typedEnvelopeV1"
+      ]
+    },
+    "negotiated": {
+      "status": "compatible",
+      "selectedVersion": 15,
+      "capabilities": [
+        "typedEnvelopeV1"
+      ]
+    }
+  },
+  "session": {
+    "status": "observed",
+    "name": "operability-test",
+    "mode": "scout_owned_flutter_run",
+    "state": "ready",
+    "runId": "run-observed",
+    "project": "/workspace/example_app",
+    "sourceIdentity": {
+      "status": "clean_commit",
+      "commit": "0123456789abcdef0123456789abcdef01234567",
+      "workingTreeDirty": false
+    }
+  },
+  "device": {
+    "status": "observed",
+    "id": "sim-device-1",
+    "name": "Reference Simulator",
+    "platform": "ios",
+    "category": "mobile",
+    "emulator": true,
+    "capabilities": null
+  },
+  "app": {
+    "reachability": "reachable",
+    "helperExtension": "registered"
+  },
+  "runnerOwnership": {
+    "status": "verified",
+    "mode": "scout_owned_flutter_run",
+    "pid": 4242,
+    "proof": "exact_process_identity",
+    "processIdentityRecorded": true
+  },
+  "supervisorStatus": "metadata_available",
+  "runtime": {
+    "status": "observed",
+    "runId": "run-observed",
+    "runtimeInstanceId": "runtime-observed",
+    "stateGeneration": 27,
+    "snapshotId": "g27:stable-digest",
+    "screen": {
+      "status": "observed",
+      "name": "HomeScreen",
+      "viewSignature": "home:ready",
+      "idle": true
+    },
+    "vmServiceEndpoint": null
+  },
+  "artifacts": {
+    "logs": {
+      "status": "available",
+      "path": "<SESSION>/runs/run-observed/logs.txt",
+      "exists": true,
+      "cursor": 0
+    },
+    "recordings": {
+      "status": "available",
+      "path": "<SESSION>/recordings",
+      "exists": true
+    },
+    "evidence": {
+      "status": "available",
+      "path": "<SESSION>/evidence",
+      "exists": true,
+      "indexPath": "<SESSION>/evidence/index.json"
+    },
+    "events": {
+      "status": "absent",
+      "path": "<SESSION>/events.jsonl",
+      "exists": false,
+      "cursorAddressable": true
+    }
+  },
+  "actionState": {
+    "status": "held_drag_active",
+    "activeDrag": true,
+    "position": [120.0, 450.0],
+    "elapsedMs": 125,
+    "allowedNextActions": [
+      "drag-move",
+      "drag-end",
+      "drag-cancel"
+    ]
+  },
+  "recordingState": {
+    "status": "paused",
+    "active": true,
+    "paused": true,
+    "name": "checkout-flow",
+    "feature": "checkout",
+    "stepCount": 4,
+    "store": {
+      "status": "available",
+      "path": "<SESSION>/recordings",
+      "exists": true
+    }
+  },
+  "sourceFreshness": {
+    "status": "verified",
+    "verifiedCount": 3,
+    "mismatchedCount": 0,
+    "action": "reload"
+  },
+  "prioritizedRecoveryAction": {
+    "status": "recommended",
+    "priority": 1,
+    "action": "flutter-scout drag-status",
+    "reason": "held_drag_exclusively_owns_mutation_channel"
+  }
+}

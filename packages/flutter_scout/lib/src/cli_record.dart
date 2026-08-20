@@ -11,7 +11,8 @@ part of 'flutter_scout_cli.dart';
 /// Redacted-value marker written by the helper recorder (must match
 /// `_kRecordRedactedPrefix` in flutter_scout_helper/runtime_recorder.dart):
 /// a redacted field's value is stored as ` VAR:<field-id>`, resolved at replay
-/// from `--var <field-id>=<value>`.
+/// from protected `--var-file` or `--var-stdin` input. Legacy `--var` remains
+/// available with an explicit process-argument exposure warning.
 const String _kRecordRedactedPrefix = ' VAR:';
 
 extension _CliRecord on FlutterScoutCli {
@@ -129,13 +130,17 @@ extension _CliRecord on FlutterScoutCli {
       ..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
     final name = parsed.rest.isEmpty ? null : parsed.rest.first;
-    final result = await _call('ext.flutter_scout.record', {
+    var result = await _call('ext.flutter_scout.record', {
       'action': 'start',
       'name': ?name,
       if (parsed.option('feature') != null)
         'feature': parsed.option('feature')!,
       if (parsed.option('title') != null) 'title': parsed.option('title')!,
     });
+    result = _commitActionEvidence(
+      method: 'ext.flutter_scout.record',
+      result: result,
+    );
     _printJson(result);
     return result['ok'] == false ? 1 : 0;
   }
@@ -144,29 +149,68 @@ extension _CliRecord on FlutterScoutCli {
     final parser = ArgParser()..addFlag('discard', defaultsTo: false);
     final parsed = parser.parse(args);
     final discard = parsed.flag('discard');
-    final result = await _call('ext.flutter_scout.record', {
+    var result = await _call('ext.flutter_scout.record', {
       'action': 'stop',
       if (discard) 'discard': 'true',
     });
     // Fallback persistence: if the in-app helper could not reach the project
-    // dir (e.g. iOS-simulator sandbox), write the returned flow from here.
-    if (!discard &&
-        result['ok'] != false &&
-        result['persisted'] != true &&
-        result['flow'] is Map) {
-      final flow = Map<String, Object?>.from(result['flow'] as Map);
-      final path = _writeFlowToStore(flow);
-      result['path'] = path;
-      result['persisted'] = true;
-      result['persistedBy'] = 'cli';
+    // dir (e.g. iOS-simulator sandbox), write the returned flow from here. The
+    // CLI store is canonical for `record list/run`; preserve the helper result
+    // separately so one path never overwrites the provenance of the other.
+    if (!discard && result['ok'] != false && result['flow'] is Map) {
+      final helperPersistence = <String, Object?>{
+        'status': result['persistenceStatus'] ?? 'unknown',
+        'persisted': result['persisted'] == true,
+        if (result['path'] != null) 'path': result['path'],
+        if (result['persistenceReason'] != null)
+          'reason': result['persistenceReason'],
+      };
+      final flow = _redactFlowForStorage(
+        Map<String, Object?>.from(result['flow'] as Map),
+      );
+      try {
+        final path = _writeFlowToStore(flow);
+        result['helperPersistence'] = helperPersistence;
+        result['path'] = path;
+        result['persisted'] = true;
+        result['persistedBy'] = 'cli';
+        result['persistenceStatus'] = 'persisted_by_cli';
+        result.remove('persistenceReason');
+      } catch (error) {
+        result['ok'] = false;
+        result['helperPersistence'] = helperPersistence;
+        result['persisted'] = false;
+        result['persistedBy'] = 'none';
+        result['persistenceStatus'] = 'cli_persistence_failed';
+        result['error'] = {
+          'code': 'recording_persistence_failed',
+          'message':
+              'Recording stopped, but the canonical private CLI store could '
+              'not commit the redacted flow: '
+              '${_redactSensitiveLogText(error.toString())}',
+        };
+        result.remove('path');
+      }
     }
     result.remove('flow');
+    result = _commitActionEvidence(
+      method: 'ext.flutter_scout.record',
+      result: result,
+    );
     _printJson(result);
     return result['ok'] == false ? 1 : 0;
   }
 
   Future<int> _recordSimple(String action) async {
-    final result = await _call('ext.flutter_scout.record', {'action': action});
+    var result = await _call('ext.flutter_scout.record', {'action': action});
+    if (_isMutatingExtension('ext.flutter_scout.record', <String, String>{
+      'action': action,
+    })) {
+      result = _commitActionEvidence(
+        method: 'ext.flutter_scout.record',
+        result: result,
+      );
+    }
     _printJson(result);
     return result['ok'] == false ? 1 : 0;
   }
@@ -238,7 +282,9 @@ extension _CliRecord on FlutterScoutCli {
         'No recording named `${parsed.rest.first}`.',
       );
     }
-    final flow = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+    final flow = _redactFlowForStorage(
+      jsonDecode(file.readAsStringSync()) as Map<String, Object?>,
+    );
     final newName = _recordSlug(parsed.rest[1]);
     final feature = flow['feature']?.toString() ?? 'unsorted';
     final target = File(p.join(_recordingsDir.path, feature, '$newName.json'));
@@ -251,8 +297,12 @@ extension _CliRecord on FlutterScoutCli {
     }
     flow['name'] = newName;
     flow['updatedAt'] = _isoNow();
-    target.parent.createSync(recursive: true);
-    target.writeAsStringSync(_prettyJson(flow));
+    _ensurePrivateDirectory(target.parent.path, boundary: _sessionDir.path);
+    _atomicWritePrivateString(
+      target.path,
+      _prettyJson(_redactFlowForStorage(flow)),
+      boundary: _sessionDir.path,
+    );
     if (target.path != file.path) {
       // Move the old flow's checkpoint dir alongside the rename, then drop it.
       final oldShots = Directory(p.withoutExtension(file.path));
@@ -296,9 +346,9 @@ extension _CliRecord on FlutterScoutCli {
   Future<int> _recordRun(List<String> args) async {
     final parser = ArgParser()
       ..addOption('feature')
-      ..addMultiOption('var')
       ..addFlag('keep-going', defaultsTo: false)
       ..addFlag('verbose', defaultsTo: false);
+    _addReplayVariableOptions(parser);
     final parsed = parser.parse(args);
     if (parsed.rest.isEmpty) {
       throw const ScoutCliException('usage', 'Usage: record run <name>');
@@ -317,14 +367,14 @@ extension _CliRecord on FlutterScoutCli {
       return 2;
     }
 
-    final vars = <String, String>{};
-    for (final entry in parsed.multiOption('var')) {
-      final eq = entry.indexOf('=');
-      if (eq > 0) vars[entry.substring(0, eq)] = entry.substring(eq + 1);
-    }
+    final vars = _replayVariablesFromSources(parsed);
 
     final steps = (flow['steps'] as List?) ?? const [];
+    _requireRecordVariables(steps, vars);
     final keepGoing = parsed.flag('keep-going');
+    final callerIdempotencyScope = _activeCallerIdempotencyKey;
+    final replayIdempotencyScope =
+        callerIdempotencyScope ?? _newProtocolIdentifier('record-run');
     final results = <Map<String, Object?>>[];
     var passed = 0;
     var failed = 0;
@@ -397,8 +447,27 @@ extension _CliRecord on FlutterScoutCli {
         });
         return 2;
       }
-      final result = await _call(method, callParams);
-      final ok = result['ok'] != false;
+      final stepKey = _derivedStepIdempotencyKey(
+        scope: replayIdempotencyScope,
+        step: i,
+        businessRequest: <String, Object?>{
+          'kind': 'record-run',
+          'feature': flow['feature'],
+          'flow': flow['name'],
+          'step': step,
+        },
+      );
+      var result = await _withCallerIdempotencyKey<Map<String, dynamic>>(
+        stepKey,
+        () => _call(method, callParams),
+      );
+      result = await _withRecentLogSignals(result);
+      result = _commitActionEvidence(
+        method: method,
+        result: result,
+        record: step,
+      );
+      final ok = result['ok'] == true;
       if (ok) {
         passed++;
         results.add({'step': i + 1, 'cmd': line, 'status': 'pass'});
@@ -443,6 +512,15 @@ extension _CliRecord on FlutterScoutCli {
       'precondition': ?precondition,
       'results': results,
       'summary': _recordRunSummary(flow, passed, failed, results),
+      'idempotency': <String, Object?>{
+        'perStepKeys': 'deterministic_sha256_derivation',
+        'scopeKeySource': callerIdempotencyScope == null
+            ? 'generated'
+            : 'caller',
+        'scopeKeyDigest': _idempotencyKeyDigest(replayIdempotencyScope),
+      },
+      if (callerIdempotencyScope == null)
+        'idempotencyScopeKey': replayIdempotencyScope,
     });
     return exitCode;
   }
@@ -450,12 +528,19 @@ extension _CliRecord on FlutterScoutCli {
   Future<int> _recordExport(List<String> args) async {
     final parser = ArgParser()
       ..addOption('feature')
-      ..addOption('out', abbr: 'o');
+      ..addOption('out', abbr: 'o')
+      ..addOption(
+        'retention',
+        defaultsTo: 'session',
+        allowed: const <String>['session', '24h', '7d', 'manual'],
+        help: 'Private-data retention for the exported replay artifact.',
+      );
     final parsed = parser.parse(args);
     if (parsed.rest.isEmpty) {
       throw const ScoutCliException(
         'usage',
-        'Usage: record export <name> -o <path>',
+        'Usage: record export <name> -o <path> '
+            '[--retention session|24h|7d|manual]',
       );
     }
     final flow = _loadFlow(parsed.rest.first, parsed.option('feature'));
@@ -466,20 +551,28 @@ extension _CliRecord on FlutterScoutCli {
       for (final step in steps)
         {
           for (final entry in (step as Map).entries)
-            if (!entry.key.toString().startsWith('_'))
+            if (!entry.key.toString().startsWith('_') ||
+                entry.key == '_redacted' ||
+                entry.key == '_redactedFields' ||
+                entry.key == '_redactionPolicy')
               entry.key.toString(): entry.value,
         },
     ];
     final outPath =
         parsed.option('out') ??
         p.join(Directory.systemTemp.path, '${flow['name']}.json');
-    File(outPath).writeAsStringSync(_prettyJson(array));
+    final retention = _retentionOption(parsed);
+    _writePrivateArtifactBytes(outPath, utf8.encode(_prettyJson(array)));
+    _writePrivateArtifactMetadata(outPath, retention);
     _printJson({
       'ok': true,
       'name': flow['name'],
       'steps': array.length,
+      'requiredVariables': _requiredRecordVariables(array),
       'path': outPath,
-      'runWith': 'flutter-scout replay $outPath',
+      'metadata': '$outPath.metadata.json',
+      ..._privateArtifactMetadata(retention),
+      'runWith': 'flutter-scout replay $outPath --var-file <0600-vars.json>',
     });
     return 0;
   }
@@ -513,25 +606,20 @@ extension _CliRecord on FlutterScoutCli {
     // Only a step explicitly flagged `_redacted` carries a VAR placeholder, and
     // only in its `value`. Anchoring to the flag + the exact ' VAR:' prefix
     // avoids mangling a legit value/assertion that merely contains "VAR:".
-    final redacted = step['_redacted'] == 'true';
+    final redacted = step['_redacted'] == 'true' || step['_redacted'] == true;
     final out = <String, String>{};
     for (final entry in step.entries) {
       if (entry.key.startsWith('_') || entry.key == 'cmd') continue;
-      var value = entry.value?.toString() ?? '';
-      if (redacted &&
-          entry.key == 'value' &&
-          value.startsWith(_kRecordRedactedPrefix)) {
-        final key = value.substring(_kRecordRedactedPrefix.length).trim();
-        final supplied = vars[key];
-        if (supplied == null) {
-          throw ScoutCliException(
-            'missing_var',
-            'This recording needs `--var $key=<value>` for a redacted field.',
-          );
-        }
-        value = supplied;
+      final resolved = _resolveRecordVariables(
+        entry.value,
+        vars,
+        redacted: redacted,
+      );
+      if (entry.key == 'values' && resolved is! String) {
+        out[entry.key] = jsonEncode(resolved);
+      } else {
+        out[entry.key] = resolved?.toString() ?? '';
       }
-      out[entry.key] = value;
     }
     return out;
   }
@@ -662,28 +750,46 @@ extension _CliRecord on FlutterScoutCli {
             '${feature != null ? ' in feature `$feature`' : ''}.',
       );
     }
-    return jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+    final decoded = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+    final safe = _redactFlowForStorage(decoded);
+    final encoded = _prettyJson(safe);
+    if (file.readAsStringSync() != encoded) {
+      _atomicWritePrivateString(file.path, encoded, boundary: _sessionDir.path);
+    }
+    return safe;
   }
 
   String _writeFlowToStore(Map<String, Object?> flow) {
-    final feature = flow['feature']?.toString() ?? 'unsorted';
-    final name = _recordSlug(flow['name']?.toString() ?? 'recording');
+    final safeFlow = _redactFlowForStorage(flow);
+    final feature = safeFlow['feature']?.toString() ?? 'unsorted';
+    final name = _recordSlug(safeFlow['name']?.toString() ?? 'recording');
     final file = File(p.join(_recordingsDir.path, feature, '$name.json'));
-    file.parent.createSync(recursive: true);
-    file.writeAsStringSync(_prettyJson(flow));
+    _ensurePrivateDirectory(file.parent.path, boundary: _sessionDir.path);
+    _atomicWritePrivateString(
+      file.path,
+      _prettyJson(safeFlow),
+      boundary: _sessionDir.path,
+    );
     _rebuildIndex();
     return file.path;
   }
 
   void _rebuildIndex() {
     final rows = _scanRecordings();
-    _recordingsDir.createSync(recursive: true);
-    File(_recordingsIndexFile).writeAsStringSync(
-      _prettyJson({
-        'schemaVersion': 1,
-        'updatedAt': _isoNow(),
-        'recordings': rows,
-      }),
+    _ensurePrivateDirectory(_recordingsDir.path, boundary: _sessionDir.path);
+    _withPrivateFileLock<void>(
+      '$_recordingsIndexFile.lock',
+      boundary: _sessionDir.path,
+      body: () => _atomicWritePrivateString(
+        _recordingsIndexFile,
+        _prettyJson({
+          'schemaVersion': 1,
+          'updatedAt': _isoNow(),
+          'recordings': rows,
+          ..._privateArtifactMetadata('manual'),
+        }),
+        boundary: _sessionDir.path,
+      ),
     );
   }
 
@@ -701,5 +807,6 @@ extension _CliRecord on FlutterScoutCli {
   String _prettyJson(Object? value) =>
       const JsonEncoder.withIndent('  ').convert(value);
 
-  void _printJson(Object? value) => stdout.writeln(_prettyJson(value));
+  void _printJson(Object? value, {bool? success, String? commandName}) =>
+      _writeCliResponse(value, success: success, commandName: commandName);
 }

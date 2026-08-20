@@ -1,0 +1,148 @@
+{
+  "contractVersion": 1,
+  "command": "status",
+  "binary": {
+    "status": "observed",
+    "cli": {
+      "package": "flutter_scout",
+      "packageVersion": "2.0.0-dev.1"
+    },
+    "helper": {
+      "status": "unavailable",
+      "package": "flutter_scout_helper",
+      "packageVersion": null,
+      "packageVersionStatus": "unavailable",
+      "reason": "running_helper_not_observed"
+    }
+  },
+  "protocol": {
+    "status": "unavailable",
+    "cliSupported": {
+      "schemaVersion": 1,
+      "minimum": 15,
+      "maximum": 15,
+      "capabilities": [
+        "activeRuntimeSignalsV1",
+        "boundedCliPayloadsV1",
+        "callerIdempotencyKeysV1",
+        "cliResponseEnvelopeV1",
+        "closedMutationOutcomes",
+        "correlatedEventCursorsV1",
+        "durableIdempotencyReceiptsV1",
+        "heldDragExclusion",
+        "idempotencyTombstonesV1",
+        "idempotentMutations",
+        "phaseTimingsV1",
+        "runtimeErrorCursor",
+        "runtimeSignalProvenanceV1",
+        "semanticStabilityV1",
+        "serializedMutations",
+        "sourceRedaction",
+        "stableIdempotencyFingerprintV1",
+        "stateDigestSha256",
+        "stateGeneration",
+        "strictMutationEnvelope",
+        "structuredHeartbeatsV1",
+        "typedEnvelopeV1"
+      ]
+    },
+    "helperObserved": {
+      "status": "unavailable",
+      "reason": "helper_protocol_not_observed"
+    },
+    "negotiated": {
+      "status": "unavailable",
+      "selectedVersion": null,
+      "capabilities": null
+    }
+  },
+  "session": {
+    "status": "unavailable",
+    "name": null,
+    "mode": "unknown",
+    "state": null,
+    "runId": null,
+    "project": null,
+    "sourceIdentity": {
+      "status": "unavailable",
+      "reason": "launch_source_identity_not_recorded"
+    }
+  },
+  "device": {
+    "status": "unavailable",
+    "requestedOrRecordedId": null,
+    "reason": "resolved_device_identity_not_recorded"
+  },
+  "app": {
+    "reachability": "unreachable",
+    "helperExtension": "unavailable"
+  },
+  "runnerOwnership": {
+    "status": "unavailable",
+    "mode": "unknown",
+    "pid": null,
+    "proof": null,
+    "reason": "owned_runner_not_recorded"
+  },
+  "supervisorStatus": "unavailable",
+  "runtime": {
+    "status": "unavailable",
+    "runId": null,
+    "runtimeInstanceId": null,
+    "stateGeneration": null,
+    "snapshotId": null,
+    "screen": null,
+    "vmServiceEndpoint": null,
+    "reason": "runtime_identity_not_observed"
+  },
+  "artifacts": {
+    "logs": {
+      "status": "absent",
+      "path": "<SESSION>/logs.txt",
+      "exists": false,
+      "cursor": 0
+    },
+    "recordings": {
+      "status": "absent",
+      "path": "<SESSION>/recordings",
+      "exists": false
+    },
+    "evidence": {
+      "status": "absent",
+      "path": "<SESSION>/evidence",
+      "exists": false,
+      "indexPath": "<SESSION>/evidence/index.json"
+    },
+    "events": {
+      "status": "absent",
+      "path": "<SESSION>/events.jsonl",
+      "exists": false,
+      "cursorAddressable": true
+    }
+  },
+  "actionState": {
+    "status": "unavailable",
+    "activeDrag": null,
+    "reason": "vm_service_uri_unavailable"
+  },
+  "recordingState": {
+    "status": "unavailable",
+    "active": null,
+    "reason": "vm_service_uri_unavailable",
+    "store": {
+      "status": "absent",
+      "path": "<SESSION>/recordings",
+      "exists": false
+    }
+  },
+  "sourceFreshness": {
+    "status": "unavailable",
+    "reason": "no_hot_update_source_verification_observed"
+  },
+  "prioritizedRecoveryAction": {
+    "status": "recommended",
+    "priority": 1,
+    "action": "flutter-scout ensure --device <simulator-id> --project <path>",
+    "reason": "app_unreachable"
+  }
+}

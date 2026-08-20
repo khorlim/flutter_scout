@@ -1,0 +1,72 @@
+{
+  "artifactKind": "flutter_scout_release_evidence_contract_catalog",
+  "formatVersion": 1,
+  "qualification": "These contracts make release evidence deterministic and machine-checkable. They do not establish release eligibility, a valid signature, or a completed rollback exercise.",
+  "requiredEvidenceFiles": [
+    {
+      "name": "artifact-checksums.sha256",
+      "mediaType": "text/plain",
+      "contract": "sha256sum-lines-v1"
+    },
+    {
+      "name": "artifacts.json",
+      "mediaType": "application/json",
+      "contract": "artifact-digests-v1"
+    },
+    {
+      "name": "dependency-inventory.cdx.json",
+      "mediaType": "application/vnd.cyclonedx+json",
+      "contract": "offline-lockfile-inventory-v1"
+    },
+    {
+      "name": "dependency-sbom.cdx.json",
+      "mediaType": "application/vnd.cyclonedx+json",
+      "contract": "cyclonedx-1.5-incomplete-composition-v1"
+    },
+    {
+      "name": "provenance-statement.intoto.json",
+      "mediaType": "application/vnd.in-toto+json",
+      "contract": "slsa-provenance-v1-unsigned-local-statement"
+    },
+    {
+      "name": "provenance.json",
+      "mediaType": "application/json",
+      "contract": "flutter-scout-provenance-v1"
+    },
+    {
+      "name": "release-alignment.json",
+      "mediaType": "application/json",
+      "contract": "release-alignment-v1"
+    },
+    {
+      "name": "release-contract-catalog.json",
+      "mediaType": "application/json",
+      "contract": "release-contract-catalog-v1"
+    },
+    {
+      "name": "release-schema-manifest.json",
+      "mediaType": "application/json",
+      "contract": "release-schema-manifest-v1"
+    },
+    {
+      "name": "rollback-plan.json",
+      "mediaType": "application/json",
+      "contract": "rollback-plan-v1"
+    },
+    {
+      "name": "schema-digests.json",
+      "mediaType": "application/json",
+      "contract": "schema-digests-v1"
+    },
+    {
+      "name": "signing-verification.json",
+      "mediaType": "application/json",
+      "contract": "signing-verification-v1"
+    },
+    {
+      "name": "source-checksums.sha256",
+      "mediaType": "text/plain",
+      "contract": "sha256sum-lines-v1"
+    }
+  ]
+}

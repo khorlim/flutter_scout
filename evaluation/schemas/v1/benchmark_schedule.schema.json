@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/benchmark_schedule.schema.json",
+  "title": "Flutter Scout paired benchmark schedule v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmarkId",
+    "configSha256",
+    "catalogSha256",
+    "randomizationSeed",
+    "repetitions",
+    "conditionIds",
+    "episodes"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "benchmarkId": { "$ref": "#/$defs/id" },
+    "configSha256": { "$ref": "#/$defs/sha256" },
+    "catalogSha256": { "$ref": "#/$defs/sha256" },
+    "randomizationSeed": { "type": "integer", "minimum": 0 },
+    "repetitions": { "type": "integer", "minimum": 1 },
+    "conditionIds": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/id" }
+    },
+    "conditionRoles": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 4,
+      "propertyNames": { "$ref": "#/$defs/id" },
+      "additionalProperties": {
+        "enum": [
+          "screenshot_coordinate_only",
+          "current_released_scout",
+          "candidate_scout",
+          "perfect_handle_ceiling"
+        ]
+      }
+    },
+    "episodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sequence",
+          "episodeId",
+          "pairId",
+          "taskId",
+          "templateId",
+          "split",
+          "variantSeed",
+          "repetition",
+          "repetitionSeed",
+          "condition",
+          "conditionOrder",
+          "freshResetRequired"
+        ],
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 1 },
+          "episodeId": { "$ref": "#/$defs/id" },
+          "pairId": { "$ref": "#/$defs/id" },
+          "taskId": { "$ref": "#/$defs/id" },
+          "templateId": { "$ref": "#/$defs/id" },
+          "split": {
+            "enum": [
+              "public_development",
+              "private_validation",
+              "frozen_hidden_release"
+            ]
+          },
+          "variantSeed": { "type": "integer" },
+          "repetition": { "type": "integer", "minimum": 1 },
+          "repetitionSeed": { "type": "integer", "minimum": 0 },
+          "condition": { "$ref": "#/$defs/id" },
+          "conditionOrder": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4
+          },
+          "freshResetRequired": { "const": true }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "conditionIds": { "minItems": 3 }
+        }
+      },
+      "then": { "required": ["conditionRoles"] }
+    },
+    {
+      "if": { "required": ["conditionRoles"] },
+      "then": {
+        "properties": {
+          "conditionIds": { "minItems": 3 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

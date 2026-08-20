@@ -3,28 +3,65 @@ part of 'flutter_scout_cli.dart';
 // part: CLI value types (exception, discovery/validation/ready results, device + macOS window descriptors).
 
 class ScoutCliException implements Exception {
-  const ScoutCliException(this.code, this.message);
+  const ScoutCliException(
+    this.code,
+    this.message, {
+    this.details = const <String, Object?>{},
+    this.additional = const <String, Object?>{},
+  });
 
   final String code;
   final String message;
+  final Map<String, Object?> details;
+  final Map<String, Object?> additional;
+
+  @override
+  String toString() => '$code: $message';
 }
 
 class _LaunchLease {
-  const _LaunchLease({
-    required this.file,
+  _LaunchLease({
+    required this.controlFile,
+    required this.infoFile,
+    required this.handle,
     required this.runId,
     required this.startedAt,
   });
 
-  final File file;
+  final File controlFile;
+  final File infoFile;
+  final RandomAccessFile handle;
   final String runId;
   final DateTime startedAt;
+  bool _released = false;
 
   void release() {
+    if (_released) return;
+    _released = true;
     try {
-      if (file.existsSync()) file.deleteSync();
+      // Remove only this lease's descriptive metadata while the kernel lease
+      // is still held. The control inode deliberately remains in place: an
+      // unlink/recreate cycle would let two processes hold locks on different
+      // inodes for the same pathname.
+      final type = FileSystemEntity.typeSync(infoFile.path, followLinks: false);
+      if (type == FileSystemEntityType.file &&
+          infoFile.statSync().size <= 64 * 1024) {
+        final decoded = jsonDecode(infoFile.readAsStringSync());
+        if (decoded is Map && decoded['runId'] == runId) {
+          infoFile.deleteSync();
+        }
+      }
     } catch (_) {
-      // A stale lock is recoverable by the next launch.
+      // Stale or malformed metadata is replaced atomically by the next
+      // process after it acquires the kernel lease.
+    } finally {
+      try {
+        handle.unlockSync();
+      } catch (_) {}
+      try {
+        handle.closeSync();
+      } catch (_) {}
+      _heldLaunchLeasePaths.remove(_absoluteNormalized(controlFile.path));
     }
   }
 }
@@ -35,12 +72,16 @@ class _TemporaryHelperSetup {
     required this.targetPath,
     required this.lockExisted,
     required this.lockBackupPath,
+    this.transactionRecordPath,
+    this.transactionId,
   });
 
   final String project;
   final String targetPath;
   final bool lockExisted;
   final String? lockBackupPath;
+  final String? transactionRecordPath;
+  final String? transactionId;
 
   Map<String, Object?> toJson() => {
     'mode': 'temporary_helper',
@@ -48,6 +89,8 @@ class _TemporaryHelperSetup {
     'targetPath': targetPath,
     'lockExisted': lockExisted,
     'lockBackupPath': ?lockBackupPath,
+    'transactionRecordPath': ?transactionRecordPath,
+    'transactionId': ?transactionId,
   };
 }
 

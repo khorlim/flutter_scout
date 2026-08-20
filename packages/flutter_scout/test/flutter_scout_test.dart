@@ -245,14 +245,14 @@ void main() {
       final exitCode = await FlutterScoutCli().run([
         'launch',
         '--dart-define',
-        'API_KEY=super-secret',
+        'FEATURE_THEME=midnight-blue',
       ]);
       expect(exitCode, 1);
       final events = File('.flutter_scout/events.jsonl');
       expect(events.existsSync(), isTrue);
       final text = events.readAsStringSync();
       expect(text, contains('[REDACTED]'));
-      expect(text, isNot(contains('super-secret')));
+      expect(text, isNot(contains('midnight-blue')));
       final event = jsonDecode(text.trim()) as Map<String, dynamic>;
       expect(event['type'], 'command');
       expect(event['durationMs'], isA<int>());
@@ -372,7 +372,7 @@ void main() {
     });
   });
 
-  test('logs summary tolerates malformed utf8 bytes', () async {
+  test('logs summary rejects malformed utf8 bytes', () async {
     await _withTempCwd(() async {
       Directory('.flutter_scout').createSync();
       File('.flutter_scout/logs.txt').writeAsBytesSync([
@@ -387,7 +387,17 @@ void main() {
 
       final exitCode = await FlutterScoutCli().run(['logs', '--summary']);
 
-      expect(exitCode, 0);
+      expect(exitCode, 1);
+      expect(
+        () => FlutterScoutCli().debugReadScoutLog(),
+        throwsA(
+          isA<ScoutCliException>().having(
+            (error) => error.code,
+            'code',
+            'runtime_log_corrupt',
+          ),
+        ),
+      );
     });
   });
 
@@ -860,7 +870,7 @@ void main() {
           'tap btn.save',
           "tap-text 'T&C' --wait-ms 800 --expect-text Saved",
           "tap-text --text '-Hair Dye - Plum'",
-          "input --target field.name 'QA name'",
+          "input --target field.name ' VAR:field.name'",
           'scroll down --distance 300',
           'scroll-to tap.calendar --max-scrolls 6',
           'scroll-to tap.calendar --max-scrolls 6 --direction up',
@@ -879,71 +889,413 @@ void main() {
   });
 
   group('serve', () {
-    test('daemon runs commands over HTTP and stops on /stop', () async {
-      final temp = await Directory.systemTemp.createTemp('scout_serve_');
-      addTearDown(() => temp.delete(recursive: true));
-      FlutterScoutCli.debugRegistryPathOverride = p.join(
-        temp.path,
-        'registry.json',
-      );
-      addTearDown(() => FlutterScoutCli.debugRegistryPathOverride = null);
-      final portFile = p.join(temp.path, 'port');
-
-      final cli = FlutterScoutCli();
-      final serving = cli.run(['serve', '--port-file', portFile]);
-      // Wait for the daemon to write its bound port.
-      var waited = 0;
-      while (!File(portFile).existsSync() && waited < 100) {
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        waited++;
-      }
-      final port = int.parse(File(portFile).readAsStringSync());
-      final client = HttpClient();
-      addTearDown(client.close);
-
-      Future<Map<String, dynamic>> get(String pathAndQuery) async {
-        final request = await client.getUrl(
-          Uri.parse('http://127.0.0.1:$port$pathAndQuery'),
-        );
-        final response = await request.close();
-        final body = await utf8.decoder.bind(response).join();
-        return jsonDecode(body) as Map<String, dynamic>;
-      }
-
-      final health = await get('/health');
-      expect(health['ok'], isTrue);
-
-      final schema = await get('/v1/schema');
-      expect(schema['protocol'], 'flutter-scout-agent');
-      expect(schema['methods'], contains('tap'));
-
-      final typedRequest = await client.postUrl(
-        Uri.parse('http://127.0.0.1:$port/v1/call'),
-      );
-      typedRequest.headers.contentType = ContentType.json;
-      typedRequest.write(jsonEncode({'method': 'apps'}));
-      final typedResponse = await typedRequest.close();
-      final typedBody =
-          jsonDecode(await utf8.decoder.bind(typedResponse).join())
+    test('daemon enforces the authenticated bounded typed protocol', () async {
+      final publishedCatalog =
+          jsonDecode(
+                File(
+                  '../../protocol/schemas/v1/persistent-methods.json',
+                ).readAsStringSync(),
+              )
               as Map<String, dynamic>;
-      expect(typedBody['exitCode'], 0);
-      expect(typedBody['result'], containsPair('ok', true));
+      await _withTempCwd(() async {
+        FlutterScoutCli.debugRegistryPathOverride = p.join(
+          Directory.current.path,
+          'registry.json',
+        );
+        try {
+          final portFile = p.join(Directory.current.path, 'serve.port');
+          final credentialFile = '$portFile.credential';
+          final cli = FlutterScoutCli();
+          final serving = cli.run([
+            'serve',
+            '--port-file',
+            portFile,
+            '--max-body-bytes',
+            '128',
+            '--request-timeout',
+            '2',
+          ]);
+          await _waitForFile(portFile);
+          await _waitForFile(credentialFile);
+          final port = int.parse(File(portFile).readAsStringSync());
+          final authorization = _readTestAuthorization(credentialFile);
+          expect(authorization.startsWith('Bearer '), isTrue);
+          if (!Platform.isWindows) {
+            expect(File(credentialFile).statSync().mode & 0x1ff, 0x180);
+          }
+          final sessionMeta = File(
+            p.join('.flutter_scout', 'session_meta.json'),
+          ).readAsStringSync();
+          expect(sessionMeta, isNot(contains(authorization)));
 
-      final apps = await get('/run?cmd=apps');
-      expect(apps['exitCode'], 0);
-      // Command JSON is nested as an object, not a re-encoded string.
-      final appsResult = apps['result'] as Map<String, dynamic>;
-      expect(appsResult['ok'], isTrue);
-      expect(appsResult.containsKey('sessions'), isTrue);
-      expect(apps.containsKey('output'), isFalse);
+          final client = HttpClient();
+          try {
+            final unauthenticatedHealth = await _serveRequest(
+              client,
+              port,
+              'GET',
+              '/health',
+            );
+            expect(unauthenticatedHealth.statusCode, HttpStatus.unauthorized);
+            expect(unauthenticatedHealth.body, isNot(contains('appHealth')));
+            expect(unauthenticatedHealth.body, isNot(contains('operability')));
 
-      final bogus = await get('/run?cmd=serve');
-      expect(bogus['exitCode'], 1);
+            final health = await _serveRequest(
+              client,
+              port,
+              'GET',
+              '/health',
+              authorization: authorization,
+            );
+            expect(health.statusCode, HttpStatus.ok);
+            expect(health.body['ok'], isTrue);
+            expect(health.body['address'], '127.0.0.1');
+            expect(health.body['transportHealthy'], isTrue);
+            expect(health.body['appReachable'], isFalse);
+            expect(health.body['healthy'], isFalse);
+            expect(health.body['transport'], containsPair('status', 'ready'));
+            expect(health.body['appHealth'], isA<Map>());
+            expect(health.body['operability'], isA<Map>());
+            final healthOperability = health.body['operability']! as Map;
+            expect(
+              healthOperability['prioritizedRecoveryAction'],
+              containsPair('action', contains('ensure')),
+            );
 
-      final stop = await get('/stop');
-      expect(stop['stopping'], isTrue);
-      expect(await serving, 0);
+            final schema = await _serveRequest(
+              client,
+              port,
+              'GET',
+              '/v1/schema',
+            );
+            expect(schema.statusCode, HttpStatus.ok);
+            expect(schema.body['protocol'], 'flutter-scout-agent');
+            expect(schema.body['version'], 2);
+            expect(schema.body['methods'], contains('tap'));
+            expect(
+              (schema.body['methods'] as List<dynamic>).toSet(),
+              (publishedCatalog['methods'] as Map<String, dynamic>).keys
+                  .toSet(),
+            );
+            expect(
+              schema.body['parameterAllowlist'],
+              publishedCatalog['methods'],
+            );
+            expect(
+              (schema.body['parameterAllowlist'] as Map)['crop'],
+              contains('changedSince'),
+            );
+            expect(schema.body['legacyRun'], containsPair('enabled', false));
+            expect(jsonEncode(schema.body), isNot(contains(authorization)));
+
+            final wrongMethod = await _serveRequest(
+              client,
+              port,
+              'GET',
+              '/v1/call',
+            );
+            expect(wrongMethod.statusCode, HttpStatus.methodNotAllowed);
+            expect(
+              (wrongMethod.body['error'] as Map)['code'],
+              'method_not_allowed',
+            );
+
+            final unauthenticated = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/v1/call',
+              contentType: ContentType.json.mimeType,
+              body: jsonEncode({'method': 'apps'}),
+            );
+            expect(unauthenticated.statusCode, HttpStatus.unauthorized);
+            expect(
+              (unauthenticated.body['error'] as Map)['code'],
+              'invalid_credential',
+            );
+
+            final wrongContentType = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/v1/call',
+              authorization: authorization,
+              contentType: ContentType.text.mimeType,
+              body: jsonEncode({'method': 'apps'}),
+            );
+            expect(
+              wrongContentType.statusCode,
+              HttpStatus.unsupportedMediaType,
+            );
+
+            final crossOrigin = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/v1/call',
+              authorization: authorization,
+              contentType: ContentType.json.mimeType,
+              body: jsonEncode({'method': 'apps'}),
+              headers: const {'origin': 'https://attacker.example'},
+            );
+            expect(crossOrigin.statusCode, HttpStatus.forbidden);
+            expect(
+              (crossOrigin.body['error'] as Map)['code'],
+              'origin_not_allowed',
+            );
+
+            final invalidDeadline = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/v1/call',
+              authorization: authorization,
+              contentType: ContentType.json.mimeType,
+              body: jsonEncode({'method': 'apps'}),
+              headers: const {'x-flutter-scout-deadline-ms': '0'},
+            );
+            expect(invalidDeadline.statusCode, HttpStatus.badRequest);
+            expect(
+              (invalidDeadline.body['error'] as Map)['code'],
+              'invalid_deadline',
+            );
+
+            final oversized = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/v1/call',
+              authorization: authorization,
+              contentType: ContentType.json.mimeType,
+              body: jsonEncode({'method': 'apps', 'padding': 'x' * 200}),
+            );
+            expect(oversized.statusCode, HttpStatus.requestEntityTooLarge);
+            expect(
+              (oversized.body['error'] as Map)['code'],
+              'request_body_too_large',
+            );
+
+            final unknownParameter = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/v1/call',
+              authorization: authorization,
+              contentType: ContentType.json.mimeType,
+              body: jsonEncode({
+                'method': 'apps',
+                'params': {'replace': true},
+              }),
+            );
+            expect(unknownParameter.statusCode, HttpStatus.ok);
+            expect(
+              (unknownParameter.body['error'] as Map)['code'],
+              'unknown_parameter',
+            );
+
+            final changedRegionParameter = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/v1/call',
+              authorization: authorization,
+              contentType: ContentType.json.mimeType,
+              body: jsonEncode({
+                'method': 'crop',
+                'params': {'changedSince': 'g0:x'},
+              }),
+            );
+            expect(changedRegionParameter.statusCode, HttpStatus.ok);
+            expect(changedRegionParameter.body['exitCode'], 1);
+            expect(
+              changedRegionParameter.body['structuredError'],
+              containsPair('code', 'invalid_snapshot_id'),
+            );
+
+            final typed = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/v1/call',
+              authorization: authorization,
+              contentType: ContentType.json.mimeType,
+              body: jsonEncode({'method': 'apps'}),
+            );
+            expect(typed.statusCode, HttpStatus.ok);
+            expect(typed.body['exitCode'], 0);
+            expect(typed.body['result'], containsPair('ok', true));
+
+            // Ordinary CLI commands discover the credential file through
+            // session metadata and proxy without placing the credential in
+            // argv, stdout, or the event log.
+            expect(await FlutterScoutCli().run(['health']), 1);
+            final events = File(
+              p.join('.flutter_scout', 'events.jsonl'),
+            ).readAsStringSync();
+            expect(events, contains('"transport":"persistent"'));
+            expect(events, isNot(contains(authorization)));
+
+            final legacy = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/run',
+              authorization: authorization,
+              contentType: ContentType.text.mimeType,
+              body: 'apps',
+            );
+            expect(legacy.statusCode, HttpStatus.notFound);
+            expect(
+              (legacy.body['error'] as Map)['code'],
+              'legacy_run_disabled',
+            );
+
+            final stopByGet = await _serveRequest(
+              client,
+              port,
+              'GET',
+              '/stop',
+              authorization: authorization,
+            );
+            expect(stopByGet.statusCode, HttpStatus.methodNotAllowed);
+
+            final stop = await _serveRequest(
+              client,
+              port,
+              'POST',
+              '/stop',
+              authorization: authorization,
+            );
+            expect(stop.statusCode, HttpStatus.ok);
+            expect(stop.body['stopping'], isTrue);
+            expect(await serving, 0);
+            expect(File(credentialFile).existsSync(), isFalse);
+          } finally {
+            client.close(force: true);
+          }
+        } finally {
+          FlutterScoutCli.debugRegistryPathOverride = null;
+        }
+      });
     });
+
+    test(
+      'legacy free-form endpoint requires explicit authenticated opt-in',
+      () async {
+        await _withTempCwd(() async {
+          FlutterScoutCli.debugRegistryPathOverride = p.join(
+            Directory.current.path,
+            'registry.json',
+          );
+          try {
+            final portFile = p.join(Directory.current.path, 'legacy.port');
+            final credentialFile = '$portFile.credential';
+            final serving = FlutterScoutCli().run([
+              'serve',
+              '--port-file',
+              portFile,
+              '--allow-legacy-run',
+            ]);
+            await _waitForFile(portFile);
+            await _waitForFile(credentialFile);
+            final port = int.parse(File(portFile).readAsStringSync());
+            final authorization = _readTestAuthorization(credentialFile);
+            final client = HttpClient();
+            try {
+              final queryForm = await _serveRequest(
+                client,
+                port,
+                'GET',
+                '/run?cmd=apps',
+                authorization: authorization,
+              );
+              expect(queryForm.statusCode, HttpStatus.methodNotAllowed);
+
+              final run = await _serveRequest(
+                client,
+                port,
+                'POST',
+                '/run',
+                authorization: authorization,
+                contentType: ContentType.text.mimeType,
+                body: 'apps',
+              );
+              expect(run.statusCode, HttpStatus.ok);
+              expect(run.body['exitCode'], 0);
+              final result = run.body['result'] as Map<String, dynamic>;
+              expect(result['ok'], isTrue);
+              expect(result.containsKey('sessions'), isTrue);
+              expect(run.body.containsKey('output'), isFalse);
+
+              final nested = await _serveRequest(
+                client,
+                port,
+                'POST',
+                '/run',
+                authorization: authorization,
+                contentType: ContentType.text.mimeType,
+                body: '--app any serve',
+              );
+              expect(nested.body['exitCode'], 1);
+              expect(
+                nested.body['error'],
+                allOf(
+                  containsPair('code', 'command_failed'),
+                  containsPair(
+                    'message',
+                    'nested persistent mode is not supported',
+                  ),
+                ),
+              );
+
+              final stop = await _serveRequest(
+                client,
+                port,
+                'POST',
+                '/stop',
+                authorization: authorization,
+              );
+              expect(stop.body['stopping'], isTrue);
+              expect(await serving, 0);
+              expect(File(credentialFile).existsSync(), isFalse);
+
+              final rotatedPortFile = p.join(
+                Directory.current.path,
+                'rotated.port',
+              );
+              final rotatedCredentialFile = '$rotatedPortFile.credential';
+              final rotatedServing = FlutterScoutCli().run([
+                'serve',
+                '--port-file',
+                rotatedPortFile,
+              ]);
+              await _waitForFile(rotatedPortFile);
+              await _waitForFile(rotatedCredentialFile);
+              final rotatedPort = int.parse(
+                File(rotatedPortFile).readAsStringSync(),
+              );
+              final rotatedAuthorization = _readTestAuthorization(
+                rotatedCredentialFile,
+              );
+              expect(rotatedAuthorization == authorization, isFalse);
+              final rotatedStop = await _serveRequest(
+                client,
+                rotatedPort,
+                'POST',
+                '/stop',
+                authorization: rotatedAuthorization,
+              );
+              expect(rotatedStop.body['stopping'], isTrue);
+              expect(await rotatedServing, 0);
+            } finally {
+              client.close(force: true);
+            }
+          } finally {
+            FlutterScoutCli.debugRegistryPathOverride = null;
+          }
+        });
+      },
+    );
   });
 
   group('helper protocol diagnostics', () {
@@ -1006,13 +1358,19 @@ void main() {
         expect(protocol['status'], 'older_than_cli');
         expect(protocol['helperProtocolVersion'], 1);
         expect(result['warnings'], isNotEmpty);
-        expect(result['protocolMismatch'], '1<14');
+        expect(
+          result['protocolMismatch'],
+          '1<${FlutterScoutCli.expectedHelperProtocolVersion}',
+        );
 
         final repeated = cli.debugProtocolDiagnostics(
           'ext.flutter_scout.inspect',
           {'ok': true, 'helperProtocolVersion': 1, 'screen': 'HomeScreen'},
         );
-        expect(repeated['protocolMismatch'], '1<14');
+        expect(
+          repeated['protocolMismatch'],
+          '1<${FlutterScoutCli.expectedHelperProtocolVersion}',
+        );
         expect(repeated.containsKey('helperProtocol'), isFalse);
         expect(repeated.containsKey('warnings'), isFalse);
       });
@@ -1078,26 +1436,39 @@ void main() {
     expect(result.containsKey('visibleText'), isFalse);
   });
 
-  test('brief inspect omits stable protocol and compresses text overlap', () {
-    final result = FlutterScoutCli().debugCompactBriefInspect({
-      'ok': true,
-      'helperProtocolVersion': FlutterScoutCli.expectedHelperProtocolVersion,
-      'runtimeInstanceId': 'runtime-secret-for-lifecycle-only',
-      'routeGuess': null,
-      'visibleText': ['Search', 'Save', 'Cancel'],
-      'hitTestableText': ['Save', 'Cancel'],
-      'offscreenText': <String>[],
-      'fieldValues': <String, Object?>{},
-    });
+  test(
+    'brief inspect preserves state identity and compresses text overlap',
+    () {
+      final result = FlutterScoutCli().debugCompactBriefInspect({
+        'ok': true,
+        'helperProtocolVersion': FlutterScoutCli.expectedHelperProtocolVersion,
+        'runtimeInstanceId': 'runtime-a',
+        'stateGeneration': 12,
+        'stateDigest': List<String>.filled(64, 'a').join(),
+        'snapshotId': 'g12:${List<String>.filled(64, 'a').join()}',
+        'errorCursor': 4,
+        'errorsSinceCursor': <Object?>[],
+        'routeGuess': null,
+        'visibleText': ['Search', 'Save', 'Cancel'],
+        'hitTestableText': ['Save', 'Cancel'],
+        'offscreenText': <String>[],
+        'fieldValues': <String, Object?>{},
+      });
 
-    expect(result.containsKey('helperProtocolVersion'), isFalse);
-    expect(result.containsKey('runtimeInstanceId'), isFalse);
-    expect(result.containsKey('routeGuess'), isFalse);
-    expect(result.containsKey('hitTestableText'), isFalse);
-    expect(result['nonHitTestableText'], ['Search']);
-    expect(result.containsKey('offscreenText'), isFalse);
-    expect(result.containsKey('fieldValues'), isFalse);
-  });
+      expect(result.containsKey('helperProtocolVersion'), isFalse);
+      expect(result['runtimeInstanceId'], 'runtime-a');
+      expect(result['stateGeneration'], 12);
+      expect(result, contains('stateDigest'));
+      expect(result, contains('snapshotId'));
+      expect(result['errorCursor'], 4);
+      expect(result['errorsSinceCursor'], isEmpty);
+      expect(result.containsKey('routeGuess'), isFalse);
+      expect(result.containsKey('hitTestableText'), isFalse);
+      expect(result['nonHitTestableText'], ['Search']);
+      expect(result.containsKey('offscreenText'), isFalse);
+      expect(result.containsKey('fieldValues'), isFalse);
+    },
+  );
 
   test(
     'post-action capture is materialized without base64 in output',
@@ -1128,6 +1499,14 @@ void main() {
   test('assert-no-errors converts fresh blocking signals into failure', () {
     final result = FlutterScoutCli().debugAssertActionHasNoErrors({
       'ok': true,
+      'errorsSinceCursor': [
+        {
+          'cursor': 8,
+          'blocking': true,
+          'stale': false,
+          'message': 'fresh framework error',
+        },
+      ],
       'recentLogSignals': [
         {'blocking': true, 'stale': false, 'message': 'build failed'},
       ],
@@ -1135,6 +1514,7 @@ void main() {
 
     expect(result['ok'], isFalse);
     expect(result['error'], containsPair('code', 'blocking_errors_observed'));
+    expect(result['blockingErrors'], hasLength(1));
   });
 
   test(
@@ -1166,6 +1546,34 @@ void main() {
       final helperPath = p.normalize(
         p.join(Directory.current.path, '..', 'flutter_scout_helper'),
       );
+      FlutterScoutCli.debugTemporaryHelperPubGetOverride = (project) async {
+        final hasHelper = File(
+          p.join(project, 'pubspec.yaml'),
+        ).readAsStringSync().contains('flutter_scout_helper:');
+        final packageConfig = File(
+          p.join(project, '.dart_tool', 'package_config.json'),
+        );
+        packageConfig.parent.createSync(recursive: true);
+        packageConfig.writeAsStringSync(
+          jsonEncode({
+            'configVersion': 2,
+            'packages': hasHelper
+                ? [
+                    {'name': 'flutter_scout_helper'},
+                  ]
+                : const <Object?>[],
+          }),
+          flush: true,
+        );
+        File(p.join(project, 'pubspec.lock')).writeAsStringSync(
+          hasHelper ? 'helper transaction lock\n' : 'cleanup lock\n',
+          flush: true,
+        );
+        return ProcessResult(1, 0, '', '');
+      };
+      addTearDown(() {
+        FlutterScoutCli.debugTemporaryHelperPubGetOverride = null;
+      });
 
       final cli = FlutterScoutCli();
       final setup = await cli.debugPrepareTemporaryHelper(
@@ -1255,7 +1663,8 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
         'label': 'Save',
         'kind': 'btn',
         'rect': [1, 2, 300, 80],
-        'confidence': 0.95,
+        'heuristicScore': 0.95,
+        'scoreKind': 'uncalibrated_heuristic',
       },
       'expectation': {
         'met': false,
@@ -1319,14 +1728,18 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
     final cli = FlutterScoutCli();
     final redacted = cli.debugRedactLogText(
       '{"token":"secret","mobileID":"abc"} '
-      'Authorization: Bearer xyz.123 session=raw',
+      'Authorization: Bearer xyz.123 session=raw\n\u0085',
     );
 
     expect(redacted, isNot(contains('secret')));
     expect(redacted, isNot(contains('abc')));
     expect(redacted, isNot(contains('xyz.123')));
     expect(redacted, isNot(contains('session=raw')));
-    expect('<redacted>'.allMatches(redacted).length, greaterThanOrEqualTo(4));
+    expect(redacted, contains('<redacted>'));
+    expect(redacted, isNot(contains('\n')));
+    expect(redacted, isNot(contains('\u0085')));
+    expect(redacted, contains(r'\n'));
+    expect(redacted, contains(r'\u0085'));
   });
 
   test('untimestamped historical log signals are stale by default', () {
@@ -1479,4 +1892,53 @@ Future<void> _withTempCwd(Future<void> Function() body) async {
       await temp.delete(recursive: true);
     }
   }
+}
+
+Future<void> _waitForFile(String path) async {
+  for (var attempt = 0; attempt < 100; attempt++) {
+    if (File(path).existsSync()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  throw StateError('Timed out waiting for test file.');
+}
+
+String _readTestAuthorization(String credentialFile) {
+  final line = File(credentialFile).readAsStringSync().trim();
+  const prefix = 'Authorization: ';
+  if (!line.startsWith(prefix)) {
+    throw StateError('Serve credential file did not contain an HTTP header.');
+  }
+  return line.substring(prefix.length);
+}
+
+Future<({int statusCode, Map<String, dynamic> body})> _serveRequest(
+  HttpClient client,
+  int port,
+  String method,
+  String path, {
+  String? authorization,
+  String? contentType,
+  String? body,
+  Map<String, String> headers = const {},
+}) async {
+  final request = await client.openUrl(
+    method,
+    Uri.parse('http://127.0.0.1:$port$path'),
+  );
+  if (authorization != null) {
+    request.headers.set(HttpHeaders.authorizationHeader, authorization);
+  }
+  if (contentType != null) {
+    request.headers.contentType = ContentType.parse(contentType);
+  }
+  for (final entry in headers.entries) {
+    request.headers.set(entry.key, entry.value);
+  }
+  if (body != null) request.write(body);
+  final response = await request.close();
+  final responseBody = await utf8.decoder.bind(response).join();
+  return (
+    statusCode: response.statusCode,
+    body: jsonDecode(responseBody) as Map<String, dynamic>,
+  );
 }

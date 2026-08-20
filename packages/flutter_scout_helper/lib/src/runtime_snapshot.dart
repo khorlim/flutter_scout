@@ -2,12 +2,275 @@ part of 'flutter_scout_binding.dart';
 
 // part: widget-tree snapshot + annotation target collection + hit testing.
 
+class _SnapshotScrollRegion {
+  _SnapshotScrollRegion({
+    required this.id,
+    required this.baseId,
+    required this.occurrence,
+    required this.key,
+    required this.widgetType,
+    required this.axisDirection,
+    required this.rect,
+    required this.visibleRect,
+    required this.element,
+    required this.state,
+    required this.treeOrdinal,
+    required this.coordinateDevicePixelRatio,
+  });
+
+  final String id;
+  final String baseId;
+  final int occurrence;
+  final String? key;
+  final String widgetType;
+  final AxisDirection axisDirection;
+  final Rect? rect;
+  Rect? visibleRect;
+  final Element element;
+  final ScrollableState? state;
+  final int treeOrdinal;
+  final double? coordinateDevicePixelRatio;
+  String? parentId;
+  int nestingDepth = 0;
+  List<String> scopePath = const <String>[];
+
+  static List<double>? _rectJson(Rect? value) => value == null
+      ? null
+      : <double>[value.left, value.top, value.width, value.height];
+
+  List<double>? _physicalRectJson(Rect? value) {
+    final scale = coordinateDevicePixelRatio;
+    if (value == null || scale == null || !scale.isFinite || scale <= 0) {
+      return null;
+    }
+    return <double>[
+      value.left * scale,
+      value.top * scale,
+      value.width * scale,
+      value.height * scale,
+    ];
+  }
+
+  double? _finite(double? value) => value?.isFinite == true ? value : null;
+
+  Map<String, Object?> toJson({bool includeEphemeralPositionIdentity = false}) {
+    final vertical = axisDirectionToAxis(axisDirection) == Axis.vertical;
+    final logicalBounds = _rectJson(rect);
+    final visibleLogicalBounds = _rectJson(visibleRect);
+    final physicalBounds = _physicalRectJson(rect);
+    final visiblePhysicalBounds = _physicalRectJson(visibleRect);
+    ScrollPosition? position;
+    String? positionUnavailableReason;
+    try {
+      position = state?.position;
+      if (state == null) {
+        positionUnavailableReason = 'scrollable_state_unavailable';
+      }
+    } catch (_) {
+      positionUnavailableReason = 'scroll_position_unavailable';
+    }
+
+    double? pixels;
+    double? minScrollExtent;
+    double? maxScrollExtent;
+    double? viewportDimension;
+    var hasContentDimensions = false;
+    if (position != null) {
+      try {
+        pixels = position.hasPixels ? _finite(position.pixels) : null;
+        hasContentDimensions = position.hasContentDimensions;
+        if (hasContentDimensions) {
+          minScrollExtent = _finite(position.minScrollExtent);
+          maxScrollExtent = _finite(position.maxScrollExtent);
+          viewportDimension = _finite(position.viewportDimension);
+        }
+        if (pixels == null) {
+          positionUnavailableReason = position.hasPixels
+              ? 'non_finite_scroll_pixels'
+              : 'scroll_pixels_not_available';
+        } else if (!hasContentDimensions) {
+          positionUnavailableReason = 'content_dimensions_not_available';
+        } else if (minScrollExtent == null ||
+            maxScrollExtent == null ||
+            viewportDimension == null) {
+          positionUnavailableReason = 'non_finite_scroll_metrics';
+        }
+      } catch (_) {
+        pixels = null;
+        minScrollExtent = null;
+        maxScrollExtent = null;
+        viewportDimension = null;
+        hasContentDimensions = false;
+        positionUnavailableReason = 'scroll_metrics_observation_failed';
+      }
+    }
+
+    final completePosition =
+        pixels != null &&
+        minScrollExtent != null &&
+        maxScrollExtent != null &&
+        viewportDimension != null;
+    final extentBefore = completePosition
+        ? math.max(0.0, pixels - minScrollExtent)
+        : null;
+    final extentAfter = completePosition
+        ? math.max(0.0, maxScrollExtent - pixels)
+        : null;
+    final range = completePosition ? maxScrollExtent - minScrollExtent : null;
+    final normalized = completePosition
+        ? range!.abs() <= 0.000001
+              ? 0.0
+              : ((pixels - minScrollExtent) / range).clamp(0.0, 1.0)
+        : null;
+    final visibleArea = visibleRect == null
+        ? 0.0
+        : visibleRect!.width * visibleRect!.height;
+    final totalArea = rect == null ? 0.0 : rect!.width * rect!.height;
+    final visibleFraction = totalArea <= 0
+        ? 0.0
+        : (visibleArea / totalArea).clamp(0.0, 1.0);
+    final scopedId = scopePath.isEmpty ? id : scopePath.join('/');
+    final hasOwnValueKey = element.widget.key is ValueKey;
+
+    return <String, Object?>{
+      'id': id,
+      'scopedId': scopedId,
+      'baseId': baseId,
+      'ordinal': occurrence,
+      if (key != null) 'key': key,
+      if (key != null)
+        'keyEvidence': <String, Object?>{
+          'kind': 'observed',
+          'source': hasOwnValueKey
+              ? 'scrollable_value_key'
+              : 'nearest_ancestor_value_key',
+        },
+      'widgetType': widgetType,
+      'identity': <String, Object?>{
+        'kind': 'deterministic_derivation',
+        'source': key == null
+            ? 'axis_direction_and_snapshot_occurrence'
+            : hasOwnValueKey
+            ? 'flutter_value_key'
+            : 'nearest_ancestor_value_key_and_snapshot_occurrence',
+        'stability': key == null
+            ? 'snapshot_local'
+            : hasOwnValueKey
+            ? 'key_derived_within_observed_scope'
+            : 'ancestor_scope_derived_snapshot_local',
+        'scopedId': scopedId,
+        'scopePath': scopePath,
+        'uniqueInSnapshot': true,
+      },
+      'axis': vertical ? 'vertical' : 'horizontal',
+      'axisDirection': axisDirection.name,
+      'directionEvidence': const <String, Object?>{
+        'kind': 'observed',
+        'source': 'flutter_scrollable_axis_direction',
+      },
+      // Existing compact/action consumers use rect/visibleRect. The explicit
+      // names below make their logical coordinate space unambiguous.
+      'rect': logicalBounds,
+      'visibleRect': visibleLogicalBounds,
+      'logicalBounds': logicalBounds,
+      'visibleLogicalBounds': visibleLogicalBounds,
+      'physicalBounds': physicalBounds,
+      'visiblePhysicalBounds': visiblePhysicalBounds,
+      'visibleFraction': visibleFraction,
+      'visibilityEvidence': <String, Object?>{
+        'status': 'partially_observed',
+        'clipping': 'derived_from_window_and_ancestor_scroll_bounds',
+        'occlusion': 'not_directly_measured_for_scroll_region',
+        'visibleFractionMeaning': 'geometric_clip_exposure_only',
+      },
+      'geometryEvidence': <String, Object?>{
+        'logical': logicalBounds == null
+            ? 'observation_unavailable'
+            : 'observed',
+        'physical': physicalBounds == null
+            ? 'observation_unavailable'
+            : 'derived_observation',
+        'source': 'render_box_global_bounds',
+        'visibleBoundsSource':
+            'window_viewport_and_ancestor_scroll_region_intersection',
+        if (physicalBounds != null)
+          'physicalDerivation': 'logical_bounds_times_device_pixel_ratio',
+        if (coordinateDevicePixelRatio != null)
+          'devicePixelRatio': coordinateDevicePixelRatio,
+        if (physicalBounds == null)
+          'physicalUnavailableReason': 'view_metrics_not_captured',
+      },
+      'nestingDepth': nestingDepth,
+      'parentId': parentId,
+      'scopePath': scopePath,
+      'treeOrdinal': treeOrdinal,
+      'positionAvailable': pixels != null,
+      'metricsAvailable': completePosition,
+      'positionEvidence': <String, Object?>{
+        'status': completePosition
+            ? 'observed'
+            : pixels != null
+            ? 'partially_observed'
+            : 'observation_unavailable',
+        'source': 'flutter_scroll_position',
+        'reason': ?positionUnavailableReason,
+      },
+      if (includeEphemeralPositionIdentity)
+        'positionIdentity': position == null
+            ? null
+            : identityHashCode(position),
+      if (includeEphemeralPositionIdentity && position != null)
+        'positionIdentityScope': 'runtime_process_only',
+      'pixels': pixels,
+      'minScrollExtent': minScrollExtent,
+      'maxScrollExtent': maxScrollExtent,
+      'extentBefore': extentBefore,
+      'extentAfter': extentAfter,
+      'viewportDimension': viewportDimension,
+      'viewport': <String, Object?>{
+        'axisDimension': viewportDimension,
+        'logicalBounds': logicalBounds,
+        'visibleLogicalBounds': visibleLogicalBounds,
+        'physicalBounds': physicalBounds,
+        'source': 'scroll_position_and_render_box',
+      },
+      'approximateNormalizedPosition': normalized,
+      'normalizedPositionEvidence': normalized == null
+          ? const <String, Object?>{
+              'status': 'observation_unavailable',
+              'reason': 'complete_scroll_metrics_required',
+            }
+          : const <String, Object?>{
+              'status': 'derived_observation',
+              'basis':
+                  '(pixels-minScrollExtent)/(maxScrollExtent-minScrollExtent)',
+              'clamped': true,
+            },
+      'atStart': completePosition ? pixels <= minScrollExtent + 0.5 : null,
+      'atEnd': completePosition ? pixels >= maxScrollExtent - 0.5 : null,
+      'endpointEvidence': const <String, Object?>{
+        'kind': 'metric_definition',
+        'source': 'flutter_scroll_extent_metrics',
+        'atStartMeaning': 'at_min_scroll_extent',
+        'atEndMeaning': 'at_max_scroll_extent',
+      },
+      'canScroll': completePosition ? range!.abs() > 0.5 : null,
+    };
+  }
+}
+
 extension _RuntimeSnapshot on FlutterScoutRuntime {
-  ScoutSnapshot _snapshot() {
+  ScoutSnapshot _snapshot() =>
+      _inRequestPhase(_requestSnapshotPhase, _snapshotWithoutPhaseTiming);
+
+  ScoutSnapshot _snapshotWithoutPhaseTiming() {
     final root = WidgetsBinding.instance.rootElement;
     final nodes = <ScoutNode>[];
+    final rawScrollables = <_SnapshotScrollRegion>[];
     final scrollables = <Map<String, Object?>>[];
     final scrollableIds = <String, int>{};
+    final perceptionGaps = <Map<String, Object?>>[];
+    final perceptionGapFingerprints = <String>{};
     final overlays = <Map<String, Object?>>[];
     final visibleText = <String>{};
     final hitTestableText = <String>{};
@@ -15,18 +278,51 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     var screen = 'RootWidget';
     var screenDepth = -1;
     var degradedNodes = 0;
-    final logicalSize = _logicalSize();
+    final views = WidgetsBinding.instance.platformDispatcher.views;
+    final implicitView =
+        WidgetsBinding.instance.platformDispatcher.implicitView;
+    final view = implicitView != null && views.contains(implicitView)
+        ? implicitView
+        : views.isEmpty
+        ? null
+        : views.first;
+    final rawDevicePixelRatio = view?.devicePixelRatio;
+    final physicalSize = view?.physicalSize ?? Size.zero;
+    final viewMetricsAvailable =
+        view != null &&
+        rawDevicePixelRatio != null &&
+        rawDevicePixelRatio.isFinite &&
+        rawDevicePixelRatio > 0 &&
+        physicalSize.isFinite &&
+        physicalSize.width > 0 &&
+        physicalSize.height > 0;
+    final devicePixelRatio = viewMetricsAvailable ? rawDevicePixelRatio : 1.0;
+    final logicalSize = viewMetricsAvailable
+        ? physicalSize / devicePixelRatio
+        : Size.zero;
+    EdgeInsets logicalInsets(ui.ViewPadding? value) =>
+        value == null || !viewMetricsAvailable
+        ? EdgeInsets.zero
+        : EdgeInsets.fromLTRB(
+            value.left / devicePixelRatio,
+            value.top / devicePixelRatio,
+            value.right / devicePixelRatio,
+            value.bottom / devicePixelRatio,
+          );
+    final padding = logicalInsets(view?.padding);
+    final viewPadding = logicalInsets(view?.viewPadding);
+    final viewInsets = logicalInsets(view?.viewInsets);
     if (root != null) {
       // _walkVisible prunes hidden subtrees AND Scout's own overlay chrome:
       // the annotation FAB/badge must never surface as app interactables
       // (tap.add_location_alt) that an agent might try to press.
-      _walkVisible(root, (Element element) {
+      _walkPerceptionVisible(root, (Element element) {
         // Per-element fault isolation: reading one misbehaving widget (a
         // throwing property getter, corrupt render state, …) must skip that
         // element only — never blind the agent to the entire screen.
+        final widgetType = element.widget.runtimeType.toString();
         try {
           debugSnapshotNodeProbe?.call(element);
-          final widgetType = element.widget.runtimeType.toString();
           final elementDepth = _elementDepth(element);
           if ((widgetType.endsWith('Screen') || widgetType.endsWith('Page')) &&
               !_frameworkScreenWidgets.contains(widgetType) &&
@@ -35,49 +331,72 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
             screen = widgetType;
             screenDepth = elementDepth;
           }
-          final node = _nodeFromElement(element);
+          final node = _nodeFromElement(
+            element,
+            coordinateDevicePixelRatio: viewMetricsAvailable
+                ? devicePixelRatio
+                : null,
+          );
           if (node != null) {
-            nodes.add(node);
+            nodes.add(node.copyWith(treeOrdinal: nodes.length));
           }
-          if (element.widget is Scrollable) {
+          final visualGap = _visualPerceptionGap(
+            element,
+            widgetType: widgetType,
+            devicePixelRatio: viewMetricsAvailable ? devicePixelRatio : null,
+            ordinal: perceptionGaps.length + 1,
+          );
+          if (visualGap != null) {
+            _addPerceptionGap(
+              perceptionGaps,
+              perceptionGapFingerprints,
+              visualGap,
+            );
+          }
+          if (element.widget case final Scrollable widget) {
             final rect = _rectFor(element);
-            if (rect != null) {
-              final visibleRect = _visibleRectFor(rect);
-              final widget = element.widget as Scrollable;
-              final keyLabel = _nearestScrollableKey(element);
-              final baseId =
-                  'scroll.${_slug(keyLabel ?? widget.axisDirection.name)}';
-              final occurrence = scrollableIds.update(
-                baseId,
-                (count) => count + 1,
-                ifAbsent: () => 1,
-              );
-              scrollables.add({
-                'id': occurrence == 1 ? baseId : '${baseId}_$occurrence',
-                'baseId': baseId,
-                'key': ?keyLabel,
-                'widgetType': element.widget.runtimeType.toString(),
-                'axis': axisDirectionToAxis(widget.axisDirection).name,
-                'axisDirection': widget.axisDirection.name,
-                'rect': [rect.left, rect.top, rect.width, rect.height],
-                'visibleRect': visibleRect == null
-                    ? null
-                    : [
-                        visibleRect.left,
-                        visibleRect.top,
-                        visibleRect.width,
-                        visibleRect.height,
-                      ],
-                'visibleFraction': _visibleFraction(rect, visibleRect),
-              });
-            }
+            final visibleRect = rect == null
+                ? null
+                : _visiblePerceptionRectFor(element, rect);
+            final keyLabel = _nearestScrollableKey(element);
+            final baseId =
+                'scroll.${_slug(keyLabel ?? widget.axisDirection.name)}';
+            final occurrence = scrollableIds.update(
+              baseId,
+              (count) => count + 1,
+              ifAbsent: () => 1,
+            );
+            rawScrollables.add(
+              _SnapshotScrollRegion(
+                id: occurrence == 1 ? baseId : '${baseId}_$occurrence',
+                baseId: baseId,
+                occurrence: occurrence,
+                key: keyLabel,
+                widgetType: widgetType,
+                axisDirection: widget.axisDirection,
+                rect: rect,
+                visibleRect: visibleRect,
+                element: element,
+                state:
+                    element is StatefulElement &&
+                        element.state is ScrollableState
+                    ? element.state as ScrollableState
+                    : null,
+                treeOrdinal: rawScrollables.length,
+                coordinateDevicePixelRatio: viewMetricsAvailable
+                    ? devicePixelRatio
+                    : null,
+              ),
+            );
           }
           final overlay = _overlayFor(element);
           if (overlay != null) {
             overlay['ordinal'] = nodes.length;
             overlays.add(overlay);
           }
-          final text = _ownText(element.widget);
+          final text = _isInsideSensitiveEditable(element)
+              ? null
+              : _ownText(element.widget);
           if (text != null && _isUsefulVisibleText(text)) {
             final rect = _rectFor(element);
             final trimmed = text.trim();
@@ -94,8 +413,92 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           }
         } catch (_) {
           degradedNodes += 1;
+          final semanticsNode = element.widget is Semantics;
+          _addPerceptionGap(
+            perceptionGaps,
+            perceptionGapFingerprints,
+            <String, Object?>{
+              'id': 'gap.element_observation.${perceptionGaps.length + 1}',
+              'kind': semanticsNode
+                  ? 'semantics_node_observation_failed'
+                  : 'element_observation_failed',
+              'status': 'observation_unavailable',
+              'evidenceKind': 'observed_failure',
+              'source': semanticsNode
+                  ? 'flutter_semantics_widget_probe'
+                  : 'widget_tree_element_probe',
+              'widgetType': widgetType,
+              'affectedEvidence': semanticsNode
+                  ? const <String>['semantics_label_and_state']
+                  : const <String>[
+                      'semantics',
+                      'geometry',
+                      'interaction_metadata',
+                    ],
+              'isolation': semanticsNode
+                  ? 'affected_semantics_node_only'
+                  : 'affected_element_only',
+              'recommendation': const <String, Object?>{
+                'action': 'inspect_remaining_snapshot',
+                'reason': 'healthy_sibling_evidence_remains_available',
+              },
+            },
+          );
         }
       });
+    }
+
+    _linkSnapshotScrollScopes(rawScrollables);
+    scrollables.addAll(rawScrollables.map((region) => region.toJson()));
+    final captureBackend = _captureBackendEvidence();
+    if (captureBackend['status'] != 'available') {
+      _addPerceptionGap(
+        perceptionGaps,
+        perceptionGapFingerprints,
+        <String, Object?>{
+          'id': 'gap.capture_backend.${perceptionGaps.length + 1}',
+          'kind': 'capture_backend_unavailable',
+          'status': 'observation_unavailable',
+          'evidenceKind': 'observed_failure',
+          'source': 'flutter_root_layer_probe',
+          'affectedEvidence': const <String>['focused_pixel_capture'],
+          'reason': captureBackend['reason'],
+          'recommendation': const <String, Object?>{
+            'action': 'use_native_screenshot_if_available',
+            'availability': 'not_observable_by_helper',
+          },
+        },
+      );
+    }
+
+    // A sensitive field may be encountered after another widget that mirrors
+    // its controller value. Sanitize the complete collected state only after
+    // the walk has registered every sensitive value, before any inference,
+    // hierarchy, annotation, or debug payload can observe it.
+    final safeNodes = [for (final node in nodes) _redactNode(node)];
+    nodes
+      ..clear()
+      ..addAll(safeNodes);
+    final safeVisibleText = _redactSensitiveStrings(visibleText);
+    visibleText
+      ..clear()
+      ..addAll(safeVisibleText);
+    final safeHitTestableText = _redactSensitiveStrings(hitTestableText);
+    hitTestableText
+      ..clear()
+      ..addAll(safeHitTestableText);
+    final safeOffscreenText = _redactSensitiveStrings(offscreenText);
+    offscreenText
+      ..clear()
+      ..addAll(safeOffscreenText);
+    for (var index = 0; index < scrollables.length; index++) {
+      scrollables[index] = _redactSensitiveMap(scrollables[index]);
+    }
+    for (var index = 0; index < overlays.length; index++) {
+      overlays[index] = _redactSensitiveMap(overlays[index]);
+    }
+    for (var index = 0; index < perceptionGaps.length; index++) {
+      perceptionGaps[index] = _redactSensitiveMap(perceptionGaps[index]);
     }
 
     List<ScoutNode> compactNodes;
@@ -109,17 +512,60 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       // Post-processing failed as a batch; fall back to the raw nodes so the
       // agent keeps (noisier) eyes instead of none.
       degradedNodes += 1;
+      _addPerceptionGap(
+        perceptionGaps,
+        perceptionGapFingerprints,
+        <String, Object?>{
+          'id': 'gap.node_post_processing.${perceptionGaps.length + 1}',
+          'kind': 'node_post_processing_failed',
+          'status': 'observation_unavailable',
+          'evidenceKind': 'observed_failure',
+          'source': 'snapshot_node_enrichment',
+          'affectedEvidence': const <String>[
+            'handle_compaction',
+            'label_inference',
+            'id_disambiguation',
+          ],
+          'isolation': 'raw_nodes_retained',
+        },
+      );
       compactNodes = nodes;
     }
     try {
       compactNodes = _inferSegmentSelection(compactNodes);
     } catch (_) {
       // Inference is best-effort; never let it cost the snapshot.
+      _addPerceptionGap(
+        perceptionGaps,
+        perceptionGapFingerprints,
+        <String, Object?>{
+          'id': 'gap.selection_inference.${perceptionGaps.length + 1}',
+          'kind': 'selection_inference_failed',
+          'status': 'heuristic_inference_unavailable',
+          'evidenceKind': 'observed_failure',
+          'source': 'uncalibrated_segment_selection_heuristic',
+          'affectedEvidence': const <String>['inferred_selection_state'],
+          'isolation': 'observed_node_facts_retained',
+        },
+      );
     }
     try {
       compactNodes = _linkEnclosingTargets(compactNodes);
     } catch (_) {
       // Best-effort enrichment.
+      _addPerceptionGap(
+        perceptionGaps,
+        perceptionGapFingerprints,
+        <String, Object?>{
+          'id': 'gap.enclosing_target_inference.${perceptionGaps.length + 1}',
+          'kind': 'enclosing_target_inference_failed',
+          'status': 'heuristic_inference_unavailable',
+          'evidenceKind': 'observed_failure',
+          'source': 'uncalibrated_geometry_heuristic',
+          'affectedEvidence': const <String>['enclosing_target_aliases'],
+          'isolation': 'observed_node_facts_retained',
+        },
+      );
     }
     final interactables = compactNodes
         .where((node) => node.kind != 'text' && node.kind != 'field')
@@ -130,7 +576,8 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final textTargets = compactNodes
         .where((node) => node.kind == 'text')
         .toList(growable: false);
-    final route = root == null ? null : ModalRoute.of(root)?.settings.name;
+    final rawRoute = root == null ? null : ModalRoute.of(root)?.settings.name;
+    final route = rawRoute == null ? null : _redactSensitiveText(rawRoute);
     final modalScreenName = root == null ? null : _modalScreenName(root);
     final concreteModalSurface = root != null && _hasConcreteModalSurface(root);
     final genericModal =
@@ -178,18 +625,44 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     if (activeSurface == null && reportedScreen.endsWith('Surface')) {
       reportedScreen = 'RootWidget';
     }
-    final snapshot = ScoutSnapshot(
+    final screenEvidence = route != null && route.isNotEmpty
+        ? <String, Object?>{
+            'kind': 'observed',
+            'source': 'route_name',
+            'routeNameAvailable': true,
+          }
+        : activeSurface != null
+        ? <String, Object?>{
+            'kind': 'heuristic_inference',
+            'source': 'active_surface',
+            'scoreKind': 'uncalibrated_heuristic',
+            if (activeSurface['source'] != null)
+              'surfaceSource': activeSurface['source'],
+            if (activeSurface['heuristicScore'] != null)
+              'heuristicScore': activeSurface['heuristicScore'],
+          }
+        : <String, Object?>{
+            'kind': 'heuristic_inference',
+            'source': 'widget_ancestry',
+            'scoreKind': 'uncalibrated_heuristic',
+            'basis': screen == 'RootWidget'
+                ? 'root_widget_fallback'
+                : 'screen_or_page_runtime_type',
+          };
+    _synchronizeVisibleErrorSurfaceSignals(perceptionGaps);
+    var snapshot = ScoutSnapshot(
       screen: reportedScreen,
+      screenEvidence: screenEvidence,
       activeSurface: activeSurface,
       routeGuess: route,
       idle: !WidgetsBinding.instance.hasScheduledFrame,
-      devicePixelRatio: WidgetsBinding
-          .instance
-          .platformDispatcher
-          .views
-          .first
-          .devicePixelRatio,
+      devicePixelRatio: devicePixelRatio,
       logicalSize: logicalSize,
+      physicalSize: physicalSize,
+      padding: padding,
+      viewPadding: viewPadding,
+      viewInsets: viewInsets,
+      viewMetricsAvailable: viewMetricsAvailable,
       visibleText: visibleText.toList(growable: false),
       hitTestableText: hitTestableText.toList(growable: false),
       offscreenText: offscreenText.toList(growable: false),
@@ -197,24 +670,127 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       fields: fields,
       textTargets: textTargets,
       scrollables: scrollables,
+      perceptionGaps: perceptionGaps,
+      captureBackend: captureBackend,
       overlays: overlays,
       visualTree: null,
       controlGroups: const [],
       structuredRows: const [],
       suggestedActions: const [],
-      recentErrors: _recentErrors(),
+      recentErrors: _recentErrors(useRequestCursor: false),
       degradedNodes: degradedNodes,
     );
-    final controlGroups = _buildControlGroups(snapshot);
-    final structuredRows = _buildStructuredRows(snapshot);
+    List<Map<String, Object?>> controlGroups;
+    try {
+      controlGroups = _buildControlGroups(snapshot);
+    } catch (_) {
+      controlGroups = const <Map<String, Object?>>[];
+      snapshot.perceptionGaps.add(<String, Object?>{
+        'id':
+            'gap.control_group_inference.${snapshot.perceptionGaps.length + 1}',
+        'kind': 'control_group_inference_failed',
+        'status': 'heuristic_inference_unavailable',
+        'evidenceKind': 'observed_failure',
+        'source': 'uncalibrated_control_group_heuristic',
+        'affectedEvidence': const <String>['controlGroups'],
+        'isolation': 'base_snapshot_retained',
+      });
+    }
+    // Custom numeric keypads commonly carry PIN/payment values outside an
+    // EditableText. Control-group detection registers their display value;
+    // re-scrub the base snapshot before building rows/visual hierarchy so that
+    // value cannot survive through text targets or debug snapshot APIs.
+    snapshot = _redactSnapshot(snapshot);
+    List<Map<String, Object?>> structuredRows;
+    try {
+      structuredRows = _buildStructuredRows(snapshot);
+    } catch (_) {
+      structuredRows = const <Map<String, Object?>>[];
+      snapshot.perceptionGaps.add(<String, Object?>{
+        'id':
+            'gap.structured_row_inference.${snapshot.perceptionGaps.length + 1}',
+        'kind': 'structured_row_inference_failed',
+        'status': 'heuristic_inference_unavailable',
+        'evidenceKind': 'observed_failure',
+        'source': 'uncalibrated_row_grouping_heuristic',
+        'affectedEvidence': const <String>['structuredRows'],
+        'isolation': 'base_snapshot_retained',
+      });
+    }
+    Map<String, Object?>? visualTree;
+    try {
+      visualTree = _buildVisualTree(snapshot, controlGroups);
+    } catch (_) {
+      snapshot.perceptionGaps.add(<String, Object?>{
+        'id': 'gap.visual_tree_inference.${snapshot.perceptionGaps.length + 1}',
+        'kind': 'visual_tree_inference_failed',
+        'status': 'heuristic_inference_unavailable',
+        'evidenceKind': 'observed_failure',
+        'source': 'uncalibrated_visual_hierarchy_heuristic',
+        'affectedEvidence': const <String>['visualTree'],
+        'isolation': 'base_snapshot_retained',
+      });
+    }
     final enriched = snapshot.copyWith(
       controlGroups: controlGroups,
       structuredRows: structuredRows,
-      visualTree: _buildVisualTree(snapshot, controlGroups),
+      visualTree: visualTree,
     );
-    return enriched.copyWith(
-      suggestedActions: _buildSuggestedActions(enriched, controlGroups),
+    List<Map<String, Object?>> suggestedActions;
+    try {
+      suggestedActions = _buildSuggestedActions(enriched, controlGroups);
+    } catch (_) {
+      suggestedActions = const <Map<String, Object?>>[];
+      enriched.perceptionGaps.add(<String, Object?>{
+        'id':
+            'gap.action_suggestion_inference.${enriched.perceptionGaps.length + 1}',
+        'kind': 'action_suggestion_inference_failed',
+        'status': 'heuristic_inference_unavailable',
+        'evidenceKind': 'observed_failure',
+        'source': 'uncalibrated_action_suggestion_heuristic',
+        'affectedEvidence': const <String>['suggestedActions'],
+        'isolation': 'base_snapshot_retained',
+      });
+    }
+    return _withStateIdentity(
+      enriched.copyWith(suggestedActions: suggestedActions),
     );
+  }
+
+  void _synchronizeVisibleErrorSurfaceSignals(
+    List<Map<String, Object?>> perceptionGaps,
+  ) {
+    final surfaces = <String>[
+      for (final gap in perceptionGaps)
+        if (gap['kind'] == 'flutter_error_widget_visible')
+          jsonEncode(<String, Object?>{
+            'widgetType': gap['widgetType'],
+            'logicalBounds': gap['geometry'] is Map
+                ? (gap['geometry'] as Map)['logicalBounds']
+                : null,
+          }),
+    ]..sort();
+    if (surfaces.isEmpty) {
+      _activeVisibleErrorSignalCursors.clear();
+      return;
+    }
+
+    final surfaceSetIdentity = crypto.sha256
+        .convert(utf8.encode(jsonEncode(surfaces)))
+        .toString();
+    if (_activeVisibleErrorSignalCursors.containsKey(surfaceSetIdentity)) {
+      return;
+    }
+    final signal = _recordError(
+      type: 'visible_error_surface',
+      message:
+          'Flutter is visibly substituting an ErrorWidget; diagnostic text is intentionally omitted.',
+      library: 'ErrorWidget',
+      identityQualifier: surfaceSetIdentity,
+    );
+    _activeVisibleErrorSignalCursors
+      ..clear()
+      ..[surfaceSetIdentity] = signal['cursor']! as int;
   }
 
   String? _nearestScrollableKey(Element element) {
@@ -235,6 +811,340 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       return true;
     });
     return found;
+  }
+
+  void _linkSnapshotScrollScopes(List<_SnapshotScrollRegion> regions) {
+    final byElement = <Element, _SnapshotScrollRegion>{
+      for (final region in regions) region.element: region,
+    };
+    final byId = <String, _SnapshotScrollRegion>{
+      for (final region in regions) region.id: region,
+    };
+    for (final region in regions) {
+      var clippedVisibleRect = region.visibleRect;
+      region.element.visitAncestorElements((ancestor) {
+        if (ancestor.widget is Scrollable) {
+          region.nestingDepth += 1;
+          final parent = byElement[ancestor];
+          region.parentId ??= parent?.id;
+          final parentViewport = parent?.visibleRect ?? parent?.rect;
+          if (clippedVisibleRect != null && parentViewport != null) {
+            final intersection = clippedVisibleRect!.intersect(parentViewport);
+            clippedVisibleRect =
+                intersection.width <= 0 || intersection.height <= 0
+                ? null
+                : intersection;
+          }
+        }
+        return true;
+      });
+      region.visibleRect = clippedVisibleRect;
+    }
+
+    List<String> pathFor(_SnapshotScrollRegion region, Set<String> seen) {
+      if (!seen.add(region.id)) return <String>[region.id];
+      final parent = region.parentId == null ? null : byId[region.parentId];
+      if (parent == null) return <String>[region.id];
+      return <String>[...pathFor(parent, seen), region.id];
+    }
+
+    for (final region in regions) {
+      region.scopePath = pathFor(region, <String>{});
+    }
+  }
+
+  void _addPerceptionGap(
+    List<Map<String, Object?>> gaps,
+    Set<String> fingerprints,
+    Map<String, Object?> gap,
+  ) {
+    final geometry = gap['geometry'];
+    final logicalBounds = geometry is Map ? geometry['logicalBounds'] : null;
+    final fingerprint = logicalBounds == null
+        ? '${gap['kind']}|${gap['widgetType']}|${gap['id']}'
+        : '${gap['kind']}|$logicalBounds';
+    if (fingerprints.add(fingerprint)) gaps.add(gap);
+  }
+
+  Map<String, Object?> _captureBackendEvidence() {
+    try {
+      debugCaptureBackendProbe?.call();
+      final renderView = _primaryRenderView();
+      if (renderView == null) {
+        return const <String, Object?>{
+          'status': 'observation_unavailable',
+          'backend': 'flutter_root_offset_layer',
+          'reason': 'no_render_view',
+          'nativeFallback': <String, Object?>{
+            'status': 'not_observable_by_helper',
+            'selectedBy': 'flutter_scout_cli',
+          },
+        };
+      }
+      // RenderView.layer is protected but is the same root-layer contract used
+      // by the capture implementation in runtime_annotations.dart.
+      // ignore: invalid_use_of_protected_member
+      final layer = renderView.layer;
+      if (layer is! OffsetLayer) {
+        return const <String, Object?>{
+          'status': 'observation_unavailable',
+          'backend': 'flutter_root_offset_layer',
+          'reason': 'no_offset_layer',
+          'nativeFallback': <String, Object?>{
+            'status': 'not_observable_by_helper',
+            'selectedBy': 'flutter_scout_cli',
+          },
+        };
+      }
+      return <String, Object?>{
+        'status': 'available',
+        'backend': 'flutter_root_offset_layer',
+        'provenance': const <String, Object?>{
+          'kind': 'observed',
+          'source': 'render_view_offset_layer',
+        },
+        'coverage': const <String, Object?>{
+          'flutterLayers': 'supported',
+          'platformViewPixels': 'unsupported',
+          'texturePixels': 'not_guaranteed',
+        },
+        'nativeFallback': const <String, Object?>{
+          'status': 'not_observable_by_helper',
+          'selectedBy': 'flutter_scout_cli',
+        },
+      };
+    } catch (_) {
+      return const <String, Object?>{
+        'status': 'observation_unavailable',
+        'backend': 'flutter_root_offset_layer',
+        'reason': 'capture_backend_probe_failed',
+        'nativeFallback': <String, Object?>{
+          'status': 'not_observable_by_helper',
+          'selectedBy': 'flutter_scout_cli',
+        },
+      };
+    }
+  }
+
+  Map<String, Object?>? _visualPerceptionGap(
+    Element element, {
+    required String widgetType,
+    required double? devicePixelRatio,
+    required int ordinal,
+  }) {
+    final widget = element.widget;
+    final renderType = element.renderObject?.runtimeType.toString() ?? '';
+    final platformSurface = <String>[
+      widgetType,
+      renderType,
+    ].any(_isPlatformSurfaceRuntimeType);
+    final textureSurface = widget is Texture;
+    final customPaint = widget is CustomPaint;
+    final imageSurface = widget is Image || widget is RawImage;
+    final errorSurface = widget is ErrorWidget;
+    if (!platformSurface &&
+        !textureSurface &&
+        !customPaint &&
+        !imageSurface &&
+        !errorSurface) {
+      return null;
+    }
+
+    final rect = _rectFor(element);
+    final visibleRect = rect == null
+        ? null
+        : _visiblePerceptionRectFor(element, rect);
+    if (rect != null && visibleRect == null) return null;
+    List<double>? rectJson(Rect? value) => value == null
+        ? null
+        : <double>[value.left, value.top, value.width, value.height];
+    List<double>? physicalRectJson(Rect? value) {
+      if (value == null || devicePixelRatio == null) return null;
+      return <double>[
+        value.left * devicePixelRatio,
+        value.top * devicePixelRatio,
+        value.width * devicePixelRatio,
+        value.height * devicePixelRatio,
+      ];
+    }
+
+    late final String kind;
+    late final String status;
+    late final bool nativeCaptureRequired;
+    late final String limitation;
+    Map<String, Object?>? semanticEvidence;
+    List<String>? painterTypes;
+    if (errorSurface) {
+      kind = 'flutter_error_widget_visible';
+      status = 'observed_blocking_error_surface';
+      nativeCaptureRequired = false;
+      limitation =
+          'Flutter is visibly substituting an ErrorWidget; the affected subtree is not trustworthy. Rendered diagnostic text is intentionally omitted from snapshot evidence.';
+    } else if (platformSurface) {
+      kind = 'platform_view_pixels_unobserved';
+      status = 'unsupported_by_in_app_raster_capture';
+      nativeCaptureRequired = true;
+      limitation =
+          'The widget tree exposes the platform-view region, not its opaque native pixels or meaning.';
+    } else if (textureSurface) {
+      kind = 'texture_pixels_unobserved';
+      status = 'capture_coverage_not_guaranteed';
+      nativeCaptureRequired = true;
+      limitation =
+          'The widget tree exposes the Texture region, not the externally supplied texture pixels or meaning.';
+    } else if (customPaint) {
+      painterTypes = <String>[
+        if (widget.painter != null) widget.painter.runtimeType.toString(),
+        if (widget.foregroundPainter != null)
+          widget.foregroundPainter.runtimeType.toString(),
+      ];
+      final painterSemanticsDeclared =
+          widget.painter?.semanticsBuilder != null ||
+          widget.foregroundPainter?.semanticsBuilder != null;
+      kind = 'custom_paint_pixels_unobserved';
+      status = 'unavailable_in_widget_tree_observation';
+      nativeCaptureRequired = false;
+      limitation = painterSemanticsDeclared
+          ? 'Custom-painted pixels are not represented by inspect; painter semantics are declared but do not prove visual appearance.'
+          : 'This CustomPaint declares no painter semantics, so its painted content and meaning are unavailable to inspect.';
+      semanticEvidence = <String, Object?>{
+        'status': painterSemanticsDeclared
+            ? 'semantics_declared_not_visual_proof'
+            : 'unsupported_by_widget_semantics',
+        'source': 'custom_painter_semantics_builder',
+      };
+    } else {
+      kind = 'image_pixels_unobserved';
+      status = 'unavailable_in_widget_tree_observation';
+      nativeCaptureRequired = false;
+      limitation =
+          'The Image region is observable, but its decoded pixels are not included in inspect.';
+    }
+
+    final logicalVisible = rectJson(visibleRect ?? rect);
+    final totalArea = rect == null ? 0.0 : rect.width * rect.height;
+    final visibleArea = visibleRect == null
+        ? 0.0
+        : visibleRect.width * visibleRect.height;
+    final visibleFraction = totalArea <= 0
+        ? 0.0
+        : (visibleArea / totalArea).clamp(0.0, 1.0);
+    final commandRect = logicalVisible
+        ?.map((value) => value.toStringAsFixed(1))
+        .join(',');
+    return <String, Object?>{
+      'id': 'gap.${_slug(kind)}.$ordinal',
+      'kind': kind,
+      'status': status,
+      'evidenceKind': 'observed_limitation',
+      'source': 'widget_and_render_runtime_type',
+      'widgetType': widgetType,
+      if (painterTypes?.isNotEmpty == true) 'painterTypes': painterTypes,
+      if (renderType.isNotEmpty) 'renderObjectType': renderType,
+      'geometry': <String, Object?>{
+        'status': rect == null ? 'observation_unavailable' : 'observed',
+        'logicalBounds': rectJson(rect),
+        'visibleLogicalBounds': rectJson(visibleRect),
+        'physicalBounds': physicalRectJson(rect),
+        'visiblePhysicalBounds': physicalRectJson(visibleRect),
+        'visibleFraction': visibleFraction,
+        'clipped': visibleFraction > 0 && visibleFraction < 1,
+        'visibilityEvidence': const <String, Object?>{
+          'status': 'partially_observed',
+          'clipping': 'derived_from_window_and_ancestor_clip_bounds',
+          'occlusion': 'not_directly_measured_for_visual_region',
+          'visibleFractionMeaning': 'geometric_clip_exposure_only',
+        },
+        'devicePixelRatio': ?devicePixelRatio,
+        if (rect == null) 'reason': 'render_box_bounds_unavailable',
+      },
+      'semantics': ?semanticEvidence,
+      'limitation': limitation,
+      'recommendation': errorSurface
+          ? const <String, Object?>{
+              'action': 'inspect_runtime_errors',
+              'pixelEvidenceRequired': false,
+              'suggestedCommand': 'flutter-scout logs --summary',
+            }
+          : <String, Object?>{
+              'action': 'capture_focused_region',
+              'pixelEvidenceRequired': true,
+              'nativeCaptureRequired': nativeCaptureRequired,
+              if (commandRect != null)
+                'suggestedCommand':
+                    'flutter-scout crop --rect $commandRect${nativeCaptureRequired ? ' --native' : ''}',
+              if (commandRect == null)
+                'suggestedCommand':
+                    'flutter-scout screenshot${nativeCaptureRequired ? ' --native' : ''}',
+            },
+    };
+  }
+
+  void _walkPerceptionVisible(
+    Element element,
+    void Function(Element element) visitor,
+  ) {
+    visitor(element);
+    // ErrorWidget renders exception diagnostics as ordinary Text widgets. The
+    // runtime-error stream owns those diagnostics and redaction; perception
+    // observes the ErrorWidget surface itself, then prunes its potentially
+    // sensitive diagnostic subtree in O(1) rather than ancestor-scanning every
+    // element in the app.
+    if (element.widget is ErrorWidget ||
+        _hidesSubtree(element) ||
+        _isScoutOverlayWidget(element.widget)) {
+      return;
+    }
+    element.visitChildElements(
+      (child) => _walkPerceptionVisible(child, visitor),
+    );
+  }
+
+  Rect? _visiblePerceptionRectFor(Element element, Rect rect) {
+    var visible = _visibleRectFor(rect);
+    if (visible == null) return null;
+    element.visitAncestorElements((ancestor) {
+      final widget = ancestor.widget;
+      final clipsDescendants =
+          widget is Scrollable ||
+          widget is ClipRect ||
+          widget is ClipRRect ||
+          widget is ClipOval ||
+          widget is PhysicalModel ||
+          widget is PhysicalShape;
+      if (!clipsDescendants) return true;
+      final ancestorRect = _rectFor(ancestor);
+      if (ancestorRect == null) return true;
+      final intersection = visible!.intersect(ancestorRect);
+      visible = intersection.width <= 0 || intersection.height <= 0
+          ? null
+          : intersection;
+      return visible != null;
+    });
+    return visible;
+  }
+
+  bool _isPlatformSurfaceRuntimeType(String name) {
+    const exactTypes = <String>{
+      'AndroidView',
+      'AndroidViewSurface',
+      'UiKitView',
+      'AppKitView',
+      'HtmlElementView',
+      'PlatformViewLink',
+      'PlatformViewSurface',
+      'RenderAndroidView',
+      'RenderUiKitView',
+      'RenderAppKitView',
+      'RenderHtmlElementView',
+      'RenderPlatformView',
+      'RenderPlatformViewSurface',
+    };
+    if (exactTypes.contains(name)) return true;
+    // Flutter/plugin implementations may private-prefix the concrete class;
+    // require an exact platform-surface suffix rather than a broad substring,
+    // which would misclassify business widgets such as AndroidViewModel.
+    return exactTypes.any((type) => name.endsWith(type));
   }
 
   bool _isElementOnActiveHitPath(Element element) {
@@ -404,20 +1314,26 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final label = labels.isEmpty ? null : labels.first;
       if (label == null || label.isEmpty) return null;
       final displayLabel = _surfaceDisplayLabel(label);
-      final anchors = [
-        for (final node in textTargets)
-          if ((node.label ?? '').trim() == label) node,
-      ]..sort((a, b) => a.ordinal.compareTo(b.ordinal));
+      final anchors =
+          [
+            for (final node in textTargets)
+              if ((node.label ?? '').trim() == label) node,
+          ]..sort(
+            (a, b) => (a._treeOrdinal ?? 1 << 30).compareTo(
+              b._treeOrdinal ?? 1 << 30,
+            ),
+          );
       final anchor = anchors.isEmpty ? null : anchors.first;
       return {
         'kind': 'modal',
         'label': displayLabel,
         'screen': '${_pascalCaseSurfaceName(displayLabel)}Surface',
-        if (anchor != null) 'anchorOrdinal': anchor.ordinal,
+        if (anchor?._treeOrdinal != null) 'anchorOrdinal': anchor!._treeOrdinal,
         if (anchor?.rect case final rect?)
           'anchorRect': [rect.left, rect.top, rect.width, rect.height],
         'source': 'visibleText',
-        'confidence': 0.62,
+        'heuristicScore': 0.62,
+        'scoreKind': 'uncalibrated_heuristic',
       };
     }
     candidates.sort((a, b) {
@@ -440,11 +1356,13 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       'kind': 'modal',
       'label': displayLabel,
       'screen': '${_pascalCaseSurfaceName(displayLabel)}Surface',
-      'anchorOrdinal': candidates.first.ordinal,
+      if (candidates.first._treeOrdinal != null)
+        'anchorOrdinal': candidates.first._treeOrdinal,
       if (candidates.first.rect case final rect?)
         'anchorRect': [rect.left, rect.top, rect.width, rect.height],
       'source': 'prominentText',
-      'confidence': _surfaceLabelRank(label) > 0 ? 0.92 : 0.74,
+      'heuristicScore': _surfaceLabelRank(label) > 0 ? 0.92 : 0.74,
+      'scoreKind': 'uncalibrated_heuristic',
     };
   }
 
@@ -478,21 +1396,27 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final label = title?.label.trim();
       if (label == null || label.isEmpty) continue;
       final displayLabel = _surfaceDisplayLabel(label);
-      final anchors = [
-        for (final node in textTargets)
-          if ((node.label ?? '').trim() == label) node,
-      ]..sort((a, b) => a.ordinal.compareTo(b.ordinal));
+      final anchors =
+          [
+            for (final node in textTargets)
+              if ((node.label ?? '').trim() == label) node,
+          ]..sort(
+            (a, b) => (a._treeOrdinal ?? 1 << 30).compareTo(
+              b._treeOrdinal ?? 1 << 30,
+            ),
+          );
       final anchor = anchors.isEmpty ? null : anchors.first;
       return {
         'kind': 'modal',
         'label': displayLabel,
         'screen': '${_pascalCaseSurfaceName(displayLabel)}Surface',
-        if (anchor != null) 'anchorOrdinal': anchor.ordinal,
+        if (anchor?._treeOrdinal != null) 'anchorOrdinal': anchor!._treeOrdinal,
         if (anchor?.rect case final rect?)
           'anchorRect': [rect.left, rect.top, rect.width, rect.height],
         if (overlay['rect'] != null) 'rect': overlay['rect'],
         'source': title?.source ?? 'overlayLabel',
-        'confidence': title?.confidence ?? 0.86,
+        'heuristicScore': title?.confidence ?? 0.86,
+        'scoreKind': 'uncalibrated_heuristic',
       };
     }
     return null;
@@ -683,7 +1607,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     String? surfaceKind;
     var surfaceDepth = -1;
     var barrierDepth = -1;
-    _walkVisible(root, (Element element) {
+    _walkPerceptionVisible(root, (Element element) {
       final depth = _elementDepth(element);
       // A visible ModalBarrier is the general signal that a modal is open —
       // showDialog/showModalBottomSheet/showGeneralDialog and most custom
@@ -891,8 +1815,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
   List<ScoutAnnotationTarget> _annotationTargets() {
     final root = WidgetsBinding.instance.rootElement;
     if (root == null) return const <ScoutAnnotationTarget>[];
-    final route = ModalRoute.of(root)?.settings.name;
-    final screen = _screenName(root, route);
+    final rawRoute = ModalRoute.of(root)?.settings.name;
+    final route = rawRoute == null ? null : _redactSensitiveText(rawRoute);
+    final screen = _redactSensitiveText(_screenName(root, rawRoute));
     final modalElement = _activeAnnotationModalElement(root);
     final targets = <ScoutAnnotationTarget>[];
     // Containers (cards/tiles/rows/buttons) are gated by whether they hold a
@@ -905,7 +1830,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final containerCandidates =
         <({RenderObject render, ScoutAnnotationTarget target})>[];
     final rendersWithVisibleLeaf = <RenderObject>{};
-    _walkVisible(root, (Element element) {
+    _walkPerceptionVisible(root, (Element element) {
       try {
         _collectAnnotationTarget(
           element: element,
@@ -982,11 +1907,15 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     required Set<RenderObject> rendersWithVisibleLeaf,
   }) {
     {
+      if (element.widget is ErrorWidget) return;
       if (!_isInsideActiveAnnotationModal(element, modalElement)) return;
+      if (_isInsideSensitiveEditable(element)) return;
       final widget = element.widget;
       final widgetType = widget.runtimeType.toString();
-      final key = _annotationKeyLabel(widget.key);
-      final text = _ownText(widget)?.trim();
+      final rawKey = _annotationKeyLabel(widget.key);
+      final key = rawKey == null ? null : _redactSensitiveText(rawKey);
+      final rawText = _ownText(widget)?.trim();
+      final text = rawText == null ? null : _redactSensitiveText(rawText);
       final kind = _annotationKindFor(widget, element);
       final interactive = kind == 'tap' || kind == 'btn';
       // A "surface" is a non-interactive box that paints a visible background
@@ -1014,7 +1943,8 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         if (widgetType.startsWith('_')) return;
       } else {
         if (kind != 'widget' && kind != 'layout') {
-          label = _labelFor(element, widget);
+          final rawLabel = _labelFor(element, widget);
+          label = rawLabel == null ? null : _redactSensitiveText(rawLabel);
         }
         if (!_isUsefulAnnotationTarget(
           widget: widget,
@@ -1037,7 +1967,8 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       // holding a visible leaf.
       if (!container && !_leafReceivesHit(element, rect)) return;
 
-      label ??= _labelFor(element, widget);
+      final rawLabel = label == null ? _labelFor(element, widget) : null;
+      label ??= rawLabel == null ? null : _redactSensitiveText(rawLabel);
       final ancestors = _ancestorSummary(element);
       final target = ScoutAnnotationTarget(
         id: _annotationTargetId(

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.dev/protocol/schemas/v1/cli-event.schema.json",
+  "title": "Flutter Scout correlated ordered event",
+  "type": "object",
+  "maxProperties": 1024,
+  "required": [
+    "schemaVersion",
+    "protocolVersion",
+    "eventCursor",
+    "cursor",
+    "previousEventCursor",
+    "commandId",
+    "cliCommandId",
+    "runId",
+    "sessionRunId",
+    "runtimeInstanceId",
+    "stateGeneration",
+    "logCursor",
+    "correlationId",
+    "identityStatus",
+    "correlation"
+  ],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "protocolVersion": {"const": 15},
+    "eventCursor": {"type": "integer", "minimum": 1},
+    "cursor": {"type": "integer", "minimum": 1},
+    "previousEventCursor": {"type": ["integer", "null"], "minimum": 1},
+    "commandId": {"type": ["string", "null"]},
+    "cliCommandId": {"type": ["string", "null"]},
+    "runId": {"type": ["string", "null"]},
+    "sessionRunId": {"type": ["string", "null"]},
+    "runtimeInstanceId": {"type": ["string", "null"]},
+    "stateGeneration": {"type": ["integer", "null"], "minimum": 0},
+    "logCursor": {"type": "integer", "minimum": 0},
+    "correlationId": {"type": ["string", "null"]},
+    "identityStatus": {"enum": ["observed", "partial", "unavailable"]},
+    "correlation": {
+      "type": "object",
+      "required": [
+        "commandId",
+        "cliCommandId",
+        "runId",
+        "runtimeInstanceId",
+        "stateGeneration",
+        "logCursor",
+        "availability"
+      ],
+      "properties": {
+        "commandId": {"type": ["string", "null"]},
+        "cliCommandId": {"type": ["string", "null"]},
+        "runId": {"type": ["string", "null"]},
+        "runtimeInstanceId": {"type": ["string", "null"]},
+        "stateGeneration": {"type": ["integer", "null"], "minimum": 0},
+        "logCursor": {"type": "integer", "minimum": 0},
+        "availability": {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

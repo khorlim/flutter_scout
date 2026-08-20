@@ -146,7 +146,10 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return _stableId(kind, label, widget.key, widget.runtimeType.toString());
   }
 
-  ScoutNode? _nodeFromElement(Element element) {
+  ScoutNode? _nodeFromElement(
+    Element element, {
+    double? coordinateDevicePixelRatio,
+  }) {
     if (_isHiddenByAncestor(element)) return null;
     final widget = element.widget;
     final rect = _rectFor(element);
@@ -154,18 +157,40 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
     final kind = _kindFor(widget, element);
     if (kind == null) return null;
+    if (kind == 'text' && _isInsideSensitiveEditable(element)) return null;
 
-    final label = _labelFor(
+    final editable = kind == 'field' ? _editableStateBelow(element) : null;
+    final rawValue = editable?.widget.controller.text;
+    final obscured = editable?.widget.obscureText ?? false;
+    final rawLabel = _labelFor(
       element,
       widget,
       deepText: _usesDeepTextLabel(widget),
     );
-    final baseId = _stableId(
-      kind,
-      label,
-      widget.key,
-      element.widget.runtimeType.toString(),
-    );
+    final rawKey = _keyLabel(widget.key);
+    final redacted =
+        kind == 'field' &&
+        _shouldRedactField(
+          element: element,
+          editable: editable,
+          label: rawLabel,
+          key: rawKey,
+        );
+    if (redacted) _rememberSensitiveValue(rawValue);
+    final label = rawLabel == null ? null : _redactSensitiveText(rawLabel);
+    final key = rawKey == null ? null : _redactSensitiveText(rawKey);
+    final widgetType = element.widget.runtimeType.toString();
+    final rawValidationMessage = kind == 'field'
+        ? _validationMessageForFieldWidget(widget)
+        : null;
+    final validationMessage = rawValidationMessage == null
+        ? null
+        : _redactSensitiveText(rawValidationMessage);
+    final baseId = key != null && key.isNotEmpty
+        ? '$kind.${_slug(key)}'
+        : label != null && label.isNotEmpty
+        ? '$kind.${_slug(label)}'
+        : '$kind.${_slug(widgetType)}';
     // Alternate handles from the other label sources, so the node stays
     // addressable when its primary label source flickers (e.g. an
     // async-loaded Semantics username appearing after first paint).
@@ -192,12 +217,10 @@ extension _RuntimeNodes on FlutterScoutRuntime {
           'i${baseId.hashCode.abs().toString().padLeft(8, '0').substring(0, 6)}',
       kind: kind,
       label: label,
-      value: kind == 'field' ? _editableValueBelow(element) : null,
-      validationMessage: kind == 'field'
-          ? _validationMessageForFieldWidget(widget)
-          : null,
-      widgetType: widget.runtimeType.toString(),
-      key: _keyLabel(widget.key),
+      value: redacted ? null : rawValue,
+      validationMessage: validationMessage,
+      widgetType: widgetType,
+      key: key,
       rect: rect,
       visibleRect: visibleRect,
       visibleFraction: _visibleFraction(rect, visibleRect),
@@ -205,11 +228,17 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       hitTestable: suggestedTapPoint == null
           ? false
           : _hitTestable(suggestedTapPoint, target: element.renderObject),
-      enabled: _enabledFor(widget),
+      enabled: _enabledFor(widget) && !(editable?.widget.readOnly ?? false),
       confidence: label == null ? 0.65 : 0.94,
+      coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: kind == 'text' ? null : _selectedStateFor(element, widget),
       altIds: altIds.toList(growable: false),
-      obscured: kind == 'field' && _obscuredBelow(element),
+      obscured: kind == 'field' && obscured,
+      redacted: redacted,
+      isEmpty: kind == 'field' ? (rawValue ?? '').isEmpty : null,
+      valueToken: kind == 'field' ? _fieldValueToken(rawValue ?? '') : null,
+      renderObject: element.renderObject,
+      editableState: editable,
       textColor: kind == 'btn' || kind == 'tap'
           ? _effectiveTextColor(element)
           : null,
@@ -420,11 +449,44 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   bool _enabledFor(Widget widget) {
+    if (widget is TextField) {
+      return widget.enabled != false && !widget.readOnly;
+    }
+    if (widget is TextFormField) {
+      return widget.enabled;
+    }
+    if (widget is EditableText) return !widget.readOnly;
     if (widget is ButtonStyleButton) {
       return widget.onPressed != null || widget.onLongPress != null;
     }
     if (widget is IconButton) return widget.onPressed != null;
     if (widget is FloatingActionButton) return widget.onPressed != null;
+    if (widget is CupertinoButton) return widget.onPressed != null;
+    if (widget is Switch) return widget.onChanged != null;
+    if (widget is CupertinoSwitch) return widget.onChanged != null;
+    if (widget is Checkbox) return widget.onChanged != null;
+    if (widget is ChoiceChip) return widget.onSelected != null;
+    if (widget is FilterChip) return widget.onSelected != null;
+    if (widget is InputChip) {
+      return widget.onSelected != null ||
+          widget.onPressed != null ||
+          widget.onDeleted != null;
+    }
+    if (widget is ActionChip) return widget.onPressed != null;
+    if (widget is ListTile) return widget.enabled;
+    if (widget is InkWell) {
+      return widget.onTap != null ||
+          widget.onLongPress != null ||
+          widget.onDoubleTap != null;
+    }
+    if (widget is GestureDetector) {
+      return widget.onTap != null ||
+          widget.onLongPress != null ||
+          widget.onDoubleTap != null ||
+          widget.onPanStart != null ||
+          widget.onVerticalDragStart != null ||
+          widget.onHorizontalDragStart != null;
+    }
     return true;
   }
 
@@ -536,6 +598,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     void visit(Element child) {
       if (result != null || budget <= 0) return;
       budget -= 1;
+      if (_isInsideSensitiveEditable(child)) return;
       final value = probe(child);
       if (value != null) {
         result = value;
@@ -731,6 +794,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
   String? _textBelow(Element element, {int depth = 0, int maxDepth = 5}) {
     if (depth > maxDepth) return null;
+    if (_isInsideSensitiveEditable(element)) return null;
     final own = _ownText(element.widget);
     if (own != null && own.trim().isNotEmpty) return own.trim();
     String? result;
@@ -826,31 +890,6 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return rect;
   }
 
-  Offset? _pointForTarget(
-    String? target,
-    Map<String, String> params, {
-    ScoutSnapshot? snapshot,
-  }) {
-    final explicitPoint = _pointFromParams(params);
-    if (explicitPoint != null) return explicitPoint;
-    if (target == null || target.isEmpty) return null;
-    // Reuse the caller's snapshot when it has one — building a fresh one just
-    // to resolve a handle doubles the per-action tree-walk cost.
-    final current = snapshot ?? _snapshot();
-    final node = current.findNode(target);
-    if (node?.suggestedTapPoint case final point?) return point;
-    for (final scrollable in current.scrollables) {
-      if (scrollable['id'] != target && scrollable['baseId'] != target) {
-        continue;
-      }
-      final rect =
-          _rectFromJsonList(scrollable['visibleRect']) ??
-          _rectFromJsonList(scrollable['rect']);
-      if (rect != null) return rect.center;
-    }
-    return null;
-  }
-
   Offset? _pointFromParams(Map<String, String> params, {String prefix = ''}) {
     final xKey = prefix.isEmpty ? 'x' : '${prefix}X';
     final yKey = prefix.isEmpty ? 'y' : '${prefix}Y';
@@ -873,8 +912,19 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   Size _logicalSize() {
-    final view = WidgetsBinding.instance.platformDispatcher.views.first;
-    return view.physicalSize / view.devicePixelRatio;
+    final dispatcher = WidgetsBinding.instance.platformDispatcher;
+    final views = dispatcher.views;
+    final implicitView = dispatcher.implicitView;
+    final view = implicitView != null && views.contains(implicitView)
+        ? implicitView
+        : views.isEmpty
+        ? null
+        : views.first;
+    final scale = view?.devicePixelRatio;
+    if (view == null || scale == null || !scale.isFinite || scale <= 0) {
+      return Size.zero;
+    }
+    return view.physicalSize / scale;
   }
 
   Rect _viewportRect() => Offset.zero & _logicalSize();
@@ -1274,51 +1324,6 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return rank;
   }
 
-  EditableTextState? _findEditable({String? target}) {
-    final root = WidgetsBinding.instance.rootElement;
-    if (root == null) return null;
-    if (target == null || target.isEmpty || target == 'focused') {
-      return _focusedEditable(root);
-    }
-
-    final snapshot = _snapshot();
-    final matchedNode = snapshot.findField(target);
-    if (matchedNode != null) {
-      final candidates = <_EditableCandidate>[];
-      _walk(root, (Element element) {
-        final node = _nodeFromElement(element);
-        if (node == null) return;
-        final sameBase =
-            node.id == matchedNode.id || node.id == matchedNode.baseId;
-        final sameLabel = node.label != null && node.label == matchedNode.label;
-        if (!sameBase && !sameLabel) return;
-        final editable = _editableStateBelow(element);
-        if (editable != null) {
-          candidates.add(_EditableCandidate(node: node, state: editable));
-        }
-      });
-      for (final candidate in candidates) {
-        if (_sameRect(candidate.node.rect, matchedNode.rect)) {
-          return candidate.state;
-        }
-      }
-      if (matchedNode.ordinal > 0 && matchedNode.ordinal <= candidates.length) {
-        return candidates[matchedNode.ordinal - 1].state;
-      }
-      if (candidates.isNotEmpty) return candidates.first.state;
-    }
-
-    EditableTextState? result;
-    _walk(root, (Element element) {
-      if (result != null) return;
-      final label = _labelFor(element, element.widget);
-      if (label != null && _slug(label) == _slug(target)) {
-        result = _editableStateBelow(element);
-      }
-    });
-    return result;
-  }
-
   bool _sameRect(Rect? a, Rect? b) {
     if (a == null || b == null) return false;
     return (a.left - b.left).abs() < 0.5 &&
@@ -1409,6 +1414,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   List<Map<String, Object?>> _buildControlGroups(ScoutSnapshot snapshot) {
     final surface = _detectCustomInputSurface(snapshot);
     if (surface == null) return const [];
+    _rememberSensitiveValue(surface.currentValue);
     return [surface.toControlGroupJson()];
   }
 
@@ -1434,7 +1440,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
             {
               'target': field.id,
               if (field.label != null) 'label': field.label,
-              if (field.value != null) 'value': field.value,
+              ...field.serializedFieldState,
             },
         ],
       });
@@ -2224,18 +2230,6 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return target;
   }
 
-  EditableTextState? _focusedEditable(Element root) {
-    EditableTextState? result;
-    _walk(root, (Element element) {
-      if (result != null) return;
-      if (element is StatefulElement && element.state is EditableTextState) {
-        final state = element.state as EditableTextState;
-        if (state.widget.focusNode.hasFocus) result = state;
-      }
-    });
-    return result;
-  }
-
   EditableTextState? _editableStateBelow(Element element) {
     if (element is StatefulElement && element.state is EditableTextState) {
       return element.state as EditableTextState;
@@ -2245,15 +2239,6 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       result ??= _editableStateBelow(child);
     });
     return result;
-  }
-
-  String? _editableValueBelow(Element element) {
-    final editable = _editableStateBelow(element);
-    return editable?.widget.controller.text;
-  }
-
-  bool _obscuredBelow(Element element) {
-    return _editableStateBelow(element)?.widget.obscureText ?? false;
   }
 
   NavigatorState? _findActiveNavigator(Element root) {

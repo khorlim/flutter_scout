@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/public_fixture_configuration.schema.json",
+  "title": "Flutter Scout public Stress Lab fixture configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "revision",
+    "taskId",
+    "templateId",
+    "variantId",
+    "seed",
+    "family",
+    "patternId",
+    "title",
+    "targetLabel",
+    "decoyLabel",
+    "inputLabel",
+    "inputValue",
+    "completionValue",
+    "contentLength",
+    "targetIndex",
+    "initialPage",
+    "delayMs",
+    "initialModalOpen",
+    "initialFocus",
+    "labelOnlyTarget",
+    "successPredicateId",
+    "forbiddenPredicateId",
+    "perturbations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "revision": { "const": "public-fixture-v1" },
+    "taskId": { "$ref": "#/$defs/id" },
+    "templateId": { "$ref": "#/$defs/id" },
+    "variantId": { "type": "string", "pattern": "^variant-[1-5]$" },
+    "seed": { "type": "integer", "minimum": 1, "maximum": 1000000000 },
+    "family": {
+      "enum": [
+        "forms",
+        "lists",
+        "grids",
+        "nested_scroll",
+        "tabs",
+        "dialogs_sheets_menus",
+        "pickers",
+        "custom_painted",
+        "gesture",
+        "lifecycle_reconnect",
+        "faults",
+        "security_privacy"
+      ]
+    },
+    "patternId": { "$ref": "#/$defs/id" },
+    "title": { "$ref": "#/$defs/text" },
+    "targetLabel": { "$ref": "#/$defs/text" },
+    "decoyLabel": { "$ref": "#/$defs/text" },
+    "inputLabel": { "$ref": "#/$defs/text" },
+    "inputValue": { "$ref": "#/$defs/text" },
+    "completionValue": { "$ref": "#/$defs/text" },
+    "contentLength": { "type": "integer", "minimum": 8, "maximum": 120 },
+    "targetIndex": { "type": "integer", "minimum": 0, "maximum": 119 },
+    "initialPage": { "type": "integer", "minimum": 0, "maximum": 2 },
+    "delayMs": { "type": "integer", "minimum": 0, "maximum": 2000 },
+    "initialModalOpen": { "type": "boolean" },
+    "initialFocus": { "type": "boolean" },
+    "labelOnlyTarget": { "type": "boolean" },
+    "successPredicateId": { "$ref": "#/$defs/id" },
+    "forbiddenPredicateId": { "$ref": "#/$defs/id" },
+    "perturbations": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 13,
+      "propertyNames": {
+        "enum": [
+          "viewport",
+          "device_pixel_ratio",
+          "orientation",
+          "content_order",
+          "content_length",
+          "initial_scroll_state",
+          "initial_tab_state",
+          "initial_modal_state",
+          "initial_focus_state",
+          "animation_delay",
+          "network_delay",
+          "semantics_degradation",
+          "key_degradation"
+        ]
+      },
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 96
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    }
+  }
+}

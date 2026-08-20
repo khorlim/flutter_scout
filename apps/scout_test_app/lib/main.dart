@@ -3,10 +3,17 @@ import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 
+import 'evaluation_oracle/public_fixture_configuration.dart';
+import 'evaluation_oracle/supplier_workflow_oracle.dart';
+import 'screens/public_fixture_screen.dart';
 import 'screens/stress_lab_hub.dart';
 
 void main() {
   FlutterScoutBinding.ensureInitialized();
+  assert(() {
+    installDebugSupplierWorkflowOracle();
+    return true;
+  }());
   runApp(const ScoutTestApp());
 }
 
@@ -34,12 +41,82 @@ class SupplierListScreen extends StatefulWidget {
 
 class _SupplierListScreenState extends State<SupplierListScreen> {
   final List<String> _suppliers = <String>[];
+  final TextEditingController _searchController = TextEditingController();
   int _duplicateActions = 0;
   int _glyphDuplicateActions = 0;
   String _customPhone = 'Not set';
   String _intentAliasStatus = 'Idle';
   String _asyncStatus = 'Idle';
   int _testAnnotationsCreated = 0;
+  PublicFixtureConfiguration? _activePublicFixture;
+
+  @override
+  void initState() {
+    super.initState();
+    assert(() {
+      debugSupplierWorkflowOracle?.attach(
+        owner: this,
+        reset: _resetForEvaluation,
+      );
+      return true;
+    }());
+  }
+
+  @override
+  void dispose() {
+    assert(() {
+      debugSupplierWorkflowOracle?.detach(this);
+      return true;
+    }());
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _resetForEvaluation(PublicFixtureConfiguration? fixture) async {
+    Navigator.of(
+      context,
+      rootNavigator: true,
+    ).popUntil((route) => route.isFirst);
+    if (!mounted) return;
+    _searchController.clear();
+    setState(() {
+      _suppliers.clear();
+      _duplicateActions = 0;
+      _glyphDuplicateActions = 0;
+      _customPhone = 'Not set';
+      _intentAliasStatus = 'Idle';
+      _asyncStatus = 'Idle';
+      _testAnnotationsCreated = 0;
+      _activePublicFixture = fixture;
+    });
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  void _recordFixtureCompletion(String value) {
+    assert(() {
+      debugSupplierWorkflowOracle?.recordFixtureCompletion(value);
+      return true;
+    }());
+  }
+
+  void _recordFixtureForbiddenAction() {
+    assert(() {
+      debugSupplierWorkflowOracle?.recordForbiddenWrongAction();
+      return true;
+    }());
+  }
+
+  void _recordFixtureModal(bool open) {
+    assert(() {
+      final oracle = debugSupplierWorkflowOracle;
+      if (open) {
+        oracle?.recordModalOpened();
+      } else {
+        oracle?.recordModalClosed();
+      }
+      return true;
+    }());
+  }
 
   void _createTestAnnotation() {
     // This is a fixture-only control used to prove Scout's cross-restart
@@ -58,14 +135,30 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
   }
 
   Future<void> _openAddSupplierDialog() async {
-    final supplier = await showDialog<String>(
-      context: context,
-      builder: (context) => const AddSupplierDialog(),
-    );
+    assert(() {
+      debugSupplierWorkflowOracle?.recordModalOpened();
+      return true;
+    }());
+    String? supplier;
+    try {
+      supplier = await showDialog<String>(
+        context: context,
+        builder: (context) => const AddSupplierDialog(),
+      );
+    } finally {
+      assert(() {
+        debugSupplierWorkflowOracle?.recordModalClosed();
+        return true;
+      }());
+    }
     if (supplier == null || supplier.isEmpty) return;
     setState(() {
-      _suppliers.add(supplier);
+      _suppliers.add(supplier!);
     });
+    assert(() {
+      debugSupplierWorkflowOracle?.recordSupplierAdded(supplier!);
+      return true;
+    }());
   }
 
   Future<void> _showOkDialog() async {
@@ -115,6 +208,16 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final publicFixture = _activePublicFixture;
+    if (publicFixture != null) {
+      return PublicFixtureScreen(
+        key: ValueKey('public_fixture_host.${publicFixture.taskId}'),
+        configuration: publicFixture,
+        onCompletion: _recordFixtureCompletion,
+        onForbiddenAction: _recordFixtureForbiddenAction,
+        onModalChanged: _recordFixtureModal,
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('Suppliers'),
@@ -124,6 +227,10 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
               setState(() {
                 _duplicateActions++;
               });
+              assert(() {
+                debugSupplierWorkflowOracle?.recordForbiddenDuplicateAction();
+                return true;
+              }());
             },
             icon: const Icon(Icons.copy),
           ),
@@ -136,6 +243,7 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
           children: [
             TextField(
               key: const ValueKey('supplier_search'),
+              controller: _searchController,
               decoration: const InputDecoration(
                 labelText: 'Search',
                 border: OutlineInputBorder(),
@@ -152,6 +260,11 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                       setState(() {
                         _glyphDuplicateActions++;
                       });
+                      assert(() {
+                        debugSupplierWorkflowOracle
+                            ?.recordForbiddenDuplicateAction();
+                        return true;
+                      }());
                     },
                     child: Text(
                       String.fromCharCode(Icons.copy.codePoint),
@@ -164,6 +277,11 @@ class _SupplierListScreenState extends State<SupplierListScreen> {
                   IconButton(
                     onPressed: () {
                       setState(() => _intentAliasStatus = 'Opened');
+                      assert(() {
+                        debugSupplierWorkflowOracle
+                            ?.recordForbiddenWrongAction();
+                        return true;
+                      }());
                     },
                     icon: const Icon(Icons.settings),
                   ),

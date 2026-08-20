@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/supplier_oracle_observation.schema.json",
+  "title": "Flutter Scout evaluator-only Supplier oracle observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "channel",
+    "operation",
+    "requestId",
+    "runtimeId",
+    "workflowAttached",
+    "resetGeneration",
+    "state"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "channel": { "const": "supplier_workflow_oracle_v1" },
+    "operation": { "enum": ["state", "reset"] },
+    "requestId": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9._-]{1,96}$"
+    },
+    "runtimeId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "workflowAttached": { "type": "boolean" },
+    "resetGeneration": { "type": "integer", "minimum": 0 },
+    "resetPerformed": { "type": "boolean" },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "modal",
+        "supplierAdditionCount",
+        "supplierNames",
+        "forbiddenDuplicateActionCount",
+        "forbiddenWrongActionCount"
+      ],
+      "properties": {
+        "modal": { "enum": ["open", "closed"] },
+        "supplierAdditionCount": { "type": "integer", "minimum": 0 },
+        "supplierNames": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "forbiddenDuplicateActionCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forbiddenWrongActionCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeTaskId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "predicateResults": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+          },
+          "additionalProperties": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "operation": { "const": "reset" } } },
+      "then": {
+        "required": ["resetPerformed"],
+        "properties": { "resetPerformed": { "const": true } }
+      },
+      "else": {
+        "not": { "required": ["resetPerformed"] }
+      }
+    }
+  ]
+}

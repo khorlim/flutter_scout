@@ -22,11 +22,29 @@ writes a normal recording. Inspect and run it:
 ```bash
 flutter-scout record show checkout --feature orders --transcript
 flutter-scout record run checkout --feature orders
-flutter-scout record export checkout --feature orders
+flutter-scout record export checkout --feature orders \
+  --out /private/path/checkout-replay.json --retention session
 ```
 
-Recorded sensitive fields can require `--var field=value` at replay time.
-`could-not-start` is distinct from a regression and uses exit code 2.
+Exports are private application-data artifacts. Scout writes owner-only bytes
+and metadata, registers their exact unchanged identity, and defaults to
+`session`; choose `24h`, `7d`, or `manual` only when the handoff genuinely needs
+to outlive session cleanup. Scout never changes the permissions of an existing
+caller-owned output directory.
+
+Recorded sensitive fields use placeholders. Supply them from protected stdin
+or an owner-only, non-symlink `0600` JSON file so plaintext never enters process
+arguments:
+
+```bash
+flutter-scout record run checkout --feature orders \
+  --var-file /private/path/checkout-vars.json
+flutter-scout replay session.json --var-stdin
+```
+
+Legacy `--var field=value` is accepted with a warning only for deliberately
+non-sensitive values. `could-not-start` is distinct from a regression and uses
+exit code 2.
 
 Use `batch` for a known, timing-sensitive sequence:
 
@@ -37,4 +55,11 @@ flutter-scout batch 'tap btn.save --expect-text Saved; inspect --brief'
 
 Use `evidence` for handoff. It includes screenshot, inspect, status, logs,
 session actions/transcript, and `events.jsonl`. Event arguments redact input,
-fill JSON, file values, Dart defines, and other sensitive payloads.
+fill JSON, file values, Dart defines, and other sensitive payloads. Choose an
+explicit private retention policy only when needed; `session` is the safe
+default:
+
+```bash
+flutter-scout evidence -o /private/path/checkout-evidence \
+  --retention session
+```

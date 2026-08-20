@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "policy": "default_deny",
+  "telemetry": {
+    "implemented": false,
+    "optInRequired": true
+  },
+  "scannedRoots": [
+    "packages/flutter_scout/lib",
+    "packages/flutter_scout_helper/lib",
+    "apps/scout_test_app/lib",
+    "evaluation/lib",
+    "evaluation/bin",
+    "tool"
+  ],
+  "allowedConnections": [
+    {
+      "path": "packages/flutter_scout/lib/src/flutter_scout_cli.dart",
+      "primitive": "vmServiceConnectUri(",
+      "occurrences": 1,
+      "destination": "loopback_vm_service",
+      "purpose": "Connect the CLI to the selected app's local Dart VM service.",
+      "requiredEvidence": [
+        "final validated = _validatedVmServiceUri(uri);",
+        "validated.normalized"
+      ]
+    },
+    {
+      "path": "packages/flutter_scout/lib/src/cli_serve.dart",
+      "primitive": "HttpServer.bind(",
+      "occurrences": 1,
+      "destination": "loopback_listener",
+      "purpose": "Expose the authenticated persistent Scout transport locally.",
+      "requiredEvidence": [
+        "InternetAddress.loopbackIPv4"
+      ]
+    },
+    {
+      "path": "packages/flutter_scout/lib/src/cli_serve.dart",
+      "primitive": "HttpClient(",
+      "occurrences": 1,
+      "destination": "loopback_client",
+      "purpose": "Proxy a short-lived CLI invocation to its authenticated local Scout transport.",
+      "requiredEvidence": [
+        "http://127.0.0.1:$port/v1/call"
+      ]
+    },
+    {
+      "path": "evaluation/lib/src/tool_simulator/vm_supplier_oracle_client.dart",
+      "primitive": "WebSocket.connect(",
+      "occurrences": 1,
+      "destination": "loopback_vm_service",
+      "purpose": "Read the debug-only evaluator oracle over the app's local VM service.",
+      "requiredEvidence": [
+        "_normalizeLoopbackVmServiceUri(vmServiceUri)",
+        "The evaluator oracle only connects to loopback VM services."
+      ]
+    },
+    {
+      "path": "apps/scout_test_app/lib/screens/fault_injection_screen.dart",
+      "primitive": "Image.network(",
+      "occurrences": 1,
+      "destination": "loopback_fault_fixture",
+      "purpose": "Exercise deterministic image-load failure in the verification app.",
+      "requiredEvidence": [
+        "http://127.0.0.1:1/scout-fault-image.png"
+      ]
+    }
+  ]
+}

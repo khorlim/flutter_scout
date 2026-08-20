@@ -144,6 +144,16 @@ extension _CliActions on FlutterScoutCli {
             'fields, textTargets, scrollables, overlays, visualTree, '
             'controlGroups, rows, annotations, semantics.',
       )
+      ..addOption(
+        'since',
+        help:
+            'Return a structured delta from this run/runtime snapshot identity.',
+      )
+      ..addOption(
+        'max-response-bytes',
+        defaultsTo: '65536',
+        help: 'Bound an inspect --since response (4096-1048576 bytes).',
+      )
       ..addFlag(
         'include-stale',
         defaultsTo: false,
@@ -152,6 +162,7 @@ extension _CliActions on FlutterScoutCli {
     final parsed = parser.parse(args);
     final sections = parsed.option('sections');
     final maxItems = parsed.option('max-items');
+    final since = parsed.option('since');
     if (maxItems != null &&
         (int.tryParse(maxItems) == null ||
             int.parse(maxItems) < 1 ||
@@ -161,12 +172,32 @@ extension _CliActions on FlutterScoutCli {
         '--max-items must be an integer from 1 to 100.',
       );
     }
+    if (since != null &&
+        since.isNotEmpty &&
+        (parsed.flag('brief') ||
+            parsed.flag('surface') ||
+            (sections != null && sections.isNotEmpty) ||
+            maxItems != null)) {
+      throw const ScoutCliException(
+        'usage',
+        '--since cannot be combined with --brief, --surface, --sections, or --max-items.',
+      );
+    }
+    final maxResponseBytes = _boundedNavigationInteger(
+      parsed.option('max-response-bytes'),
+      name: '--max-response-bytes',
+      minimum: 4096,
+      maximum: 1048576,
+    );
     var result = _withProtocolDiagnostics(
       'ext.flutter_scout.inspect',
       await _call('ext.flutter_scout.inspect', {
         if (parsed.flag('brief') || parsed.flag('surface')) 'brief': 'true',
         if (parsed.flag('surface')) 'surfaceOnly': 'true',
         if (sections != null && sections.isNotEmpty) 'sections': sections,
+        if (since != null && since.isNotEmpty) 'since': since,
+        if (since != null && since.isNotEmpty)
+          'maxResponseBytes': '$maxResponseBytes',
         'maxItems': ?maxItems,
       }),
     );
@@ -180,63 +211,28 @@ extension _CliActions on FlutterScoutCli {
         ? _recentLogSignals()
         : _freshRecentLogSignals();
     if (logSignals.isNotEmpty && result['ok'] != false) {
-      result['recentLogSignals'] = _logSignalMaps(logSignals);
+      result['recentLogSignals'] = _logSignalMaps(
+        logSignals,
+        phase: 'inspect',
+        actionCommandId: _activeCommandId,
+      );
     }
     result['logCursor'] = _currentLogCursor();
     if (_currentRunIdFromSession() case final runId?) {
       result['runId'] = runId;
     }
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
+    _printJson(result);
     return result['ok'] == false ? 1 : 0;
   }
 
   Future<int> _health(List<String> args) async {
     final parser = ArgParser()..addFlag('include-stale', defaultsTo: false);
     final parsed = parser.parse(args);
-    final result = await _call('ext.flutter_scout.inspect', {'brief': 'true'});
-    if (result['ok'] == false) {
-      stdout.writeln(const JsonEncoder.withIndent('  ').convert(result));
-      return 1;
-    }
-    final errors = result['recentErrors'];
-    final errorList = errors is List ? errors : const <Object?>[];
-    final blocking = [
-      for (final e in errorList)
-        if (e is Map && e['blocking'] == true && e['stale'] != true) e,
-    ];
-    final interactables = result['interactables'];
-    final allLogSignals = _recentLogSignals();
-    final now = DateTime.now();
-    final logSignals = parsed.flag('include-stale')
-        ? allLogSignals
-        : allLogSignals.where((signal) => !signal.isStale(now)).toList();
-    final blockingLogSignals = [
-      for (final signal in logSignals)
-        if (signal.isFreshBlocking(now)) signal,
-    ];
-    final health = <String, Object?>{
-      'ok': true,
-      'screen': result['screen'],
-      'viewSignature': result['viewSignature'],
-      'idle': result['idle'],
-      if ((result['degradedNodes'] ?? 0) != 0)
-        'degradedNodes': result['degradedNodes'],
-      'interactableCount': interactables is List ? interactables.length : 0,
-      if (blocking.isNotEmpty) 'blockingErrors': blocking,
-      if (blockingLogSignals.isNotEmpty)
-        'blockingLogSignals': _logSignalMaps(blockingLogSignals, now: now),
-      if (errorList.isNotEmpty) 'recentErrorCount': errorList.length,
-      if (logSignals.isNotEmpty)
-        'recentLogSignals': _logSignalMaps(logSignals, now: now),
-      'logCursor': _currentLogCursor(),
-      'runId': ?_currentRunIdFromSession(),
-      'healthy':
-          blocking.isEmpty &&
-          blockingLogSignals.isEmpty &&
-          (result['degradedNodes'] ?? 0) == 0,
-    };
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(health));
-    return 0;
+    final health = await _healthPayload(
+      includeStale: parsed.flag('include-stale'),
+    );
+    _printJson(health);
+    return health['ok'] == false ? 1 : 0;
   }
 
   Future<int> _waitFor(List<String> args) async {
@@ -376,32 +372,40 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('target')
       ..addOption(
         'file',
-        help:
-            'Read the value from this file instead of the command line — '
-            'no shell quoting battles for long or multi-line text.',
+        help: 'Read the value from a regular owner-only 0600 UTF-8 file.',
+      )
+      ..addFlag(
+        'stdin',
+        defaultsTo: false,
+        negatable: false,
+        help: 'Read one bounded UTF-8 value from protected standard input.',
       )
       ..addFlag('verbose', defaultsTo: false);
     _addExpectOptions(parser);
     final parsed = parser.parse(args);
     final filePath = parsed.option('file');
+    final fromStdin = parsed.flag('stdin');
+    final sourceCount =
+        (filePath != null ? 1 : 0) +
+        (fromStdin ? 1 : 0) +
+        (parsed.rest.isNotEmpty ? 1 : 0);
+    if (sourceCount != 1) {
+      throw const ScoutCliException(
+        'usage',
+        'Use exactly one input source: a positional value, '
+            '`--file <owner-only-path>`, or `--stdin`.',
+      );
+    }
     final String value;
     if (filePath != null && filePath.isNotEmpty) {
-      final file = File(filePath);
-      if (!file.existsSync()) {
-        throw ScoutCliException('file_not_found', 'No file at `$filePath`.');
-      }
-      value = file.readAsStringSync();
+      value = _protectedActionInput('input');
+    } else if (fromStdin) {
+      value = _protectedActionInput('input');
     } else {
-      if (parsed.rest.isEmpty) {
-        throw const ScoutCliException(
-          'usage',
-          'Usage: flutter-scout input [--target <field>] <value> or '
-              'flutter-scout input --target <field> --file <path>',
-        );
-      }
       value = parsed.rest.join(' ');
     }
     final target = parsed.option('target') ?? 'focused';
+    _registerSensitiveValue(value);
     final params = <String, String>{
       'target': target,
       'value': value,
@@ -504,27 +508,20 @@ extension _CliActions on FlutterScoutCli {
         'totalMs': totalStopwatch.elapsedMilliseconds,
       },
     };
+    final actionSucceeded = result['ok'] == true;
+    result = _commitActionEvidence(
+      method: 'ext.flutter_scout.tapText',
+      result: result,
+      record: {'cmd': 'tap-text', ...params},
+    );
     _emitActionOutput(
       Map<String, dynamic>.from(
         parsed.flag('verbose') ? result : _compactActionResult(result),
       ),
     );
-    if (result['ok'] == true) {
-      _recordAction({'cmd': 'tap-text', ...params});
+    if (actionSucceeded && result['ok'] == true) {
       await _maybeStartAutoServe();
     }
-    _appendEvent({
-      'schemaVersion': 1,
-      'type': 'action_result',
-      'commandId': ?_activeCommandId,
-      'method': 'ext.flutter_scout.tapText',
-      'ok': result['ok'] == true,
-      'runId': ?result['runId'],
-      'runtimeInstanceId': ?result['runtimeInstanceId'],
-      'snapshotId': ?result['snapshotId'],
-      'timings': result['timings'],
-      if (result['error'] != null) 'error': result['error'],
-    });
     return result['ok'] == false ? 1 : 0;
   }
 
@@ -568,18 +565,68 @@ extension _CliActions on FlutterScoutCli {
   Future<int> _fill(List<String> args) async {
     final parser = ArgParser()
       ..addOption('json')
+      ..addOption(
+        'file',
+        help:
+            'Read one JSON object of string field/value pairs from a regular '
+            'owner-only 0600 file.',
+      )
+      ..addFlag(
+        'stdin',
+        defaultsTo: false,
+        negatable: false,
+        help:
+            'Read one bounded JSON object of string field/value pairs from '
+            'protected standard input.',
+      )
       ..addFlag('verbose', defaultsTo: false);
     _addExpectOptions(parser);
     final parsed = parser.parse(args);
-    final raw = parsed.option('json');
-    if (raw == null || raw.isEmpty) {
+    final inlineJson = parsed.option('json');
+    final filePath = parsed.option('file');
+    final fromStdin = parsed.flag('stdin');
+    final sourceCount =
+        (inlineJson != null ? 1 : 0) +
+        (filePath != null ? 1 : 0) +
+        (fromStdin ? 1 : 0);
+    if (sourceCount != 1) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout fill --json <object>',
+        'Use exactly one fill source: deprecated `--json <object>`, '
+            '`--file <owner-only-path>`, or `--stdin`.',
       );
     }
-    jsonDecode(raw);
-    final params = <String, String>{'values': raw, ..._expectParams(parsed)};
+    final protectedSource = filePath != null || fromStdin;
+    final raw = protectedSource ? _protectedActionInput('fill') : inlineJson!;
+    final Object? decodedValues;
+    if (protectedSource) {
+      decodedValues = _decodeProtectedStringObject(
+        raw,
+        source: 'fill input',
+        allowEmpty: false,
+      );
+    } else {
+      try {
+        decodedValues = jsonDecode(raw);
+      } catch (_) {
+        throw const ScoutCliException(
+          'invalid_fill_json',
+          '`fill --json` must contain a valid JSON object. Input content was '
+              'not included in this diagnostic.',
+        );
+      }
+      if (decodedValues is! Map) {
+        throw const ScoutCliException(
+          'invalid_fill_json',
+          '`fill --json` must contain one JSON object.',
+        );
+      }
+    }
+    _registerSensitiveValue(decodedValues);
+    final params = <String, String>{
+      'values': protectedSource ? jsonEncode(decodedValues) : raw,
+      ..._expectParams(parsed),
+    };
     return _callAndPrint(
       'ext.flutter_scout.fill',
       params: params,
@@ -627,20 +674,33 @@ extension _CliActions on FlutterScoutCli {
       signal: ProcessSignal.sigusr1,
       fullRestart: false,
     );
-    final enrichedResult = await _withRecentLogSignals(
+    final logsStopwatch = Stopwatch()..start();
+    var enrichedResult = await _withRecentLogSignals(
       result,
       sinceCursor: logCursor,
     );
-    stdout.writeln(
-      const JsonEncoder.withIndent('  ').convert(
-        parsed.flag('verbose')
-            ? enrichedResult
-            : _compactActionResult(enrichedResult),
-      ),
+    logsStopwatch.stop();
+    enrichedResult = _withMeasuredCliPhase(
+      enrichedResult,
+      phase: 'logs',
+      elapsedMs:
+          _phaseElapsedMs(enrichedResult, 'logs') +
+          logsStopwatch.elapsedMilliseconds,
+      scope:
+          'hot-update acknowledgement plus bounded post-action log collection',
+      facts: <String, Object?>{'sinceCursor': logCursor},
     );
-    if (enrichedResult['ok'] == true) {
-      _recordAction(const {'cmd': 'reload'});
-    }
+    enrichedResult = _persistHotUpdateOperability(enrichedResult);
+    enrichedResult = _commitActionEvidence(
+      method: 'process.flutter.reload',
+      result: enrichedResult,
+      record: const {'cmd': 'reload'},
+    );
+    _emitActionOutput(
+      parsed.flag('verbose')
+          ? enrichedResult
+          : _compactActionResult(enrichedResult),
+    );
     return enrichedResult['ok'] == false ? 1 : 0;
   }
 
@@ -653,20 +713,33 @@ extension _CliActions on FlutterScoutCli {
       signal: ProcessSignal.sigusr2,
       fullRestart: true,
     );
-    final enrichedResult = await _withRecentLogSignals(
+    final logsStopwatch = Stopwatch()..start();
+    var enrichedResult = await _withRecentLogSignals(
       result,
       sinceCursor: logCursor,
     );
-    stdout.writeln(
-      const JsonEncoder.withIndent('  ').convert(
-        parsed.flag('verbose')
-            ? enrichedResult
-            : _compactActionResult(enrichedResult),
-      ),
+    logsStopwatch.stop();
+    enrichedResult = _withMeasuredCliPhase(
+      enrichedResult,
+      phase: 'logs',
+      elapsedMs:
+          _phaseElapsedMs(enrichedResult, 'logs') +
+          logsStopwatch.elapsedMilliseconds,
+      scope:
+          'hot-update acknowledgement plus bounded post-action log collection',
+      facts: <String, Object?>{'sinceCursor': logCursor},
     );
-    if (enrichedResult['ok'] == true) {
-      _recordAction(const {'cmd': 'restart'});
-    }
+    enrichedResult = _persistHotUpdateOperability(enrichedResult);
+    enrichedResult = _commitActionEvidence(
+      method: 'process.flutter.restart',
+      result: enrichedResult,
+      record: const {'cmd': 'restart'},
+    );
+    _emitActionOutput(
+      parsed.flag('verbose')
+          ? enrichedResult
+          : _compactActionResult(enrichedResult),
+    );
     return enrichedResult['ok'] == false ? 1 : 0;
   }
 
@@ -738,10 +811,14 @@ extension _CliActions on FlutterScoutCli {
     if (result['ok'] == true && screenshot != null && screenshot.isNotEmpty) {
       final capture = await _inAppCapture(mode: 'screen');
       if (capture?.bytes != null) {
-        final file = File(screenshot);
-        file.parent.createSync(recursive: true);
-        file.writeAsBytesSync(capture!.bytes!);
-        result = {...result, 'screenshot': file.absolute.path};
+        _writePrivateArtifactBytes(screenshot, capture!.bytes!);
+        _writePrivateArtifactMetadata(screenshot, 'session');
+        result = {
+          ...result,
+          'screenshot': File(screenshot).absolute.path,
+          'screenshotMetadata': '$screenshot.metadata.json',
+          ..._privateArtifactMetadata('session'),
+        };
       } else {
         result = {
           ...result,
@@ -757,12 +834,14 @@ extension _CliActions on FlutterScoutCli {
       result,
       enabled: !parsed.flag('allow-errors'),
     );
+    result = _commitActionEvidence(
+      method: 'ext.flutter_scout.dragMove',
+      result: result,
+      record: {'cmd': 'drag-move', ...params},
+    );
     _emitActionOutput(
       parsed.flag('verbose') ? result : _compactActionResult(result),
     );
-    if (result['ok'] == true) {
-      _recordAction({'cmd': 'drag-move', ...params});
-    }
     return result['ok'] == false ? 1 : 0;
   }
 
@@ -833,18 +912,44 @@ extension _CliActions on FlutterScoutCli {
       if (parsed.option('distance') != null)
         'distance': parsed.option('distance')!,
     };
+    final callerScope = _activeCallerIdempotencyKey;
+    final idempotencyScope =
+        callerScope ?? _newProtocolIdentifier('scroll-to-scope');
+    final initialKey = _derivedStepIdempotencyKey(
+      scope: idempotencyScope,
+      step: 0,
+      businessRequest: <String, Object?>{
+        'kind': 'scroll-to-attempt',
+        'params': params,
+      },
+    );
     var result = _withProtocolDiagnostics(
       'ext.flutter_scout.scrollTo',
-      await _call('ext.flutter_scout.scrollTo', params),
+      await _withCallerIdempotencyKey<Map<String, dynamic>>(
+        initialKey,
+        () => _call('ext.flutter_scout.scrollTo', params),
+      ),
     );
     if (result['ok'] == false &&
         !explicitDirection &&
+        _isClosedCertainScrollToFallbackOutcome(result) &&
         _shouldRetryScrollToOpposite(result)) {
       final opposite = _oppositeDirection(direction);
       final retryParams = {...params, 'direction': opposite};
+      final retryKey = _derivedStepIdempotencyKey(
+        scope: idempotencyScope,
+        step: 1,
+        businessRequest: <String, Object?>{
+          'kind': 'scroll-to-opposite-attempt',
+          'params': retryParams,
+        },
+      );
       final retry = _withProtocolDiagnostics(
         'ext.flutter_scout.scrollTo',
-        await _call('ext.flutter_scout.scrollTo', retryParams),
+        await _withCallerIdempotencyKey<Map<String, dynamic>>(
+          retryKey,
+          () => _call('ext.flutter_scout.scrollTo', retryParams),
+        ),
       );
       retry['fallback'] = {
         'used': true,
@@ -861,18 +966,29 @@ extension _CliActions on FlutterScoutCli {
       };
       result = retry;
     }
+    result = <String, dynamic>{
+      ...result,
+      'idempotencyScope': <String, Object?>{
+        'kind': 'deterministic_composite_steps',
+        'keySource': callerScope == null ? 'generated' : 'caller',
+        'scopeKeyDigest': _idempotencyKeyDigest(idempotencyScope),
+      },
+      if (callerScope == null) 'idempotencyScopeKey': idempotencyScope,
+    };
     result = await _withRecentLogSignals(result, sinceCursor: logCursor);
     result = _assertActionHasNoErrors(
       result,
       enabled: !parsed.flag('allow-errors'),
     );
+    result = _commitActionEvidence(
+      method: 'ext.flutter_scout.scrollTo',
+      result: result,
+      record: {'cmd': 'scroll-to', ...recordParams},
+    );
     final output = parsed.flag('verbose')
         ? result
         : _compactActionResult(result);
     _emitActionOutput(output);
-    if (result['ok'] == true) {
-      _recordAction({'cmd': 'scroll-to', ...recordParams});
-    }
     return result['ok'] == false ? 1 : 0;
   }
 
@@ -885,6 +1001,12 @@ extension _CliActions on FlutterScoutCli {
     if (error is Map && error['code'] == 'target_not_reached') return true;
     return false;
   }
+
+  bool _isClosedCertainScrollToFallbackOutcome(Map<String, dynamic> result) =>
+      result['transport'] == 'ok' &&
+      result['dispatch'] == 'dispatched' &&
+      result['identityStatus'] == 'validated' &&
+      result['observation'] != 'observation_unavailable';
 
   bool _hasOption(List<String> args, String name) =>
       args.any((arg) => arg == '--$name' || arg.startsWith('--$name='));
@@ -963,17 +1085,324 @@ extension _CliActions on FlutterScoutCli {
   }
 
   Future<int> _deeplink(List<String> args) async {
-    if (args.isEmpty) {
+    final parser = ArgParser()
+      ..addOption(
+        'url-file',
+        help: 'Read the URL from an owner-only 0600 regular file.',
+      )
+      ..addFlag(
+        'url-stdin',
+        defaultsTo: false,
+        negatable: false,
+        help: 'Read the URL from bounded protected standard input.',
+      );
+    final parsed = parser.parse(args);
+    if (parsed.rest.length > 1 ||
+        (parsed.rest.isEmpty &&
+            parsed.option('url-file') == null &&
+            !parsed.flag('url-stdin'))) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout deeplink <url>',
+        'Usage: flutter-scout deeplink '
+            '(<legacy-url> | --url-file <0600-file> | --url-stdin)',
       );
     }
-    final url = args.first;
-    await _openDeeplink(url);
-    stdout.writeln(jsonEncode({'ok': true, 'url': url}));
-    _recordAction({'cmd': 'deeplink', 'url': url});
-    return 0;
+    final protected = _protectedDeeplinkInput();
+    final url = protected.url;
+    final dispatched = await _durableDeeplink(url);
+    final result = _commitActionEvidence(
+      method: dispatched['method']?.toString() ?? 'platform.deeplink',
+      result: dispatched,
+      record: <String, Object?>{
+        'cmd': 'deeplink',
+        'url': '${_kRecordRedactedPrefix}deeplink.url',
+        'urlSource': protected.source,
+        '_redacted': 'true',
+        '_redactedFields': const <String>['url'],
+        '_redactionPolicy': 'source',
+      },
+    );
+    _emitActionOutput(result);
+    return result['ok'] == false ? 1 : 0;
+  }
+
+  Future<Map<String, dynamic>> _durableDeeplink(String url) async {
+    final validatedUrl = _validateDeeplinkUrl(url);
+    late final _NativeMobileTarget target;
+    try {
+      target = _requireNativeMobileTarget(operation: 'deeplink');
+      // Capability and exact target reachability are proven before the durable
+      // mutation boundary. An unsupported tool/platform therefore cannot be
+      // confused with an uncertain application dispatch.
+      await _preflightNativeTarget(target, operation: 'deeplink');
+    } on ScoutCliException catch (error) {
+      return _notDispatchedProtocolFailure(
+        code: error.code,
+        message: error.message,
+        method: 'platform.deeplink',
+        runId: _currentRunIdFromSession(),
+        details: error.details,
+      );
+    }
+    return _runDurableLocalMutation(
+      method: target.deeplinkMethod,
+      businessParams: <String, String>{'url': url},
+      dispatch: () async {
+        final before = await _tryInspect(
+          callTimeout: const Duration(seconds: 2),
+        );
+        final expectedRunId = _currentRunIdFromSession();
+        final observationIssue = _nativeDeeplinkObservationIssue(
+          before,
+          expectedRunId: expectedRunId,
+        );
+        if (observationIssue != null) {
+          var failure = _notDispatchedProtocolFailure(
+            code: 'native_deeplink_preflight_observation_unavailable',
+            message:
+                'Scout could not prove a live protocol-valid observation from '
+                'this exact session immediately before native deep-link '
+                'dispatch. Nothing was sent to the emulator.',
+            method: target.deeplinkMethod,
+            runId: expectedRunId,
+            transport: before == null ? 'failed' : 'invalid_response',
+            details: <String, Object?>{
+              'reason': observationIssue,
+              'backend': target.backend,
+              'device': target.id,
+              'expectedRunId': expectedRunId,
+              if (before != null) 'observedIdentity': _protocolIdentity(before),
+            },
+          );
+          if (before != null &&
+              _canonicalPhaseTimingsIssue(before['timings']) == null) {
+            failure = _withPreflightPhaseTimings(failure, before['timings']);
+          }
+          for (final phase in const <String>[
+            'match',
+            'dispatch',
+            'settle',
+            'delta',
+          ]) {
+            failure = _withUnavailablePhase(
+              failure,
+              phase: phase,
+              owner: phase == 'settle'
+                  ? 'helper'
+                  : phase == 'delta'
+                  ? 'cli_and_helper'
+                  : 'cli',
+              reason:
+                  'not_applicable:native_deeplink_preflight_observation_failed',
+            );
+          }
+          return failure;
+        }
+        final beforeObserved = before!;
+        final dispatchStopwatch = Stopwatch()..start();
+        final nativeDispatch = await _dispatchNativeDeeplink(
+          target,
+          validatedUrl,
+        );
+        dispatchStopwatch.stop();
+        final nativeDispatchStatus =
+            nativeDispatch['dispatch']?.toString() ??
+            'dispatch_outcome_unknown';
+        if (nativeDispatchStatus == 'not_dispatched') {
+          var failure = _notDispatchedProtocolFailure(
+            code:
+                ((nativeDispatch['structuredError'] as Map?)?['code'])
+                    ?.toString() ??
+                'deeplink_not_dispatched',
+            message:
+                ((nativeDispatch['structuredError'] as Map?)?['message'])
+                    ?.toString() ??
+                'The native deep-link process could not be started.',
+            method: target.deeplinkMethod,
+            runId: _currentRunIdFromSession(),
+            details: <String, Object?>{
+              'backend': target.backend,
+              'device': target.id,
+            },
+          );
+          failure = _withPreflightPhaseTimings(
+            failure,
+            beforeObserved['timings'],
+          );
+          failure = _withMeasuredPhase(
+            failure,
+            phase: 'dispatch',
+            elapsedMs: dispatchStopwatch.elapsedMilliseconds,
+            owner: 'cli',
+            scope: 'bounded native deep-link process start',
+          );
+          failure = _withUnavailablePhase(
+            failure,
+            phase: 'match',
+            owner: 'cli',
+            reason: 'not_applicable:native_deeplink_has_no_widget_selector',
+          );
+          failure = _withUnavailablePhase(
+            failure,
+            phase: 'settle',
+            owner: 'helper',
+            reason: 'not_applicable:deeplink_was_not_dispatched',
+          );
+          failure = _withUnavailablePhase(
+            failure,
+            phase: 'delta',
+            owner: 'cli_and_helper',
+            reason: 'not_applicable:deeplink_was_not_dispatched',
+          );
+          return failure;
+        }
+        Map<String, dynamic>? settled;
+        try {
+          settled = await _call(
+            'ext.flutter_scout.waitStable',
+            const <String, String>{'timeoutMs': '3000'},
+            const Duration(seconds: 5),
+          );
+        } catch (_) {
+          settled = null;
+        }
+        final after = await _tryInspect(
+          callTimeout: const Duration(seconds: 2),
+        );
+        final afterObserved = after?['ok'] == true ? after : null;
+        final deltaStopwatch = Stopwatch()..start();
+        final delta = _inspectDelta(beforeObserved, afterObserved);
+        deltaStopwatch.stop();
+        final nativeStructuredError = nativeDispatch['structuredError'];
+        var result = <String, dynamic>{
+          'ok': nativeDispatchStatus == 'dispatched',
+          'deeplink': <String, Object?>{
+            'accepted': true,
+            'credentialPresent': _deeplinkCredentialPresent(url),
+          },
+          'method': target.deeplinkMethod,
+          'backend': target.backend,
+          'nativeDispatch': nativeDispatch,
+          if (nativeStructuredError is Map)
+            'structuredError': <String, Object?>{
+              for (final entry in nativeStructuredError.entries)
+                entry.key.toString(): entry.value,
+            },
+          'transport': nativeDispatch['transport'] ?? 'ok',
+          'dispatch': nativeDispatchStatus,
+          'observation': afterObserved != null
+              ? _inspectChanged(beforeObserved, afterObserved)
+                    ? 'changed'
+                    : 'no_effect'
+              : 'observation_unavailable',
+          'postcondition': 'postcondition_not_requested',
+          'runtimeHealth': afterObserved == null
+              ? 'runtime_health_unknown'
+              : _objectList(afterObserved['activeBlockingSignals']).isEmpty
+              ? 'runtime_clean'
+              : 'runtime_blocked',
+          'stable': settled?['stable'] == true,
+          'before': beforeObserved,
+          'after': afterObserved,
+          'delta': delta,
+        };
+        result = _withPreflightPhaseTimings(result, beforeObserved['timings']);
+        result = _withPreflightPhaseTimings(
+          result,
+          _postDispatchObservationTimings(settled?['timings']),
+        );
+        result = _withPreflightPhaseTimings(
+          result,
+          _postDispatchObservationTimings(afterObserved?['timings']),
+        );
+        result = _withMeasuredPhase(
+          result,
+          phase: 'dispatch',
+          elapsedMs: dispatchStopwatch.elapsedMilliseconds,
+          owner: 'cli',
+          scope: 'bounded simulator deep-link process dispatch',
+        );
+        result = _withMeasuredPhase(
+          result,
+          phase: 'delta',
+          elapsedMs:
+              deltaStopwatch.elapsedMilliseconds +
+              _phaseElapsedMs(result, 'delta'),
+          owner: 'cli_and_helper',
+          scope:
+              'post-dispatch helper observation plus CLI factual delta construction',
+        );
+        return _withUnavailablePhase(
+          result,
+          phase: 'match',
+          owner: 'cli',
+          reason: 'not_applicable:native_deeplink_has_no_widget_selector',
+        );
+      },
+      classifyDispatch: (result) =>
+          result['dispatch']?.toString() ?? 'dispatch_outcome_unknown',
+    );
+  }
+
+  String _validateDeeplinkUrl(String raw) {
+    _registerDeeplinkCredentials(raw);
+    if (raw.isEmpty ||
+        utf8.encode(raw).length > 8192 ||
+        raw.codeUnits.any((unit) => unit == 0 || unit < 0x20 || unit == 0x7f)) {
+      throw const ScoutCliException(
+        'invalid_deeplink_url',
+        'A deep link must be a non-empty URI of at most 8192 UTF-8 bytes and '
+            'must not contain control characters.',
+      );
+    }
+    final parsed = Uri.tryParse(raw);
+    if (parsed == null || parsed.scheme.isEmpty) {
+      throw const ScoutCliException(
+        'invalid_deeplink_url',
+        'A deep link must contain an explicit URI scheme.',
+      );
+    }
+    return raw;
+  }
+
+  bool _deeplinkCredentialPresent(String raw) {
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return true;
+    return uri.userInfo.isNotEmpty ||
+        uri.pathSegments.any((segment) => segment.isNotEmpty) ||
+        uri.hasQuery ||
+        uri.fragment.isNotEmpty;
+  }
+
+  String? _nativeDeeplinkObservationIssue(
+    Map<String, dynamic>? observation, {
+    required String? expectedRunId,
+  }) {
+    if (observation == null) return 'observation_unavailable';
+    if (observation['ok'] != true) return 'observation_not_ok';
+    final protocolIssue = _protocolEnvelopeIssue(
+      observation,
+      requireMutationCapabilities: false,
+    );
+    if (protocolIssue != null) return protocolIssue.$1;
+    if (expectedRunId == null || expectedRunId.isEmpty) {
+      return 'session_run_id_unavailable';
+    }
+    if (observation['runId']?.toString() != expectedRunId) {
+      return 'session_run_id_mismatch';
+    }
+    final generation = observation['stateGeneration'];
+    final snapshotId = observation['snapshotId']?.toString();
+    final stateDigest = observation['stateDigest']?.toString();
+    if (generation is! int ||
+        snapshotId == null ||
+        !RegExp(r'^g\d+:[a-f0-9]{64}$').hasMatch(snapshotId) ||
+        snapshotId != 'g$generation:$stateDigest' ||
+        stateDigest == null ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(stateDigest)) {
+      return 'snapshot_identity_unavailable';
+    }
+    return null;
   }
 
   Future<int> _logs(List<String> args) async {
@@ -987,7 +1416,7 @@ extension _CliActions on FlutterScoutCli {
       contains: parsed.option('contains'),
       summary: parsed.flag('summary'),
     );
-    stdout.writeln(const JsonEncoder.withIndent('  ').convert(payload));
+    _printJson(payload);
     return 0;
   }
 
@@ -996,6 +1425,24 @@ extension _CliActions on FlutterScoutCli {
     required String? contains,
     required bool summary,
   }) async {
+    if (last <= 0) {
+      throw const ScoutCliException(
+        'usage',
+        '`logs --last` must be a positive integer.',
+      );
+    }
+    if (last > _maxScoutLogResultLines) {
+      throw const ScoutCliException(
+        'request_parameter_too_large',
+        '`logs --last` exceeds the bounded 1000-line result limit.',
+      );
+    }
+    if (contains != null && contains.length > _maxScoutLogFilterCharacters) {
+      throw const ScoutCliException(
+        'request_parameter_too_large',
+        '`logs --contains` exceeds the bounded 4096-character filter limit.',
+      );
+    }
     final file = File(_logFile);
     final attachOnly = await _isAttachOnlySession();
     if (!attachOnly) {
@@ -1025,8 +1472,16 @@ extension _CliActions on FlutterScoutCli {
           'lines': const <String>[],
       };
     }
+    final chunk = _readLogChunk(file, maxBytes: _maxScoutLogTailBytes);
+    final rawLines = chunk.lines;
+    // Discover and register every capability URL before serializing even the
+    // first line. The URI may occur later in the log than an echoed token, so
+    // line-by-line generic redaction cannot establish this ordering safely.
+    for (final line in rawLines) {
+      _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
+    }
     final allLines = _dedupeVmStdoutEcho(
-      _readLogLinesSync(file).map(_redactSensitiveLogText).toList(),
+      rawLines.map(_redactActiveSensitiveText).toList(growable: false),
     );
     if (summary) {
       final summary = _summarizeLogLines(allLines, last: last);
@@ -1037,6 +1492,10 @@ extension _CliActions on FlutterScoutCli {
         'source': allLines.isEmpty
             ? 'empty_scout_log'
             : 'scout_owned_flutter_run',
+        'cursor': chunk.endCursor,
+        'retainedFromCursor': chunk.startCursor,
+        'readBytes': chunk.bytesRead,
+        'truncated': chunk.truncated,
         'session': _sessionModeInfo(),
         if (allLines.isEmpty)
           'message':
@@ -1060,6 +1519,10 @@ extension _CliActions on FlutterScoutCli {
       'source': allLines.isEmpty
           ? 'empty_scout_log'
           : 'scout_owned_flutter_run',
+      'cursor': chunk.endCursor,
+      'retainedFromCursor': chunk.startCursor,
+      'readBytes': chunk.bytesRead,
+      'truncated': chunk.truncated,
       'session': _sessionModeInfo(),
       if (contains != null && contains.isNotEmpty) 'contains': contains,
       if (contains != null && contains.isNotEmpty) 'matched': lines.length,
@@ -1074,17 +1537,17 @@ extension _CliActions on FlutterScoutCli {
 
   Future<int> _vmLogListener(List<String> args) async {
     final parser = ArgParser()
-      ..addOption('vm-uri')
+      ..addOption('vm-uri-file')
       ..addOption('log-file')
       ..addOption('session-dir')
       ..addOption('owner-pid');
     final parsed = parser.parse(args);
-    final vmUri = parsed.option('vm-uri');
+    final vmUriFile = parsed.option('vm-uri-file');
     final logFile = parsed.option('log-file');
     final sessionDir = parsed.option('session-dir');
     final ownerPid = int.tryParse(parsed.option('owner-pid') ?? '');
-    if (vmUri == null ||
-        vmUri.isEmpty ||
+    if (vmUriFile == null ||
+        vmUriFile.isEmpty ||
         logFile == null ||
         logFile.isEmpty ||
         sessionDir == null ||
@@ -1092,12 +1555,46 @@ extension _CliActions on FlutterScoutCli {
         ownerPid == null) {
       throw const ScoutCliException(
         'usage',
-        'Usage: flutter-scout vm-log-listener --vm-uri <uri> '
+        'Usage: flutter-scout vm-log-listener --vm-uri-file <private-file> '
             '--log-file <path> --session-dir <path> --owner-pid <pid>',
       );
     }
+    final sessionRoot = p.normalize(p.absolute(sessionDir));
+    final credentialPath = p.normalize(p.absolute(vmUriFile));
+    if (!p.isWithin(sessionRoot, credentialPath)) {
+      throw const ScoutCliException(
+        'invalid_vm_uri_file',
+        'The VM credential handoff must be inside the selected session directory.',
+      );
+    }
+    final credential = File(credentialPath);
+    if (FileSystemEntity.typeSync(credential.path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      throw const ScoutCliException(
+        'invalid_vm_uri_file',
+        'The VM credential handoff is missing or is not a regular file.',
+      );
+    }
+    late final String vmUri;
+    try {
+      vmUri = _readOwnerOnlySecretFile(credential.path).trim();
+    } finally {
+      _deleteFileIfExists(credential.path);
+    }
+    if (vmUri.isEmpty) {
+      throw const ScoutCliException(
+        'invalid_vm_uri_file',
+        'The VM credential handoff was empty.',
+      );
+    }
+    _registerVmUriCredentials(vmUri);
+    final validatedVmUri = _normalizeVmUri(vmUri);
     FlutterScoutCli._sessionDirectoryOverride = sessionDir;
-    return _listenToVmLogs(vmUri: vmUri, logFile: logFile, ownerPid: ownerPid);
+    return _listenToVmLogs(
+      vmUri: validatedVmUri,
+      logFile: logFile,
+      ownerPid: ownerPid,
+    );
   }
 
   Future<int> _listenToVmLogs({
@@ -1108,21 +1605,42 @@ extension _CliActions on FlutterScoutCli {
     _LockedLogWriter? writer;
     var consecutiveFailures = 0;
     try {
-      Directory(p.dirname(logFile)).createSync(recursive: true);
       writer = _LockedLogWriter(logFile);
 
       Future<void> writeLine(String line) {
-        final sanitized = _redactSensitiveLogText(line);
+        final sanitized = _redactActiveSensitiveText(line);
         final timestamped = _extractLogTimestamp(sanitized) == null
             ? '[${DateTime.now().toUtc().toIso8601String()}] $sanitized'
             : sanitized;
         return writer!.write(timestamped);
       }
 
+      Future<bool> exactlyOwnsRunner() async {
+        final meta = _readSessionMeta();
+        return _readPid() == ownerPid &&
+            await _matchesOwnedFlutterRun(ownerPid, meta);
+      }
+
+      // The listener is spawned just before the final ready metadata write.
+      // Wait briefly for that exact owner tuple instead of accepting mere PID
+      // existence during the handoff.
+      final ownershipDeadline = DateTime.now().add(const Duration(seconds: 5));
+      while (!await exactlyOwnsRunner() &&
+          DateTime.now().isBefore(ownershipDeadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      if (!await exactlyOwnsRunner()) {
+        await writeLine(
+          '[flutter_scout] VM logging listener stopped: owner identity was not established',
+        );
+        _deleteFileIfExists(_vmLogListenerPidFile);
+        return 0;
+      }
+
       while (true) {
-        if (!await _processExists(ownerPid)) {
+        if (!await exactlyOwnsRunner()) {
           await writeLine(
-            '[flutter_scout] VM logging listener stopped: Flutter run process exited ${DateTime.now().toIso8601String()}',
+            '[flutter_scout] VM logging listener stopped: Flutter run ownership ended ${DateTime.now().toIso8601String()}',
           );
           _deleteFileIfExists(_vmLogListenerPidFile);
           return 0;
@@ -1131,7 +1649,7 @@ extension _CliActions on FlutterScoutCli {
         VmService? service;
         final subscriptions = <StreamSubscription<Event>>[];
         try {
-          service = await vmServiceConnectUri(_normalizeVmUri(vmUri));
+          service = await _connect(vmUri);
           final connected = service;
           // developer.log / dart:developer records arrive on the Logging stream.
           subscriptions.add(
@@ -1203,7 +1721,7 @@ extension _CliActions on FlutterScoutCli {
       writer ??= _LockedLogWriter(logFile);
       await writer.write(
         '[flutter_scout] VM logging listener failed: '
-        '${_redactSensitiveLogText(error.toString())}',
+        '${_redactActiveSensitiveText(error.toString())}',
       );
       return 1;
     } finally {

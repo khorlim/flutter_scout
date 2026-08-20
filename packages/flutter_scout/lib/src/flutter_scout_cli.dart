@@ -5,40 +5,87 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:args/args.dart';
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:vm_service/vm_service.dart';
 import 'package:vm_service/vm_service_io.dart';
 
 part 'cli_batch.dart';
+part 'cli_typed_methods.dart';
 part 'cli_serve.dart';
 part 'cli_models.dart';
 part 'cli_session.dart';
+part 'cli_temporary_helper.dart';
+part 'cli_temporary_helper_storage.dart';
 part 'cli_session_recovery.dart';
 part 'cli_supervisor.dart';
 part 'cli_annotations.dart';
 part 'cli_actions.dart';
+part 'cli_navigation.dart';
 part 'cli_capture.dart';
+part 'cli_native_platform.dart';
+part 'cli_vm_transport.dart';
 part 'cli_evidence.dart';
+part 'cli_privacy.dart';
+part 'cli_idempotency.dart';
+part 'cli_protocol.dart';
+part 'cli_response.dart';
+part 'cli_operability.dart';
 part 'cli_results.dart';
+part 'cli_timings.dart';
 part 'cli_record.dart';
+part 'cli_secret_ingress.dart';
+part 'cli_storage.dart';
+part 'cli_event_journal.dart';
+part 'cli_log_storage.dart';
+
+Map<String, String> _flutterToolEnvironment([
+  Map<String, String>? inherited,
+]) => <String, String>{
+  ...(inherited ?? Platform.environment),
+  // Flutter documents this environment variable for non-interactive tooling.
+  // Scout never opts the application or its developer into Flutter analytics.
+  'FLUTTER_SUPPRESS_ANALYTICS': 'true',
+};
 
 class FlutterScoutCli {
-  static const String packageVersion = '1.2.0';
+  static const String packageVersion = '2.0.0-dev.1';
   static String? _sessionDirectoryOverride;
+  static void Function()? debugEventJournalAfterHeadCommitHook;
+  static void Function(String path)? debugLogReadValidationHook;
   String? _activeCommandId;
+  String? _activeCommandName;
+  Stopwatch? _activeCommandStopwatch;
+  int _heartbeatCursor = 0;
   String? _implicitlySelectedSessionName;
+  final Set<String> _activeSensitiveValues = <String>{};
+  final Map<String, String> _protectedSecretIngress = <String, String>{};
 
   /// Test-only override for the session registry path, so tests never touch
   /// the real `~/.flutter_scout/registry.json`.
   static String? debugRegistryPathOverride;
+
+  /// Test-only deterministic substitute for `flutter pub get` in temporary
+  /// helper transaction tests. Production always leaves this null.
+  static Future<ProcessResult> Function(String project)?
+  debugTemporaryHelperPubGetOverride;
+
+  /// Test-only crash checkpoint. When set, the temporary-helper transaction
+  /// deliberately stops immediately after durably recording this phase.
+  static String? debugTemporaryHelperInterruptAfterPhase;
 
   /// Helper protocol version this CLI is built against. Keep in sync with
   /// `scoutHelperProtocolVersion` in flutter_scout_helper — the helper echoes
   /// its version in every response, and a lower value means the running app
   /// compiled an older helper (typically the git/pub-cache dependency trap
   /// where hot reload silently keeps old code).
-  static const int expectedHelperProtocolVersion = 14;
+  static const int expectedHelperProtocolVersion = 15;
+
+  /// Test-only view of the environment applied to every Flutter tool process.
+  Map<String, String> debugFlutterToolEnvironment(
+    Map<String, String> inherited,
+  ) => _flutterToolEnvironment(inherited);
 
   /// Test-only view of response protocol diagnostics.
   Map<String, dynamic> debugProtocolDiagnostics(
@@ -46,12 +93,62 @@ class FlutterScoutCli {
     Map<String, dynamic> result,
   ) => _withProtocolDiagnostics(method, result);
 
+  /// Test-only view of the source compatibility contract used by mutation
+  /// preflight. This deliberately describes this checkout, not any published
+  /// binary or retained simulator evidence.
+  Map<String, Object?> debugProtocolCompatibilityContract() =>
+      <String, Object?>{
+        'schemaVersion': _scoutCliSchemaVersion,
+        'minSupportedProtocolVersion': _scoutCliProtocolMin,
+        'maxSupportedProtocolVersion': _scoutCliProtocolMax,
+        'requiredHelperMutationCapabilities':
+            _requiredMutationCapabilities.toList()..sort(),
+      };
+
+  /// Test-only access to the production helper-envelope compatibility gate.
+  Map<String, Object?> debugValidateHelperProtocolEnvelope(
+    Map<String, dynamic> response, {
+    bool requireMutationCapabilities = true,
+  }) {
+    final issue = _protocolEnvelopeIssue(
+      response,
+      requireMutationCapabilities: requireMutationCapabilities,
+    );
+    return <String, Object?>{
+      'compatible': issue == null,
+      if (issue != null) 'errorCode': issue.$1,
+      if (issue != null) 'message': issue.$2,
+    };
+  }
+
   /// Test-only view of default compact action output.
   Map<String, dynamic> debugCompactActionResult(Map<String, dynamic> result) =>
       _compactActionResult(result);
 
   Map<String, dynamic> debugCompactBriefInspect(Map<String, dynamic> result) =>
       _compactBriefInspect(result);
+
+  /// Test-only deterministic access to the canonical phase closure used by
+  /// responses, compact output, evidence, and durable mutation outcomes.
+  Map<String, dynamic> debugCanonicalPhaseTimings(
+    Map<String, dynamic> result,
+  ) => _withCanonicalPhaseTimings(result);
+
+  Map<String, dynamic> debugMergePreflightPhaseTimings(
+    Map<String, dynamic> result,
+    Object? preflightTimings,
+  ) => _withPreflightPhaseTimings(result, preflightTimings);
+
+  Map<String, dynamic> debugMeasureCliPhase(
+    Map<String, dynamic> result, {
+    required String phase,
+    required int elapsedMs,
+  }) => _withMeasuredCliPhase(
+    result,
+    phase: phase,
+    elapsedMs: elapsedMs,
+    scope: 'deterministic_test_scope',
+  );
 
   Map<String, dynamic> debugMaterializeActionCapture(
     Map<String, dynamic> result,
@@ -61,6 +158,22 @@ class FlutterScoutCli {
   Map<String, dynamic> debugAssertActionHasNoErrors(
     Map<String, dynamic> result,
   ) => _assertActionHasNoErrors(result, enabled: true);
+
+  Future<Map<String, dynamic>> debugDurableLocalMutation({
+    required String idempotencyKey,
+    required String method,
+    required Map<String, String> businessParams,
+    required Future<Map<String, dynamic>> Function() dispatch,
+  }) => _withCallerIdempotencyKey<Map<String, dynamic>>(
+    idempotencyKey,
+    () => _runDurableLocalMutation(
+      method: method,
+      businessParams: businessParams,
+      dispatch: dispatch,
+      classifyDispatch: (result) =>
+          result['dispatch']?.toString() ?? 'dispatch_outcome_unknown',
+    ),
+  );
 
   Map<String, Object?> debugLaunchTimingFromLines(List<String> lines) {
     final timing = _LaunchTiming(startedAt: DateTime.now());
@@ -94,8 +207,16 @@ class FlutterScoutCli {
       targetPath: setup['targetPath']!.toString(),
       lockExisted: setup['lockExisted'] == true,
       lockBackupPath: setup['lockBackupPath']?.toString(),
+      transactionRecordPath: setup['transactionRecordPath']?.toString(),
+      transactionId: setup['transactionId']?.toString(),
     ),
   );
+
+  /// Test-only entry point for the same project-local startup repair scanner
+  /// used by real commands.
+  Future<Map<String, Object?>> debugRecoverTemporaryHelperProject(
+    String project,
+  ) => _recoverTemporaryHelperProject(project, preserveLive: false);
 
   /// Test-only ownership reconciliation for a reachable VM service.
   Future<bool> debugReconcileReachableSessionOwnership(String vmUri) =>
@@ -127,6 +248,7 @@ class FlutterScoutCli {
     int max = 8,
   }) => _logSignalMaps(
     _logSignalsFromLines(lines, scanLines: scanLines, max: max),
+    phase: 'debug_classification',
   );
 
   /// Test-only view of `logs --summary` classification.
@@ -135,8 +257,175 @@ class FlutterScoutCli {
 
   String debugRedactLogText(String value) => _redactSensitiveLogText(value);
 
+  /// Test-only source-redaction surface. Production writes go through the
+  /// same [_recordAction] sink.
+  void debugRecordAction(Map<String, Object?> action) => _recordAction(action);
+
+  /// Test-only view of the exact serialization guard used for command output,
+  /// diagnostics, and events.
+  Object? debugSanitizeSerialization(
+    Object? value, {
+    Iterable<String> sensitiveValues = const <String>[],
+  }) {
+    final previous = Set<String>.of(_activeSensitiveValues);
+    _activeSensitiveValues
+      ..clear()
+      ..addAll(sensitiveValues.where((value) => value.isNotEmpty));
+    try {
+      return _sanitizeForSerialization(value);
+    } finally {
+      _activeSensitiveValues
+        ..clear()
+        ..addAll(previous);
+    }
+  }
+
+  /// Test-only view of the additive machine-readable CLI response envelope.
+  Map<String, Object?> debugCliResponseEnvelope(
+    Object? value, {
+    bool? success,
+  }) => _cliResponseEnvelope(value, success: success);
+
+  /// Test-only view of the exact persistent `/health` response without
+  /// opening a socket. Production uses the same bounded payload builder.
+  Future<Map<String, Object?>> debugPersistentHealthResponse({
+    int port = 17341,
+  }) async => _cliResponseEnvelope(
+    await _persistentHealthPayload(port),
+    commandName: 'health',
+  );
+
+  /// Test-only deterministic heartbeat shape. Production progress uses the
+  /// same builder, with a process-local monotonic heartbeat cursor.
+  Map<String, Object?> debugCliHeartbeatEnvelope({
+    required String stage,
+    required int elapsedMs,
+    String? commandId,
+    String? runId,
+    String? runtimeInstanceId,
+    int? stateGeneration,
+    Map<String, Object?> progress = const <String, Object?>{},
+  }) => _cliHeartbeatEnvelope(
+    stage,
+    elapsedMs: elapsedMs,
+    heartbeatCursor: 1,
+    commandId: commandId,
+    runId: runId,
+    runtimeInstanceId: runtimeInstanceId,
+    stateGeneration: stateGeneration,
+    progress: progress,
+  );
+
+  /// Test-only proof that stored placeholders become VM parameters only when
+  /// the caller explicitly supplies their runtime variables.
+  Map<String, String> debugResolveRecordedAction(
+    Map<String, Object?> action,
+    Map<String, String> variables,
+  ) => _recordCallParams(_redactRecordedAction(action), variables);
+
+  /// Test-only launch spec. It deliberately returns the URI-file path and
+  /// child argv separately so a regression can inspect the process surface.
+  Map<String, Object?> debugVmLogListenerLaunchSpec({
+    required String vmUri,
+    required String logFile,
+    required int ownerPid,
+  }) => _prepareVmLogListenerLaunchSpec(
+    vmUri: vmUri,
+    logFile: logFile,
+    ownerPid: ownerPid,
+  ).toJson();
+
+  /// Test-only view of the exact user define arguments persisted for the
+  /// detached worker and forwarded to Flutter. Protected file contents must
+  /// never be present in this surface.
+  List<String> debugDartDefineFlutterArgs({
+    Iterable<String> inline = const <String>[],
+    Iterable<String> files = const <String>[],
+  }) => _prepareDartDefineFlutterArgs(inline: inline, files: files);
+
+  /// Test-only storage boundary probes used by adversarial filesystem tests.
+  void debugEnsurePrivateStorage() => _ensureSessionDir();
+
+  void debugAtomicSessionWrite(String relativePath, String value) {
+    final target = p.join(_sessionDir.path, relativePath);
+    _writePrivateSessionString(target, value);
+  }
+
+  void debugWriteAnnotationManifest(List<Map<String, Object?>> annotations) =>
+      _writeAnnotationManifest(annotations);
+
+  void debugWriteAnnotationCrop(String path, List<int> bytes) =>
+      _writePrivateArtifactBytes(path, bytes);
+
+  void debugWriteServePortFile(String path, int port) =>
+      _writeServePortFile(path, port);
+
+  void debugWriteServeCredentialFile(String path, String credential) =>
+      _writeServeCredentialFile(path, credential);
+
+  int debugAppendEventStrict(Map<String, Object?> event) =>
+      _appendEventStrict(event);
+
+  void debugUpdateEventStrict({
+    required int cursor,
+    required String commandId,
+    required Map<String, Object?> updates,
+  }) => _updateEventStrict(
+    cursor: cursor,
+    commandId: commandId,
+    updates: updates,
+  );
+
+  List<Map<String, Object?>> debugReadEventJournal() =>
+      _readEventRows(File(_eventsFile));
+
+  Map<String, Object?> debugReadScoutLog({
+    int? sinceCursor,
+    int maxBytes = _maxScoutLogTailBytes,
+  }) {
+    final chunk = _readLogChunk(
+      File(_logFile),
+      sinceCursor: sinceCursor,
+      maxBytes: maxBytes,
+    );
+    return <String, Object?>{
+      'path': _logFile,
+      'lines': chunk.lines,
+      'startCursor': chunk.startCursor,
+      'endCursor': chunk.endCursor,
+      'observedFileLength': chunk.observedFileLength,
+      'bytesRead': chunk.bytesRead,
+      'pendingBytes': chunk.pendingBytes,
+      'truncated': chunk.truncated,
+    };
+  }
+
+  String get debugResolvedScoutLogFile => _logFile;
+
+  Map<String, dynamic> debugCommitActionEvidence({
+    required String method,
+    required Map<String, dynamic> result,
+    Map<String, Object?>? record,
+  }) => _commitActionEvidence(method: method, result: result, record: record);
+
+  void debugWritePrivateArtifact(
+    String path,
+    List<int> bytes, {
+    String retention = 'session',
+  }) {
+    _writePrivateArtifactBytes(path, bytes);
+    _writePrivateArtifactMetadata(path, retention);
+  }
+
   // Batch-mode connection cache: one WebSocket serves every step of a batch
   // instead of connect/dispose per command. See cli_batch.dart.
+  /// Test-only native-process seam. Production always leaves this null.
+  static NativeProcessDebugRunner? debugNativeProcessRunner;
+
+  /// Test-only notification immediately before an approved VM-service
+  /// connection. Rejected URI candidates must never reach this observer.
+  static void Function(String normalizedUri)? debugVmServiceConnectObserver;
+
   bool _reuseVmConnection = false;
   VmService? _cachedVmService;
   String? _cachedVmUri;
@@ -276,11 +565,14 @@ class FlutterScoutCli {
       String? command;
       for (var i = 0; i < args.length; i++) {
         final arg = args[i];
-        if (arg == '--app') {
+        if (arg == '--app' || arg == '--idempotency-key') {
           i++;
           continue;
         }
-        if (arg.startsWith('--app=') || arg == '--help' || arg == '-h') {
+        if (arg.startsWith('--app=') ||
+            arg.startsWith('--idempotency-key=') ||
+            arg == '--help' ||
+            arg == '-h') {
           continue;
         }
         if (!arg.startsWith('-')) {
@@ -294,14 +586,28 @@ class FlutterScoutCli {
 
     final previousSessionDirectory = _sessionDirectoryOverride;
     final previousCommandId = _activeCommandId;
+    final previousCommandName = _activeCommandName;
+    final previousCommandStopwatch = _activeCommandStopwatch;
+    final previousHeartbeatCursor = _heartbeatCursor;
     final previousImplicitSessionName = _implicitlySelectedSessionName;
+    final previousCallerIdempotencyKey = _activeCallerIdempotencyKey;
+    final previousIdempotencyKeyWasGenerated =
+        _activeIdempotencyKeyWasGenerated;
+    final previousSensitiveValues = Set<String>.of(_activeSensitiveValues);
+    final previousProtectedSecretIngress = Map<String, String>.of(
+      _protectedSecretIngress,
+    );
     final commandStartedAt = DateTime.now().toUtc();
     final commandStopwatch = Stopwatch()..start();
     final commandId =
         '${commandStartedAt.microsecondsSinceEpoch.toRadixString(36)}-$pid';
     _activeCommandId = commandId;
+    _activeCommandStopwatch = commandStopwatch;
+    _heartbeatCursor = 0;
     int? exitCode;
+    int? commandEventCursor;
     var handledByProxy = false;
+    Timer? longOperationHeartbeat;
 
     // Global `--app <name>`: run this command against the named session
     // (registered by launch/ensure --name) from anywhere — no cd dance.
@@ -326,23 +632,82 @@ class FlutterScoutCli {
         break;
       }
     }
+    try {
+      final idempotency = _extractIdempotencyKey(effectiveArgs);
+      effectiveArgs = idempotency.args;
+      _activeCallerIdempotencyKey = idempotency.key;
+    } on ScoutCliException catch (error) {
+      _writeStructuredError(error.code, error.message);
+      _activeCommandId = previousCommandId;
+      _activeCommandName = previousCommandName;
+      _activeCommandStopwatch = previousCommandStopwatch;
+      _heartbeatCursor = previousHeartbeatCursor;
+      _activeCallerIdempotencyKey = previousCallerIdempotencyKey;
+      if (previousCallerIdempotencyKey != null &&
+          previousIdempotencyKeyWasGenerated) {
+        _adoptGeneratedIdempotencyKey(previousCallerIdempotencyKey);
+      }
+      return 1;
+    }
+    if (effectiveArgs.isEmpty) {
+      _writeStructuredError(
+        'missing_command',
+        'A command is required after global options.',
+      );
+      _activeCommandId = previousCommandId;
+      _activeCommandName = previousCommandName;
+      _activeCommandStopwatch = previousCommandStopwatch;
+      _heartbeatCursor = previousHeartbeatCursor;
+      _activeCallerIdempotencyKey = previousCallerIdempotencyKey;
+      if (previousCallerIdempotencyKey != null &&
+          previousIdempotencyKeyWasGenerated) {
+        _adoptGeneratedIdempotencyKey(previousCallerIdempotencyKey);
+      }
+      return 1;
+    }
+    _activeCommandName = effectiveArgs.isEmpty ? null : effectiveArgs.first;
     if (appName != null && appName.isNotEmpty) {
-      final registry = _readScoutRegistry();
+      late final Map<String, String> registry;
+      try {
+        registry = _readScoutRegistry();
+      } on ScoutCliException catch (error) {
+        _writeStructuredError(
+          error.code,
+          error.message,
+          details: error.details,
+          additional: error.additional,
+        );
+        _activeCommandId = previousCommandId;
+        _activeCommandName = previousCommandName;
+        _activeCommandStopwatch = previousCommandStopwatch;
+        _heartbeatCursor = previousHeartbeatCursor;
+        _activeCallerIdempotencyKey = previousCallerIdempotencyKey;
+        if (previousCallerIdempotencyKey != null &&
+            previousIdempotencyKeyWasGenerated) {
+          _adoptGeneratedIdempotencyKey(previousCallerIdempotencyKey);
+        }
+        return 1;
+      }
       final directory = registry[appName];
       if (directory == null || !Directory(directory).existsSync()) {
-        stderr.writeln(
-          jsonEncode({
-            'ok': false,
-            'error': {
-              'code': 'session_not_registered',
-              'message':
-                  'No registered session named `$appName`'
-                  '${directory != null ? ' (directory `$directory` is gone)' : ''}. '
-                  'Sessions register on launch/ensure --name.',
-            },
+        _writeStructuredError(
+          'session_not_registered',
+          'No registered session named `$appName`'
+              '${directory != null ? ' (directory `$directory` is gone)' : ''}. '
+              'Sessions register on launch/ensure --name.',
+          additional: <String, Object?>{
             'knownSessions': registry.keys.toList(growable: false),
-          }),
+          },
         );
+        _activeCommandId = previousCommandId;
+        _activeCommandName = previousCommandName;
+        _activeCommandStopwatch = previousCommandStopwatch;
+        _heartbeatCursor = previousHeartbeatCursor;
+        _activeCallerIdempotencyKey = previousCallerIdempotencyKey;
+        if (previousCallerIdempotencyKey != null &&
+            previousIdempotencyKeyWasGenerated) {
+          _adoptGeneratedIdempotencyKey(previousCallerIdempotencyKey);
+        }
         return 1;
       }
       final registered = p.normalize(p.absolute(directory));
@@ -356,6 +721,7 @@ class FlutterScoutCli {
     final command = effectiveArgs.first;
     final rest = effectiveArgs.skip(1).toList(growable: false);
     final requestedName = _optionValue(rest, 'name');
+    String? pendingSessionRegistration;
     if (appName == null &&
         (command == 'launch' || command == 'ensure') &&
         requestedName != null &&
@@ -366,18 +732,75 @@ class FlutterScoutCli {
         'sessions',
         _safeSessionName(requestedName),
       );
-      _registerScoutSession(requestedName, _sessionDirectoryOverride!);
+      pendingSessionRegistration = requestedName;
     }
+    _activeSensitiveValues.clear();
+    _protectedSecretIngress.clear();
     try {
+      _preloadProtectedSecretIngress(command, rest);
+      _registerSensitiveCommandArgs(command, rest);
+      _warnAboutLegacySecretIngress(command, rest);
+      if (!_infrastructureCommands.contains(command)) {
+        longOperationHeartbeat = Timer.periodic(const Duration(seconds: 5), (
+          _,
+        ) {
+          try {
+            _writeHeartbeat('command_running', <String, Object?>{
+              'command': command,
+            });
+          } catch (_) {
+            // A diagnostic heartbeat must never change command behavior.
+          }
+        });
+      }
       _selectImplicitNamedSession(command);
+      await _recoverPendingTemporaryHelpersAtCommandStart(command, rest);
+      _runRetentionCleanupAtCommandStart(command, rest);
+      if (command == 'stop' && rest.contains('--clear-session')) {
+        _ensurePrivateDirectory(
+          _sessionDir.path,
+          boundary: _sessionManagedBoundary(),
+        );
+      } else {
+        _ensureSessionDir();
+      }
+      if (pendingSessionRegistration != null) {
+        _registerScoutSession(
+          pendingSessionRegistration,
+          _sessionDirectoryOverride!,
+        );
+      }
       if (!_reuseVmConnection &&
-          _commandsEligibleForServeProxy.contains(command)) {
+          _commandsEligibleForServeProxy.contains(command) &&
+          !_usesProtectedStdin(command, rest)) {
         final proxied = await _tryProxyToActiveServe(effectiveArgs);
         if (proxied != null) {
           handledByProxy = true;
           exitCode = proxied;
           return proxied;
         }
+      }
+      final clearsSession =
+          command == 'stop' && rest.contains('--clear-session');
+      if (!_infrastructureCommands.contains(command) && !clearsSession) {
+        // Reserve one durable event before dispatch. A crash or full-disk
+        // failure can then leave an explicit `started` row, never erase the
+        // fact that a command may have reached the app. Completion updates
+        // this exact cursor rather than appending a second command record.
+        commandEventCursor = _appendEventStrict({
+          'schemaVersion': 1,
+          'type': 'command',
+          'status': 'started',
+          'evidenceStatus': 'reserved_before_dispatch',
+          'commandId': commandId,
+          'startedAt': commandStartedAt.toIso8601String(),
+          'command': command,
+          'args': _redactedCommandArgs(command, rest),
+          'runId': ?_currentRunIdFromSession(),
+          'session': ?_readSessionMeta()?['name'],
+          'transport': _reuseVmConnection ? 'persistent' : 'process',
+          'timings': _lifecycleReservationTimings(),
+        });
       }
       exitCode = await switch (command) {
         'launch' => _launch(rest),
@@ -388,6 +811,9 @@ class FlutterScoutCli {
         'stop' => _stop(rest),
         'cleanup' => _stop(rest),
         'inspect' => _inspect(rest),
+        'where' => _where(rest),
+        'locate' => _locate(rest),
+        'reveal' => _reveal(rest),
         'annotations' => _annotations(rest),
         'bounds' => _bounds(rest),
         'tap' => _tap(rest),
@@ -429,51 +855,68 @@ class FlutterScoutCli {
         'help' => _help(rest),
         _ => _unknown(command),
       };
-      return exitCode!;
     } on ScoutCliException catch (error) {
       exitCode = 1;
-      stderr.writeln(
-        jsonEncode({
-          'ok': false,
-          'error': {'code': error.code, 'message': error.message},
-        }),
+      _writeStructuredError(
+        error.code,
+        error.message,
+        details: error.details,
+        additional: error.additional,
       );
-      return 1;
     } catch (error) {
       exitCode = 1;
-      stderr.writeln(
-        jsonEncode({
-          'ok': false,
-          'error': {'code': 'unexpected_error', 'message': error.toString()},
-        }),
-      );
-      return 1;
+      _writeStructuredError('unexpected_error', error.toString());
     } finally {
+      longOperationHeartbeat?.cancel();
       commandStopwatch.stop();
-      final clearsSession =
-          command == 'stop' && rest.contains('--clear-session');
-      if (!_infrastructureCommands.contains(command) &&
-          !handledByProxy &&
-          !clearsSession) {
-        _appendEvent({
-          'schemaVersion': 1,
-          'type': 'command',
-          'commandId': commandId,
-          'startedAt': commandStartedAt.toIso8601String(),
-          'finishedAt': DateTime.now().toUtc().toIso8601String(),
-          'durationMs': commandStopwatch.elapsedMilliseconds,
-          'command': command,
-          'args': _redactedCommandArgs(command, rest),
-          'exitCode': exitCode ?? 1,
-          'runId': ?_currentRunIdFromSession(),
-          'session': ?_readSessionMeta()?['name'],
-          'transport': _reuseVmConnection ? 'persistent' : 'process',
-        });
+      if (!handledByProxy && commandEventCursor != null) {
+        try {
+          _updateEventStrict(
+            cursor: commandEventCursor,
+            commandId: commandId,
+            updates: {
+              'status': 'completed',
+              'evidenceStatus': 'complete',
+              'finishedAt': DateTime.now().toUtc().toIso8601String(),
+              'durationMs': commandStopwatch.elapsedMilliseconds,
+              'exitCode': exitCode ?? 1,
+              'runId': ?_currentRunIdFromSession(),
+              'session': ?_readSessionMeta()?['name'],
+            },
+          );
+        } catch (error) {
+          exitCode = 1;
+          _writeStructuredError(
+            'command_evidence_completion_failed',
+            'The command may have completed, but Scout could not '
+                'commit its reserved evidence row: ${error.toString()}',
+            additional: <String, Object?>{
+              'commandId': commandId,
+              'eventCursor': commandEventCursor,
+              'evidenceStatus': 'reserved_row_incomplete',
+            },
+          );
+        }
       }
       _activeCommandId = previousCommandId;
+      _activeCommandName = previousCommandName;
+      _activeCommandStopwatch = previousCommandStopwatch;
+      _heartbeatCursor = previousHeartbeatCursor;
       _implicitlySelectedSessionName = previousImplicitSessionName;
       _sessionDirectoryOverride = previousSessionDirectory;
+      _activeCallerIdempotencyKey = previousCallerIdempotencyKey;
+      if (previousCallerIdempotencyKey != null &&
+          previousIdempotencyKeyWasGenerated) {
+        _adoptGeneratedIdempotencyKey(previousCallerIdempotencyKey);
+      }
+      _activeSensitiveValues
+        ..clear()
+        ..addAll(previousSensitiveValues);
+      _protectedSecretIngress
+        ..clear()
+        ..addAll(previousProtectedSecretIngress);
     }
+    return exitCode ?? 1;
   }
 
   static const Set<String> _infrastructureCommands = {
@@ -482,6 +925,12 @@ class FlutterScoutCli {
   };
 
   List<String> _redactedCommandArgs(String command, List<String> args) {
+    if (command == 'batch') {
+      return <String>[
+        for (final arg in args)
+          arg.startsWith('--') && !arg.contains('=') ? arg : '[REDACTED]',
+      ];
+    }
     final redacted = <String>[];
     var redactNext = false;
     for (final arg in args) {
@@ -494,6 +943,10 @@ class FlutterScoutCli {
       if (lower == '--json' ||
           lower == '--file' ||
           lower == '--var' ||
+          lower == '--var-file' ||
+          lower == '--debug-url' ||
+          lower == '--debug-url-file' ||
+          lower == '--url-file' ||
           lower == '--dart-define' ||
           lower == '--dart-define-from-file') {
         redacted.add(arg);
@@ -501,8 +954,14 @@ class FlutterScoutCli {
         continue;
       }
       if (lower.startsWith('--json=') ||
+          lower.startsWith('--file=') ||
           lower.startsWith('--var=') ||
-          lower.startsWith('--dart-define=')) {
+          lower.startsWith('--var-file=') ||
+          lower.startsWith('--debug-url=') ||
+          lower.startsWith('--debug-url-file=') ||
+          lower.startsWith('--url-file=') ||
+          lower.startsWith('--dart-define=') ||
+          lower.startsWith('--dart-define-from-file=')) {
         redacted.add('${arg.split('=').first}=[REDACTED]');
         continue;
       }
@@ -532,24 +991,36 @@ class FlutterScoutCli {
         }
       }
     }
+    if (command == 'deeplink') {
+      const optionValues = <String>{'--url-file'};
+      for (var index = 0; index < redacted.length; index++) {
+        final isOptionValue =
+            index > 0 && optionValues.contains(args[index - 1].toLowerCase());
+        if (!redacted[index].startsWith('-') && !isOptionValue) {
+          redacted[index] = '[REDACTED]';
+        }
+      }
+    }
     return redacted;
   }
 
-  void _appendEvent(Map<String, Object?> event) {
-    try {
-      _ensureSessionDir();
-      final file = File(_eventsFile);
-      final handle = file.openSync(mode: FileMode.append);
-      try {
-        handle.writeStringSync('${jsonEncode(event)}\n');
-        handle.flushSync();
-      } finally {
-        handle.closeSync();
-      }
-    } catch (_) {
-      // Runtime evidence must never prevent the requested Scout command.
-    }
-  }
+  int _appendEvent(Map<String, Object?> event) => _appendEventStrict(event);
+
+  int _appendEventStrict(Map<String, Object?> event) =>
+      _appendSegmentedEventStrict(event);
+
+  void _updateEventStrict({
+    required int cursor,
+    required String commandId,
+    required Map<String, Object?> updates,
+  }) => _updateSegmentedEventStrict(
+    cursor: cursor,
+    commandId: commandId,
+    updates: updates,
+  );
+
+  List<Map<String, Object?>> _readEventRows(File file) =>
+      _readSegmentedEventRows(legacyProjection: file);
 
   String? _optionValue(List<String> args, String name) {
     for (var index = 0; index < args.length; index++) {
@@ -614,8 +1085,10 @@ class FlutterScoutCli {
   }
 
   Future<VmService> _connect(String uri) {
+    final validated = _validatedVmServiceUri(uri);
+    FlutterScoutCli.debugVmServiceConnectObserver?.call(validated.normalized);
     return vmServiceConnectUri(
-      _normalizeVmUri(uri),
+      validated.normalized,
     ).timeout(const Duration(seconds: 5));
   }
 
@@ -737,88 +1210,6 @@ class FlutterScoutCli {
         );
   }
 
-  Future<Map<String, Object?>> _captureScreenshot(String output) async {
-    Directory(p.dirname(output)).createSync(recursive: true);
-    final macos = await _macosWindowTarget();
-    if (macos != null) {
-      return _captureMacosWindowScreenshot(output, macos);
-    }
-    final simTarget = _requireSimulatorScreenshotTarget();
-    final result = await Process.run('xcrun', [
-      'simctl',
-      'io',
-      simTarget,
-      'screenshot',
-      output,
-    ]);
-    if (result.exitCode != 0) {
-      throw ScoutCliException(
-        'screenshot_failed',
-        (result.stderr as String).trim(),
-      );
-    }
-    return {'backend': 'ios_simulator', 'device': simTarget};
-  }
-
-  String _requireSimulatorScreenshotTarget() {
-    final device = _readDevice();
-    final deviceInfo = _readDeviceInfo();
-    final platform = deviceInfo?['platform']?.toString().toLowerCase();
-    final category = deviceInfo?['category']?.toString().toLowerCase();
-    final emulator = deviceInfo?['emulator'] == true;
-    if (device == null || device.isEmpty) {
-      throw const ScoutCliException(
-        'screenshot_unsupported_target',
-        'No screenshot-capable target is recorded for this session. Attach with --device <ios-simulator-id> for iOS Simulator screenshots, or attach to a reachable macOS Flutter VM service so Scout can find that app window.',
-      );
-    }
-    if (device == 'macos' ||
-        platform == 'macos' ||
-        category == 'desktop' ||
-        emulator == false) {
-      throw ScoutCliException(
-        'screenshot_unsupported_target',
-        'No capturable macOS app window was found for `${deviceInfo?['name'] ?? device}`. Make sure the app window is open and not minimized.',
-      );
-    }
-    if (platform != null && !platform.contains('ios')) {
-      throw ScoutCliException(
-        'screenshot_unsupported_target',
-        'Screenshots and crops currently use xcrun simctl and are only supported for iOS Simulator sessions. The attached target platform is `$platform`.',
-      );
-    }
-    return device;
-  }
-
-  Future<Map<String, Object?>> _captureMacosWindowScreenshot(
-    String output,
-    _MacosWindowTarget target,
-  ) async {
-    final result = await Process.run('screencapture', [
-      '-x',
-      '-l',
-      target.windowId.toString(),
-      output,
-    ]);
-    if (result.exitCode != 0) {
-      throw ScoutCliException(
-        'screenshot_failed',
-        (result.stderr as String).trim().isEmpty
-            ? 'macOS screencapture failed for window ${target.windowId}.'
-            : (result.stderr as String).trim(),
-      );
-    }
-    return {
-      'backend': 'macos_window',
-      'windowId': target.windowId,
-      'pid': target.pid,
-      'ownerName': target.ownerName,
-      if (target.windowName != null && target.windowName!.isNotEmpty)
-        'windowName': target.windowName,
-      if (target.bounds != null) 'bounds': target.bounds,
-    };
-  }
-
   Future<_MacosWindowTarget?> _macosWindowTarget() async {
     if (!await _isMacosScreenshotSession()) return null;
     final vmUri = _readVmUri();
@@ -921,14 +1312,17 @@ let output: [String: Any] = [
 let data = try! JSONSerialization.data(withJSONObject: output)
 print(String(data: data, encoding: .utf8)!)
 ''';
-    final temp = await File(
-      p.join(
-        Directory.systemTemp.path,
-        'flutter_scout_window_${DateTime.now().microsecondsSinceEpoch}.swift',
-      ),
-    ).create();
+    final tempDirectory = await Directory.systemTemp.createTemp(
+      'flutter_scout_window_',
+    );
+    _ensurePrivateDirectory(tempDirectory.path, boundary: tempDirectory.path);
+    final temp = File(p.join(tempDirectory.path, 'window_probe.swift'));
     try {
-      await temp.writeAsString(script);
+      _atomicWritePrivateString(
+        temp.path,
+        script,
+        boundary: tempDirectory.path,
+      );
       final result = await Process.run('swift', [temp.path, pid.toString()])
           .timeout(
             const Duration(seconds: 10),
@@ -940,25 +1334,9 @@ print(String(data: data, encoding: .utf8)!)
       if (decoded is! Map<String, dynamic>) return null;
       return _MacosWindowTarget.fromJson(decoded);
     } finally {
-      if (await temp.exists()) {
-        await temp.delete();
-      }
-    }
-  }
-
-  Future<void> _openDeeplink(String url) async {
-    final device = _readDevice();
-    final simTarget = device == null || device.isEmpty ? 'booted' : device;
-    final result = await Process.run('xcrun', [
-      'simctl',
-      'openurl',
-      simTarget,
-      url,
-    ]);
-    if (result.exitCode != 0) {
-      throw ScoutCliException(
-        'deeplink_failed',
-        (result.stderr as String).trim(),
+      _deletePrivateDirectoryIfExists(
+        tempDirectory.path,
+        boundary: tempDirectory.path,
       );
     }
   }
@@ -967,8 +1345,14 @@ print(String(data: data, encoding: .utf8)!)
     List<String> lines, {
     required int last,
   }) {
+    // Register credential-bearing VM URLs before sanitizing any neighboring
+    // line. Otherwise an earlier summary field could serialize the raw token
+    // before the later URI-bearing line was inspected.
+    for (final line in lines) {
+      _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
+    }
     final sanitizedLines = lines
-        .map(_redactSensitiveLogText)
+        .map(_redactActiveSensitiveText)
         .toList(growable: false);
     final important = <String>[];
     final signals = _logSignalsFromLines(
@@ -978,7 +1362,7 @@ print(String(data: data, encoding: .utf8)!)
     );
     final signalLines = {for (final signal in signals) signal.line};
     var warnings = 0;
-    String? vmServiceUri;
+    Map<String, Object?>? vmServiceEndpoint;
     for (final line in sanitizedLines) {
       final lower = line.toLowerCase();
       final isSignal = signalLines.contains(line.trim());
@@ -987,7 +1371,9 @@ print(String(data: data, encoding: .utf8)!)
           !_isNegatedLogError(lower);
       final uri = _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
       if (isWarning) warnings++;
-      if (uri != null) vmServiceUri = _normalizeVmUri(uri);
+      if (uri != null) {
+        vmServiceEndpoint = _safeVmServiceEndpointIdentity(uri);
+      }
       if (isSignal || isWarning || uri != null) {
         important.add(line);
       }
@@ -999,10 +1385,11 @@ print(String(data: data, encoding: .utf8)!)
     return {
       'errors': signals.where((signal) => signal.severity != 'warning').length,
       'warnings': warnings,
-      'vmServiceUri': vmServiceUri,
-      'recentLogSignals': _logSignalMaps(recentSignals),
+      'vmServiceEndpoint': vmServiceEndpoint,
+      'recentLogSignals': _logSignalMaps(recentSignals, phase: 'logs_summary'),
       'blockingLogSignals': _logSignalMaps(
         signals.where((signal) => signal.blocking).toList(growable: false),
+        phase: 'logs_summary',
       ),
       'lastImportantLines': important.length > limit
           ? important.sublist(important.length - limit)
@@ -1058,100 +1445,6 @@ print(String(data: data, encoding: .utf8)!)
     return const <Object?>[];
   }
 
-  List<double>? _rectFromNode(Map<String, dynamic> node) {
-    final rect = node['rect'];
-    if (rect is! List || rect.length < 4) return null;
-    final left = (rect[0] as num?)?.toDouble();
-    final top = (rect[1] as num?)?.toDouble();
-    final width = (rect[2] as num?)?.toDouble();
-    final height = (rect[3] as num?)?.toDouble();
-    if (left == null || top == null || width == null || height == null) {
-      return null;
-    }
-    return [left, top, width, height];
-  }
-
-  List<double> _rectCenter(List<double> rect) => [
-    rect[0] + rect[2] / 2,
-    rect[1] + rect[3] / 2,
-  ];
-
-  bool _rectContains(List<double> rect, List<double> point) {
-    return point[0] >= rect[0] &&
-        point[0] <= rect[0] + rect[2] &&
-        point[1] >= rect[1] &&
-        point[1] <= rect[1] + rect[3];
-  }
-
-  double _rectArea(List<double> rect) => rect[2] * rect[3];
-
-  double _overlapRatio(List<double> a, List<double> b) {
-    final left = a[0] > b[0] ? a[0] : b[0];
-    final top = a[1] > b[1] ? a[1] : b[1];
-    final right = a[0] + a[2] < b[0] + b[2] ? a[0] + a[2] : b[0] + b[2];
-    final bottom = a[1] + a[3] < b[1] + b[3] ? a[1] + a[3] : b[1] + b[3];
-    final width = right - left;
-    final height = bottom - top;
-    if (width <= 0 || height <= 0) return 0;
-    final smaller = _rectArea(a) < _rectArea(b) ? _rectArea(a) : _rectArea(b);
-    if (smaller <= 0) return 0;
-    return (width * height) / smaller;
-  }
-
-  Map<String, dynamic>? _findNodeInInspect(
-    Map<String, dynamic> inspect,
-    String target,
-  ) {
-    for (final groupName in ['interactables', 'fields', 'textTargets']) {
-      final group = inspect[groupName];
-      if (group is! List) continue;
-      for (final node in group) {
-        if (node is! Map<String, dynamic>) continue;
-        if (_nodeMatches(node, target)) return node;
-      }
-    }
-    return null;
-  }
-
-  Map<String, dynamic>? _findTextNodeInInspect(
-    Map<String, dynamic> inspect,
-    String text, {
-    bool contains = false,
-  }) {
-    final wanted = text.trim();
-    if (wanted.isEmpty) return null;
-    final wantedLower = wanted.toLowerCase();
-    Map<String, dynamic>? containsMatch;
-    final group = inspect['textTargets'];
-    if (group is! List) return null;
-    for (final node in group) {
-      if (node is! Map<String, dynamic>) continue;
-      final label = node['label']?.toString();
-      if (label == null || label.trim().isEmpty) continue;
-      if (label == wanted) return node;
-      if (contains &&
-          containsMatch == null &&
-          label.toLowerCase().contains(wantedLower)) {
-        containsMatch = node;
-      }
-    }
-    return containsMatch;
-  }
-
-  bool _nodeMatches(Map<String, dynamic> node, String target) {
-    final values = [
-      node['id'],
-      node['fallbackId'],
-      node['key'],
-      node['label'],
-    ].whereType<String>();
-    final slug = _slug(target);
-    return values.any(
-      (value) =>
-          value == target || value.endsWith('.$slug') || _slug(value) == slug,
-    );
-  }
-
   double _inferDevicePixelRatio(
     Map<String, dynamic> inspect,
     img.Image source,
@@ -1164,7 +1457,7 @@ print(String(data: data, encoding: .utf8)!)
     return 1;
   }
 
-  Map<String, String> _stringMap(Map<String, dynamic> value) {
+  Map<String, String> _stringMap(Map<String, Object?> value) {
     final result = <String, String>{};
     for (final entry in value.entries) {
       if (entry.key == 'cmd' || entry.value == null) continue;
@@ -1234,7 +1527,7 @@ print(String(data: data, encoding: .utf8)!)
     if (uri == _normalizeVmUri(staleUri)) return null;
     final validation = await _validateVmUri(uri);
     if (!validation.ok) return null;
-    File(_vmUriFile).writeAsStringSync(uri);
+    _persistValidatedVmUri(uri);
     await _ensureVmLogListenerForCurrentSession(uri);
     return _DiscoveredVmUri(uri: uri, source: discovered.source);
   }
@@ -1242,7 +1535,10 @@ print(String(data: data, encoding: .utf8)!)
   String? _discoverVmUriFromScoutLog() {
     final file = File(_logFile);
     if (!file.existsSync()) return null;
-    final text = file.readAsStringSync();
+    final text = _readLogChunk(
+      file,
+      maxBytes: _maxScoutLogTailBytes,
+    ).lines.join('\n');
     // In a Scout-owned run, the Flutter tool's own service line is scoped to
     // the process this session launched. VM logging can contain app-emitted
     // Scout markers from another Flutter app on the same simulator; preferring
@@ -1440,8 +1736,11 @@ print(String(data: data, encoding: .utf8)!)
   }
 
   Future<_FlutterDevice?> _resolveDeviceViaFlutter(String requested) async {
-    final result = await Process.run('flutter', ['devices', '--machine'])
-        .timeout(
+    final result =
+        await Process.run('flutter', [
+          'devices',
+          '--machine',
+        ], environment: _flutterToolEnvironment()).timeout(
           const Duration(seconds: 20),
           onTimeout: () => ProcessResult(0, 1, '', 'flutter devices timed out'),
         );
@@ -1482,7 +1781,11 @@ print(String(data: data, encoding: .utf8)!)
     );
     for (final line in lines) {
       final match = pattern.firstMatch(line);
-      if (match != null) return match.group(1);
+      if (match != null) {
+        final value = match.group(1);
+        if (value != null) _registerVmUriCredentials(value);
+        return value;
+      }
     }
     return null;
   }
@@ -1496,7 +1799,11 @@ print(String(data: data, encoding: .utf8)!)
       if (line.contains('[FLUTTER_SCOUT_VM_URI]')) continue;
       for (final pattern in patterns) {
         final match = pattern.firstMatch(line);
-        if (match != null) return match.group(1);
+        if (match != null) {
+          final value = match.group(1);
+          if (value != null) _registerVmUriCredentials(value);
+          return value;
+        }
       }
     }
     return null;
@@ -1505,23 +1812,10 @@ print(String(data: data, encoding: .utf8)!)
   String? _preferredVmUriFromLogText(String text) =>
       _extractFlutterToolVmUri(text) ?? _extractVmUri(text);
 
-  String _normalizeVmUri(String uri) {
-    var value = uri.trim();
-    if (value.startsWith('http://')) {
-      value = 'ws://${value.substring(7)}';
-    } else if (value.startsWith('https://')) {
-      value = 'wss://${value.substring(8)}';
-    }
-    if (!value.endsWith('/ws')) {
-      value = value.endsWith('/') ? '${value}ws' : '$value/ws';
-    }
-    return value;
-  }
+  String _normalizeVmUri(String uri) => _validatedVmServiceUri(uri).normalized;
 
   String _safeFileName(String value) =>
       _slug(value).isEmpty ? 'target' : _slug(value);
-
-  String _shellQuote(String value) => "'${value.replaceAll("'", "'\\''")}'";
 
   String _slug(String value) => value
       .toLowerCase()
@@ -1531,35 +1825,86 @@ print(String(data: data, encoding: .utf8)!)
 
   void _recordAction(Map<String, Object?> action) {
     _ensureSessionDir();
-    final file = File(_sessionFile);
-    final existing = file.existsSync()
-        ? jsonDecode(file.readAsStringSync())
-        : <Object?>[];
-    final list = existing is List ? existing : <Object?>[];
-    list.add(action);
-    file.writeAsStringSync(const JsonEncoder.withIndent('  ').convert(list));
+    _withPrivateFileLock<void>(
+      '$_sessionFile.lock',
+      boundary: _sessionDir.path,
+      body: () {
+        final file = File(_sessionFile);
+        _assertPrivateFilePath(_sessionFile, boundary: _sessionDir.path);
+        final Object? existing;
+        try {
+          existing = file.existsSync()
+              ? jsonDecode(file.readAsStringSync())
+              : <Object?>[];
+        } catch (_) {
+          throw const ScoutCliException(
+            'session_journal_corrupt',
+            'The Scout session journal is not valid JSON.',
+          );
+        }
+        if (existing is! List) {
+          throw const ScoutCliException(
+            'session_journal_corrupt',
+            'The Scout session journal must contain a JSON array.',
+          );
+        }
+        final list = <Object?>[
+          for (final item in existing)
+            item is Map
+                ? _redactRecordedAction(Map<String, Object?>.from(item))
+                : _sanitizeNonActionValue(item),
+          _redactRecordedAction(action),
+        ];
+        _atomicWritePrivateJson(_sessionFile, list, boundary: _sessionDir.path);
+      },
+    );
   }
 
   List<Object?> _readSessionActions() {
-    final file = File(_sessionFile);
-    if (!file.existsSync()) return const <Object?>[];
-    try {
-      final decoded = jsonDecode(file.readAsStringSync());
-      if (decoded is List) return decoded;
-    } catch (_) {
-      return const <Object?>[];
-    }
-    return const <Object?>[];
+    _ensureSessionDir();
+    return _withPrivateFileLock<List<Object?>>(
+      '$_sessionFile.lock',
+      boundary: _sessionDir.path,
+      body: () {
+        final file = File(_sessionFile);
+        _assertPrivateFilePath(_sessionFile, boundary: _sessionDir.path);
+        if (!file.existsSync()) return const <Object?>[];
+        final Object? decoded;
+        try {
+          decoded = jsonDecode(file.readAsStringSync());
+        } catch (_) {
+          throw const ScoutCliException(
+            'session_journal_corrupt',
+            'The Scout session journal is not valid JSON.',
+          );
+        }
+        if (decoded is! List) {
+          throw const ScoutCliException(
+            'session_journal_corrupt',
+            'The Scout session journal must contain a JSON array.',
+          );
+        }
+        final safe = <Object?>[
+          for (final action in decoded)
+            action is Map
+                ? _redactRecordedAction(Map<String, Object?>.from(action))
+                : _sanitizeNonActionValue(action),
+        ];
+        final encoded = const JsonEncoder.withIndent('  ').convert(safe);
+        if (file.readAsStringSync() != encoded) {
+          _atomicWritePrivateString(
+            _sessionFile,
+            encoded,
+            boundary: _sessionDir.path,
+          );
+        }
+        return safe;
+      },
+    );
   }
 
   void _writeProgress(String phase, [Map<String, Object?> data = const {}]) {
-    stderr.writeln(
-      jsonEncode({
-        'progress': phase,
-        'timestamp': DateTime.now().toIso8601String(),
-        ...data,
-      }),
-    );
+    _writeHeartbeat(phase, data);
   }
 
   void _writeLaunchProgressFromLine(String line) {
@@ -1584,6 +1929,7 @@ print(String(data: data, encoding: .utf8)!)
     final file = File(_vmUriFile);
     if (!file.existsSync()) return null;
     final value = file.readAsStringSync().trim();
+    _registerVmUriCredentials(value);
     return value.isEmpty ? null : value;
   }
 
@@ -1598,19 +1944,23 @@ print(String(data: data, encoding: .utf8)!)
     try {
       final effectiveOwnerPid = ownerPid ?? _readPid();
       if (effectiveOwnerPid == null) return null;
-      final process = await Process.start(Platform.resolvedExecutable, [
-        Platform.script.toFilePath(),
-        'vm-log-listener',
-        '--vm-uri',
-        vmUri,
-        '--log-file',
-        logFile,
-        '--session-dir',
-        _sessionDir.path,
-        '--owner-pid',
-        '$effectiveOwnerPid',
-      ], mode: ProcessStartMode.detached);
-      File(_vmLogListenerPidFile).writeAsStringSync(process.pid.toString());
+      final spec = _prepareVmLogListenerLaunchSpec(
+        vmUri: vmUri,
+        logFile: logFile,
+        ownerPid: effectiveOwnerPid,
+      );
+      late final Process process;
+      try {
+        process = await Process.start(
+          Platform.resolvedExecutable,
+          spec.arguments,
+          mode: ProcessStartMode.detached,
+        );
+      } catch (_) {
+        _deleteFileIfExists(spec.uriFile);
+        rethrow;
+      }
+      _writePrivateSessionString(_vmLogListenerPidFile, process.pid.toString());
       return process.pid;
     } catch (error) {
       final writer = _LockedLogWriter(logFile);
@@ -1655,15 +2005,50 @@ print(String(data: data, encoding: .utf8)!)
   Future<int?> _ensureVmLogListenerForCurrentSession(String vmUri) async {
     if (await _isAttachOnlySession()) return null;
     final existing = _readVmLogListenerPid();
+    final meta = _readSessionMeta();
     if (existing != null) {
-      final command = await _processCommand(existing);
-      if (command != null && _commandLooksLikeScoutVmLogListener(command)) {
-        if (command.contains(vmUri)) return existing;
-        Process.killPid(existing);
-      }
+      if (await _matchesOwnedVmLogListener(existing, meta)) return existing;
+      // A recognizable command or matching PID is not sufficient ownership.
+      // Leave an uncertain process untouched; an exact listener self-exits
+      // when its owner tuple no longer matches.
       _deleteFileIfExists(_vmLogListenerPidFile);
     }
-    return _startVmLogListener(vmUri: vmUri, logFile: _logFile);
+    final ownerPid = _readPid();
+    if (ownerPid == null || !await _matchesOwnedFlutterRun(ownerPid, meta)) {
+      return null;
+    }
+    final listenerPid = await _startVmLogListener(
+      vmUri: vmUri,
+      logFile: _logFile,
+      ownerPid: ownerPid,
+    );
+    if (listenerPid == null) return null;
+    final listenerIdentity = await _readProcessOwnershipIdentity(
+      listenerPid,
+      role: _vmLogListenerProcessRole,
+    );
+    final currentMeta = _readSessionMeta();
+    if (listenerIdentity == null ||
+        currentMeta == null ||
+        !await _matchesOwnedFlutterRun(ownerPid, currentMeta)) {
+      // Identity uncertainty means do not signal the listener. It will fail
+      // closed once it cannot validate the owner metadata.
+      _deleteFileIfExists(_vmLogListenerPidFile);
+      return null;
+    }
+    _writeSessionMeta({
+      ...currentMeta,
+      'vmLogListenerPid': listenerPid,
+      'vmLogListener': {
+        'pid': listenerPid,
+        'processIdentity': listenerIdentity,
+        'ownerPid': ownerPid,
+        'ownerProcessIdentity': currentMeta['processIdentity'],
+        'runId': currentMeta['runId'],
+        'sessionDirectory': _sessionDir.path,
+      },
+    });
+    return listenerPid;
   }
 
   void _clearVmUriFile() {
@@ -1678,8 +2063,7 @@ print(String(data: data, encoding: .utf8)!)
   }
 
   void _writeDeviceInfo(_FlutterDevice device) {
-    _ensureSessionDir();
-    File(_deviceInfoFile).writeAsStringSync(jsonEncode(device.toJson()));
+    _writePrivateSessionJson(_deviceInfoFile, device.toJson());
   }
 
   Map<String, dynamic>? _readDeviceInfo() {
@@ -1708,14 +2092,13 @@ print(String(data: data, encoding: .utf8)!)
   }
 
   void _writeSessionMeta(Map<String, Object?> meta) {
-    _ensureSessionDir();
-    final file = File(_sessionMetaFile);
-    final temporary = File('${file.path}.$pid.tmp');
-    temporary.writeAsStringSync(
-      const JsonEncoder.withIndent('  ').convert(meta),
-      flush: true,
-    );
-    temporary.renameSync(file.path);
+    final safe = Map<String, Object?>.from(meta);
+    final rawVmUri = safe.remove('vmServiceUri');
+    if (rawVmUri != null) {
+      final validated = _validatedVmServiceUri(rawVmUri.toString());
+      safe['vmServiceEndpoint'] = validated.endpoint;
+    }
+    _writePrivateSessionJson(_sessionMetaFile, safe);
   }
 
   Map<String, dynamic>? _readSessionMeta() {
@@ -1723,19 +2106,29 @@ print(String(data: data, encoding: .utf8)!)
     if (!file.existsSync()) return null;
     try {
       final decoded = jsonDecode(file.readAsStringSync());
-      if (decoded is Map<String, dynamic>) return decoded;
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+      if (decoded is! Map) return null;
+      final result = Map<String, dynamic>.from(decoded);
+      final rawVmUri = result.remove('vmServiceUri');
+      if (rawVmUri != null) {
+        _registerVmUriCredentials(rawVmUri);
+        result['vmServiceEndpoint'] = _safeVmServiceEndpointIdentity(
+          rawVmUri.toString(),
+        );
+        // Migrate legacy metadata immediately. The dedicated vm_uri.txt file
+        // remains the sole credential store; metadata is endpoint-only.
+        _writePrivateSessionJson(_sessionMetaFile, result);
+      }
+      return result;
     } catch (_) {
       return null;
     }
-    return null;
   }
 
   Map<String, dynamic>? _readSessionConfiguredJson(String key) {
     final configured = _readSessionMeta()?[key]?.toString();
     if (configured == null ||
         configured.isEmpty ||
-        !p.isWithin(_sessionDir.path, configured)) {
+        !_isWithinSessionOwnershipBoundary(configured)) {
       return null;
     }
     final file = File(configured);
@@ -1775,17 +2168,21 @@ print(String(data: data, encoding: .utf8)!)
   Future<bool> _isAttachOnlySession() async {
     final meta = _readSessionMeta();
     if (meta?['mode'] == 'attach_only') return true;
-    if (meta?['mode'] == 'scout_owned_flutter_run') return false;
     final pid = _readPid();
-    if (pid != null && await _looksLikeScoutFlutterRun(pid)) return false;
+    if (meta?['mode'] == 'scout_owned_flutter_run') {
+      return pid == null || !await _matchesOwnedFlutterRun(pid, meta);
+    }
+    // Legacy PID-only sessions have no immutable ownership proof. They remain
+    // usable as attach-only sessions but cannot gain signal/termination
+    // authority from a recognizable command line.
     if (pid == null) return false;
     return true;
   }
 
   Future<Map<String, Object?>> _hotUpdateCapability(String vmUri) async {
     final pid = _readPid();
-    final scoutOwned = pid != null && await _looksLikeScoutFlutterRun(pid);
     final meta = _readSessionMeta();
+    final scoutOwned = pid != null && await _matchesOwnedFlutterRun(pid, meta);
     final ownershipLossReason = meta?['ownershipLossReason']?.toString();
     final ownershipLost = ownershipLossReason == 'owner_process_exited';
     final listenerPid = await _pidForListeningVmPort(vmUri);
@@ -1798,6 +2195,18 @@ print(String(data: data, encoding: .utf8)!)
             ? 'sigusr1_hot_reload'
             : 'vm_service_reload_sources',
         'preservesState': !ownershipLost,
+        'successRequires': scoutOwned
+            ? const [
+                'exact_process_identity',
+                'flutter_tool_acknowledgement',
+                'post_update_runtime_inspection',
+                'no_loaded_source_mismatch',
+              ]
+            : const [
+                'vm_reload_report_success',
+                'post_update_runtime_inspection',
+                'no_loaded_source_mismatch',
+              ],
       },
       'restart': {
         'available': scoutOwned,
@@ -1807,11 +2216,23 @@ print(String(data: data, encoding: .utf8)!)
             ? 'sigusr2_hot_restart'
             : 'unavailable_without_scout_owned_flutter_run',
         'requiresScoutOwnedRun': true,
+        'successRequires': const [
+          'exact_process_identity',
+          'flutter_tool_acknowledgement',
+          'new_runtime_instance',
+          'no_loaded_source_mismatch',
+        ],
       },
       'attachOnly': !scoutOwned,
+      'ownershipProof': scoutOwned
+          ? 'exact_process_identity'
+          : meta?['mode'] == 'scout_owned_flutter_run'
+          ? 'identity_mismatch_or_unavailable'
+          : 'not_scout_owned',
       if (ownershipLost) 'ownershipLost': true,
       if (ownershipLost) 'ownershipLossReason': ownershipLossReason,
-      'scoutPid': ?pid,
+      if (scoutOwned) 'scoutPid': pid,
+      'recordedScoutPid': ?pid,
       'vmServiceListenerPid': ?listenerPid,
       'nextBestActions': ownershipLost
           ? const [
@@ -1883,27 +2304,6 @@ print(String(data: data, encoding: .utf8)!)
     }
   }
 
-  Future<bool> _looksLikeScoutFlutterRun(int pid) async {
-    final command = await _processCommand(pid);
-    if (command == null) return false;
-    final lower = command.toLowerCase();
-    if ((lower.contains('flutter_scout') || lower.contains('flutter-scout')) &&
-        lower.contains('flutter-run-worker')) {
-      return true;
-    }
-    final hasFlutterTool =
-        lower.contains('flutter_tools') ||
-        RegExp(r'(^|[/\s])flutter(\s|$)').hasMatch(lower);
-    final hasRunCommand = RegExp(r'(^|\s)run(\s|$)').hasMatch(lower);
-    return hasFlutterTool && hasRunCommand;
-  }
-
-  Future<bool> _looksLikeScoutVmLogListener(int pid) async {
-    final command = await _processCommand(pid);
-    if (command == null) return false;
-    return _commandLooksLikeScoutVmLogListener(command);
-  }
-
   bool _commandLooksLikeScoutVmLogListener(String command) {
     final lower = command.toLowerCase();
     return _commandLooksLikeScoutCli(command) &&
@@ -1942,30 +2342,32 @@ print(String(data: data, encoding: .utf8)!)
   }
 
   int _unknown(String command) {
-    stderr.writeln('Unknown command: $command');
-    if (command == 'action') {
-      stderr.writeln(
-        'Actions are direct commands. For example: '
-        '`flutter-scout tap btn.save --expect-text Saved`.',
-      );
-    } else if (_closestCommand(command) case final suggestion?) {
-      stderr.writeln('Did you mean `flutter-scout $suggestion`?');
-    }
-    _printUsage();
+    final suggestion = command == 'action' ? 'tap' : _closestCommand(command);
+    _writeStructuredError(
+      'unknown_command',
+      'Unknown Flutter Scout command `${_redactSensitiveLogText(command)}`.',
+      details: <String, Object?>{
+        'requestedCommand': _redactSensitiveLogText(command),
+        'suggestedCommand': suggestion,
+        'helpCommand': 'flutter-scout help',
+        'availableCommands': _commands.toList(growable: false)..sort(),
+        if (command == 'action')
+          'guidance':
+              'Actions are direct commands, for example `flutter-scout tap btn.save --expect-text Saved`.',
+      },
+    );
     return 64;
   }
 
   Future<int> _version() async {
-    stdout.writeln(
-      const JsonEncoder.withIndent('  ').convert({
-        'ok': true,
-        'package': 'flutter_scout',
-        'version': packageVersion,
-        'helperProtocolExpected': expectedHelperProtocolVersion,
-        'executable': Platform.resolvedExecutable,
-        'script': Platform.script.toString(),
-      }),
-    );
+    _printJson({
+      'ok': true,
+      'package': 'flutter_scout',
+      'version': packageVersion,
+      'helperProtocolExpected': expectedHelperProtocolVersion,
+      'executable': Platform.resolvedExecutable,
+      'script': Platform.script.toString(),
+    }, commandName: 'version');
     return 0;
   }
 
@@ -1998,6 +2400,9 @@ print(String(data: data, encoding: .utf8)!)
     'doctor',
     'stop',
     'inspect',
+    'where',
+    'locate',
+    'reveal',
     'annotations',
     'bounds',
     'tap',
@@ -2011,15 +2416,22 @@ print(String(data: data, encoding: .utf8)!)
     'drag-start',
     'drag-move',
     'drag-end',
+    'drag-cancel',
+    'drag-status',
     'back',
+    'dismiss',
     'wait',
     'wait-for',
     'health',
     'batch',
+    'export-batch',
     'serve',
+    'explore',
+    'devices',
     'apps',
     'reload',
     'restart',
+    'deeplink',
     'logs',
     'screenshot',
     'crop',
@@ -2027,10 +2439,14 @@ print(String(data: data, encoding: .utf8)!)
     'replay',
     'record',
     'version',
+    'help',
   };
 
   static const Set<String> _commandsEligibleForServeProxy = {
     'inspect',
+    'where',
+    'locate',
+    'reveal',
     'annotations',
     'bounds',
     'tap',
@@ -2044,7 +2460,10 @@ print(String(data: data, encoding: .utf8)!)
     'drag-start',
     'drag-move',
     'drag-end',
+    'drag-cancel',
+    'drag-status',
     'back',
+    'dismiss',
     'wait',
     'wait-for',
     'health',
@@ -2056,10 +2475,106 @@ print(String(data: data, encoding: .utf8)!)
   };
 
   void _printUsage({String? command}) {
+    if (command == 'launch' || command == 'ensure') {
+      stdout.writeln('''
+Flutter Scout: $command
+
+Usage:
+  flutter-scout $command --device <simulator-id> [--project <path>]
+      [--dart-define-from-file <owner-only-0600-file>]
+
+Compile-time value handling:
+  Define files are bounded to 1 MiB, strict UTF-8, regular, non-symlink, and
+  exactly 0600 on POSIX. Scout validates them before session creation and the
+  detached worker revalidates immediately before spawning Flutter. Only the
+  absolute file path enters Scout's worker configuration and the Flutter-tool
+  argv Scout creates; keep the caller-owned file private and stable until
+  Flutter reads it. Flutter may expose compile-time values in its own downstream
+  tool processes or the built app, so Dart defines are not a secret vault.
+  Inline `--dart-define <name=value>` remains temporarily compatible for
+  nonsecret values and emits a structured deprecation warning. A secret-looking
+  inline name or value is rejected before state or child-process creation.
+''');
+      return;
+    }
+    if (command == 'attach') {
+      stdout.writeln('''
+Flutter Scout: attach
+
+Usage:
+  flutter-scout attach [--device <simulator-id>]
+      [--debug-url-file <owner-only-0600-file> | --debug-url-stdin]
+
+VM-service transport:
+  The credential-bearing VM-service URL is bounded, strict UTF-8, and accepted
+  only for ws/wss/http/https on explicit loopback hosts (127/8, ::1, or exact
+  localhost) with an explicit port. Remote VM-service egress is unsupported.
+  `--debug-url <url>` remains temporarily compatible but exposes the capability
+  URL through process argv and emits a structured deprecation warning.
+''');
+      return;
+    }
+    if (command == 'deeplink') {
+      stdout.writeln('''
+Flutter Scout: deeplink
+
+Usage:
+  flutter-scout [--idempotency-key <key>] deeplink
+      (--url-file <owner-only-0600-file> | --url-stdin)
+
+Secret handling:
+  Deep-link URLs can contain session tokens. Protected file/stdin ingress keeps
+  the URL out of argv and stores only a replay placeholder/provenance. A legacy
+  positional URL remains compatible but emits a structured warning.
+
+Native capability:
+  Requires an exact recorded iOS Simulator or Android Emulator and a successful
+  read-only platform-tool preflight plus a live protocol-valid observation from
+  the exact selected session immediately before dispatch. Android uses bounded
+  local-argv ADB with a single-quoted URL for the remote shell and requires
+  Activity Manager `Status: ok`. Unsupported
+  targets abstain before app dispatch; uncertain dispatch must be reconciled
+  under the original idempotency key.
+''');
+      return;
+    }
+    if (command == 'screenshot' || command == 'crop') {
+      stdout.writeln('''
+Flutter Scout: $command
+
+Usage:
+  flutter-scout screenshot [-o <path>] [--target <target>] [--native]
+  flutter-scout crop <target> | crop --text <text> | crop --rect x,y,w,h [-o <path>] [--native]
+  flutter-scout crop --changed-since <snapshot-id> [-o <path>] [--padding <0..256>]
+
+Changed-region contract:
+  Captures only a complete bounded semantic-region union from retained helper
+  history. The baseline/current/capture-verification identities, logical and
+  physical rects, DPR, backend, limits, and provenance are returned. Scout
+  abstains on stale history, ambiguous/unavailable geometry, screen/route or
+  coordinate-frame changes, more than 16 regions, a union above 50% of the
+  viewport, or output above 4096x4096 / 4,194,304 pixels. Native fallback is
+  unsupported because it cannot be atomically bound to the helper snapshot.
+
+Native capability:
+  Full capture supports exact recorded iOS Simulators, Android Emulators, and
+  proven macOS app windows. Results disclose backend, provenance, physical-pixel
+  space, and limitations. A native targeted crop proceeds only when the scoped
+  Flutter physical viewport exactly matches the PNG dimensions; Scout never
+  guesses system-bar, inset, rotation, or letterbox offsets.
+''');
+      return;
+    }
     if (command != null &&
         const {'tap', 'tap-text', 'input', 'fill'}.contains(command)) {
       stdout.writeln('''
 Flutter Scout: $command
+
+Protected value input:
+  ${command == 'input' ? '--file <0600-path> | --stdin' : '--file <0600-json> | --stdin'}
+                             Keep values out of process argv. Protected input
+                             is bounded to 1 MiB; files must be regular,
+                             non-symlink, valid UTF-8, and exactly 0600 on POSIX.
 
 Guarded action options:
   --expect-text <text>       Wait for visible text.
@@ -2080,16 +2595,22 @@ Run `flutter-scout help` for the complete command list.
 Flutter Scout
 
 Usage:
-  flutter-scout attach [--debug-url <url>] [--device <simulator-id>]
-  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper] [--launch-timeout <s>] [--launch-idle-timeout <s>]
-  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper] [--launch-timeout <s>] [--launch-idle-timeout <s>]
+  flutter-scout [--app <name>] [--idempotency-key <key>] <command> [options]
+    --idempotency-key accepts 1-128 safe ASCII characters. Reuse one key only
+    for the same business mutation; retries replay/reconcile the first outcome.
+  flutter-scout attach [--device <simulator-id>] [--debug-url-file <0600-path> | --debug-url-stdin]
+  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper] [--dart-define-from-file <0600-path>] [--launch-timeout <s>] [--launch-idle-timeout <s>]
+  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper] [--dart-define-from-file <0600-path>] [--launch-timeout <s>] [--launch-idle-timeout <s>]
   flutter-scout status
   flutter-scout devices
   flutter-scout apps [--all] [--prune]
   flutter-scout version | --version | -V
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
-  flutter-scout inspect [--brief] [--surface] [--max-items <n>] [--sections <list>]
+  flutter-scout inspect [--brief] [--surface] [--max-items <n>] [--sections <list>] [--since <snapshot-id>]
+  flutter-scout where
+  flutter-scout locate (--text <text> | --target <handle>) [--within <scroll-id>]
+  flutter-scout reveal (--text <text> | --target <handle>) [--within <scroll-id>] [--direction down|up|right|left] [--max-actions <n>]
   flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|fixed|check]
   flutter-scout annotations wait [--timeout <seconds>] [--poll <ms>]
   flutter-scout annotations fixed <annotation-id> [--note <text>]
@@ -2098,8 +2619,10 @@ Usage:
   flutter-scout tap <x> <y> | tap --x <x> --y <y>
   flutter-scout tap-text <visible text> | tap-text --text <visible text> [--allow-mismatch] [--verbose]
   flutter-scout long-press <target> [--verbose]
-  flutter-scout input [--target <field>] <value> [--verbose]
-  flutter-scout fill --json <object> [--verbose]
+  flutter-scout input [--target <field>] (--file <0600-path> | --stdin) [--verbose]
+  flutter-scout input [--target <field>] <value> [--verbose]  # insecure legacy argv
+  flutter-scout fill (--file <0600-json> | --stdin) [--verbose]
+  flutter-scout fill --json <object> [--verbose]  # insecure legacy argv
   flutter-scout scroll [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--verbose]
   flutter-scout scroll-to <target> [--max-scrolls <n>] [--direction down|up|left|right] [--distance <px>] [--verbose]
   flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--to x,y] [--verbose]
@@ -2111,19 +2634,20 @@ Usage:
   flutter-scout wait stable [--timeout <ms>] [--verbose]
   flutter-scout wait-for [--text <text>] [--gone <text>] [--target <handle>]
   flutter-scout health [--include-stale]
-  flutter-scout batch '<command>; <command>' [--keep-going] [--verbose]
-  flutter-scout export-batch [-o <path>]
-  flutter-scout serve [--port <port>] [--port-file <path>] [--idle-timeout <seconds>]
-  flutter-scout explore [--port <port>] [--port-file <path>] [--once]
-  flutter-scout record start|stop|run|list|show|pause|resume|undo|save-last
+  flutter-scout batch '<command>; <command>' [--var-file <0600-json> | --var-stdin] [--keep-going] [--verbose]
+  flutter-scout export-batch [-o <path>] [--retention session|24h|7d|manual]
+  flutter-scout serve [--port <port>] [--port-file <path>] [--credential-file <path>] [--idle-timeout <seconds>] [--request-timeout <seconds>] [--max-body-bytes <n>] [--allow-legacy-run]
+  flutter-scout explore [--port <port>] [--port-file <path>] [--credential-file <path>] [--once]
+  flutter-scout record run <name> [--var-file <0600-json> | --var-stdin]
+  flutter-scout record start|stop|list|show|pause|resume|undo|save-last
   flutter-scout reload [--verbose]
   flutter-scout restart [--verbose]
-  flutter-scout deeplink <url>
+  flutter-scout deeplink (--url-file <0600-path> | --url-stdin)
   flutter-scout logs [--last <n>] [--contains <text>] [--summary]
-  flutter-scout screenshot [-o <path>] [--target <target>] [--native]
-  flutter-scout crop <target> | crop --text <visible text> | crop --rect x,y,w,h [-o <path>] [--native]
-  flutter-scout evidence [-o <dir>] [--last <n>] [--audit]
-  flutter-scout replay [session.json] [--verbose]
+  flutter-scout screenshot [-o <path>] [--target <target>] [--native] [--retention session|24h|7d|manual]
+  flutter-scout crop <target> | crop --text <visible text> | crop --rect x,y,w,h | crop --changed-since <snapshot-id> [-o <path>] [--native] [--retention session|24h|7d|manual]
+  flutter-scout evidence [-o <dir>] [--last <n>] [--audit] [--retention session|24h|7d|manual]
+  flutter-scout replay [session.json] [--var-file <0600-json> | --var-stdin] [--verbose]
   flutter-scout help [command]
 ''');
   }
@@ -2137,6 +2661,7 @@ Usage:
 /// reads with `String.fromEnvironment`.
 const String kScoutInstanceDefine = 'FLUTTER_SCOUT_INSTANCE';
 const String kScoutProjectDefine = 'FLUTTER_SCOUT_PROJECT';
+const String kScoutRunIdDefine = 'FLUTTER_SCOUT_RUN_ID';
 
 /// Global session registry: `--name <label>` at launch/ensure records
 /// label -> session directory here, and the global `--app <label>` option
@@ -2154,22 +2679,43 @@ Map<String, String> _readScoutRegistry() {
   try {
     final file = _scoutRegistryFile;
     if (!file.existsSync()) return {};
+    _ensurePrivateDirectory(file.parent.path, boundary: file.parent.path);
+    _assertPrivateFilePath(file.path, boundary: file.parent.path);
+    _securePrivateFile(file.path, boundary: file.parent.path);
     final decoded = jsonDecode(file.readAsStringSync());
-    if (decoded is! Map) return {};
+    if (decoded is! Map) {
+      throw const ScoutCliException(
+        'registry_corrupt',
+        'The Flutter Scout session registry must be a JSON object.',
+      );
+    }
     return {
       for (final entry in decoded.entries)
         if (entry.value is String) entry.key.toString(): entry.value as String,
     };
+  } on ScoutCliException {
+    rethrow;
   } catch (_) {
-    return {};
+    throw const ScoutCliException(
+      'registry_corrupt',
+      'The Flutter Scout session registry is not valid JSON.',
+    );
   }
 }
 
 void _registerScoutSession(String name, String directory) {
   try {
-    final registry = _readScoutRegistry();
-    registry[name] = directory;
-    _writeScoutRegistry(registry);
+    final file = _scoutRegistryFile;
+    _ensurePrivateDirectory(file.parent.path, boundary: file.parent.path);
+    _withPrivateFileLock<void>(
+      '${file.path}.lock',
+      boundary: file.parent.path,
+      body: () {
+        final registry = _readScoutRegistry();
+        registry[name] = directory;
+        _writeScoutRegistryUnlocked(registry);
+      },
+    );
   } catch (_) {
     // Registration is best-effort; the session still works from its own cwd.
   }
@@ -2177,13 +2723,17 @@ void _registerScoutSession(String name, String directory) {
 
 void _writeScoutRegistry(Map<String, String> registry) {
   final file = _scoutRegistryFile;
-  file.parent.createSync(recursive: true);
-  final temporary = File('${file.path}.$pid.tmp');
-  temporary.writeAsStringSync(
-    const JsonEncoder.withIndent('  ').convert(registry),
-    flush: true,
+  _ensurePrivateDirectory(file.parent.path, boundary: file.parent.path);
+  _withPrivateFileLock<void>(
+    '${file.path}.lock',
+    boundary: file.parent.path,
+    body: () => _writeScoutRegistryUnlocked(registry),
   );
-  temporary.renameSync(file.path);
+}
+
+void _writeScoutRegistryUnlocked(Map<String, String> registry) {
+  final file = _scoutRegistryFile;
+  _atomicWritePrivateJson(file.path, registry, boundary: file.parent.path);
 }
 
 /// Drops registry names pointing at [directory] (a cleared session). Returns
@@ -2204,19 +2754,27 @@ List<String> _pruneScoutRegistryFor(String directory) {
     final legacyProjectTarget = p.basename(directory) == '.flutter_scout'
         ? resolved(p.dirname(directory))
         : null;
-    final registry = _readScoutRegistry();
-    final pruned = [
-      for (final entry in registry.entries)
-        if (resolved(entry.value) == target ||
-            (legacyProjectTarget != null &&
-                resolved(entry.value) == legacyProjectTarget) ||
-            resolved(p.join(entry.value, '.flutter_scout')) == target)
-          entry.key,
-    ];
-    if (pruned.isEmpty) return const [];
-    pruned.forEach(registry.remove);
-    _writeScoutRegistry(registry);
-    return pruned;
+    final file = _scoutRegistryFile;
+    _ensurePrivateDirectory(file.parent.path, boundary: file.parent.path);
+    return _withPrivateFileLock<List<String>>(
+      '${file.path}.lock',
+      boundary: file.parent.path,
+      body: () {
+        final registry = _readScoutRegistry();
+        final pruned = [
+          for (final entry in registry.entries)
+            if (resolved(entry.value) == target ||
+                (legacyProjectTarget != null &&
+                    resolved(entry.value) == legacyProjectTarget) ||
+                resolved(p.join(entry.value, '.flutter_scout')) == target)
+              entry.key,
+        ];
+        if (pruned.isEmpty) return const [];
+        pruned.forEach(registry.remove);
+        _writeScoutRegistryUnlocked(registry);
+        return pruned;
+      },
+    );
   } catch (_) {
     return const [];
   }
@@ -2251,27 +2809,14 @@ String get _launchLockFile => p.join(_sessionDir.path, 'launch.lock');
 /// The active run owns its own log. This prevents overlapping launches from
 /// truncating or parsing each other's Flutter output while retaining the
 /// legacy path for old and attach-only sessions.
-String get _logFile {
-  try {
-    final meta = File(_sessionMetaFile);
-    if (meta.existsSync()) {
-      final decoded = jsonDecode(meta.readAsStringSync());
-      final configured = decoded is Map ? decoded['logFile']?.toString() : null;
-      if (configured != null && configured.isNotEmpty) return configured;
-    }
-  } catch (_) {
-    // Fall through to the backwards-compatible path.
-  }
-  return _legacyLogFile;
-}
+String get _logFile => _resolvedScoutLogFilePath();
 
 List<String> _readLogLinesSync(File file) {
-  try {
-    final text = utf8.decode(file.readAsBytesSync(), allowMalformed: true);
-    return const LineSplitter().convert(text);
-  } catch (_) {
-    return const [];
-  }
+  if (!file.existsSync()) return const [];
+  return _readValidatedScoutLogChunk(
+    file,
+    maxBytes: _maxScoutLogTailBytes,
+  ).lines;
 }
 
 /// Recent hard runtime signals from the Scout-owned log — app logs and Flutter
@@ -2293,6 +2838,8 @@ List<_LogSignal> _recentLogSignals({
       baseCursor: chunk.startCursor,
       runId: _currentRunIdFromSession(),
     );
+  } on ScoutCliException {
+    rethrow;
   } catch (_) {
     return const [];
   }
@@ -2416,6 +2963,40 @@ _LogClassification? _classifyLogLine(String rawLine) {
       lower.contains('bottom overflowed')) {
     return _LogClassification(
       kind: 'render_overflow',
+      severity: 'blocking',
+      blocking: true,
+      message: payload,
+    );
+  }
+
+  // Flutter reports image-provider failures through several different
+  // surfaces depending on the backend (asset bundle, network provider, codec,
+  // or the image resource service). Keep this ahead of the generic
+  // high-severity-log branch so the signal retains its actionable category.
+  if (lower.contains('exception caught by image resource service') ||
+      lower.contains('unable to load asset') ||
+      lower.contains('failed to load network image') ||
+      lower.contains('image loading failed') ||
+      lower.contains('image load failed') ||
+      lower.contains('imagecodec exception') ||
+      lower.contains('imagecodecexception') ||
+      lower.contains('networkimageloadexception')) {
+    return _LogClassification(
+      kind: 'image_loading_failure',
+      severity: 'non_blocking',
+      blocking: false,
+      message: payload,
+    );
+  }
+
+  if (lower.contains('hot reload was rejected') ||
+      lower.contains('hot restart was rejected') ||
+      lower.contains('could not hot reload') ||
+      lower.contains('could not hot restart') ||
+      lower.contains('hot reload failed') ||
+      lower.contains('hot restart failed')) {
+    return _LogClassification(
+      kind: 'flutter_hot_update_rejected',
       severity: 'blocking',
       blocking: true,
       message: payload,
@@ -2559,9 +3140,18 @@ bool _isNegatedLogError(String lower) {
 List<Map<String, Object?>> _logSignalMaps(
   List<_LogSignal> signals, {
   DateTime? now,
+  String phase = 'session',
+  String? actionCommandId,
 }) {
   final effectiveNow = now ?? DateTime.now();
-  return [for (final signal in signals) signal.toJson(now: effectiveNow)];
+  return [
+    for (final signal in signals)
+      signal.toJson(
+        now: effectiveNow,
+        phase: phase,
+        actionCommandId: actionCommandId,
+      ),
+  ];
 }
 
 class _LogSignal {
@@ -2595,72 +3185,92 @@ class _LogSignal {
 
   bool isFreshBlocking(DateTime now) => blocking && !isStale(now);
 
-  Map<String, Object?> toJson({required DateTime now}) {
+  Map<String, Object?> toJson({
+    required DateTime now,
+    required String phase,
+    String? actionCommandId,
+  }) {
     final parsed = timestamp;
     final ageMs = parsed == null ? null : now.difference(parsed).inMilliseconds;
+    final stale = ageMs == null || ageMs > 30000;
     return {
+      'identity': 'log:${runId ?? 'unbound'}:$cursor:$kind',
       'kind': kind,
       'severity': severity,
       'blocking': blocking,
       'message': message,
       'line': line,
+      'provenance': {
+        'source': 'scout_owned_runtime_log',
+        'stream': _logSignalStream(line),
+      },
+      'phase': phase,
       'cursor': cursor,
-      if (runId != null) 'runId': runId,
+      'logCursor': cursor,
+      'actionCommandId': ?actionCommandId,
+      'runId': ?runId,
       if (context.isNotEmpty) 'context': context,
-      if (parsed != null) 'timestamp': parsed.toIso8601String(),
-      if (parsed == null) ...{'freshness': 'unknown', 'stale': true},
-      if (ageMs case final value?) ...{'ageMs': value, 'stale': value > 30000},
+      'timestamp': ?parsed?.toIso8601String(),
+      'observedAt': now.toIso8601String(),
+      'timestampStatus': parsed == null ? 'unavailable' : 'observed_in_log',
+      'ageStatus': parsed == null ? 'unknown' : 'measured',
+      'staleness': ageMs == null
+          ? 'unknown'
+          : stale
+          ? 'stale'
+          : 'fresh',
+      'freshness': ageMs == null
+          ? 'unknown'
+          : stale
+          ? 'stale'
+          : 'fresh',
+      'stale': stale,
+      'ageMs': ?ageMs,
     };
   }
 }
 
+String _logSignalStream(String line) {
+  if (line.contains('[VM_STDOUT]')) return 'vm_stdout';
+  if (line.contains('[VM_STDERR]')) return 'vm_stderr';
+  if (line.contains('[VM_LOG]')) return 'vm_logging';
+  return 'flutter_tool_output';
+}
+
 int _currentLogCursor() {
-  final file = File(_logFile);
-  if (!file.existsSync()) return 0;
-  try {
-    return file.lengthSync();
-  } catch (_) {
-    return 0;
-  }
+  return _validatedScoutLogLength();
 }
 
 _LogChunk _readLogChunk(File file, {int? sinceCursor, int maxBytes = 262144}) {
-  final length = file.lengthSync();
-  final requestedStart = sinceCursor == null
-      ? (length - maxBytes).clamp(0, length)
-      : sinceCursor.clamp(0, length);
-  final handle = file.openSync();
-  try {
-    handle.setPositionSync(requestedStart);
-    final bytes = handle.readSync(length - requestedStart);
-    var text = utf8.decode(bytes, allowMalformed: true);
-    var startCursor = requestedStart;
-    if (sinceCursor == null && requestedStart > 0) {
-      final firstNewline = text.indexOf('\n');
-      if (firstNewline >= 0) {
-        startCursor += utf8.encode(text.substring(0, firstNewline + 1)).length;
-        text = text.substring(firstNewline + 1);
-      }
-    }
-    return _LogChunk(
-      const LineSplitter().convert(text),
-      startCursor: startCursor,
-    );
-  } finally {
-    handle.closeSync();
-  }
+  return _readValidatedScoutLogChunk(
+    file,
+    sinceCursor: sinceCursor,
+    maxBytes: maxBytes,
+  );
 }
 
 class _LogChunk {
-  const _LogChunk(this.lines, {required this.startCursor});
+  const _LogChunk(
+    this.lines, {
+    required this.startCursor,
+    required this.endCursor,
+    required this.observedFileLength,
+    required this.truncated,
+    required this.bytesRead,
+    required this.pendingBytes,
+  });
 
   final List<String> lines;
   final int startCursor;
+  final int endCursor;
+  final int observedFileLength;
+  final bool truncated;
+  final int bytesRead;
+  final int pendingBytes;
 }
 
 class _LockedLogWriter {
-  _LockedLogWriter(String path)
-    : _file = File(path).openSync(mode: FileMode.append);
+  _LockedLogWriter(String path) : _file = _openPrivateAppendFile(path);
 
   final RandomAccessFile _file;
   Future<void> _chain = Future<void>.value();
@@ -2669,7 +3279,7 @@ class _LockedLogWriter {
   Future<void> write(String line) {
     if (_closed) return Future<void>.value();
     _chain = _chain.then((_) async {
-      await _file.lock(FileLock.exclusive);
+      await _file.lock(FileLock.blockingExclusive);
       try {
         await _file.setPosition(await _file.length());
         await _file.writeString('$line\n');
@@ -2704,6 +3314,13 @@ String? _currentRunIdFromSession() {
 
 String _redactSensitiveLogText(String value) {
   var redacted = value;
+  redacted = redacted.replaceAllMapped(
+    RegExp(
+      r'((?:wss?|https?)://(?:127\.0\.0\.1|localhost|\[::1\]):\d+/)([^/\s]+)(/ws\b)',
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1)}<redacted>${match.group(3)}',
+  );
   const names =
       r'authorization|token|access[_-]?token|refresh[_-]?token|session|cookie|api[_-]?key|mobile[_-]?id';
   redacted = redacted.replaceAllMapped(
@@ -2716,15 +3333,53 @@ String _redactSensitiveLogText(String value) {
   );
   redacted = redacted.replaceAllMapped(
     RegExp(
-      '((?:$names)\\s*[:=]\\s*)(?:Bearer\\s+)?[^\\s,}\\]]+',
+      '((?:$names)\\s*[:=]\\s*)(?:Bearer\\s+)?'
+      '[^,}\\]\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]+',
       caseSensitive: false,
     ),
     (match) => '${match.group(1)}<redacted>',
   );
-  return redacted.replaceAllMapped(
-    RegExp(r'(Bearer\s+)[A-Za-z0-9._~+/=-]+', caseSensitive: false),
+  redacted = redacted.replaceAllMapped(
+    RegExp(
+      r'(Bearer\s+)[^,}\]\x00-\x1f\x7f-\x9f\u2028\u2029]+',
+      caseSensitive: false,
+    ),
     (match) => '${match.group(1)}<redacted>',
   );
+  return _escapeUnsafeLogControls(redacted);
+}
+
+/// Makes every diagnostic a single, non-forgeable record while retaining a
+/// readable escaped representation of harmless whitespace and control input.
+String _escapeUnsafeLogControls(String value) {
+  final out = StringBuffer();
+  for (final rune in value.runes) {
+    switch (rune) {
+      case 0x08:
+        out.write(r'\b');
+      case 0x09:
+        out.write(r'\t');
+      case 0x0a:
+        out.write(r'\n');
+      case 0x0c:
+        out.write(r'\f');
+      case 0x0d:
+        out.write(r'\r');
+      case 0x2028:
+        out.write(r'\u2028');
+      case 0x2029:
+        out.write(r'\u2029');
+      default:
+        if (rune < 0x20 || (rune >= 0x7f && rune <= 0x9f)) {
+          out
+            ..write(r'\u')
+            ..write(rune.toRadixString(16).padLeft(4, '0'));
+        } else {
+          out.writeCharCode(rune);
+        }
+    }
+  }
+  return out.toString();
 }
 
 class _LogClassification {
@@ -2744,5 +3399,9 @@ class _LogClassification {
 String get _sessionMetaFile => p.join(_sessionDir.path, 'session_meta.json');
 
 void _ensureSessionDir() {
-  _sessionDir.createSync(recursive: true);
+  _ensurePrivateDirectory(
+    _sessionDir.path,
+    boundary: _sessionManagedBoundary(),
+    secureExistingTree: true,
+  );
 }

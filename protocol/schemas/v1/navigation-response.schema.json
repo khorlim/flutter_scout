@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.dev/protocol/schemas/v1/navigation-response.schema.json",
+  "title": "Flutter Scout bounded navigation response",
+  "type": "object",
+  "required": [
+    "ok",
+    "schemaVersion",
+    "protocolVersion",
+    "commandId",
+    "runtimeInstanceId",
+    "stateGeneration",
+    "result",
+    "structuredError"
+  ],
+  "properties": {
+    "ok": {"type": "boolean"},
+    "schemaVersion": {"const": 1},
+    "protocolVersion": {"const": 15},
+    "commandId": {"type": "string", "minLength": 1},
+    "runId": {"type": ["string", "null"]},
+    "runtimeInstanceId": {"type": "string", "minLength": 1},
+    "stateGeneration": {"type": "integer", "minimum": 0},
+    "result": {},
+    "structuredError": {"type": ["object", "null"]},
+    "orientation": {"const": "where"},
+    "operation": {
+      "enum": ["locate", "reveal", "inspect_since"]
+    },
+    "query": {
+      "type": "object",
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {"enum": ["text", "target"]},
+        "value": {"type": "string", "minLength": 1},
+        "contains": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "scope": {"type": "object"},
+    "searchRegion": {},
+    "coordinateFrame": {
+      "type": "object",
+      "properties": {
+        "primarySpace": {"type": "string", "minLength": 1},
+        "origin": {"type": "string", "minLength": 1},
+        "xDirection": {"enum": ["right"]},
+        "yDirection": {"enum": ["down"]},
+        "logicalViewport": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {"type": ["number", "null"]}
+        },
+        "physicalViewport": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {"type": ["number", "null"]}
+        },
+        "devicePixelRatio": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "logicalToPhysicalScale": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "viewMetricsAvailable": {"type": "boolean"},
+        "provenance": {"type": "string", "minLength": 1},
+        "nativeImageContract": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "direction": {"enum": ["none", "up", "down", "left", "right"]},
+    "startingStateGeneration": {"type": "integer", "minimum": 0},
+    "bounds": {"type": "object"},
+    "resolution": {"type": "object"},
+    "progressSignatures": {"type": "array"},
+    "scrollRegionsAttempted": {"type": "array"},
+    "repeatedStateDetected": {"type": "boolean"},
+    "loopDetected": {"type": "boolean"},
+    "endOfContentDetected": {"type": "boolean"},
+    "stoppingReason": {"type": "string", "minLength": 1},
+    "restoration": {
+      "type": "object",
+      "required": ["attempted", "result"],
+      "properties": {
+        "attempted": {"type": "boolean"},
+        "result": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "delta": {
+      "type": "object",
+      "properties": {
+        "changedRegions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": ["logicalRect", "physicalRect", "reasons", "geometryProvenance"],
+            "properties": {
+              "logicalRect": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number"}},
+              "physicalRect": {"type": ["array", "null"], "minItems": 4, "maxItems": 4, "items": {"type": "number"}},
+              "reasons": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "geometryProvenance": {"type": "object"}
+            },
+            "additionalProperties": true
+          }
+        },
+        "changedRegionCoverage": {
+          "type": "object",
+          "required": ["status", "baselineSnapshotId", "currentSnapshotId", "issues"],
+          "properties": {
+            "status": {"enum": ["complete", "incomplete"]},
+            "baselineSnapshotId": {"type": "string", "pattern": "^g[0-9]+:[a-f0-9]{64}$"},
+            "currentSnapshotId": {"type": "string", "pattern": "^g[0-9]+:[a-f0-9]{64}$"},
+            "issues": {"type": "array", "items": {"type": "string"}}
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "history": {"type": "object"},
+    "maxResponseBytes": {"type": "integer", "minimum": 4096},
+    "responseBytes": {"type": "integer", "minimum": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"operation": {"const": "reveal"}}},
+      "then": {
+        "required": [
+          "query",
+          "scope",
+          "searchRegion",
+          "direction",
+          "startingStateGeneration",
+          "bounds",
+          "progressSignatures",
+          "scrollRegionsAttempted",
+          "repeatedStateDetected",
+          "loopDetected",
+          "endOfContentDetected",
+          "stoppingReason",
+          "restoration"
+        ]
+      }
+    },
+    {
+      "if": {"properties": {"operation": {"const": "inspect_since"}}},
+      "then": {
+        "required": [
+          "requestedSnapshotId",
+          "baselineScope",
+          "currentScope",
+          "delta",
+          "history"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

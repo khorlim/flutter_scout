@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "taskId": "supplier-add.variant-1",
+  "templateId": "supplier-add",
+  "split": "public_development",
+  "agentVisible": {
+    "instruction": "Add exactly one supplier named \"Benchmark Supplier\" and leave the dialog closed.",
+    "allowedTools": ["flutter-scout"],
+    "budget": {
+      "maxActions": 6,
+      "maxWallTimeMs": 30000,
+      "maxTokens": 100
+    }
+  },
+  "hiddenHarness": {
+    "oracleId": "oracle.supplier-workflow-v1",
+    "setupFixture": "setup.supplier-clean-reset",
+    "successPredicateIds": [
+      "predicate.supplier-added-once",
+      "predicate.supplier-modal-closed"
+    ],
+    "forbiddenPredicateIds": [
+      "predicate.duplicate-action",
+      "predicate.wrong-action"
+    ],
+    "teardownFixture": "teardown.supplier-reset"
+  },
+  "variant": {
+    "variantId": "variant-1",
+    "seed": 123,
+    "parameters": {
+      "expectedSupplierName": "Benchmark Supplier"
+    }
+  }
+}

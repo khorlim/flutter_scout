@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "flutter-scout-adversarial-privacy-v1",
+  "seed": "scout-privacy-2026-08-20",
+  "description": "Deterministic source-redaction corpus. Test code combines each category with every payload trick; no generated plaintext is checked in.",
+  "categories": [
+    {
+      "id": "password",
+      "label": "Password",
+      "key": "account_password",
+      "obscureText": true
+    },
+    {
+      "id": "pin",
+      "label": "PIN",
+      "key": "transaction_pin",
+      "obscureText": false
+    },
+    {
+      "id": "passcode",
+      "label": "Passcode",
+      "key": "device_passcode",
+      "obscureText": false
+    },
+    {
+      "id": "otp",
+      "label": "One-time code",
+      "key": "one_time_code",
+      "obscureText": false
+    },
+    {
+      "id": "payment",
+      "label": "Card number",
+      "key": "credit_card_payment",
+      "obscureText": false
+    },
+    {
+      "id": "cvv",
+      "label": "CVV",
+      "key": "card_cvv",
+      "obscureText": false
+    },
+    {
+      "id": "token",
+      "label": "Access token",
+      "key": "access_token",
+      "obscureText": false
+    },
+    {
+      "id": "cookie",
+      "label": "Cookie",
+      "key": "auth_cookie",
+      "obscureText": false
+    },
+    {
+      "id": "session",
+      "label": "Session ID",
+      "key": "session_id",
+      "obscureText": false
+    },
+    {
+      "id": "api_key",
+      "label": "API key",
+      "key": "api_key",
+      "obscureText": false
+    },
+    {
+      "id": "bearer",
+      "label": "Authorization token",
+      "key": "bearer_access_token",
+      "obscureText": false
+    }
+  ],
+  "payloadTricks": [
+    "plain",
+    "json_quote_backslash_\\\"_\\\\_end",
+    "newline_\\n_second_record",
+    "tab_\\t_delimited",
+    "crlf_\\r\\n_forged_line",
+    "nul_\\u0000_unit_separator_\\u001f",
+    "escape_\\u001b[31m_ansi",
+    "json_delimiters_{}[],:=|;",
+    "unicode_lines_\\u2028_\\u2029",
+    "percent_%0A_%00_%7C",
+    "shellish_$()_`cmd`_&&_||",
+    "csv_tsv_,_\\t_\\n"
+  ],
+  "encodedForms": [
+    "exact_utf8",
+    "json_escaped",
+    "uri_component",
+    "base64",
+    "base64url",
+    "utf8_hex"
+  ],
+  "requiredSurfaces": {
+    "helper": [
+      "snapshot_full",
+      "inspect_brief",
+      "inspect_sections",
+      "before_after_delta",
+      "expectation_echo",
+      "runtime_error",
+      "recorder_flow",
+      "recorder_disk",
+      "recorder_index",
+      "recorder_debug_api"
+    ],
+    "cli": [
+      "session_journal",
+      "event_journal",
+      "stdout",
+      "stderr",
+      "recording_export",
+      "batch_export",
+      "evidence_bundle",
+      "log_sanitizer",
+      "vm_uri_file_handoff",
+      "process_argv"
+    ]
+  }
+}

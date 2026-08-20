@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/endurance_archive.schema.json",
+  "title": "Flutter Scout finalized endurance archive outcome",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "recordType",
+    "enduranceRunId",
+    "configSha256",
+    "environmentSha256",
+    "planSha256",
+    "mode",
+    "status",
+    "componentStatus",
+    "releaseClaimable",
+    "startedAtUtc",
+    "finishedAtUtc",
+    "measurementStartedAtUtc",
+    "measurementFinishedAtUtc",
+    "durationMs",
+    "actionCount",
+    "targetReached",
+    "evidenceComplete",
+    "freshSetupProven",
+    "cleanTeardownProven",
+    "incidents",
+    "failure",
+    "memory",
+    "finalCorrelation",
+    "finalRecordSha256",
+    "inventory"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "recordType": { "const": "outcome" },
+    "enduranceRunId": { "$ref": "#/$defs/identifier" },
+    "configSha256": { "$ref": "#/$defs/sha256" },
+    "environmentSha256": { "$ref": "#/$defs/sha256" },
+    "planSha256": { "$ref": "#/$defs/sha256" },
+    "mode": { "enum": ["test_only", "release_evidence"] },
+    "status": {
+      "enum": ["completed", "product_failure", "interrupted", "harness_invalid"]
+    },
+    "componentStatus": { "enum": ["pass", "fail", "unmeasured"] },
+    "releaseClaimable": { "const": false },
+    "startedAtUtc": { "type": "string", "format": "date-time" },
+    "finishedAtUtc": { "type": "string", "format": "date-time" },
+    "measurementStartedAtUtc": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "measurementFinishedAtUtc": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "durationMs": { "type": "integer", "minimum": 0 },
+    "actionCount": { "type": "integer", "minimum": 0 },
+    "targetReached": { "type": "boolean" },
+    "evidenceComplete": { "type": "boolean" },
+    "freshSetupProven": { "type": "boolean" },
+    "cleanTeardownProven": { "type": "boolean" },
+    "incidents": { "$ref": "#/$defs/incidents" },
+    "failure": {
+      "oneOf": [{ "$ref": "#/$defs/failure" }, { "type": "null" }]
+    },
+    "memory": { "$ref": "#/$defs/memory" },
+    "finalCorrelation": {
+      "oneOf": [{ "$ref": "#/$defs/correlation" }, { "type": "null" }]
+    },
+    "finalRecordSha256": {
+      "oneOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+    },
+    "inventory": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/inventoryEntry" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "mode": { "const": "test_only" } } },
+      "then": { "properties": { "componentStatus": { "const": "unmeasured" } } }
+    },
+    {
+      "if": { "properties": { "componentStatus": { "const": "pass" } } },
+      "then": {
+        "properties": {
+          "mode": { "const": "release_evidence" },
+          "status": { "const": "completed" },
+          "targetReached": { "const": true },
+          "evidenceComplete": { "const": true },
+          "freshSetupProven": { "const": true },
+          "cleanTeardownProven": { "const": true },
+          "failure": { "type": "null" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "correlation": {
+      "type": "object",
+      "required": [
+        "sessionName",
+        "runId",
+        "runtimeInstanceId",
+        "processId",
+        "fixtureGeneration"
+      ],
+      "properties": {
+        "sessionName": { "$ref": "#/$defs/identifier" },
+        "runId": { "type": "string", "minLength": 1 },
+        "runtimeInstanceId": { "type": "string", "minLength": 1 },
+        "processId": { "type": "integer", "minimum": 1 },
+        "fixtureGeneration": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "incidents": {
+      "type": "object",
+      "required": [
+        "crashCount",
+        "crossoverCount",
+        "deadlockCount",
+        "blockingSignalCount"
+      ],
+      "properties": {
+        "crashCount": { "type": "integer", "minimum": 0 },
+        "crossoverCount": { "type": "integer", "minimum": 0 },
+        "deadlockCount": { "type": "integer", "minimum": 0 },
+        "blockingSignalCount": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "failure": {
+      "type": "object",
+      "required": ["kind", "owner", "releaseBlocking", "message", "sequence"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "controller_identity_mismatch",
+            "setup_failed",
+            "setup_not_fresh",
+            "baseline_failed",
+            "probe_failed",
+            "teardown_failed",
+            "teardown_not_clean",
+            "clock_regressed",
+            "runner_cancelled",
+            "hard_bound_reached",
+            "command_launch_failed",
+            "command_failed",
+            "output_truncated",
+            "malformed_response",
+            "missing_safety_evidence",
+            "postcondition_failed",
+            "uncertain_dispatch",
+            "blocking_runtime_signal",
+            "app_crash",
+            "deadlock",
+            "session_crossover",
+            "run_crossover",
+            "runtime_crossover",
+            "process_crossover",
+            "state_regressed",
+            "log_cursor_regressed",
+            "no_progress",
+            "memory_bound_exceeded",
+            "unbounded_memory_growth",
+            "archive_incomplete"
+          ]
+        },
+        "owner": { "enum": ["harness", "product", "interruption", "evidence_archive"] },
+        "releaseBlocking": { "type": "boolean" },
+        "message": { "type": "string", "minLength": 1 },
+        "sequence": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "memory": {
+      "type": "object",
+      "required": [
+        "sampleCount",
+        "windowSampleCount",
+        "startMedianRssBytes",
+        "endMedianRssBytes",
+        "positiveGrowthBytes",
+        "peakRssBytes",
+        "tailSlopeBytesPerAction",
+        "tailMonotonicIncreaseRatio",
+        "maximumPositiveGrowthBytes",
+        "maximumTailSlopeBytesPerAction",
+        "boundExceeded",
+        "unboundedGrowthObserved"
+      ],
+      "properties": {
+        "sampleCount": { "type": "integer", "minimum": 0 },
+        "windowSampleCount": { "type": "integer", "minimum": 0, "maximum": 512 },
+        "startMedianRssBytes": { "type": "integer", "minimum": 0 },
+        "endMedianRssBytes": { "type": "integer", "minimum": 0 },
+        "positiveGrowthBytes": { "type": "integer", "minimum": 0 },
+        "peakRssBytes": { "type": "integer", "minimum": 0 },
+        "tailSlopeBytesPerAction": { "type": "number" },
+        "tailMonotonicIncreaseRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maximumPositiveGrowthBytes": { "type": "integer", "minimum": 0 },
+        "maximumTailSlopeBytesPerAction": { "type": "number", "minimum": 0 },
+        "boundExceeded": { "type": "boolean" },
+        "unboundedGrowthObserved": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "inventoryEntry": {
+      "type": "object",
+      "required": ["relativePath", "sha256", "byteLength"],
+      "properties": {
+        "relativePath": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "byteLength": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

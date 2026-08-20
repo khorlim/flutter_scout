@@ -9,8 +9,9 @@ Use Scout when validating a Flutter feature on a simulator. Keep the core loop
 short and evidence-based:
 
 ```text
-named ensure -> inspect --brief -> act with a gate -> inspect delta/errors
-             -> reload after edits -> replay/evidence -> stop
+named ensure -> where/inspect --brief -> locate/reveal if needed
+             -> act once with a gate -> inspect --since + errors
+             -> reload after edits -> replay/evidence -> exact stop
 ```
 
 ## Before acting
@@ -26,7 +27,8 @@ void main() {
 
 If another debug binding already owns initialization, keep it and call
 `FlutterScoutHelper.ensureRegistered()` after it. Never add per-screen wrappers
-or test-only UI.
+or test-only UI. Scout is intentionally inert in normal profile and release
+builds; use a debug build for every Scout session.
 
 Run `flutter-scout doctor --project <app>` when setup or protocol state is
 unclear. For an app that is not integrated, prefer a zero-diff launch:
@@ -50,7 +52,8 @@ run is intentional. Use `attach` only to preserve a human-started app:
 
 ```bash
 flutter-scout attach --device <simulator-id>
-flutter-scout attach --debug-url <vm-service-url>
+# Put the VM-service capability URL in an owner-only 0600 file first.
+flutter-scout attach --debug-url-file /private/path/vm-service-url
 ```
 
 Address named sessions from any directory with `--app <name>`. Use
@@ -66,6 +69,15 @@ Check `status` when ownership is unclear. Stop every Scout-owned run when done:
 ```bash
 flutter-scout --app template-save stop --clear-session
 ```
+
+Read the response's `operability` object when diagnosis matters. It separates
+CLI-supported protocol from the helper range actually observed, live app
+reachability from daemon readiness, and recorded ownership metadata from a
+revalidated process proof. `actionState` reports an active held drag,
+`recordingState` reports recorder state and storage, and
+`prioritizedRecoveryAction` contains at most one next action. Treat every
+`unavailable` fact as unknown; never infer a version, runtime, device, or source
+match from absence.
 
 A launch ends on silence, not on elapsed time: it fails once the runner prints
 nothing for `--launch-idle-timeout` seconds (default 180), bounded by
@@ -97,11 +109,61 @@ flutter-scout --app template-save inspect \
   --sections textTargets,scrollables,rows
 ```
 
+Keep the returned `snapshotId`, then request a bounded relative observation
+instead of repeatedly retransmitting the whole tree:
+
+```bash
+flutter-scout --app template-save inspect --since '<snapshot-id>'
+```
+
+When a localized visual fact changed, reuse that same retained baseline rather
+than taking another broad screenshot:
+
+```bash
+flutter-scout --app template-save crop \
+  --changed-since '<snapshot-id>' -o /private/path/changed.png
+```
+
+Trust the crop only when `changedRegionCoverage.status` is `complete` and the
+baseline, current, and capture-verification scopes are present. Scout binds one
+helper-side current observation to retained history, captures the bounded union,
+then discards the raster if the snapshot changes during capture. It abstains on
+stale/foreign history, ambiguous or unavailable geometry, screen/route/frame
+changes, more than 16 regions, a padded union above 50% of the viewport,
+padding above 256 logical pixels, or output above 4096×4096 / 4,194,304 pixels.
+The regions are semantic/render geometry, not a pixel diff. Native/platform-view
+fallback is intentionally unavailable because it cannot preserve the same
+atomic helper snapshot; take a full native screenshot instead.
+
 Prefer semantic handles (`btn.save`, `field.template_name`,
 `row.customer.more_actions`) over coordinates. Fields can inherit nearby
 labels; row actions expose stable intent aliases such as `.open` and
 `.more_actions`. Read `selected`, `enabled`, `hitTestable`, `visibleFraction`,
 `enclosingTarget`, `altIds`, and `didYouMean` before guessing.
+
+## Orient and navigate with bounds
+
+Use read-only orientation and location before exploratory scrolling:
+
+```bash
+flutter-scout --app template-save where
+flutter-scout --app template-save locate --target row.customer_acme
+flutter-scout --app template-save locate --text "Acme" --contains
+```
+
+If a unique target is not built or visible, use bounded `reveal`. When more
+than one scroll region exists, pass the exact region returned by `where` or
+`inspect --sections scrollables`; Scout refuses to guess.
+
+```bash
+flutter-scout --app template-save reveal row.customer_acme \
+  --within scroll.suppliers --max-actions 8 --timeout 8000
+```
+
+Read `stoppingReason`, bounds, regions, progress, restoration, ambiguity, and
+state identity before choosing the next step. `reveal` restores the starting
+position after any post-dispatch failure. Do not turn it into an unbounded
+autonomous explorer.
 
 ## Act and verify atomically
 
@@ -112,13 +174,28 @@ flutter-scout tap btn.save --expect-text "Saved"
 flutter-scout tap btn.create \
   --expect-log "Created template" \
   --reject-log "validation_failed"
-flutter-scout input --target field.name "Ava" --expect-field field.name=Ava
-flutter-scout fill --json '{"field.name":"Ava"}' --expect-text "Ready"
+flutter-scout input --target field.name --stdin --expect-field field.name=Ava
+flutter-scout fill --file /private/path/owner-only-values.json \
+  --expect-text "Ready"
 ```
+
+Use `--stdin` or an owner-only regular `0600` file for any secret. Use direct
+value/`--json` arguments only for deliberately non-sensitive data; process
+arguments can be observed by other local tooling. Replay variables follow the
+same rule through `--var-stdin` or `--var-file`.
+
+Treat VM-service and deep-link URLs as credentials too. Use
+`attach --debug-url-file`/`--debug-url-stdin` and
+`deeplink --url-file`/`--url-stdin`; never paste token-bearing URLs into argv.
+Scout deliberately rejects non-loopback VM-service endpoints.
 
 Actions fail by default when fresh blocking runtime or log errors appear. Use
 `--allow-errors` only when the error is deliberately part of the scenario.
-Action JSON includes VM, log-settle, and total timings.
+Action JSON uses a typed/versioned envelope and independently reports dispatch,
+observation, postcondition, stability, runtime health, evidence persistence,
+and phase timings. If dispatch is `dispatch_outcome_unknown` or evidence
+persistence fails after a possible mutation, inspect/reconcile current state;
+never retry under a fresh identity merely because transport timed out.
 
 Use `wait-for` for a state not caused by the current command:
 
@@ -199,17 +276,22 @@ flutter-scout record run template-create --feature forms
 Collect a bundle when handing off:
 
 ```bash
-flutter-scout evidence -o /tmp/template-create-evidence
+flutter-scout evidence -o /private/path/template-create-evidence \
+  --retention session
 ```
 
 The bundle includes status, inspect, logs, screenshot, session replay data, and
-the JSONL event journal when available.
+the JSONL event journal when available. Artifacts are private application data;
+the safe default retention is the session. Select `24h`, `7d`, or `manual` only
+when the task explicitly needs longer retention.
 
 ## Safety and completion
 
 - Inspect before the first action and after meaningful transitions.
 - Treat structured `ok:false`, fresh blocking errors, rejected logs, protocol
   mismatch, source mismatch, and failed expectations as failures.
+- Treat ambiguity, stale identity, unavailable observation, unknown dispatch,
+  and uncommitted evidence as abstention/reconciliation states, never success.
 - Do not infer visual quality from geometry or semantics alone; capture and
   inspect images when appearance matters.
 - Never claim a simulator check that was not run.

@@ -108,7 +108,8 @@ Example workflow:
 flutter-scout attach --device <simulator-id>
 flutter-scout inspect
 flutter-scout tap btn.add_supplier
-flutter-scout fill --json '{"Supplier name":"QA Supplier","Phone":"0123456789"}'
+# Prepare an owner-only 0600 /private/tmp/supplier.json first.
+flutter-scout fill --file /private/tmp/supplier.json
 flutter-scout tap btn.save
 flutter-scout crop dialog.current
 flutter-scout replay .flutter_scout/session.json
@@ -126,7 +127,7 @@ Attach should preserve running app state by default. It should not restart the s
 
 `flutter-scout attach` should discover or accept the Dart VM service URI through multiple paths:
 
-- explicit `--debug-url`
+- protected `--debug-url-file` or `--debug-url-stdin` ingress
 - helper-emitted VM URI markers
 - Flutter/IDE/DevTools terminal output copied by the user
 - simulator logs
@@ -152,7 +153,7 @@ Failed attach output should include the next best recovery action:
   "reason": "vm_service_uri_not_found",
   "nextBestActions": [
     "Run the app in debug/profile mode and copy the VM Service URL",
-    "flutter-scout attach --debug-url <url>",
+    "flutter-scout attach --debug-url-file <owner-only-0600-file>",
     "flutter-scout launch --device <simulator-id> --project ."
   ]
 }
@@ -174,7 +175,8 @@ Failed attach output should include the next best recovery action:
       "kind": "button",
       "label": "Add supplier",
       "enabled": true,
-      "confidence": 0.98
+      "heuristicScore": 0.98,
+      "scoreKind": "uncalibrated_heuristic"
     }
   ],
   "fields": [
@@ -244,7 +246,8 @@ Flutter Scout should generate meaningful temporary handles:
   "kind": "button",
   "rect": [742, 88, 138, 40],
   "enabled": true,
-  "confidence": 0.96
+  "heuristicScore": 0.96,
+  "scoreKind": "uncalibrated_heuristic"
 }
 ```
 
@@ -265,7 +268,8 @@ If a handle becomes stale, the CLI may attempt fallback matching by label, type,
 Agents should not need to tap and type field by field for normal forms.
 
 ```bash
-flutter-scout fill --json '{"Supplier name":"QA Supplier","Phone":"0123456789"}'
+# supplier.json is an owner-only 0600 string-to-string JSON object.
+flutter-scout fill --file /private/tmp/supplier.json
 ```
 
 The bridge should match fields by label, hint, semantics, nearby text, keys, focus traversal, and visible layout.

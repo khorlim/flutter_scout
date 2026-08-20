@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "flutter-scout-adversarial-privacy-v1",
+  "qualityStandardSections": ["8.2", "8.4"],
+  "zeroTolerance": [
+    "exact_secret_plaintext",
+    "json_escaped_secret",
+    "uri_encoded_secret",
+    "base64_secret",
+    "base64url_secret",
+    "hex_secret",
+    "obscured_value_length"
+  ],
+  "protectedIngress": {
+    "inputFile": "implemented",
+    "inputStdin": "implemented",
+    "vmUriOwnerOnlyFile": "implemented",
+    "fillFile": "implemented",
+    "fillStdin": "implemented",
+    "replayVariableFile": "implemented",
+    "replayVariableStdin": "implemented"
+  },
+  "artifactControls": {
+    "helperRecorderOwnerOnlyAtomicStorage": "implemented",
+    "cliOwnerOnlyAtomicStorage": "implemented",
+    "secretPatternRedaction": "implemented",
+    "c0C1AndRecordDelimiterSanitization": "implemented"
+  },
+  "gapPolicy": "A gap is never counted as a pass. This manifest is converted to all-implemented only after an end-to-end regression test exists."
+}

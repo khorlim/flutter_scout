@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/benchmark_config.schema.json",
+  "title": "Flutter Scout paired benchmark config v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmarkId",
+    "catalogSha256",
+    "conditions",
+    "agent",
+    "app",
+    "environment",
+    "budget",
+    "repetitions",
+    "agentResultClassification",
+    "randomizationSeed",
+    "taskRegime",
+    "includedSplits",
+    "templateFamilies"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "benchmarkId": { "$ref": "#/$defs/id" },
+    "catalogSha256": { "$ref": "#/$defs/sha256" },
+    "conditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["current", "candidate"],
+      "properties": {
+        "current": { "$ref": "#/$defs/condition" },
+        "candidate": { "$ref": "#/$defs/condition" }
+      }
+    },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "modelSnapshot",
+        "reasoning",
+        "systemPrompt",
+        "toolSchema"
+      ],
+      "properties": {
+        "provider": { "$ref": "#/$defs/nonEmpty" },
+        "model": { "$ref": "#/$defs/nonEmpty" },
+        "modelSnapshot": { "$ref": "#/$defs/nonEmpty" },
+        "reasoning": { "$ref": "#/$defs/nonEmpty" },
+        "systemPrompt": { "$ref": "#/$defs/digestPin" },
+        "toolSchema": { "$ref": "#/$defs/digestPin" }
+      }
+    },
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "gitCommit"],
+      "properties": {
+        "repository": { "$ref": "#/$defs/nonEmpty" },
+        "gitCommit": { "$ref": "#/$defs/gitCommit" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hardware", "hostOs", "simulator", "toolchains"],
+      "properties": {
+        "hardware": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "cpu", "memoryBytes"],
+          "properties": {
+            "model": { "$ref": "#/$defs/nonEmpty" },
+            "cpu": { "$ref": "#/$defs/nonEmpty" },
+            "memoryBytes": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "hostOs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version", "architecture"],
+          "properties": {
+            "name": { "$ref": "#/$defs/nonEmpty" },
+            "version": { "$ref": "#/$defs/nonEmpty" },
+            "architecture": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
+        "simulator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "platform",
+            "image",
+            "device",
+            "logicalWidth",
+            "logicalHeight",
+            "devicePixelRatio",
+            "locale",
+            "orientation"
+          ],
+          "properties": {
+            "platform": { "$ref": "#/$defs/nonEmpty" },
+            "image": { "$ref": "#/$defs/nonEmpty" },
+            "device": { "$ref": "#/$defs/nonEmpty" },
+            "logicalWidth": { "type": "integer", "minimum": 1 },
+            "logicalHeight": { "type": "integer", "minimum": 1 },
+            "devicePixelRatio": { "type": "number", "exclusiveMinimum": 0 },
+            "locale": { "$ref": "#/$defs/nonEmpty" },
+            "orientation": { "$ref": "#/$defs/nonEmpty" }
+          }
+        },
+        "toolchains": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["flutterVersion", "dartVersion", "platformSdkVersion"],
+          "properties": {
+            "flutterVersion": { "$ref": "#/$defs/nonEmpty" },
+            "dartVersion": { "$ref": "#/$defs/nonEmpty" },
+            "platformSdkVersion": { "$ref": "#/$defs/nonEmpty" }
+          }
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxActions",
+        "maxWallTimeMs",
+        "maxTokens",
+        "maxToolCalls",
+        "maxResponseBytes",
+        "maxScreenshots"
+      ],
+      "properties": {
+        "maxActions": { "type": "integer", "minimum": 1 },
+        "maxWallTimeMs": { "type": "integer", "minimum": 1 },
+        "maxTokens": { "type": "integer", "minimum": 1 },
+        "maxToolCalls": { "type": "integer", "minimum": 1 },
+        "maxResponseBytes": { "type": "integer", "minimum": 1 },
+        "maxScreenshots": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "repetitions": { "type": "integer", "minimum": 1 },
+    "agentResultClassification": {
+      "enum": ["standard", "explicitly_borderline"]
+    },
+    "randomizationSeed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "taskRegime": { "enum": ["clean", "perturbed", "mixed"] },
+    "includedSplits": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "public_development",
+          "private_validation",
+          "frozen_hidden_release"
+        ]
+      }
+    },
+    "templateFamilies": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["familyId", "templateIds"],
+        "properties": {
+          "familyId": { "$ref": "#/$defs/id" },
+          "templateIds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/id" }
+          }
+        }
+      }
+    },
+    "controlledComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "randomizationAlgorithm",
+        "freshResetPerEpisode",
+        "identicalTaskSeedsAcrossRoles",
+        "resetProtocol",
+        "conditions"
+      ],
+      "properties": {
+        "randomizationAlgorithm": {
+          "const": "stable_balanced_role_rotation_v1"
+        },
+        "freshResetPerEpisode": { "const": true },
+        "identicalTaskSeedsAcrossRoles": { "const": true },
+        "resetProtocol": { "$ref": "#/$defs/digestPin" },
+        "conditions": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/controlledCondition" },
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "required": ["role"],
+                "properties": {
+                  "role": { "const": "screenshot_coordinate_only" }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["role"],
+                "properties": {
+                  "role": { "const": "current_released_scout" }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["role"],
+                "properties": {
+                  "role": { "const": "candidate_scout" }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["role"],
+                "properties": {
+                  "role": { "const": "perfect_handle_ceiling" }
+                }
+              },
+              "minContains": 0,
+              "maxContains": 1
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"
+    },
+    "digestPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sha256"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conditionId", "scoutGitCommit"],
+      "properties": {
+        "conditionId": { "$ref": "#/$defs/id" },
+        "scoutGitCommit": { "$ref": "#/$defs/gitCommit" }
+      }
+    },
+    "controlledCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "conditionId", "toolSchema", "implementation"],
+      "properties": {
+        "role": {
+          "enum": [
+            "screenshot_coordinate_only",
+            "current_released_scout",
+            "candidate_scout",
+            "perfect_handle_ceiling"
+          ]
+        },
+        "conditionId": { "$ref": "#/$defs/id" },
+        "toolSchema": { "$ref": "#/$defs/digestPin" },
+        "implementation": { "$ref": "#/$defs/digestPin" }
+      }
+    }
+  }
+}

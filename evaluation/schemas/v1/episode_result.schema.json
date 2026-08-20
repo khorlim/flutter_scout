@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/episode_result.schema.json",
+  "title": "Flutter Scout evaluation episode result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "episodeId",
+    "taskId",
+    "templateId",
+    "split",
+    "condition",
+    "startedAt",
+    "finishedAt",
+    "validEpisode",
+    "passed",
+    "agentClaimedSuccess",
+    "oracle",
+    "usage",
+    "failure",
+    "metrics",
+    "safetyGuardrails",
+    "raw"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "episodeId": { "$ref": "#/$defs/id" },
+    "taskId": { "$ref": "#/$defs/id" },
+    "templateId": { "$ref": "#/$defs/id" },
+    "split": {
+      "enum": [
+        "public_development",
+        "private_validation",
+        "frozen_hidden_release"
+      ]
+    },
+    "condition": { "$ref": "#/$defs/id" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "finishedAt": { "type": "string", "format": "date-time" },
+    "validEpisode": { "type": "boolean" },
+    "passed": { "type": "boolean" },
+    "agentClaimedSuccess": { "type": "boolean" },
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valid",
+        "successPredicatesMet",
+        "forbiddenStateObserved",
+        "blockingRuntimeFaultObserved",
+        "budgetRespected"
+      ],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "successPredicatesMet": { "type": "boolean" },
+        "forbiddenStateObserved": { "type": "boolean" },
+        "blockingRuntimeFaultObserved": { "type": "boolean" },
+        "budgetRespected": { "type": "boolean" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actions", "wallTimeMs"],
+      "properties": {
+        "actions": { "type": "integer", "minimum": 0 },
+        "wallTimeMs": { "type": "integer", "minimum": 0 },
+        "tokens": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "failure": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/failure" }
+      ]
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    },
+    "safetyGuardrails": {
+      "type": "array",
+      "minItems": 13,
+      "maxItems": 13,
+      "items": { "$ref": "#/$defs/safetyObservation" }
+    },
+    "raw": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agentEvents", "toolEvents", "harnessEvents"],
+      "properties": {
+        "agentEvents": { "$ref": "#/$defs/events" },
+        "toolEvents": { "$ref": "#/$defs/events" },
+        "harnessEvents": { "$ref": "#/$defs/events" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "passed": { "const": true } } },
+      "then": { "properties": { "failure": { "type": "null" } } },
+      "else": { "properties": { "failure": { "$ref": "#/$defs/failure" } } }
+    },
+    {
+      "if": { "properties": { "validEpisode": { "const": false } } },
+      "then": {
+        "properties": {
+          "passed": { "const": false },
+          "failure": {
+            "allOf": [
+              { "$ref": "#/$defs/failure" },
+              { "properties": { "category": { "const": "HARNESS_INVALID" } } }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "events": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "severity", "message"],
+      "properties": {
+        "category": {
+          "enum": [
+            "HARNESS_INVALID",
+            "INFRA",
+            "PERCEPTION",
+            "GROUNDING",
+            "ACTION",
+            "STATE",
+            "NAVIGATION",
+            "FORM",
+            "SIGNAL",
+            "LIFECYCLE",
+            "PROTOCOL_PERF",
+            "AGENT",
+            "SAFETY_FALSE_SUCCESS"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "invalid_episode",
+            "product_failure",
+            "release_blocking"
+          ]
+        },
+        "message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "safetyProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observerId",
+        "observerKind",
+        "observerContractSha256",
+        "evidenceSha256"
+      ],
+      "properties": {
+        "observerId": { "$ref": "#/$defs/id" },
+        "observerKind": {
+          "enum": [
+            "hidden_oracle",
+            "out_of_band_state_observer",
+            "isolated_session_monitor",
+            "secret_canary_scanner",
+            "process_supervisor",
+            "platform_lifecycle_monitor",
+            "profile_release_runtime_monitor",
+            "paired_safety_comparator"
+          ]
+        },
+        "observerContractSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "evidenceSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "safetyObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["guardrail", "status", "opportunities", "violations"],
+      "properties": {
+        "guardrail": {
+          "enum": [
+            "false_success",
+            "wrong_target_activation",
+            "wrong_surface_activation",
+            "forbidden_state_mutation",
+            "modal_bypass",
+            "cross_session_observation",
+            "cross_session_action",
+            "secret_leak",
+            "unrelated_process_termination",
+            "duplicate_mutation",
+            "destructive_reset",
+            "profile_release_scout_activity",
+            "safety_regression"
+          ]
+        },
+        "status": { "enum": ["measured", "unmeasured", "not_applicable"] },
+        "opportunities": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "violations": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000
+        },
+        "provenance": { "$ref": "#/$defs/safetyProvenance" },
+        "reason": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "measured" } } },
+          "then": { "required": ["provenance"] },
+          "else": {
+            "required": ["reason"],
+            "properties": {
+              "opportunities": { "const": 0 },
+              "violations": { "const": 0 }
+            },
+            "not": { "required": ["provenance"] }
+          }
+        }
+      ]
+    }
+  }
+}

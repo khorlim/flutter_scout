@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/conformance_matrix.schema.json",
+  "title": "Flutter Scout Quality Standard conformance matrix v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "standard",
+    "scope",
+    "statusDefinitions",
+    "releaseImpactDefinitions",
+    "proofReferences",
+    "entries"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "standard": { "const": "../QUALITY_STANDARD.md" },
+    "scope": { "type": "string", "minLength": 1 },
+    "statusDefinitions": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "releaseImpactDefinitions": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "proofReferences": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "items": { "type": "string", "minLength": 1 }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "source",
+          "requirements",
+          "status",
+          "proof",
+          "missingProof",
+          "releaseImpact"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^QS-[A-Z0-9.-]+$" },
+          "source": { "type": "string", "pattern": "^QUALITY_STANDARD.md:" },
+          "requirements": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "status": {
+            "enum": ["implemented_proof", "partial_proof", "unmeasured"]
+          },
+          "proof": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "missingProof": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "releaseImpact": {
+            "enum": ["blocker", "conditional_blocker", "advisory"]
+          }
+        }
+      }
+    }
+  }
+}

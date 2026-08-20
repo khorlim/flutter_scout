@@ -1,0 +1,403 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.local/evaluation/v1/performance_report.schema.json",
+  "title": "Flutter Scout performance comparison report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "benchmarkId",
+    "configSha256",
+    "environmentSha256",
+    "environment",
+    "evidenceIntegrity",
+    "measurementContract",
+    "conditions",
+    "comparison",
+    "observationNonInterference",
+    "quantitativeGates",
+    "releaseAssessment"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "benchmarkId": { "$ref": "#/$defs/id" },
+    "configSha256": { "$ref": "#/$defs/sha256" },
+    "environmentSha256": { "$ref": "#/$defs/sha256" },
+    "environment": {
+      "$ref": "performance_config.schema.json#/$defs/environment"
+    },
+    "evidenceIntegrity": { "$ref": "#/$defs/integrity" },
+    "measurementContract": { "$ref": "#/$defs/measurementContract" },
+    "conditions": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "$ref": "#/$defs/conditionSummary" }
+    },
+    "comparison": { "$ref": "#/$defs/comparison" },
+    "observationNonInterference": { "$ref": "#/$defs/nonInterference" },
+    "quantitativeGates": { "$ref": "#/$defs/quantitativeGates" },
+    "releaseAssessment": { "$ref": "#/$defs/releaseAssessment" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nonEmpty": { "type": "string", "minLength": 1 },
+    "nullableNumber": { "type": ["number", "null"] },
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "minimum", "maximum", "mean", "p50", "p95", "p99"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1 },
+        "minimum": { "type": "number" },
+        "maximum": { "type": "number" },
+        "mean": { "type": "number" },
+        "p50": { "type": "number" },
+        "p95": { "type": "number" },
+        "p99": { "type": "number" }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "exactInputBytesHashed",
+        "inputMutationDetected",
+        "missingSamples",
+        "extraSamples",
+        "duplicateSamples",
+        "postHocExclusions",
+        "archiveSha256",
+        "inventory"
+      ],
+      "properties": {
+        "status": { "const": "complete" },
+        "exactInputBytesHashed": { "const": true },
+        "inputMutationDetected": { "const": false },
+        "missingSamples": { "const": 0 },
+        "extraSamples": { "const": 0 },
+        "duplicateSamples": { "const": 0 },
+        "postHocExclusions": { "const": 0 },
+        "archiveSha256": { "$ref": "#/$defs/sha256" },
+        "inventory": {
+          "type": "array",
+          "minItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sampleId", "sourceFile", "fileSha256", "byteLength"],
+            "properties": {
+              "sampleId": { "$ref": "#/$defs/id" },
+              "sourceFile": { "$ref": "#/$defs/nonEmpty" },
+              "fileSha256": { "$ref": "#/$defs/sha256" },
+              "byteLength": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "measurementContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phaseOrder",
+        "phaseUnit",
+        "actionOverheadDefinition",
+        "percentileMethod",
+        "tokenEstimationMethod",
+        "estimatedUtf8BytesPerToken",
+        "scenario",
+        "warmupIterations",
+        "repetitionsPerCondition"
+      ],
+      "properties": {
+        "phaseOrder": {
+          "const": ["connect", "snapshot", "match", "dispatch", "settle", "delta", "logs", "serialize"]
+        },
+        "phaseUnit": { "const": "microseconds" },
+        "actionOverheadDefinition": { "$ref": "#/$defs/nonEmpty" },
+        "percentileMethod": { "const": "empirical_nearest_rank" },
+        "tokenEstimationMethod": { "const": "utf8_bytes_divisor_ceiling" },
+        "estimatedUtf8BytesPerToken": { "type": "number", "exclusiveMinimum": 0 },
+        "scenario": {
+          "enum": [
+            "warm_brief_inspect_standard",
+            "warm_brief_inspect_large_tree",
+            "action_overhead"
+          ]
+        },
+        "warmupIterations": { "type": "integer", "minimum": 1 },
+        "repetitionsPerCondition": { "type": "integer", "minimum": 2 }
+      }
+    },
+    "phaseSummaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connect", "snapshot", "match", "dispatch", "settle", "delta", "logs", "serialize"],
+      "properties": {
+        "connect": { "$ref": "#/$defs/distribution" },
+        "snapshot": { "$ref": "#/$defs/distribution" },
+        "match": { "$ref": "#/$defs/distribution" },
+        "dispatch": { "$ref": "#/$defs/distribution" },
+        "settle": { "$ref": "#/$defs/distribution" },
+        "delta": { "$ref": "#/$defs/distribution" },
+        "logs": { "$ref": "#/$defs/distribution" },
+        "serialize": { "$ref": "#/$defs/distribution" }
+      }
+    },
+    "resourceSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "idleCpuPercent",
+        "activeCpuPercent",
+        "processRssBytes",
+        "incrementalRssBytes",
+        "peakRssBytes",
+        "frameMedianUs",
+        "frameP95Us",
+        "enduranceDurationMs",
+        "enduranceActionCount",
+        "enduranceGrowthBytes",
+        "enduranceFailures"
+      ],
+      "properties": {
+        "idleCpuPercent": { "$ref": "#/$defs/distribution" },
+        "activeCpuPercent": { "$ref": "#/$defs/distribution" },
+        "processRssBytes": { "$ref": "#/$defs/distribution" },
+        "incrementalRssBytes": { "$ref": "#/$defs/distribution" },
+        "peakRssBytes": { "$ref": "#/$defs/distribution" },
+        "frameMedianUs": { "$ref": "#/$defs/distribution" },
+        "frameP95Us": { "$ref": "#/$defs/distribution" },
+        "enduranceDurationMs": { "$ref": "#/$defs/distribution" },
+        "enduranceActionCount": { "$ref": "#/$defs/distribution" },
+        "enduranceGrowthBytes": { "$ref": "#/$defs/distribution" },
+        "enduranceFailures": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["crashes", "crossovers", "deadlocks", "unboundedGrowthSamples"],
+          "properties": {
+            "crashes": { "type": "integer", "minimum": 0 },
+            "crossovers": { "type": "integer", "minimum": 0 },
+            "deadlocks": { "type": "integer", "minimum": 0 },
+            "unboundedGrowthSamples": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "conditionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "conditionId",
+        "sampleCount",
+        "phaseTimingsUs",
+        "actionOverheadExcludingSettleUs",
+        "totalUs",
+        "payload",
+        "resources",
+        "provenance",
+        "observationEffectSampleCount"
+      ],
+      "properties": {
+        "conditionId": { "$ref": "#/$defs/id" },
+        "sampleCount": { "type": "integer", "minimum": 2 },
+        "phaseTimingsUs": { "$ref": "#/$defs/phaseSummaries" },
+        "actionOverheadExcludingSettleUs": { "$ref": "#/$defs/distribution" },
+        "totalUs": { "$ref": "#/$defs/distribution" },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bytes", "estimatedTokens"],
+          "properties": {
+            "bytes": { "$ref": "#/$defs/distribution" },
+            "estimatedTokens": { "$ref": "#/$defs/distribution" }
+          }
+        },
+        "resources": { "$ref": "#/$defs/resourceSummary" },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cpu", "memory", "frameTime", "endurance", "observationEffects"],
+          "properties": {
+            "cpu": { "$ref": "#/$defs/provenanceSummary" },
+            "memory": { "$ref": "#/$defs/provenanceSummary" },
+            "frameTime": { "$ref": "#/$defs/provenanceSummary" },
+            "endurance": { "$ref": "#/$defs/provenanceSummary" },
+            "observationEffects": { "$ref": "#/$defs/provenanceSummary" }
+          }
+        },
+        "observationEffectSampleCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "provenanceSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observationCount", "earliestCapturedAtUtc", "latestCapturedAtUtc", "collectors"],
+      "properties": {
+        "observationCount": { "type": "integer", "minimum": 2 },
+        "earliestCapturedAtUtc": { "type": "string", "format": "date-time", "pattern": "Z$" },
+        "latestCapturedAtUtc": { "type": "string", "format": "date-time", "pattern": "Z$" },
+        "collectors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["source", "method", "collectorVersion", "target", "observationCount"],
+            "properties": {
+              "source": { "$ref": "#/$defs/nonEmpty" },
+              "method": { "$ref": "#/$defs/nonEmpty" },
+              "collectorVersion": { "$ref": "#/$defs/nonEmpty" },
+              "target": { "$ref": "#/$defs/nonEmpty" },
+              "observationCount": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "metricComparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metricId",
+        "baseline",
+        "candidate",
+        "absoluteChange",
+        "relativeChangePercent",
+        "lowerIsBetter",
+        "regressed",
+        "reason"
+      ],
+      "properties": {
+        "metricId": { "$ref": "#/$defs/nonEmpty" },
+        "baseline": { "type": "number" },
+        "candidate": { "type": "number" },
+        "absoluteChange": { "type": "number" },
+        "relativeChangePercent": { "$ref": "#/$defs/nullableNumber" },
+        "lowerIsBetter": { "type": "boolean" },
+        "regressed": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baselineConditionId",
+        "candidateConditionId",
+        "comparisonTolerancePercent",
+        "metrics",
+        "regressionStatus",
+        "regressions"
+      ],
+      "properties": {
+        "baselineConditionId": { "$ref": "#/$defs/id" },
+        "candidateConditionId": { "$ref": "#/$defs/id" },
+        "comparisonTolerancePercent": { "type": "number", "minimum": 0 },
+        "metrics": {
+          "type": "object",
+          "minProperties": 22,
+          "additionalProperties": { "$ref": "#/$defs/metricComparison" }
+        },
+        "regressionStatus": { "enum": ["pass", "fail"] },
+        "regressions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["metricId", "baseline", "candidate", "relativeChangePercent", "reason"],
+            "properties": {
+              "metricId": { "$ref": "#/$defs/nonEmpty" },
+              "baseline": { "type": "number" },
+              "candidate": { "type": "number" },
+              "relativeChangePercent": { "$ref": "#/$defs/nullableNumber" },
+              "reason": { "$ref": "#/$defs/nonEmpty" }
+            }
+          }
+        }
+      }
+    },
+    "nonInterference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "requiredEffectKinds", "affectedSampleCount", "affectedSamples"],
+      "properties": {
+        "status": { "enum": ["pass", "blocked"] },
+        "requiredEffectKinds": {
+          "const": ["focus", "pointer_gesture", "route", "semantics", "overlay_interception", "business_state", "synthetic_frames"]
+        },
+        "affectedSampleCount": { "type": "integer", "minimum": 0 },
+        "affectedSamples": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sampleId", "conditionId", "effects", "fileSha256"],
+            "properties": {
+              "sampleId": { "$ref": "#/$defs/id" },
+              "conditionId": { "$ref": "#/$defs/id" },
+              "effects": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "enum": ["focus", "pointer_gesture", "route", "semantics", "overlay_interception", "business_state", "synthetic_frames"] }
+              },
+              "fileSha256": { "$ref": "#/$defs/sha256" }
+            }
+          }
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gateId", "status", "threshold", "observed"],
+      "properties": {
+        "gateId": { "$ref": "#/$defs/id" },
+        "status": { "enum": ["pass", "fail", "blocked", "unmeasured"] },
+        "threshold": {},
+        "observed": {},
+        "comparison": { "enum": ["less_than_or_equal", "strictly_less_than"] },
+        "reason": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "quantitativeGates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ratificationStatus", "ratificationId", "frozenEnvironmentSha256", "gates", "note"],
+      "properties": {
+        "ratificationStatus": { "enum": ["provisional", "ratified"] },
+        "ratificationId": { "type": ["string", "null"] },
+        "frozenEnvironmentSha256": {
+          "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "gates": {
+          "type": "array",
+          "minItems": 8,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/gate" }
+        },
+        "note": { "$ref": "#/$defs/nonEmpty" }
+      }
+    },
+    "releaseAssessment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "claimable", "reasons"],
+      "properties": {
+        "status": { "enum": ["blocked", "unmeasured"] },
+        "claimable": { "const": false },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/nonEmpty" }
+        }
+      }
+    }
+  }
+}

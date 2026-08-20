@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "configSha256": "8f86e65f55dcde62728c0f414b5e5ab5cc4013f8bd4d01a516566ad4c1fa52bf",
+  "environmentSha256": "90e36f629c8da8db16f73f649e687c4b4e014e2a7a52798111a270cbbb081664",
+  "archiveSha256": "3d98cb90009847e00a854021b1f993cdcd700d0212afc344242ce9f2c78f8510",
+  "baseline": {
+    "actionOverheadP95Us": 2947,
+    "settleP95Us": 5002,
+    "payloadP95EstimatedTokens": 1001
+  },
+  "candidate": {
+    "actionOverheadP95Us": 2814,
+    "settleP95Us": 5002,
+    "payloadP95EstimatedTokens": 951
+  },
+  "regressionStatus": "pass",
+  "observationNonInterferenceStatus": "pass",
+  "quantitativeGateStatuses": [
+    "unmeasured",
+    "unmeasured",
+    "unmeasured",
+    "unmeasured",
+    "unmeasured",
+    "unmeasured",
+    "unmeasured",
+    "unmeasured"
+  ],
+  "releaseAssessment": {
+    "status": "unmeasured",
+    "claimable": false
+  }
+}

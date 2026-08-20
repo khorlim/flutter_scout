@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flutter-scout.dev/protocol/schemas/v1/cli-response.schema.json",
+  "title": "Flutter Scout additive CLI response envelope",
+  "type": "object",
+  "maxProperties": 1024,
+  "required": [
+    "messageType",
+    "ok",
+    "schemaVersion",
+    "protocolVersion",
+    "minSupportedProtocolVersion",
+    "maxSupportedProtocolVersion",
+    "protocolRange",
+    "capabilities",
+    "commandId",
+    "cliCommandId",
+    "commandName",
+    "runId",
+    "runtimeInstanceId",
+    "stateGeneration",
+    "identityStatus",
+    "identityAvailability",
+    "result",
+    "structuredError",
+    "timings",
+    "logCursor",
+    "eventCursor",
+    "payloadBounds",
+    "safetyEvidenceStatus"
+  ],
+  "properties": {
+    "messageType": {"enum": ["response", "warning"]},
+    "ok": {"type": "boolean"},
+    "schemaVersion": {"const": 1},
+    "protocolVersion": {"const": 15},
+    "minSupportedProtocolVersion": {"const": 15},
+    "maxSupportedProtocolVersion": {"const": 15},
+    "protocolRange": {
+      "type": "object",
+      "required": ["minimum", "maximum", "compatibility"],
+      "properties": {
+        "minimum": {"const": 15},
+        "maximum": {"const": 15},
+        "compatibility": {
+          "enum": ["within_supported_range", "outside_supported_range"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "object",
+      "required": [
+        "typedEnvelopeV1",
+        "runtimeSignalProvenanceV1",
+        "cliResponseEnvelopeV1",
+        "structuredHeartbeatsV1",
+        "correlatedEventCursorsV1",
+        "boundedCliPayloadsV1"
+      ],
+      "additionalProperties": {"type": "boolean"}
+    },
+    "capabilitySource": {"type": "string", "minLength": 1},
+    "commandId": {"type": ["string", "null"], "minLength": 1},
+    "cliCommandId": {"type": ["string", "null"], "minLength": 1},
+    "commandName": {"type": ["string", "null"], "minLength": 1},
+    "runId": {"type": ["string", "null"], "minLength": 1},
+    "runtimeInstanceId": {"type": ["string", "null"], "minLength": 1},
+    "stateGeneration": {"type": ["integer", "null"], "minimum": 0},
+    "identityStatus": {
+      "enum": [
+        "observed",
+        "validated",
+        "validated_pre_dispatch",
+        "partial",
+        "unavailable"
+      ]
+    },
+    "identityAvailability": {
+      "type": "object",
+      "required": [
+        "commandId",
+        "cliCommandId",
+        "runId",
+        "runtimeInstanceId",
+        "stateGeneration"
+      ],
+      "additionalProperties": {"enum": ["available", "unavailable"]}
+    },
+    "result": {},
+    "structuredError": {
+      "oneOf": [
+        {"$ref": "#/$defs/structuredError"},
+        {"type": "null"}
+      ]
+    },
+    "timings": {
+      "type": "object",
+      "required": ["totalMs", "status", "phases"],
+      "properties": {
+        "totalMs": {"type": ["integer", "null"], "minimum": 0},
+        "status": {
+          "enum": ["measured", "partial", "unavailable", "in_progress"]
+        },
+        "phases": {
+          "type": "object",
+          "required": [
+            "connect",
+            "snapshot",
+            "match",
+            "dispatch",
+            "settle",
+            "delta",
+            "logs",
+            "serialize"
+          ],
+          "maxProperties": 32,
+          "additionalProperties": {"$ref": "#/$defs/timingPhase"}
+        }
+      },
+      "additionalProperties": {"type": ["integer", "number", "string", "null"]}
+    },
+    "logCursor": {"type": "integer", "minimum": 0},
+    "eventCursor": {"type": ["integer", "null"], "minimum": 0},
+    "payloadBounds": {
+      "type": "object",
+      "required": [
+        "maxSerializedBytes",
+        "maxStringCharacters",
+        "maxCollectionEntries",
+        "maxDepth",
+        "truncated",
+        "truncationCount",
+        "safetyDisposition"
+      ],
+      "properties": {
+        "maxSerializedBytes": {"type": "integer", "minimum": 1},
+        "maxStringCharacters": {"type": "integer", "minimum": 1},
+        "maxCollectionEntries": {"type": "integer", "minimum": 1},
+        "maxDepth": {"type": "integer", "minimum": 1},
+        "truncated": {"type": "boolean"},
+        "truncationCount": {"type": "integer", "minimum": 0},
+        "safetyDisposition": {"enum": ["complete", "failed_closed"]}
+      },
+      "additionalProperties": false
+    },
+    "safetyEvidenceStatus": {"enum": ["complete", "truncated"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"ok": {"const": true}}},
+      "then": {"properties": {"structuredError": {"type": "null"}}},
+      "else": {
+        "properties": {
+          "structuredError": {"$ref": "#/$defs/structuredError"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "structuredError": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "message": {"type": "string", "maxLength": 65536},
+        "details": {"type": "object", "maxProperties": 1024}
+      },
+      "additionalProperties": true
+    },
+    "timingPhase": {
+      "type": "object",
+      "required": ["status", "elapsedMs"],
+      "properties": {
+        "status": {"enum": ["measured", "unavailable"]},
+        "elapsedMs": {"type": ["integer", "null"], "minimum": 0},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "status": {"const": "measured"},
+            "elapsedMs": {"type": "integer", "minimum": 0}
+          }
+        },
+        {
+          "required": ["reason"],
+          "properties": {
+            "status": {"const": "unavailable"},
+            "elapsedMs": {"type": "null"}
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
