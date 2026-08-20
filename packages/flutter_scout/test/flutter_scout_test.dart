@@ -1901,6 +1901,42 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
     );
   });
 
+  test('launch poll accepts only the exact Dart VM exec transition', () {
+    final cli = FlutterScoutCli();
+    final initialIdentity = <String, Object?>{
+      'pid': 42,
+      'parentPid': 1,
+      'startedAt': 'Thu Aug 20 17:09:04 2026',
+      'executable': '/flutter/bin/cache/dart-sdk/bin/dart',
+      'commandIdentity': 'flutter_run_worker',
+    };
+    final postExecIdentity = <String, Object?>{
+      ...initialIdentity,
+      'executable': '/flutter/bin/cache/dart-sdk/bin/dartvm',
+    };
+
+    expect(
+      cli.debugMatchesRunnerWorkerIdentity(initialIdentity, postExecIdentity),
+      isTrue,
+    );
+    for (final mismatch in <Map<String, Object?>>[
+      {...postExecIdentity, 'pid': 43},
+      {...postExecIdentity, 'parentPid': 2},
+      {...postExecIdentity, 'startedAt': 'Thu Aug 20 17:09:05 2026'},
+      {...postExecIdentity, 'commandIdentity': 'foreign_worker'},
+      {...postExecIdentity, 'executable': '/tmp/dartvm'},
+      {
+        ...postExecIdentity,
+        'executable': '/flutter/bin/cache/dart-sdk/bin/dartaotruntime',
+      },
+    ]) {
+      expect(
+        cli.debugMatchesRunnerWorkerIdentity(initialIdentity, mismatch),
+        isFalse,
+      );
+    }
+  });
+
   test(
     'supervised worker records Flutter exit without requesting relaunch',
     () async {

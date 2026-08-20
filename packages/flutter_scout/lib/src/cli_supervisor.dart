@@ -249,7 +249,7 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
       role: _flutterWorkerProcessRole,
     );
     if (currentIdentity == null ||
-        !_sameProcessOwnershipIdentity(expectedIdentity, currentIdentity)) {
+        !_matchesRunnerWorkerIdentity(expectedIdentity, currentIdentity)) {
       return false;
     }
     final command = await _processCommand(workerPid);
@@ -559,6 +559,26 @@ Object? _selectRunnerWorkerIdentity({
   return supervisorState['workerProcessIdentity'];
 }
 
+bool _matchesRunnerWorkerIdentity(
+  Map<Object?, Object?> expected,
+  Map<String, Object?> current,
+) {
+  if (_sameProcessOwnershipIdentity(expected, current)) return true;
+
+  final expectedExecutable = expected['executable']?.toString();
+  final currentExecutable = current['executable']?.toString();
+  return int.tryParse('${expected['pid'] ?? ''}') == current['pid'] &&
+      int.tryParse('${expected['parentPid'] ?? ''}') == current['parentPid'] &&
+      expected['startedAt']?.toString() == current['startedAt'] &&
+      expected['commandIdentity'] == _flutterWorkerProcessRole &&
+      current['commandIdentity'] == _flutterWorkerProcessRole &&
+      expectedExecutable != null &&
+      currentExecutable != null &&
+      p.basename(expectedExecutable) == 'dart' &&
+      p.basename(currentExecutable) == 'dartvm' &&
+      p.dirname(expectedExecutable) == p.dirname(currentExecutable);
+}
+
 extension FlutterScoutCliSupervisorTesting on FlutterScoutCli {
   Object? debugSelectRunnerWorkerIdentity({
     required Object? initialIdentity,
@@ -571,6 +591,11 @@ extension FlutterScoutCliSupervisorTesting on FlutterScoutCli {
     liveWorkerPid: liveWorkerPid,
     supervisorState: supervisorState,
   );
+
+  bool debugMatchesRunnerWorkerIdentity(
+    Map<Object?, Object?> expected,
+    Map<String, Object?> current,
+  ) => _matchesRunnerWorkerIdentity(expected, current);
 }
 
 class _RunnerSupervisor {

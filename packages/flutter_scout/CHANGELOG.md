@@ -1,5 +1,8 @@
 ## Unreleased
 
+- Fixed a launch race where the runner could be rejected during the narrow
+  in-place Dart-to-VM executable transition before supervisor state existed.
+
 - Keep macOS launches waiting through the Dart launcher-to-VM executable
   transition by validating the live worker against its exact post-exec
   supervisor identity instead of prematurely reporting `runner_exited`.
