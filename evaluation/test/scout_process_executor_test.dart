@@ -4,9 +4,11 @@ import 'dart:io';
 import 'package:flutter_scout_evaluation/flutter_scout_evaluation.dart';
 import 'package:test/test.dart';
 
+import 'test_support.dart';
+
 void main() {
   test('process executor passes arguments literally without a shell', () async {
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_process_executor_',
     );
     addTearDown(() => temporary.delete(recursive: true));
@@ -42,7 +44,7 @@ void main(List<String> arguments) {
   });
 
   test('process executor kills a command at its action deadline', () async {
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_process_executor_',
     );
     addTearDown(() => temporary.delete(recursive: true));
@@ -71,7 +73,7 @@ Future<void> main() async {
 
   test('attach keeps the VM capability URI out of argv and evidence', () async {
     if (Platform.isWindows) return;
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_process_executor_',
     );
     addTearDown(() => temporary.delete(recursive: true));

@@ -1,14 +1,15 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter_scout_evaluation/flutter_scout_evaluation.dart';
 import 'package:test/test.dart';
+
+import 'test_support.dart';
 
 void main() {
   test(
     'runner uses only the agent projection and independent oracle truth',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_tool_simulator_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -84,7 +85,7 @@ void main() {
   test(
     'false success is caught when Scout output says ok but oracle does not',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_tool_simulator_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -126,7 +127,7 @@ void main() {
   test(
     'over-budget plan dispatches no actions and is archived as failure',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_tool_simulator_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -178,7 +179,7 @@ void main() {
   test(
     'reset generation mismatch invalidates the harness before planning',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_tool_simulator_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -219,7 +220,7 @@ void main() {
   test(
     'teardown generation mismatch invalidates a successful task episode',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_tool_simulator_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -289,7 +290,7 @@ void main() {
   );
 
   test('the concrete slice rejects private and hidden manifests', () async {
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_tool_simulator_',
     );
     addTearDown(() => temporary.delete(recursive: true));

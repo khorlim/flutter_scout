@@ -10,7 +10,7 @@ void main() {
   test(
     'raw episode archive round-trips and never overwrites an episode',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_evaluation_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -33,7 +33,7 @@ void main() {
   );
 
   test('archive read rejects path traversal identifiers', () async {
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_evaluation_',
     );
     addTearDown(() => temporary.delete(recursive: true));
@@ -48,7 +48,7 @@ void main() {
     'archive rejects symlink entries without changing their targets',
     () async {
       if (Platform.isWindows) return;
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_evaluation_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -66,7 +66,7 @@ void main() {
 
   test('archive rejects unbounded and non-private entries', () async {
     if (Platform.isWindows) return;
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_evaluation_',
     );
     addTearDown(() => temporary.delete(recursive: true));

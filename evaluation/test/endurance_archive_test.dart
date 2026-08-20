@@ -4,12 +4,13 @@ import 'package:flutter_scout_evaluation/flutter_scout_evaluation.dart';
 import 'package:test/test.dart';
 
 import 'endurance_test_support.dart';
+import 'test_support.dart';
 
 void main() {
   test(
     'archive is create-only and exact-byte tampering fails validation',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_endurance_archive_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -51,7 +52,7 @@ void main() {
   test(
     'invalid fresh setup is archived as HARNESS_INVALID ownership',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_endurance_archive_',
       );
       addTearDown(() => temporary.delete(recursive: true));

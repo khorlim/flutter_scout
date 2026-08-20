@@ -5,12 +5,13 @@ import 'package:flutter_scout_evaluation/flutter_scout_evaluation.dart';
 import 'package:test/test.dart';
 
 import 'endurance_test_support.dart';
+import 'test_support.dart';
 
 void main() {
   test(
     'short fake run archives every phase/resource step but stays unmeasured',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_endurance_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -74,7 +75,7 @@ void main() {
   );
 
   test('runtime crossover is a release-blocking product failure', () async {
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_endurance_',
     );
     addTearDown(() => temporary.delete(recursive: true));
@@ -110,7 +111,7 @@ void main() {
   });
 
   test('uncertain dispatch is never retried', () async {
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_endurance_',
     );
     addTearDown(() => temporary.delete(recursive: true));
@@ -157,7 +158,7 @@ void main() {
   test(
     'independent failure probe attributes runtime loss to app crash',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_endurance_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -212,7 +213,7 @@ void main() {
   test(
     'repeated required-progress signature stops a no-progress loop',
     () async {
-      final temporary = await Directory.systemTemp.createTemp(
+      final temporary = await createPrivateTestDirectory(
         'flutter_scout_endurance_',
       );
       addTearDown(() => temporary.delete(recursive: true));
@@ -253,7 +254,7 @@ void main() {
   );
 
   test('sustained RSS growth reports both bound and trend', () async {
-    final temporary = await Directory.systemTemp.createTemp(
+    final temporary = await createPrivateTestDirectory(
       'flutter_scout_endurance_',
     );
     addTearDown(() => temporary.delete(recursive: true));
@@ -293,10 +294,10 @@ void main() {
   test(
     'cancellation and teardown failure have distinct typed ownership',
     () async {
-      final cancellationDirectory = await Directory.systemTemp.createTemp(
+      final cancellationDirectory = await createPrivateTestDirectory(
         'flutter_scout_endurance_cancel_',
       );
-      final teardownDirectory = await Directory.systemTemp.createTemp(
+      final teardownDirectory = await createPrivateTestDirectory(
         'flutter_scout_endurance_teardown_',
       );
       addTearDown(() async {
