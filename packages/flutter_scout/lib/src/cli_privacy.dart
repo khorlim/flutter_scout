@@ -41,9 +41,9 @@ extension _CliPrivacy on FlutterScoutCli {
           _registerSensitiveValue(value);
         }
       }
-      for (final key in uri.queryParametersAll.keys) {
-        if (key.isNotEmpty) _registerSensitiveValue(key);
-      }
+      // Query names describe routing (the Dart VM commonly uses `uri`) and
+      // are not credentials. Registering a short name would corrupt unrelated
+      // factual output such as `heuristic` through exact substring redaction.
     } on FormatException {
       // The complete untrusted string was already registered above. Leave
       // structural rejection to the central typed URI validator without
@@ -61,7 +61,6 @@ extension _CliPrivacy on FlutterScoutCli {
         if (segment.isNotEmpty) _registerSensitiveValue(segment);
       }
       for (final entry in uri.queryParametersAll.entries) {
-        if (entry.key.isNotEmpty) _registerSensitiveValue(entry.key);
         for (final value in entry.value) {
           if (value.isNotEmpty) _registerSensitiveValue(value);
         }

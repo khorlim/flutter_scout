@@ -117,11 +117,9 @@ done > '${childArgv.path}'
         expect(workerLog.readAsStringSync(), isNot(contains(secret)));
         expect(
           Directory(p.join(temp.path, '.flutter_scout')).existsSync(),
-          isTrue,
-        );
-        _expectDirectoryHasNoSecret(
-          Directory(p.join(temp.path, '.flutter_scout')),
-          secret,
+          isFalse,
+          reason:
+              'The detached worker must use only its validated absolute config paths and must not bootstrap storage from its working directory.',
         );
 
         // The parent-side preparation is not treated as lasting authority.

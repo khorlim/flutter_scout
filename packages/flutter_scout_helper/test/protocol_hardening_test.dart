@@ -220,6 +220,28 @@ void main() {
     );
   });
 
+  testWidgets('accepts the VM service isolate routing parameter', (
+    tester,
+  ) async {
+    final runtime = FlutterScoutRuntime();
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: Text('transport fixture'))),
+    );
+    await tester.pump();
+
+    final response = await runtime.debugProtocolRead(const <String, String>{
+      'schemaVersion': '1',
+      'clientProtocolMin': '15',
+      'clientProtocolMax': '15',
+      'commandId': 'vm-transport-read',
+      'runId': 'run-a',
+      'isolateId': 'isolates/123456789',
+    }, method: 'ext.flutter_scout.inspect');
+
+    expect(response['ok'], isTrue);
+    expect(response['structuredError'], isNull);
+  });
+
   testWidgets(
     'pre-handler request bounds reject huge keys and business values',
     (tester) async {

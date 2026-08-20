@@ -33,6 +33,20 @@ void main() {
     expect(message, isNot(matches(RegExp(r'[\x00-\x1f\x7f-\x9f]'))));
   });
 
+  test('VM routing query names do not corrupt factual response strings', () {
+    final sanitized =
+        FlutterScoutCli().debugSanitizeSerialization(<String, Object?>{
+              'vmServiceUri':
+                  'http://127.0.0.1:12345/abcdefghijkl/'
+                  '?uri=ws%3A%2F%2F127.0.0.1%3A12345%2Fabcdefghijkl%2Fws',
+              'scoreKind': 'uncalibrated_heuristic',
+            })
+            as Map;
+
+    expect(sanitized['vmServiceEndpoint'], isA<Map>());
+    expect(sanitized['scoreKind'], 'uncalibrated_heuristic');
+  });
+
   test(
     'generated input/fill secret never reaches artifacts or process argv',
     () async {

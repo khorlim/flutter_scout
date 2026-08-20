@@ -1471,21 +1471,27 @@ void main() {
   );
 
   test(
-    'post-action capture is materialized without base64 in output',
+    'post-action capture is materialized without duplicated base64 output',
     () async {
       final temp = await Directory.systemTemp.createTemp('scout_capture_');
       addTearDown(() => temp.delete(recursive: true));
       final output = p.join(temp.path, 'capture.png');
+      final bytes = List<int>.generate(96 * 1024, (index) => index % 251);
+      final encoded = base64Encode(bytes);
       final result = FlutterScoutCli().debugMaterializeActionCapture({
         'ok': true,
-        'capture': {
-          'ok': true,
-          'bytes': base64Encode([1, 2, 3, 4]),
-          'backend': 'in_app_capture',
+        'capture': {'ok': true, 'bytes': encoded, 'backend': 'in_app_capture'},
+        'result': {
+          'action': 'tap',
+          'capture': {
+            'ok': true,
+            'bytes': encoded,
+            'backend': 'in_app_capture',
+          },
         },
       }, output);
 
-      expect(File(output).readAsBytesSync(), [1, 2, 3, 4]);
+      expect(File(output).readAsBytesSync(), bytes);
       expect(
         result['capture'],
         allOf(
@@ -1493,6 +1499,15 @@ void main() {
           containsPair('path', File(output).absolute.path),
         ),
       );
+      final nestedResult = result['result']! as Map;
+      expect(
+        nestedResult['capture'],
+        allOf(
+          isNot(contains('bytes')),
+          containsPair('path', File(output).absolute.path),
+        ),
+      );
+      expect(jsonEncode(result), isNot(contains(encoded)));
     },
   );
 
@@ -1875,6 +1890,12 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
         expect(state['launchCount'], 1);
         expect(state['workerExitingNormally'], isTrue);
         expect(state['exitCode'], 7);
+        expect(
+          Directory('.flutter_scout').existsSync(),
+          isFalse,
+          reason:
+              'Internal workers use their absolute config paths and must not bootstrap session storage from the launchd working directory.',
+        );
       });
     },
   );

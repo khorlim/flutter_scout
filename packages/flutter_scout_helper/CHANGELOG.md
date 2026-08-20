@@ -1,5 +1,8 @@
 ## Unreleased
 
+* Accept Dart VM service `isolateId` routing metadata at the strict request
+  boundary, bound it independently, and exclude it from Scout mutation
+  business fingerprints so real VM extension calls reach their handlers.
 * Publish helper-visible stable structured-error meanings in the shared v1
   error catalog and include every one in deterministic CLI envelope goldens;
   source-emission drift is blocking, while no runtime or release-binary

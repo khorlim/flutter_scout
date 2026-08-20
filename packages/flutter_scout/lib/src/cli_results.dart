@@ -22,7 +22,7 @@ extension _CliResults on FlutterScoutCli {
     try {
       result = _withProtocolDiagnostics(
         method,
-        await _call(method, params, callTimeout),
+        await _call(method, params, callTimeout, captureOutput),
       );
     } catch (error) {
       final recognizedTransportLoss =
@@ -432,25 +432,86 @@ extension _CliResults on FlutterScoutCli {
     String? output,
   ) {
     if (output == null || output.isEmpty) return result;
-    final capture = result['capture'];
-    if (capture is! Map) return result;
+    final topLevelCapture = result['capture'];
+    final nestedResult = result['result'];
+    final nestedCapture = nestedResult is Map ? nestedResult['capture'] : null;
+    final capture = topLevelCapture is Map
+        ? topLevelCapture
+        : nestedCapture is Map
+        ? nestedCapture
+        : null;
+    if (capture == null) return result;
     final encoded = capture['bytes'];
     if (encoded is! String || encoded.isEmpty) return result;
+
+    Map<String, Object?> withoutBytes(Map source, {String? path}) =>
+        <String, Object?>{
+          for (final entry in source.entries)
+            if (entry.key != 'bytes') entry.key.toString(): entry.value,
+          'path': ?path,
+        };
+
+    Map<String, dynamic> replaceCaptures({
+      required Map<String, Object?> topLevel,
+      required Map<String, Object?> nested,
+    }) => <String, dynamic>{
+      ...result,
+      if (topLevelCapture is Map) 'capture': topLevel,
+      if (nestedResult is Map)
+        'result': <String, Object?>{
+          for (final entry in nestedResult.entries)
+            entry.key.toString(): entry.value,
+          if (nestedCapture is Map) 'capture': nested,
+        },
+    };
+
     try {
       final file = File(output).absolute;
       _writePrivateArtifactBytes(file.path, base64Decode(encoded));
       _writePrivateArtifactMetadata(file.path, 'session');
-      return {
-        ...result,
-        'capture': {
-          for (final entry in capture.entries)
-            if (entry.key != 'bytes') entry.key.toString(): entry.value,
-          'path': file.path,
-        },
-      };
+      final materializedTopLevel = topLevelCapture is Map
+          ? withoutBytes(topLevelCapture, path: file.path)
+          : <String, Object?>{};
+      final materializedNested = nestedCapture is Map
+          ? withoutBytes(nestedCapture, path: file.path)
+          : <String, Object?>{};
+      return replaceCaptures(
+        topLevel: materializedTopLevel,
+        nested: materializedNested,
+      );
     } catch (error) {
-      return {
-        ...result,
+      final failedCapture = <String, Object?>{
+        ...withoutBytes(capture),
+        'ok': false,
+        'error': 'capture_write_failed',
+      };
+      return <String, dynamic>{
+        ...replaceCaptures(
+          topLevel: topLevelCapture is Map
+              ? <String, Object?>{
+                  ...withoutBytes(topLevelCapture),
+                  ...failedCapture,
+                }
+              : const <String, Object?>{},
+          nested: nestedCapture is Map
+              ? <String, Object?>{
+                  ...withoutBytes(nestedCapture),
+                  ...failedCapture,
+                }
+              : const <String, Object?>{},
+        ),
+        'ok': false,
+        'error': <String, Object?>{
+          'code': 'capture_failed',
+          'message':
+              'The action completed, but its requested post-action capture '
+              'could not be written to the selected private artifact path.',
+          'cause': error.toString(),
+        },
+        'mutationMayHaveOccurred': _actionMayHaveOccurred(
+          result,
+          mutationIntent: true,
+        ),
         'warnings': [
           ..._objectList(result['warnings']),
           'The post-action frame was captured, but could not be written to '
@@ -1075,6 +1136,7 @@ extension _CliResults on FlutterScoutCli {
     String method, [
     Map<String, String> params = const {},
     Duration? callTimeout,
+    String? captureOutput,
   ]) async {
     final connectionTiming = _CliConnectPhaseTiming();
     final result = await _callWithConnectionTiming(
@@ -1082,6 +1144,7 @@ extension _CliResults on FlutterScoutCli {
       params,
       callTimeout,
       connectionTiming,
+      captureOutput,
     );
     return _withConnectionPhaseTiming(result, connectionTiming);
   }
@@ -1091,6 +1154,7 @@ extension _CliResults on FlutterScoutCli {
     Map<String, String> params,
     Duration? callTimeout,
     _CliConnectPhaseTiming connectionTiming,
+    String? captureOutput,
   ) async {
     final mutating = _isMutatingExtension(method, params);
     final preTransport = mutating
@@ -1274,10 +1338,13 @@ extension _CliResults on FlutterScoutCli {
       }
       return _closeDurableMutationOutcome(
         invocation,
-        _withClosedMutationOutcome(
-          result,
-          invocation,
-          reconciledAfterTimeout: reconciledAfterTimeout,
+        _materializeActionCapture(
+          _withClosedMutationOutcome(
+            result,
+            invocation,
+            reconciledAfterTimeout: reconciledAfterTimeout,
+          ),
+          captureOutput,
         ),
       );
     } on RPCError catch (error) {

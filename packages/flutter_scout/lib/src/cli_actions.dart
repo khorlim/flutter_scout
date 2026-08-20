@@ -480,6 +480,7 @@ extension _CliActions on FlutterScoutCli {
       'ext.flutter_scout.tapText',
       params,
       _actionCallTimeout(parsed, params),
+      parsed.option('capture'),
     );
     result = await _tapTextFallbackIfNeeded(result, params);
     vmStopwatch.stop();

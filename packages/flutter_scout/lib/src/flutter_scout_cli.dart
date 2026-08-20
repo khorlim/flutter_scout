@@ -753,22 +753,25 @@ class FlutterScoutCli {
           }
         });
       }
-      _selectImplicitNamedSession(command);
-      await _recoverPendingTemporaryHelpersAtCommandStart(command, rest);
-      _runRetentionCleanupAtCommandStart(command, rest);
-      if (command == 'stop' && rest.contains('--clear-session')) {
-        _ensurePrivateDirectory(
-          _sessionDir.path,
-          boundary: _sessionManagedBoundary(),
-        );
-      } else {
-        _ensureSessionDir();
-      }
-      if (pendingSessionRegistration != null) {
-        _registerScoutSession(
-          pendingSessionRegistration,
-          _sessionDirectoryOverride!,
-        );
+      final infrastructureCommand = _infrastructureCommands.contains(command);
+      if (!infrastructureCommand) {
+        _selectImplicitNamedSession(command);
+        await _recoverPendingTemporaryHelpersAtCommandStart(command, rest);
+        _runRetentionCleanupAtCommandStart(command, rest);
+        if (command == 'stop' && rest.contains('--clear-session')) {
+          _ensurePrivateDirectory(
+            _sessionDir.path,
+            boundary: _sessionManagedBoundary(),
+          );
+        } else {
+          _ensureSessionDir();
+        }
+        if (pendingSessionRegistration != null) {
+          _registerScoutSession(
+            pendingSessionRegistration,
+            _sessionDirectoryOverride!,
+          );
+        }
       }
       if (!_reuseVmConnection &&
           _commandsEligibleForServeProxy.contains(command) &&

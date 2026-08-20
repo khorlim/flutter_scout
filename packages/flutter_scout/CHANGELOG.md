@@ -1,5 +1,15 @@
 ## Unreleased
 
+- Materialize post-action captures from both compatibility and typed response
+  slots, so large PNG payloads are written once to private storage instead of
+  overflowing the bounded CLI evidence envelope.
+- Treat URI query names as routing metadata rather than secret values, avoiding
+  false substring redaction of factual response values such as `heuristic`.
+
+- Let detached VM-log and Flutter-run workers start from launchd's root
+  working directory without bootstrapping an unrelated `/.flutter_scout`
+  store; internal workers now rely only on their validated absolute config
+  paths.
 - Identify this incompatible protocol-15 candidate as `2.0.0-dev.1`; it is a
   prerelease marker only and does not imply release qualification.
 - Publish independent machine-readable catalogs for all public CLI commands

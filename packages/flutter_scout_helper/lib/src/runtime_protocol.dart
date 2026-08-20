@@ -42,6 +42,7 @@ const int _maxProtocolRequestBulkValueBytes = 512 * 1024;
 const int _maxProtocolCommandIdBytes = 256;
 const int _maxProtocolRunIdBytes = 128;
 const int _maxProtocolRuntimeIdBytes = 128;
+const int _maxVmTransportIsolateIdBytes = 128;
 
 final RegExp _safeProtocolIdempotencyKey = RegExp(
   r'^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$',
@@ -63,9 +64,16 @@ const Map<String, int> _protocolParameterByteLimits = <String, int>{
   'errorsSinceCursor': 32,
   'idempotencyKey': 128,
   'runtimeInstanceId': _maxProtocolRuntimeIdBytes,
+  'isolateId': _maxVmTransportIsolateIdBytes,
   'expectedStateGeneration': 32,
   'deadlineEpochMs': 32,
 };
+
+// The VM service requires `isolateId` to route an extension call and forwards
+// it to `developer.registerExtension`. It is transport metadata rather than a
+// Scout method argument, so it is accepted at the boundary but not advertised
+// in the public typed-method catalog or included in business fingerprints.
+const Set<String> _vmTransportProtocolParameters = <String>{'isolateId'};
 
 const Set<String> _commonProtocolParameters = <String>{
   'schemaVersion',
@@ -551,6 +559,7 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
     }
     final allowed = <String>{
       ..._commonProtocolParameters,
+      ..._vmTransportProtocolParameters,
       ...methodContract.parameters.keys,
     };
     final unknown =
@@ -801,6 +810,7 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
       'deadlineEpochMs',
       'errorCursor',
       'errorsSinceCursor',
+      'isolateId',
     };
     final businessParams = <String, String>{
       for (final entry in context.params.entries)
