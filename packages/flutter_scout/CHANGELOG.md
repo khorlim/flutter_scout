@@ -1,5 +1,11 @@
 ## Unreleased
 
+- Treat Dart frontend compiler diagnostics as an immediate rejected hot-update
+  acknowledgement, even when newer Flutter tools omit their former terminal
+  rejection line. Rejected Scout-owned reloads now return a bounded,
+  redacted `compilerDiagnostics` block instead of waiting for an
+  acknowledgement timeout with no actionable compile error.
+
 - Fixed a launch race where the runner could be rejected during the narrow
   in-place Dart-to-VM executable transition before supervisor state existed.
 

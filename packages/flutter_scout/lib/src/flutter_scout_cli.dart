@@ -258,6 +258,16 @@ class FlutterScoutCli {
     phase: 'debug_classification',
   );
 
+  /// Test-only view of the compiler diagnostics used to reject a hot update.
+  Map<String, Object?>? debugHotUpdateFailureAcknowledgementFromLines(
+    String action,
+    List<String> lines,
+  ) => _hotUpdateFailureAcknowledgementFromLines(
+    action: action,
+    rawLines: lines,
+    startCursor: 0,
+  );
+
   /// Test-only view of `logs --summary` classification.
   Map<String, Object?> debugLogSummary(List<String> lines, {int last = 20}) =>
       _summarizeLogLines(lines, last: last);
@@ -2940,6 +2950,15 @@ _LogClassification? _classifyLogLine(String rawLine) {
       severity: 'blocking',
       blocking: true,
       message: buildError.group(1)!.trim(),
+    );
+  }
+
+  if (_dartCompilerErrorPattern.hasMatch(payload)) {
+    return _LogClassification(
+      kind: 'flutter_compile_error',
+      severity: 'blocking',
+      blocking: true,
+      message: _stripFlutterToolLogMetadata(line),
     );
   }
 

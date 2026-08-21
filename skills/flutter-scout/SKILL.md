@@ -232,7 +232,9 @@ this recovery ladder:
 
 1. Run `flutter-scout --app <task-slug> status`.
 2. If `appReachable:true` or `running:true`, keep the existing app and inspect
-   the reload error; it is still running the previous code.
+   the reload error; it is still running the previous code. For a Dart compile
+   failure, fix the bounded lines in
+   `acknowledgement.compilerDiagnostics`, then reload the same session again.
    If `sessionOwnershipLost:true` or
    `ownershipLossReason:owner_process_exited`, the app is inspectable but the
    original Flutter compiler process is gone, so Dart edits cannot be reloaded.

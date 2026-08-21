@@ -66,6 +66,13 @@ void main() {
         ),
         (
           line:
+              '[$now] [FLUTTER_STDERR] lib/main.dart:26:14: Error: Undefined name.',
+          kind: 'flutter_compile_error',
+          severity: 'blocking',
+          blocking: true,
+        ),
+        (
+          line:
               '[$now] [VM_STDERR] Hot reload was rejected after fixing the above error',
           kind: 'flutter_hot_update_rejected',
           severity: 'blocking',
@@ -188,6 +195,78 @@ void main() {
         expect(signals.single['blocking'], isTrue, reason: message);
         expect(signals.single['phase'], 'debug_classification');
       }
+    });
+
+    test('hot update rejection preserves bounded compiler diagnostics', () {
+      final now = DateTime.now().toUtc().toIso8601String();
+      final acknowledgement = FlutterScoutCli()
+          .debugHotUpdateFailureAcknowledgementFromLines('reload', [
+            '[$now] [FLUTTER_STDOUT] Performing hot reload...',
+            '[$now] [FLUTTER_STDERR] lib/main.dart:26:14: Error: '
+                "The getter 'missingScoutTitle' isn't defined.",
+            '[$now] [FLUTTER_STDERR] Try correcting the name.',
+            '[$now] [FLUTTER_STDERR]       title: missingScoutTitle,',
+            '[$now] [FLUTTER_STDERR]              ^^^^^^^^^^^^^^^^^',
+          ]);
+
+      expect(acknowledgement, isNotNull);
+      expect(acknowledgement!['ok'], isFalse);
+      expect(acknowledgement['rejected'], isTrue);
+      expect(acknowledgement['rejectionReason'], 'dart_compile_error');
+      expect(acknowledgement['terminalRejectionObserved'], isFalse);
+      expect(
+        acknowledgement['message'],
+        contains('lib/main.dart:26:14: Error:'),
+      );
+      expect(
+        acknowledgement['compilerDiagnostics'],
+        equals([
+          "lib/main.dart:26:14: Error: The getter 'missingScoutTitle' isn't defined.",
+          'Try correcting the name.',
+          'title: missingScoutTitle,',
+          '^^^^^^^^^^^^^^^^^',
+        ]),
+      );
+      expect(acknowledgement['compilerDiagnosticsTruncated'], isFalse);
+      expect(acknowledgement['cursor'], greaterThan(0));
+    });
+
+    test(
+      'terminal hot update rejection remains actionable without a compiler line',
+      () {
+        final now = DateTime.now().toUtc().toIso8601String();
+        final acknowledgement = FlutterScoutCli()
+            .debugHotUpdateFailureAcknowledgementFromLines('restart', [
+              '[$now] [FLUTTER_STDERR] Could not hot restart because the '
+                  'program contains compile errors.',
+            ]);
+
+        expect(acknowledgement, isNotNull);
+        expect(acknowledgement!['rejectionReason'], 'flutter_tool_rejected');
+        expect(acknowledgement['terminalRejectionObserved'], isTrue);
+        expect(
+          acknowledgement['message'],
+          'Could not hot restart because the program contains compile errors.',
+        );
+        expect(acknowledgement.containsKey('compilerDiagnostics'), isFalse);
+      },
+    );
+
+    test('hot update compiler diagnostics stay within their line bound', () {
+      final now = DateTime.now().toUtc().toIso8601String();
+      final acknowledgement = FlutterScoutCli()
+          .debugHotUpdateFailureAcknowledgementFromLines('reload', [
+            '[$now] [FLUTTER_STDERR] lib/main.dart:1:1: Error: Broken.',
+            for (var index = 0; index < 20; index++)
+              '[$now] [FLUTTER_STDERR] diagnostic context $index',
+          ]);
+
+      expect(acknowledgement, isNotNull);
+      expect(
+        acknowledgement!['compilerDiagnostics'],
+        isA<List<Object?>>().having((lines) => lines.length, 'length', 12),
+      );
+      expect(acknowledgement['compilerDiagnosticsTruncated'], isTrue);
     });
 
     test(

@@ -2073,14 +2073,10 @@ extension _CliResults on FlutterScoutCli {
             r'(reloaded \d+(?: of \d+)? libraries|hot reload performed|performing hot reload.*done)',
             caseSensitive: false,
           );
-    final rejectionPattern = RegExp(
-      r'(hot reload was rejected|hot restart was rejected|could not hot reload|could not hot restart|try again after fixing the above error)',
-      caseSensitive: false,
-    );
     while (DateTime.now().isBefore(deadline)) {
       final file = File(_logFile);
       if (file.existsSync()) {
-        final chunk = _readLogChunk(file, sinceCursor: sinceCursor);
+        var chunk = _readLogChunk(file, sinceCursor: sinceCursor);
         if (chunk.truncated) {
           return {
             'ok': false,
@@ -2092,18 +2088,32 @@ extension _CliResults on FlutterScoutCli {
                 'read window; update success cannot be proven.',
           };
         }
+        var failure = _hotUpdateFailureAcknowledgementFromLines(
+          action: action,
+          rawLines: chunk.lines,
+          startCursor: chunk.startCursor,
+        );
+        if (failure?['rejectionReason'] == 'dart_compile_error' &&
+            failure?['terminalRejectionObserved'] != true) {
+          // Newer Flutter tools can stop after printing frontend compiler
+          // diagnostics without emitting a final "hot reload was rejected"
+          // marker. Give the log writer one short bounded window to flush the
+          // source line and caret before returning the rejection immediately.
+          await Future<void>.delayed(const Duration(milliseconds: 150));
+          chunk = _readLogChunk(file, sinceCursor: sinceCursor);
+          if (!chunk.truncated) {
+            failure = _hotUpdateFailureAcknowledgementFromLines(
+              action: action,
+              rawLines: chunk.lines,
+              startCursor: chunk.startCursor,
+            );
+          }
+        }
+        if (failure != null) return failure;
         var cursor = chunk.startCursor;
         for (final rawLine in chunk.lines) {
           cursor += utf8.encode(rawLine).length + 1;
           final line = _redactSensitiveLogText(rawLine);
-          if (rejectionPattern.hasMatch(line)) {
-            return {
-              'ok': false,
-              'rejected': true,
-              'cursor': cursor,
-              'message': _stripLogMetadata(line),
-            };
-          }
           if (successPattern.hasMatch(line)) {
             return {
               'ok': true,
@@ -2122,4 +2132,106 @@ extension _CliResults on FlutterScoutCli {
           'Timed out waiting for the Flutter tool to acknowledge $action. The previous runtime was not accepted as updated.',
     };
   }
+}
+
+const int _maxHotUpdateCompilerDiagnosticLines = 12;
+const int _maxHotUpdateCompilerDiagnosticCharacters = 4096;
+
+final RegExp _hotUpdateTerminalRejectionPattern = RegExp(
+  r'(hot reload was rejected|hot restart was rejected|could not hot reload|could not hot restart|try again after fixing the above error)',
+  caseSensitive: false,
+);
+
+final RegExp _dartCompilerErrorPattern = RegExp(
+  r'(?:^|\s)(?:[^\r\n:]+[/\\])?[^\r\n:]+\.dart:\d+:\d+:\s+(?:Error|Internal problem):',
+  caseSensitive: false,
+);
+
+Map<String, Object?>? _hotUpdateFailureAcknowledgementFromLines({
+  required String action,
+  required List<String> rawLines,
+  required int startCursor,
+}) {
+  int? compilerErrorIndex;
+  int? terminalRejectionIndex;
+  var cursor = startCursor;
+  final endCursors = <int>[];
+  final sanitized = <String>[];
+
+  for (var index = 0; index < rawLines.length; index++) {
+    final rawLine = rawLines[index];
+    cursor += utf8.encode(rawLine).length + 1;
+    endCursors.add(cursor);
+    final line = _redactSensitiveLogText(rawLine);
+    sanitized.add(line);
+    final diagnostic = _stripFlutterToolLogMetadata(line);
+    if (compilerErrorIndex == null &&
+        _dartCompilerErrorPattern.hasMatch(diagnostic)) {
+      compilerErrorIndex = index;
+    }
+    if (terminalRejectionIndex == null &&
+        _hotUpdateTerminalRejectionPattern.hasMatch(diagnostic)) {
+      terminalRejectionIndex = index;
+    }
+  }
+
+  if (compilerErrorIndex == null && terminalRejectionIndex == null) {
+    return null;
+  }
+
+  final diagnosticLines = <String>[];
+  var diagnosticCharacters = 0;
+  var diagnosticsTruncated = false;
+  if (compilerErrorIndex != null) {
+    final endIndex = terminalRejectionIndex ?? sanitized.length;
+    for (var index = compilerErrorIndex; index < endIndex; index++) {
+      final line = _stripFlutterToolLogMetadata(sanitized[index]);
+      if (line.trim().isEmpty) continue;
+      final separatorCharacters = diagnosticLines.isEmpty ? 0 : 1;
+      final remaining =
+          _maxHotUpdateCompilerDiagnosticCharacters -
+          diagnosticCharacters -
+          separatorCharacters;
+      if (diagnosticLines.length >= _maxHotUpdateCompilerDiagnosticLines ||
+          remaining <= 0) {
+        diagnosticsTruncated = true;
+        break;
+      }
+      if (line.length > remaining) {
+        diagnosticLines.add('${line.substring(0, remaining)}…');
+        diagnosticsTruncated = true;
+        break;
+      }
+      diagnosticLines.add(line);
+      diagnosticCharacters += line.length + separatorCharacters;
+    }
+  }
+
+  final terminalMessage = terminalRejectionIndex == null
+      ? null
+      : _stripFlutterToolLogMetadata(sanitized[terminalRejectionIndex]);
+  final message = diagnosticLines.isNotEmpty
+      ? diagnosticLines.first
+      : terminalMessage ?? '$action was rejected by the Flutter tool.';
+
+  return <String, Object?>{
+    'ok': false,
+    'rejected': true,
+    'rejectionReason': compilerErrorIndex == null
+        ? 'flutter_tool_rejected'
+        : 'dart_compile_error',
+    'terminalRejectionObserved': terminalRejectionIndex != null,
+    'cursor': endCursors.isEmpty ? startCursor : endCursors.last,
+    'message': message,
+    if (diagnosticLines.isNotEmpty) 'compilerDiagnostics': diagnosticLines,
+    if (diagnosticLines.isNotEmpty)
+      'compilerDiagnosticsTruncated': diagnosticsTruncated,
+    'terminalMessage': ?terminalMessage,
+  };
+}
+
+String _stripFlutterToolLogMetadata(String line) {
+  var text = _stripLogMetadata(_stripLogAnsi(line));
+  text = text.replaceFirst(RegExp(r'^\[FLUTTER_STD(?:OUT|ERR)\]\s*'), '');
+  return text.trimRight();
 }
