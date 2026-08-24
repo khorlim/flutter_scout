@@ -48,6 +48,24 @@ extension VmTransportDebug on FlutterScoutCli {
   String get debugVmServiceCredentialPath => _vmUriFile;
 
   String get debugVmServiceSessionMetadataPath => _sessionMetaFile;
+
+  /// Test-only view of the identity rule used when a locally verified helper
+  /// survives the Scout launch worker that originally started it.
+  ///
+  /// This deliberately accepts helper identity as an input: production obtains
+  /// it only through a fresh VM-service `inspect` call after loopback transport
+  /// validation.
+  Map<String, Object?>? debugReconcileAttachRunIdentity({
+    required Map<String, Object?> previousMeta,
+    required String helperRunId,
+    required String runtimeInstanceId,
+    String? requestedDevice,
+  }) => _reconcileAttachRunIdentity(
+    previousMeta: previousMeta,
+    helperRunId: helperRunId,
+    runtimeInstanceId: runtimeInstanceId,
+    requestedDevice: requestedDevice,
+  );
 }
 
 extension _CliVmTransport on FlutterScoutCli {

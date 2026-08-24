@@ -12,6 +12,55 @@ void main() {
     expect(FlutterScoutCli(), isA<FlutterScoutCli>());
   });
 
+  group('attach run identity recovery', () {
+    test('recovers a verified helper from the prior Scout launch', () {
+      final recovered = FlutterScoutCli().debugReconcileAttachRunIdentity(
+        previousMeta: const <String, Object?>{
+          'mode': 'scout_owned_flutter_run',
+          'runId': '20260824125921505783-3807',
+          'device': 'ipad-sim',
+        },
+        helperRunId: '20260824125921505783-3807',
+        runtimeInstanceId: 'runtime-verified',
+        requestedDevice: 'ipad-sim',
+      );
+
+      expect(recovered, isNotNull);
+      expect(recovered!['runId'], '20260824125921505783-3807');
+      expect(recovered['runtimeInstanceId'], 'runtime-verified');
+    });
+
+    test('refuses a different helper run before any mutation can dispatch', () {
+      final recovered = FlutterScoutCli().debugReconcileAttachRunIdentity(
+        previousMeta: const <String, Object?>{
+          'mode': 'scout_owned_flutter_run',
+          'runId': 'launch-run',
+          'device': 'ipad-sim',
+        },
+        helperRunId: 'unrelated-local-run',
+        runtimeInstanceId: 'runtime-other',
+        requestedDevice: 'ipad-sim',
+      );
+
+      expect(recovered, isNull);
+    });
+
+    test('refuses recovery across explicitly different devices', () {
+      final recovered = FlutterScoutCli().debugReconcileAttachRunIdentity(
+        previousMeta: const <String, Object?>{
+          'mode': 'scout_owned_flutter_run',
+          'runId': 'launch-run',
+          'device': 'ipad-sim-a',
+        },
+        helperRunId: 'launch-run',
+        runtimeInstanceId: 'runtime-verified',
+        requestedDevice: 'ipad-sim-b',
+      );
+
+      expect(recovered, isNull);
+    });
+  });
+
   group('dedupeVmStdoutEcho', () {
     test('collapses the Flutter tool and VM copies of one app line', () {
       final lines = FlutterScoutCli.dedupeVmStdoutEcho([

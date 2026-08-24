@@ -15,6 +15,61 @@ String get _launchLockInfoFile => '$_launchLockFile.info.json';
 // narrow, post-build identity race into a destructive stop of a healthy app.
 const Duration _postBuildVmServiceGrace = Duration(seconds: 45);
 
+/// A live helper retains the launch run ID compiled into the application. An
+/// attach command normally gets a new ID, which is correct for a third-party
+/// app, but would make a healthy Scout-owned app inspect-only after its launch
+/// worker exits. This record is produced only after a fresh local VM-helper
+/// inspection; it never trusts an ID supplied on the command line.
+class _AttachedHelperIdentity {
+  const _AttachedHelperIdentity({
+    required this.runId,
+    required this.runtimeInstanceId,
+  });
+
+  final String runId;
+  final String runtimeInstanceId;
+}
+
+Map<String, Object?>? _reconcileAttachRunIdentity({
+  required Map<String, Object?>? previousMeta,
+  required String helperRunId,
+  required String runtimeInstanceId,
+  required String? requestedDevice,
+}) {
+  if (previousMeta == null) return null;
+  final previousRunId = previousMeta['runId']?.toString();
+  final mode = previousMeta['mode']?.toString();
+  final previousMode = previousMeta['previousMode']?.toString();
+  final wasScoutOwned =
+      mode == 'scout_owned_flutter_run' ||
+      previousMode == 'scout_owned_flutter_run';
+  if (!wasScoutOwned ||
+      previousRunId == null ||
+      previousRunId.isEmpty ||
+      previousRunId != helperRunId) {
+    return null;
+  }
+
+  // A caller that names a device must not silently recover a launch that was
+  // recorded for another device. If the old launch did not record one, VM
+  // loopback and exact run identity remain the available proof.
+  final previousDevice = previousMeta['device']?.toString();
+  if (requestedDevice != null &&
+      requestedDevice.isNotEmpty &&
+      previousDevice != null &&
+      previousDevice.isNotEmpty &&
+      previousDevice != requestedDevice) {
+    return null;
+  }
+  return <String, Object?>{
+    'runId': helperRunId,
+    'previousRunId': previousRunId,
+    'runtimeInstanceId': runtimeInstanceId,
+    if (previousDevice != null && previousDevice.isNotEmpty)
+      'previousDevice': previousDevice,
+  };
+}
+
 bool _shouldAwaitPostBuildVmService({
   required DateTime now,
   required DateTime? buildDoneAt,
@@ -1118,6 +1173,21 @@ extension _CliSession on FlutterScoutCli {
         ownedLogUri != null &&
         _normalizeVmUri(ownedLogUri) == _normalizeVmUri(wsUri);
     final now = DateTime.now().toIso8601String();
+    // Do not turn a run mismatch into permission to control some other local
+    // app. The only reconciliation allowed is a helper that proves it still
+    // carries this session's prior Scout launch identity. The endpoint has
+    // already passed strict loopback validation in _discoverAttachVmUri.
+    final helperIdentity = preservesOwnedRun
+        ? null
+        : await _readAttachedHelperIdentity(wsUri);
+    final reconciledIdentity = helperIdentity == null
+        ? null
+        : _reconcileAttachRunIdentity(
+            previousMeta: previousMeta,
+            helperRunId: helperIdentity.runId,
+            runtimeInstanceId: helperIdentity.runtimeInstanceId,
+            requestedDevice: parsed.option('device'),
+          );
     final reusesAttachedRun =
         previousMeta?['mode'] == 'attach_only' &&
         previousMeta?['runId'] != null &&
@@ -1131,7 +1201,7 @@ extension _CliSession on FlutterScoutCli {
         : previousMeta['runId']?.toString();
     final effectiveRunId = preservesOwnedRun
         ? ownedRunId ?? _newAttachRunId()
-        : attachRunId;
+        : reconciledIdentity?['runId']?.toString() ?? attachRunId;
     if (preservesOwnedRun) {
       _writePrivateSessionString(_pidFile, '$previousPid');
       _writeSessionMeta({
@@ -1154,11 +1224,17 @@ extension _CliSession on FlutterScoutCli {
       _writeSessionMeta({
         'mode': 'attach_only',
         'state': 'ready',
-        'runId': attachRunId,
+        'runId': effectiveRunId,
         'vmServiceUri': wsUri,
         if (parsed.option('device') != null) 'device': parsed.option('device'),
         'createdAt': now,
         'updatedAt': now,
+        if (reconciledIdentity != null)
+          'runIdentityRecovery': <String, Object?>{
+            ...reconciledIdentity,
+            'source': 'verified_local_vm_helper',
+            'recoveredAt': now,
+          },
       });
     }
     final output = <String, Object?>{
@@ -1169,6 +1245,7 @@ extension _CliSession on FlutterScoutCli {
       'appStatePreserved': true,
       'attachOnly': !preservesOwnedRun,
       if (preservesOwnedRun) 'sessionOwnershipPreserved': true,
+      if (reconciledIdentity != null) 'runIdentityRecovered': true,
     };
     final device = parsed.option('device');
     if (device != null && device.isNotEmpty) {
@@ -1194,6 +1271,46 @@ extension _CliSession on FlutterScoutCli {
     }
     _printJson(output);
     return ready.ready ? 0 : 1;
+  }
+
+  /// Reads the helper's already-bound identity without sending a run ID. A
+  /// read request cannot dispatch UI work, and omitting runId is important:
+  /// an unbound helper remains free for the ordinary attach flow to bind to
+  /// the new attach identity later.
+  Future<_AttachedHelperIdentity?> _readAttachedHelperIdentity(
+    String vmUri,
+  ) async {
+    VmService? service;
+    try {
+      service = await _connect(vmUri);
+      final isolateId = await _findMainIsolate(service);
+      final response = await _invokeServiceExtension(
+        service: service,
+        isolateId: isolateId,
+        method: 'ext.flutter_scout.inspect',
+        params: const <String, String>{'brief': 'true', 'maxItems': '1'},
+        timeout: const Duration(seconds: 5),
+      );
+      final runId = response['runId']?.toString();
+      final runtimeInstanceId = response['runtimeInstanceId']?.toString();
+      if (response['ok'] != true ||
+          runId == null ||
+          !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$').hasMatch(runId) ||
+          runtimeInstanceId == null ||
+          !RegExp(r'^[A-Za-z0-9._-]{1,128}$').hasMatch(runtimeInstanceId)) {
+        return null;
+      }
+      return _AttachedHelperIdentity(
+        runId: runId,
+        runtimeInstanceId: runtimeInstanceId,
+      );
+    } catch (_) {
+      // Identity recovery is optional. Failure deliberately falls back to the
+      // existing inspect-only attach posture instead of weakening the guard.
+      return null;
+    } finally {
+      await service?.dispose();
+    }
   }
 
   Future<int> _ensure(List<String> args) async {
