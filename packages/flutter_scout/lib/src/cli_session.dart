@@ -9,6 +9,19 @@ final Set<String> _heldLaunchLeasePaths = <String>{};
 
 String get _launchLockInfoFile => '$_launchLockFile.info.json';
 
+// On iOS Simulator, `flutter run` can report the Xcode build as complete just
+// before launchd briefly loses the worker's process identity.  The worker can
+// still flush the app's VM-service line a few seconds later.  Do not turn that
+// narrow, post-build identity race into a destructive stop of a healthy app.
+const Duration _postBuildVmServiceGrace = Duration(seconds: 45);
+
+bool _shouldAwaitPostBuildVmService({
+  required DateTime now,
+  required DateTime? buildDoneAt,
+}) =>
+    buildDoneAt != null &&
+    now.isBefore(buildDoneAt.add(_postBuildVmServiceGrace));
+
 extension _CliSession on FlutterScoutCli {
   Future<int> _launch(List<String> args) async {
     final parser = ArgParser()
@@ -303,6 +316,7 @@ extension _CliSession on FlutterScoutCli {
       // progress. [hardDeadline] still bounds a runner that never finishes.
       var lastProgressAt = DateTime.now();
       var stopReason = 'hard_timeout';
+      var reportedPostBuildWorkerUncertainty = false;
       final hardDeadline = DateTime.now().add(launchTimeout);
       while (DateTime.now().isBefore(hardDeadline)) {
         final logFile = File(runLogFile);
@@ -323,7 +337,12 @@ extension _CliSession on FlutterScoutCli {
           if (vmUri != null) break;
         }
         final now = DateTime.now();
-        if (now.difference(lastProgressAt) >= launchIdleTimeout) {
+        final awaitPostBuildVmService = _shouldAwaitPostBuildVmService(
+          now: now,
+          buildDoneAt: launchTiming.buildDoneAt,
+        );
+        if (now.difference(lastProgressAt) >= launchIdleTimeout &&
+            !awaitPostBuildVmService) {
           stopReason = 'idle_timeout';
           _writeProgress('launch_stalled', {
             'idleMs': now.difference(lastProgressAt).inMilliseconds,
@@ -340,6 +359,23 @@ extension _CliSession on FlutterScoutCli {
           });
         }
         if (!await _runnerSupervisorAlive(supervisor)) {
+          if (awaitPostBuildVmService) {
+            if (!reportedPostBuildWorkerUncertainty) {
+              reportedPostBuildWorkerUncertainty = true;
+              _writeProgress('await_post_build_vm_service', {
+                'graceMs': _postBuildVmServiceGrace.inMilliseconds,
+                'buildDoneMs': launchTiming.buildDoneAt!
+                    .difference(launchTiming.startedAt)
+                    .inMilliseconds,
+              });
+            }
+            // The URI handoff itself remains constrained to the designated
+            // session file and is VM-validated below; this grace merely avoids
+            // killing a proven post-build app because launchd momentarily
+            // cannot identify its worker.
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+            continue;
+          }
           stopReason = 'runner_exited';
           break;
         }

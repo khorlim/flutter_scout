@@ -316,6 +316,39 @@ void main() {
     expect(timing['buildDurationMs'], isNull);
   });
 
+  test(
+    'launch keeps polling through a bounded post-build worker identity race',
+    () {
+      final cli = FlutterScoutCli();
+      final buildDoneAt = DateTime.utc(2026, 8, 24, 14, 14, 15);
+
+      // iOS Simulator can publish the VM-service URI shortly after Xcode says
+      // the build is done, while launchd briefly cannot resolve the worker PID.
+      // Scout must keep reading its owned log instead of killing that app.
+      expect(
+        cli.debugShouldAwaitPostBuildVmService(
+          now: buildDoneAt.add(const Duration(seconds: 44)),
+          buildDoneAt: buildDoneAt,
+        ),
+        isTrue,
+      );
+      expect(
+        cli.debugShouldAwaitPostBuildVmService(
+          now: buildDoneAt.add(const Duration(seconds: 45)),
+          buildDoneAt: buildDoneAt,
+        ),
+        isFalse,
+      );
+      expect(
+        cli.debugShouldAwaitPostBuildVmService(
+          now: buildDoneAt.add(const Duration(seconds: 1)),
+          buildDoneAt: null,
+        ),
+        isFalse,
+      );
+    },
+  );
+
   test('stop succeeds without a stored pid', () async {
     await _withTempCwd(() async {
       final exitCode = await FlutterScoutCli().run(['stop']);

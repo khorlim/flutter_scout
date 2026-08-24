@@ -190,6 +190,12 @@ class FlutterScoutCli {
     return timing.toJson();
   }
 
+  /// Test-only guard for the iOS post-build VM-service handoff race.
+  bool debugShouldAwaitPostBuildVmService({
+    required DateTime now,
+    required DateTime? buildDoneAt,
+  }) => _shouldAwaitPostBuildVmService(now: now, buildDoneAt: buildDoneAt);
+
   static String debugNamedSessionDirectory(String base, String name) =>
       p.join(base, '.flutter_scout', 'sessions', _safeSessionName(name));
 
