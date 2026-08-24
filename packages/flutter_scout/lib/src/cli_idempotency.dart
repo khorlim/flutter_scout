@@ -1040,8 +1040,10 @@ extension _CliIdempotency on FlutterScoutCli {
       )..remove('idempotencyKey');
       final outcomeDigest = _sha256Canonical(storedOutcome);
       final encodedOutcomeBytes = utf8.encode(jsonEncode(storedOutcome)).length;
+      final dispatchOutcomeUnknown =
+          rawOutcome['dispatch'] == 'dispatch_outcome_unknown';
       final replayable =
-          rawOutcome['dispatch'] != 'dispatch_outcome_unknown' &&
+          !dispatchOutcomeUnknown &&
           encodedOutcomeBytes <= _maxStoredIdempotencyOutcomeBytes;
       _withPrivateFileLock<void>(
         _idempotencyRegistryLockPath,
@@ -1091,8 +1093,7 @@ extension _CliIdempotency on FlutterScoutCli {
             receipt['outcome'] = storedOutcome;
           } else {
             receipt.remove('outcome');
-            receipt['outcomeUnavailableReason'] =
-                rawOutcome['dispatch'] == 'dispatch_outcome_unknown'
+            receipt['outcomeUnavailableReason'] = dispatchOutcomeUnknown
                 ? 'dispatch_outcome_unknown'
                 : 'bounded_outcome_storage_limit';
           }
@@ -1112,8 +1113,21 @@ extension _CliIdempotency on FlutterScoutCli {
           'idempotencyKey': invocation.idempotencyKey,
           'idempotencyKeyDigest': invocation.idempotencyKeyDigest,
           'idempotency': <String, Object?>{
-            'status': replayable ? 'committed' : 'outcome_unknown',
+            // A bounded receipt can omit a *known* full response, which
+            // prevents replay but does not make the completed dispatch
+            // uncertain. A genuinely unknown dispatch must remain unknown
+            // so callers never infer a mutation happened.
+            'status': replayable
+                ? 'committed'
+                : dispatchOutcomeUnknown
+                ? 'outcome_unknown'
+                : 'committed_nonreplayable',
             'durability': 'cross_process_receipt',
+            'replayability': replayable ? 'replayable' : 'unavailable',
+            if (!replayable)
+              'replayUnavailableReason': dispatchOutcomeUnknown
+                  ? 'dispatch_outcome_unknown'
+                  : 'bounded_outcome_storage_limit',
             'keySource': invocation.callerSuppliedIdempotencyKey
                 ? 'caller'
                 : 'generated',

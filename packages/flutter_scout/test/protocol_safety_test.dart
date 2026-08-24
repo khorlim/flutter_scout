@@ -233,6 +233,59 @@ void main() {
       expect(fake.dispatchCount, 0);
     });
 
+    test(
+      'large known mutation outcomes are committed but marked nonreplayable',
+      () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+
+        await _withProtocolSession(fake.uri, () async {
+          final result = await FlutterScoutCli().debugDurableLocalMutation(
+            idempotencyKey: 'large-known-outcome',
+            method: 'process.flutter.reload',
+            businessParams: const <String, String>{'action': 'reload'},
+            dispatch: () async => <String, dynamic>{
+              'ok': true,
+              'dispatch': 'dispatched',
+              'evidence': 'x' * (129 * 1024),
+              'timings': _fakeHelperTimings(totalMs: 2, mutating: true),
+            },
+          );
+
+          final idempotency = result['idempotency'] as Map;
+          expect(result['ok'], isTrue);
+          expect(result['dispatch'], 'dispatched');
+          expect(idempotency['status'], 'committed_nonreplayable');
+          expect(idempotency['replayability'], 'unavailable');
+          expect(
+            idempotency['replayUnavailableReason'],
+            'bounded_outcome_storage_limit',
+          );
+          final compact = FlutterScoutCli().debugCompactActionResult(result);
+          expect(
+            (compact['idempotency'] as Map)['status'],
+            'committed_nonreplayable',
+          );
+
+          final registry =
+              jsonDecode(
+                    File(
+                      p.join('.flutter_scout', 'idempotency', 'registry.json'),
+                    ).readAsStringSync(),
+                  )
+                  as Map<String, dynamic>;
+          final receipt =
+              (registry['records'] as Map<String, dynamic>).values.single
+                  as Map<String, dynamic>;
+          expect(receipt['phase'], 'outcome_unknown');
+          expect(
+            receipt['outcomeUnavailableReason'],
+            'bounded_outcome_storage_limit',
+          );
+        });
+      },
+    );
+
     test('unknown local mutation receipt never redispatches', () async {
       final fake = await _FakeVmService.start();
       addTearDown(fake.close);
@@ -253,6 +306,7 @@ void main() {
         final first = await invoke();
         final retry = await invoke();
         expect(first['dispatch'], 'dispatch_outcome_unknown');
+        expect((first['idempotency'] as Map)['status'], 'outcome_unknown');
         expect(retry['dispatch'], 'dispatch_outcome_unknown');
       });
 
