@@ -1412,6 +1412,45 @@ void main() {
     expect(saveCount, 0);
   });
 
+  testWidgets(
+    'input accepts the visible focused field behind a pointer shell',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      final focusNode = FocusNode();
+      addTearDown(focusNode.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                TextField(
+                  focusNode: focusNode,
+                  decoration: const InputDecoration(
+                    labelText: 'Activation code',
+                  ),
+                ),
+                const Positioned.fill(child: AbsorbPointer()),
+              ],
+            ),
+          ),
+        ),
+      );
+      focusNode.requestFocus();
+      await tester.pump();
+
+      final runtime = FlutterScoutHelper.debugRuntime;
+      final fields = runtime.debugSnapshot().fields;
+      expect(fields, hasLength(1));
+      expect(fields.single.hitTestable, isFalse);
+
+      final result = await tester.runAsync(
+        () => runtime.debugInputTarget('focused', '123456'),
+      );
+      expect(result, containsPair('ok', true));
+      expect(find.text('123456'), findsOneWidget);
+    },
+  );
+
   testWidgets('Scout chrome is excluded from inspect output', (tester) async {
     FlutterScoutHelper.ensureRegistered();
     await tester.pumpWidget(

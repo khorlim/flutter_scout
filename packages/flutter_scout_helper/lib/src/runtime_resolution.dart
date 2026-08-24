@@ -14,7 +14,7 @@ enum _TargetResolutionStatus {
   occluded,
 }
 
-enum _TargetSafety { mutate, observeVisible, identify }
+enum _TargetSafety { mutate, focusedEditable, observeVisible, identify }
 
 class _TargetCandidate {
   const _TargetCandidate({
@@ -96,15 +96,18 @@ class _TargetResolution {
 }
 
 extension _RuntimeResolution on FlutterScoutRuntime {
-  _TargetResolution _resolveFocusedField(ScoutSnapshot snapshot) =>
-      _inRequestPhase(
-        'match',
-        () => _resolveFocusedFieldWithoutPhaseTiming(snapshot),
-      );
+  _TargetResolution _resolveFocusedField(
+    ScoutSnapshot snapshot, {
+    _TargetSafety safety = _TargetSafety.focusedEditable,
+  }) => _inRequestPhase(
+    'match',
+    () => _resolveFocusedFieldWithoutPhaseTiming(snapshot, safety: safety),
+  );
 
   _TargetResolution _resolveFocusedFieldWithoutPhaseTiming(
-    ScoutSnapshot snapshot,
-  ) {
+    ScoutSnapshot snapshot, {
+    _TargetSafety safety = _TargetSafety.focusedEditable,
+  }) {
     final focused = snapshot.fields
         .where((node) => node._editableState?.widget.focusNode.hasFocus == true)
         .toList(growable: false);
@@ -142,7 +145,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       snapshot: snapshot,
       requested: 'focused',
       candidate: candidates.single,
-      safety: _TargetSafety.mutate,
+      safety: safety,
       scope: scope,
     );
   }
@@ -498,6 +501,37 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         scope,
         candidate,
         'The matched control is disabled.',
+        textNode: textNode,
+      );
+    }
+
+    // Text entry is dispatched directly to the currently focused EditableText;
+    // unlike a tap, it does not send a pointer event. Some legitimate custom
+    // PIN inputs retain keyboard focus behind an IgnorePointer/animated shell,
+    // so requiring their render object on a pointer hit path rejects a safe,
+    // already-focused field. Keep this exception limited to the focused-field
+    // resolver, after active-surface, visibility, enabled, and focus checks.
+    if (safety == _TargetSafety.focusedEditable) {
+      final editable = node._editableState;
+      if (editable?.widget.focusNode.hasFocus == true) {
+        return _TargetResolution(
+          status: _TargetResolutionStatus.unique,
+          requested: requested,
+          snapshot: snapshot,
+          scope: scope,
+          candidates: [candidate],
+          node: node,
+          textNode: textNode,
+          match: candidate.match,
+        );
+      }
+      return _unsafeResolution(
+        _TargetResolutionStatus.stale,
+        requested,
+        snapshot,
+        scope,
+        candidate,
+        'The editable field no longer owns focus.',
         textNode: textNode,
       );
     }
