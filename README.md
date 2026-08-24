@@ -158,9 +158,10 @@ dart run bin/flutter_scout.dart doctor --project ../../apps/scout_test_app --dev
 dart run bin/flutter_scout.dart status
 ```
 
-For local package development, activate the CLI from this checkout. Pub keeps
-the executable on its compiled snapshot path while the script refreshes it
-after package changes:
+For local package development, activate the CLI from this checkout. The
+installer compiles the CLI and replaces Pub's path-activation wrapper, so each
+subsequent `flutter-scout` invocation keeps stdout reserved for its JSON
+response (and does not re-resolve dependencies):
 
 ```bash
 tool/install-local-shim.sh
