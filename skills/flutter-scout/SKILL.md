@@ -59,6 +59,10 @@ flutter-scout attach --debug-url-file /private/path/vm-service-url
 Address named sessions from any directory with `--app <name>`. Use
 `flutter-scout apps` for live entries, `apps --all` for missing entries, and
 `apps --prune` to remove stale registry entries.
+Named session storage and its launch lease are bound to the resolved
+`--project`, not the command working directory. If Scout reports competing
+roots for one label, inspect the listed run IDs and explicitly stop or clear
+the obsolete session; Scout will not guess or start another build.
 
 Inside an app project, commands reuse its sole current named session when there
 is no default session. If several named sessions exist, Scout refuses to guess;

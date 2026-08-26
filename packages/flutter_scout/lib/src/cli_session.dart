@@ -173,9 +173,7 @@ extension _CliSession on FlutterScoutCli {
       _clearVmUriFile();
       final instanceName = parsed.option('name');
       if (instanceName != null && instanceName.isNotEmpty) {
-        // Session files live in the cwd; register it so `--app <name>` can
-        // address this session from anywhere.
-        _registerScoutSession(instanceName, _sessionDir.path);
+        _registerScoutSession(instanceName, _sessionDir.path, project: project);
       }
       _writeProgress('resolve_device', {'requestedDevice': device});
       final resolvedDevice = await _resolveFlutterDevice(device);
@@ -1360,7 +1358,11 @@ extension _CliSession on FlutterScoutCli {
 
     final instanceName = parsed.option('name');
     if (instanceName != null && instanceName.isNotEmpty) {
-      _registerScoutSession(instanceName, _sessionDir.path);
+      _registerScoutSession(
+        instanceName,
+        _sessionDir.path,
+        project: _canonicalProjectDirectory(parsed.option('project')!),
+      );
     }
     await _joinLaunchIfNeeded(progress);
     progress('discover_vm_service', {'device': ?device});

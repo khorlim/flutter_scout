@@ -2,7 +2,10 @@
 
 Use a unique `--name` for every task. `ensure` joins or reuses that named
 session; `launch --replace` intentionally replaces it. Named runtime data lives
-outside the app worktree and is addressable with global `--app`.
+under the resolved Flutter project regardless of command cwd and is addressable
+with global `--app`. Legacy duplicate roots for one label are reported with
+their session directories and run IDs; Scout refuses to choose or launch until
+the obsolete session is explicitly stopped or cleared.
 
 `status` reports the session mode, owner PID, VM URI health, hot-update
 capability, and persistent transport. A stale VM URI is refreshed from owned
