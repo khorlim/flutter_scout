@@ -2,6 +2,215 @@ part of 'flutter_scout_cli.dart';
 
 // part: safe selection and repair of existing named/owned sessions.
 
+String _canonicalProjectDirectory(String project) {
+  final absolute = p.normalize(p.absolute(project));
+  try {
+    return Directory(absolute).resolveSymbolicLinksSync();
+  } catch (_) {
+    return absolute;
+  }
+}
+
+String _canonicalNamedSessionDirectory(String project, String name) => p.join(
+  _canonicalProjectDirectory(project),
+  '.flutter_scout',
+  'sessions',
+  _safeSessionName(name),
+);
+
+String _normalizeRegisteredSessionDirectory(String registered) {
+  final absolute = p.normalize(p.absolute(registered));
+  final sessionDirectory =
+      p.basename(absolute) == '.flutter_scout' ||
+          p.basename(p.dirname(absolute)) == 'sessions'
+      ? absolute
+      : p.join(absolute, '.flutter_scout');
+  try {
+    return Directory(sessionDirectory).resolveSymbolicLinksSync();
+  } catch (_) {
+    return sessionDirectory;
+  }
+}
+
+bool _sameSessionDirectory(String first, String second) =>
+    _normalizeRegisteredSessionDirectory(first) ==
+    _normalizeRegisteredSessionDirectory(second);
+
+Map<String, Object?>? _readNamedSessionMeta(String sessionDirectory) {
+  final file = File(p.join(sessionDirectory, 'session_meta.json'));
+  if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
+      FileSystemEntityType.file) {
+    return null;
+  }
+  try {
+    if (file.statSync().size > 64 * 1024) return null;
+    final decoded = jsonDecode(file.readAsStringSync());
+    return decoded is Map
+        ? <String, Object?>{
+            for (final entry in decoded.entries)
+              entry.key.toString(): entry.value,
+          }
+        : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+String? _projectFromNamedSession(String sessionDirectory) {
+  final project = _readNamedSessionMeta(
+    sessionDirectory,
+  )?['project']?.toString();
+  if (project != null && project.isNotEmpty) {
+    return _canonicalProjectDirectory(project);
+  }
+  final parent = p.dirname(sessionDirectory);
+  if (p.basename(parent) == 'sessions' &&
+      p.basename(p.dirname(parent)) == '.flutter_scout') {
+    return p.dirname(p.dirname(parent));
+  }
+  if (p.basename(sessionDirectory) == '.flutter_scout') {
+    return p.dirname(sessionDirectory);
+  }
+  return null;
+}
+
+String? _storageRootFromNamedSession(String sessionDirectory) {
+  final parent = p.dirname(sessionDirectory);
+  if (p.basename(parent) == 'sessions' &&
+      p.basename(p.dirname(parent)) == '.flutter_scout') {
+    return p.dirname(p.dirname(parent));
+  }
+  if (p.basename(sessionDirectory) == '.flutter_scout') {
+    return p.dirname(sessionDirectory);
+  }
+  return null;
+}
+
+String _namedSessionDiscoveryBoundary(String project) {
+  var cursor = Directory(_canonicalProjectDirectory(project));
+  while (true) {
+    if (FileSystemEntity.typeSync(
+          p.join(cursor.path, '.git'),
+          followLinks: false,
+        ) !=
+        FileSystemEntityType.notFound) {
+      return cursor.path;
+    }
+    final parent = cursor.parent;
+    if (parent.path == cursor.path) return cursor.path;
+    cursor = parent;
+  }
+}
+
+bool _directoryContainsNamedSession(String sessionDirectory) {
+  for (final fileName in const <String>[
+    'session_meta.json',
+    'vm_uri.txt',
+    'flutter.pid',
+    'launch.lock',
+  ]) {
+    if (File(p.join(sessionDirectory, fileName)).existsSync()) return true;
+  }
+  return false;
+}
+
+List<String> _discoverNamedSessionDirectories(
+  String name, {
+  required Iterable<String> seedDirectories,
+  String? project,
+}) {
+  final candidates = <String>{};
+  final projects = <String>{
+    if (project != null && project.isNotEmpty)
+      _canonicalProjectDirectory(project),
+  };
+  for (final seed in seedDirectories) {
+    final sessionDirectory = _normalizeRegisteredSessionDirectory(seed);
+    if (_directoryContainsNamedSession(sessionDirectory)) {
+      candidates.add(sessionDirectory);
+    }
+    final sessionProject = _projectFromNamedSession(sessionDirectory);
+    if (sessionProject != null) projects.add(sessionProject);
+  }
+
+  final safeName = _safeSessionName(name);
+  for (final sessionProject in projects) {
+    final boundary = _namedSessionDiscoveryBoundary(sessionProject);
+    var cursor = Directory(sessionProject);
+    while (true) {
+      final candidate = _normalizeRegisteredSessionDirectory(
+        p.join(cursor.path, '.flutter_scout', 'sessions', safeName),
+      );
+      if (_directoryContainsNamedSession(candidate)) candidates.add(candidate);
+      if (_canonicalProjectDirectory(cursor.path) == boundary) break;
+      final parent = cursor.parent;
+      if (parent.path == cursor.path) break;
+      cursor = parent;
+    }
+  }
+  return candidates.toList(growable: false)..sort();
+}
+
+Map<String, Object?> _namedSessionCandidateDetails(String directory) {
+  final meta = _readNamedSessionMeta(directory);
+  return <String, Object?>{
+    'sessionDirectory': directory,
+    'storageRoot': _storageRootFromNamedSession(directory),
+    'projectRoot': meta?['project'] ?? _projectFromNamedSession(directory),
+    'runId': meta?['runId'],
+    'state': meta?['state'],
+    'mode': meta?['mode'],
+    'exists': Directory(directory).existsSync(),
+  };
+}
+
+ScoutCliException _namedSessionAmbiguity(
+  String name,
+  Iterable<String> directories,
+) {
+  final candidates =
+      directories
+          .map(_normalizeRegisteredSessionDirectory)
+          .toSet()
+          .map(_namedSessionCandidateDetails)
+          .toList(growable: false)
+        ..sort(
+          (first, second) => first['sessionDirectory'].toString().compareTo(
+            second['sessionDirectory'].toString(),
+          ),
+        );
+  return ScoutCliException(
+    'session_selection_required',
+    'Named Scout session `$name` is ambiguous across multiple project roots. '
+        'Stop or clear the obsolete session explicitly before retrying; Scout '
+        'will not choose one or start another build.',
+    details: <String, Object?>{
+      'reason': 'duplicate_named_session_roots',
+      'name': name,
+      'candidates': candidates,
+      'recovery':
+          'From the chosen candidate storageRoot, run '
+          '`flutter-scout stop --clear-session`; then retry the named command.',
+    },
+  );
+}
+
+String _resolveRegisteredScoutSession(String name, String registered) {
+  final normalized = _normalizeRegisteredSessionDirectory(registered);
+  final candidates = _discoverNamedSessionDirectories(
+    name,
+    seedDirectories: <String>[normalized],
+  );
+  if (candidates.length > 1) {
+    throw _namedSessionAmbiguity(name, candidates);
+  }
+  if (candidates.isNotEmpty) return candidates.single;
+  // Preserve the original registry compatibility where a legacy value can
+  // name the project directory and command routing appends `.flutter_scout`.
+  final legacyProject = p.normalize(p.absolute(registered));
+  return Directory(legacyProject).existsSync() ? legacyProject : normalized;
+}
+
 extension _CliSessionRecovery on FlutterScoutCli {
   static const Set<String> _commandsUsingCurrentSession = {
     'status',

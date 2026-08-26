@@ -789,6 +789,190 @@ void main() {
       expect(first, isNot(second));
     });
 
+    test(
+      'named sessions bind to the Flutter project instead of command cwd',
+      () async {
+        final root = await Directory.systemTemp.createTemp(
+          'scout_canonical_session_',
+        );
+        addTearDown(() async {
+          if (root.existsSync()) await root.delete(recursive: true);
+        });
+        File(p.join(root.path, '.git')).writeAsStringSync('gitdir: test');
+        final app = Directory(p.join(root.path, 'apps', 'tunaipro'))
+          ..createSync(recursive: true);
+        final previous = Directory.current;
+        addTearDown(() => Directory.current = previous);
+
+        Directory.current = root;
+        final fromWorkspace =
+            FlutterScoutCli.debugCanonicalNamedSessionDirectory(
+              p.join('apps', 'tunaipro'),
+              'whatsapp-local-test',
+            );
+        Directory.current = app;
+        final fromApp = FlutterScoutCli.debugCanonicalNamedSessionDirectory(
+          '.',
+          'whatsapp-local-test',
+        );
+
+        expect(fromWorkspace, fromApp);
+        expect(
+          fromApp,
+          p.join(
+            app.resolveSymbolicLinksSync(),
+            '.flutter_scout',
+            'sessions',
+            'whatsapp-local-test',
+          ),
+        );
+      },
+    );
+
+    test(
+      'duplicate same-label roots fail explicitly without replacing registry',
+      () async {
+        final root = await Directory.systemTemp.createTemp(
+          'scout_duplicate_session_',
+        );
+        addTearDown(() async {
+          if (root.existsSync()) await root.delete(recursive: true);
+        });
+        File(p.join(root.path, '.git')).writeAsStringSync('gitdir: test');
+        final app = Directory(p.join(root.path, 'apps', 'tunaipro'))
+          ..createSync(recursive: true);
+        final workspaceSession = Directory(
+          p.join(
+            root.path,
+            '.flutter_scout',
+            'sessions',
+            'whatsapp-local-test',
+          ),
+        )..createSync(recursive: true);
+        final appSession = Directory(
+          p.join(app.path, '.flutter_scout', 'sessions', 'whatsapp-local-test'),
+        )..createSync(recursive: true);
+        File(
+          p.join(workspaceSession.path, 'session_meta.json'),
+        ).writeAsStringSync(
+          jsonEncode({
+            'name': 'whatsapp-local-test',
+            'project': app.path,
+            'runId': 'workspace-run',
+            'state': 'ready',
+          }),
+        );
+        File(p.join(appSession.path, 'session_meta.json')).writeAsStringSync(
+          jsonEncode({
+            'name': 'whatsapp-local-test',
+            'project': app.path,
+            'runId': 'app-run',
+            'state': 'ready',
+          }),
+        );
+        FlutterScoutCli.debugRegistryPathOverride = p.join(
+          root.path,
+          'registry.json',
+        );
+        addTearDown(() => FlutterScoutCli.debugRegistryPathOverride = null);
+        File(FlutterScoutCli.debugRegistryPathOverride!).writeAsStringSync(
+          jsonEncode({'whatsapp-local-test': workspaceSession.path}),
+        );
+
+        final cli = FlutterScoutCli();
+        ScoutCliException? ambiguity;
+        try {
+          cli.debugResolveRegisteredSessionDirectory(
+            'whatsapp-local-test',
+            workspaceSession.path,
+          );
+        } on ScoutCliException catch (error) {
+          ambiguity = error;
+        }
+        expect(ambiguity, isNotNull);
+        expect(ambiguity!.code, 'session_selection_required');
+        expect(ambiguity.details['reason'], 'duplicate_named_session_roots');
+        final candidates = (ambiguity.details['candidates']! as List)
+            .cast<Map<String, Object?>>();
+        final resolvedWorkspaceSession = workspaceSession
+            .resolveSymbolicLinksSync();
+        final resolvedAppSession = appSession.resolveSymbolicLinksSync();
+        expect(
+          candidates.map((candidate) => candidate['sessionDirectory']),
+          containsAll([resolvedWorkspaceSession, resolvedAppSession]),
+        );
+        expect(
+          candidates.map((candidate) => candidate['runId']),
+          containsAll(['workspace-run', 'app-run']),
+        );
+
+        expect(
+          () => cli.debugRegisterScoutSession(
+            'whatsapp-local-test',
+            appSession.path,
+            project: app.path,
+          ),
+          throwsA(
+            isA<ScoutCliException>().having(
+              (error) => error.code,
+              'code',
+              'session_selection_required',
+            ),
+          ),
+        );
+        final registry =
+            jsonDecode(
+                  File(
+                    FlutterScoutCli.debugRegistryPathOverride!,
+                  ).readAsStringSync(),
+                )
+                as Map<String, dynamic>;
+        expect(registry['whatsapp-local-test'], workspaceSession.path);
+        expect(await cli.run(['--app', 'whatsapp-local-test', 'status']), 1);
+      },
+    );
+
+    test(
+      'empty legacy directories do not masquerade as active sessions',
+      () async {
+        final root = await Directory.systemTemp.createTemp(
+          'scout_empty_session_root_',
+        );
+        addTearDown(() async {
+          if (root.existsSync()) await root.delete(recursive: true);
+        });
+        File(p.join(root.path, '.git')).writeAsStringSync('gitdir: test');
+        final app = Directory(p.join(root.path, 'apps', 'tunaipro'))
+          ..createSync(recursive: true);
+        final workspaceSession = Directory(
+          p.join(root.path, '.flutter_scout', 'sessions', 'same-label'),
+        )..createSync(recursive: true);
+        Directory(
+          p.join(app.path, '.flutter_scout', 'sessions', 'same-label'),
+        ).createSync(recursive: true);
+        File(
+          p.join(workspaceSession.path, 'session_meta.json'),
+        ).writeAsStringSync(
+          jsonEncode({
+            'name': 'same-label',
+            'project': app.path,
+            'runId': 'only-real-run',
+            'state': 'ready',
+          }),
+        );
+
+        expect(
+          FlutterScoutCli()
+              .debugResolveRegisteredSessionDirectory(
+                'same-label',
+                workspaceSession.path,
+              )
+              .toString(),
+          workspaceSession.resolveSymbolicLinksSync(),
+        );
+      },
+    );
+
     test('--app resolves a registered session directory', () async {
       final temp = await Directory.systemTemp.createTemp('scout_registry_');
       addTearDown(() => temp.delete(recursive: true));

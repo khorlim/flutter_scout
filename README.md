@@ -106,6 +106,10 @@ is separate from app reachability.
 From the app project, session commands automatically reuse the sole current
 named session when no default session exists. When several named sessions are
 available, Scout refuses to guess and asks for `--app <name>`.
+Named `launch` and `ensure` sessions are rooted at the resolved `--project`
+directory, independent of the caller's working directory. If legacy data makes
+one label point at multiple session roots, Scout lists the competing roots and
+run IDs and refuses to select or launch until the obsolete session is cleared.
 
 Use `launch` when you explicitly need Scout to start a fresh Flutter run:
 

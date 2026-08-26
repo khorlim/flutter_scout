@@ -8,6 +8,60 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'canonical named session shares one launch lease across command cwd',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'flutter_scout_canonical_lease_',
+      );
+      addTearDown(() async {
+        if (root.existsSync()) await root.delete(recursive: true);
+      });
+      final app = Directory(p.join(root.path, 'apps', 'tunaipro'))
+        ..createSync(recursive: true);
+      final previous = Directory.current;
+      addTearDown(() => Directory.current = previous);
+
+      Directory.current = root;
+      final fromWorkspace = FlutterScoutCli.debugCanonicalNamedSessionDirectory(
+        p.join('apps', 'tunaipro'),
+        'whatsapp-local-test',
+      );
+      Directory.current = app;
+      final fromApp = FlutterScoutCli.debugCanonicalNamedSessionDirectory(
+        '.',
+        'whatsapp-local-test',
+      );
+      expect(fromWorkspace, fromApp);
+
+      final cli = FlutterScoutCli();
+      await cli.debugWithLaunchLease<void>(
+        sessionDirectory: fromWorkspace,
+        project: app.path,
+        device: 'macos',
+        name: 'whatsapp-local-test',
+        body: (_) async {
+          await expectLater(
+            cli.debugWithLaunchLease<void>(
+              sessionDirectory: fromApp,
+              project: app.path,
+              device: 'macos',
+              name: 'whatsapp-local-test',
+              body: (_) async {},
+            ),
+            throwsA(
+              isA<ScoutCliException>().having(
+                (error) => error.code,
+                'code',
+                'launch_in_progress',
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+
+  test(
     'kernel launch lease survives malformed metadata and owner crash',
     () async {
       final root = await Directory.systemTemp.createTemp(

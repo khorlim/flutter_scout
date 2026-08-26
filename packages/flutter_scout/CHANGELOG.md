@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Bind named launch/ensure storage and launch leases to the resolved Flutter
+  project instead of the command working directory. Duplicate legacy roots for
+  one label now fail with their competing session/run identities instead of
+  silently switching the global registry or starting another build.
+
 - Treat Dart frontend compiler diagnostics as an immediate rejected hot-update
   acknowledgement, even when newer Flutter tools omit their former terminal
   rejection line. Rejected Scout-owned reloads now return a bounded,

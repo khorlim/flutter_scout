@@ -199,6 +199,26 @@ class FlutterScoutCli {
   static String debugNamedSessionDirectory(String base, String name) =>
       p.join(base, '.flutter_scout', 'sessions', _safeSessionName(name));
 
+  /// Test-only view of the project-bound named-session routing used by
+  /// launch/ensure command preprocessing.
+  static String debugCanonicalNamedSessionDirectory(
+    String project,
+    String name,
+  ) => _canonicalNamedSessionDirectory(project, name);
+
+  /// Test-only access to fail-closed duplicate named-session resolution.
+  String debugResolveRegisteredSessionDirectory(
+    String name,
+    String registeredDirectory,
+  ) => _resolveRegisteredScoutSession(name, registeredDirectory);
+
+  /// Test-only access to the production registry conflict guard.
+  void debugRegisterScoutSession(
+    String name,
+    String directory, {
+    String? project,
+  }) => _registerScoutSession(name, directory, project: project);
+
   Future<Map<String, Object?>> debugPrepareTemporaryHelper({
     required String project,
     required String helperPath,
@@ -716,7 +736,29 @@ class FlutterScoutCli {
         }
         return 1;
       }
-      final directory = registry[appName];
+      var directory = registry[appName];
+      if (directory != null) {
+        try {
+          directory = _resolveRegisteredScoutSession(appName, directory);
+        } on ScoutCliException catch (error) {
+          _writeStructuredError(
+            error.code,
+            error.message,
+            details: error.details,
+            additional: error.additional,
+          );
+          _activeCommandId = previousCommandId;
+          _activeCommandName = previousCommandName;
+          _activeCommandStopwatch = previousCommandStopwatch;
+          _heartbeatCursor = previousHeartbeatCursor;
+          _activeCallerIdempotencyKey = previousCallerIdempotencyKey;
+          if (previousCallerIdempotencyKey != null &&
+              previousIdempotencyKeyWasGenerated) {
+            _adoptGeneratedIdempotencyKey(previousCallerIdempotencyKey);
+          }
+          return 1;
+        }
+      }
       if (directory == null || !Directory(directory).existsSync()) {
         _writeStructuredError(
           'session_not_registered',
@@ -750,17 +792,21 @@ class FlutterScoutCli {
     final rest = effectiveArgs.skip(1).toList(growable: false);
     final requestedName = _optionValue(rest, 'name');
     String? pendingSessionRegistration;
+    String? pendingSessionProject;
     if (appName == null &&
         (command == 'launch' || command == 'ensure') &&
         requestedName != null &&
         requestedName.isNotEmpty) {
-      _sessionDirectoryOverride = p.join(
-        Directory.current.path,
-        '.flutter_scout',
-        'sessions',
-        _safeSessionName(requestedName),
+      pendingSessionProject = _canonicalProjectDirectory(
+        _optionValue(rest, 'project') ?? Directory.current.path,
       );
-      pendingSessionRegistration = requestedName;
+      if (Directory(pendingSessionProject).existsSync()) {
+        _sessionDirectoryOverride = _canonicalNamedSessionDirectory(
+          pendingSessionProject,
+          requestedName,
+        );
+        pendingSessionRegistration = requestedName;
+      }
     }
     _activeSensitiveValues.clear();
     _protectedSecretIngress.clear();
@@ -798,6 +844,7 @@ class FlutterScoutCli {
           _registerScoutSession(
             pendingSessionRegistration,
             _sessionDirectoryOverride!,
+            project: pendingSessionProject,
           );
         }
       }
@@ -2734,7 +2781,7 @@ Map<String, String> _readScoutRegistry() {
   }
 }
 
-void _registerScoutSession(String name, String directory) {
+void _registerScoutSession(String name, String directory, {String? project}) {
   try {
     final file = _scoutRegistryFile;
     _ensurePrivateDirectory(file.parent.path, boundary: file.parent.path);
@@ -2743,10 +2790,36 @@ void _registerScoutSession(String name, String directory) {
       boundary: file.parent.path,
       body: () {
         final registry = _readScoutRegistry();
-        registry[name] = directory;
+        final candidate = _normalizeRegisteredSessionDirectory(directory);
+        final existing = registry[name];
+        final competing = _discoverNamedSessionDirectories(
+          name,
+          seedDirectories: <String>[?existing, candidate],
+          project: project,
+        );
+        final liveExisting = existing == null
+            ? null
+            : _normalizeRegisteredSessionDirectory(existing);
+        final hasDifferentRegisteredSession =
+            liveExisting != null &&
+            Directory(liveExisting).existsSync() &&
+            !_sameSessionDirectory(liveExisting, candidate);
+        final hasDiscoveredConflict = competing.any(
+          (path) => !_sameSessionDirectory(path, candidate),
+        );
+        if (hasDifferentRegisteredSession || hasDiscoveredConflict) {
+          throw _namedSessionAmbiguity(name, <String>{
+            ...competing,
+            ?liveExisting,
+            candidate,
+          });
+        }
+        registry[name] = candidate;
         _writeScoutRegistryUnlocked(registry);
       },
     );
+  } on ScoutCliException catch (error) {
+    if (error.code == 'session_selection_required') rethrow;
   } catch (_) {
     // Registration is best-effort; the session still works from its own cwd.
   }
