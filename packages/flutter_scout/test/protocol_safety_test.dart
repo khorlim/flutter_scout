@@ -234,6 +234,58 @@ void main() {
     });
 
     test(
+      'local mutation legacy stable fails closed without semantic stability',
+      () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+
+        await _withProtocolSession(fake.uri, () async {
+          final unavailable = await FlutterScoutCli().debugDurableLocalMutation(
+            idempotencyKey: 'local-stability-unavailable',
+            method: 'process.flutter.reload',
+            businessParams: const <String, String>{'action': 'reload'},
+            dispatch: () async => <String, dynamic>{
+              'ok': true,
+              'dispatch': 'dispatched',
+              'stable': true,
+              'timings': _fakeHelperTimings(totalMs: 2, mutating: true),
+            },
+          );
+
+          expect(unavailable['ok'], isTrue);
+          expect(unavailable['stable'], isFalse);
+          expect(
+            unavailable['stability'],
+            allOf(
+              containsPair('state', 'observation_unavailable'),
+              containsPair('actionable', isFalse),
+            ),
+          );
+
+          final observed = await FlutterScoutCli().debugDurableLocalMutation(
+            idempotencyKey: 'local-stability-observed',
+            method: 'process.flutter.reload',
+            businessParams: const <String, String>{'action': 'reload'},
+            dispatch: () async => <String, dynamic>{
+              'ok': true,
+              'dispatch': 'dispatched',
+              'stable': true,
+              'stability': const <String, Object?>{
+                'state': 'stable',
+                'actionable': true,
+              },
+              'timings': _fakeHelperTimings(totalMs: 2, mutating: true),
+            },
+          );
+
+          expect(observed['stable'], isTrue);
+        });
+
+        expect(fake.dispatchCount, 0);
+      },
+    );
+
+    test(
       'large known mutation outcomes are committed but marked nonreplayable',
       () async {
         final fake = await _FakeVmService.start();

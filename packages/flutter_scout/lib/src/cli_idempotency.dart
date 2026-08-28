@@ -946,6 +946,14 @@ extension _CliIdempotency on FlutterScoutCli {
     try {
       final raw = await dispatch();
       final dispatchStatus = classifyDispatch(raw);
+      final stability =
+          raw['stability'] ??
+          _unavailableCliStability(
+            transport: raw['transport']?.toString() ?? 'ok',
+            stoppingReason: 'local_mutation_semantic_observation_unavailable',
+            deadlineEpochMs: invocation.deadlineEpochMs,
+            initialStateGeneration: 0,
+          );
       final closed = <String, dynamic>{
         ...raw,
         'schemaVersion': _scoutCliSchemaVersion,
@@ -964,15 +972,8 @@ extension _CliIdempotency on FlutterScoutCli {
         'observation': raw['observation'] ?? 'observation_unavailable',
         'postcondition': raw['postcondition'] ?? 'postcondition_not_requested',
         'runtimeHealth': raw['runtimeHealth'] ?? 'runtime_health_unknown',
-        'stable': raw['stable'] == true,
-        'stability':
-            raw['stability'] ??
-            _unavailableCliStability(
-              transport: raw['transport']?.toString() ?? 'ok',
-              stoppingReason: 'local_mutation_semantic_observation_unavailable',
-              deadlineEpochMs: invocation.deadlineEpochMs,
-              initialStateGeneration: 0,
-            ),
+        'stable': _truthfulLegacyStable(raw['stable'], stability),
+        'stability': stability,
         'idempotencyKey': invocation.idempotencyKey,
         'idempotencyKeyDigest': invocation.idempotencyKeyDigest,
         'expectedStateGeneration': 0,

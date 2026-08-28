@@ -719,7 +719,7 @@ extension _CliProtocol on FlutterScoutCli {
       'runtimeHealth': runtimeHealth,
       'runtimeHealthScope': 'fresh_since_cursor_and_currently_active',
       'activeBlockingSignals': activeBlockingSignals,
-      'stable': response['stable'] == true,
+      'stable': _truthfulLegacyStable(response['stable'], closedStability),
       'stability': closedStability,
       'idempotencyKey': invocation.idempotencyKey,
       'idempotencyKeyDigest': invocation.idempotencyKeyDigest,
@@ -908,6 +908,11 @@ extension _CliProtocol on FlutterScoutCli {
             'Do not infer quiescence from the legacy stable boolean or transport success.',
           ],
   };
+
+  bool _truthfulLegacyStable(Object? stable, Object? stability) {
+    if (stable != true || stability is! Map) return false;
+    return stability['state'] == 'stable' && stability['actionable'] == true;
+  }
 
   String? _responseErrorCode(Map<String, dynamic> response) {
     final structured = response['structuredError'];
