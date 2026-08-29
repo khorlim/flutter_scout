@@ -30,7 +30,10 @@ class _TargetCandidate {
   final bool onActiveSurface;
 
   Map<String, Object?> toJson(Map<String, Object?> scope) => {
-    'handle': node.id,
+    // `id` can equal a shared base id for the first duplicate. This is the
+    // always-unambiguous selector published for action replay.
+    'handle': '${node.id}#${node.ordinal}',
+    'id': node.id,
     'baseId': node.baseId,
     'fallbackId': node.fallbackId,
     'kind': node.kind,
@@ -96,6 +99,8 @@ class _TargetResolution {
 }
 
 extension _RuntimeResolution on FlutterScoutRuntime {
+  String _scopedGeneratedHandle(ScoutNode node) => '${node.id}#${node.ordinal}';
+
   _TargetResolution _resolveFocusedField(
     ScoutSnapshot snapshot, {
     _TargetSafety safety = _TargetSafety.focusedEditable,
@@ -275,6 +280,22 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         if (alias == requested) selectors.add(value);
       }
     }
+
+    // A scoped generated handle names one inspected occurrence. The regular
+    // base/id/label selector tiers below retain their ambiguity gate.
+    final scoped = <_TargetCandidate>[];
+    for (final node in nodes) {
+      if (!selectors.contains(_scopedGeneratedHandle(node))) continue;
+      scoped.add(
+        _TargetCandidate(
+          node: node,
+          match: 'scoped_handle',
+          score: 1010,
+          onActiveSurface: _nodeOnActiveSurface(snapshot, node),
+        ),
+      );
+    }
+    if (scoped.isNotEmpty) return _sortTargetCandidates(scoped);
 
     final exact = <_TargetCandidate>[];
     for (final node in nodes) {

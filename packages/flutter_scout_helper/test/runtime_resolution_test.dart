@@ -24,7 +24,7 @@ void main() {
   };
 
   testWidgets(
-    'duplicate labels, ids, keys, and tap-text matches abstain with ranked evidence',
+    'duplicate labels, keys, and tap-text matches abstain with ranked evidence',
     (tester) async {
       FlutterScoutHelper.ensureRegistered();
       var dispatched = 0;
@@ -65,12 +65,7 @@ void main() {
       await tester.pump();
 
       final runtime = FlutterScoutHelper.debugRuntime;
-      for (final target in [
-        'btn.duplicate_key',
-        'duplicate-key',
-        'Save',
-        'Sav',
-      ]) {
+      for (final target in ['duplicate-key', 'Save', 'Sav']) {
         final response = (await tester.runAsync(
           () => runtime.debugTapTarget(target),
         ))!;
@@ -101,6 +96,68 @@ void main() {
       expect(resolutionOf(textResponse)['status'], 'ambiguous');
       expect(dispatched, 0);
       expect(runtime.debugWaitForConditionsMet({'target': 'Save'}), isFalse);
+    },
+  );
+
+  testWidgets(
+    'scoped generated handles dispatch their exact duplicate control',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      var firstDispatched = 0;
+      var secondDispatched = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                ElevatedButton(
+                  onPressed: () => firstDispatched++,
+                  child: const Text('Add member'),
+                ),
+                ElevatedButton(
+                  onPressed: () => secondDispatched++,
+                  child: const Text('Add member'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final runtime = FlutterScoutHelper.debugRuntime;
+      final candidates =
+          (runtime.debugResolveTarget('Add member')['candidates']! as List)
+              .cast<Map<String, Object?>>();
+      expect(candidates, hasLength(2));
+      final firstHandle = candidates[0]['handle']! as String;
+      final secondHandle = candidates[1]['handle']! as String;
+      expect(firstHandle, 'btn.add_member#1');
+      expect(secondHandle, 'btn.add_member_2#2');
+
+      final first = (await tester.runAsync(
+        () => runtime.debugTapTarget(firstHandle),
+      ))!;
+      expect(first['ok'], isTrue);
+      expect(firstDispatched, 1);
+      expect(secondDispatched, 0);
+
+      final second = (await tester.runAsync(
+        () => runtime.debugTapTarget(secondHandle),
+      ))!;
+      expect(second['ok'], isTrue);
+      expect(firstDispatched, 1);
+      expect(secondDispatched, 1);
+
+      // The user-facing label remains deliberately unsafe when two controls
+      // own it; a generated handle is required to mutate either one.
+      final ambiguous = (await tester.runAsync(
+        () => runtime.debugTapTarget('Add member'),
+      ))!;
+      expect(ambiguous['ok'], isFalse);
+      expect(resolutionOf(ambiguous)['status'], 'ambiguous');
+      expect(firstDispatched, 1);
+      expect(secondDispatched, 1);
     },
   );
 
