@@ -1264,36 +1264,40 @@ class FlutterScoutRuntime {
       'visibleTextHash': snapshot.visibleTextHash,
       'idle': snapshot.idle,
       'viewport': snapshot.viewportJson(),
-      // Perception limitations are safety evidence, not optional detail. Keep
-      // them in brief, surface-only, and sectioned payloads so compaction can
-      // never turn a known blind spot into apparent full coverage.
-      'perception': <String, Object?>{
-        'observationKind': 'widget_tree_and_render_geometry',
-        'pixelEvidence': 'not_included_in_inspect',
-        'visualStatus': snapshot.perceptionGaps.isEmpty
-            ? 'pixels_not_observed'
-            : 'known_perception_gaps',
-        'captureBackend': <String, Object?>{
-          'status': snapshot.captureBackend['status'],
-          'backend': snapshot.captureBackend['backend'],
-          if (snapshot.captureBackend['reason'] != null)
-            'reason': snapshot.captureBackend['reason'],
-          if (snapshot.captureBackend['provenance'] != null)
-            'provenance': snapshot.captureBackend['provenance'],
-          if (snapshot.captureBackend['coverage'] case final Map coverage) ...{
-            'platformViewPixels': coverage['platformViewPixels'],
-            'texturePixels': coverage['texturePixels'],
-          },
-          if (snapshot.captureBackend['nativeFallback']
-              case final Map nativeFallback)
-            'nativeFallbackStatus': nativeFallback['status'],
-        },
-        'limitationCount': snapshot.perceptionGaps.length,
-        if (snapshot.perceptionGaps.isNotEmpty)
-          'limitations': snapshot.perceptionGaps,
-        if (snapshot.degradedNodes > 0)
-          'degradedElementCount': snapshot.degradedNodes,
-      },
+      // Perception limitations are safety evidence, not optional detail. Brief
+      // mode keeps their status and count, but not every geometry-heavy gap.
+      // The full details remain explicitly available through --sections
+      // perception so a compact orientation read cannot imply full coverage.
+      'perception': brief
+          ? _compactBriefPerception(snapshot)
+          : <String, Object?>{
+              'observationKind': 'widget_tree_and_render_geometry',
+              'pixelEvidence': 'not_included_in_inspect',
+              'visualStatus': snapshot.perceptionGaps.isEmpty
+                  ? 'pixels_not_observed'
+                  : 'known_perception_gaps',
+              'captureBackend': <String, Object?>{
+                'status': snapshot.captureBackend['status'],
+                'backend': snapshot.captureBackend['backend'],
+                if (snapshot.captureBackend['reason'] != null)
+                  'reason': snapshot.captureBackend['reason'],
+                if (snapshot.captureBackend['provenance'] != null)
+                  'provenance': snapshot.captureBackend['provenance'],
+                if (snapshot.captureBackend['coverage']
+                    case final Map coverage) ...{
+                  'platformViewPixels': coverage['platformViewPixels'],
+                  'texturePixels': coverage['texturePixels'],
+                },
+                if (snapshot.captureBackend['nativeFallback']
+                    case final Map nativeFallback)
+                  'nativeFallbackStatus': nativeFallback['status'],
+              },
+              'limitationCount': snapshot.perceptionGaps.length,
+              if (snapshot.perceptionGaps.isNotEmpty)
+                'limitations': snapshot.perceptionGaps,
+              if (snapshot.degradedNodes > 0)
+                'degradedElementCount': snapshot.degradedNodes,
+            },
       'keyboard': <String, Object?>{
         'visible':
             snapshot.viewMetricsAvailable && snapshot.viewInsets.bottom > 0.5,
@@ -1306,7 +1310,11 @@ class FlutterScoutRuntime {
       },
       if (snapshot.degradedNodes > 0) 'degradedNodes': snapshot.degradedNodes,
       if (snapshot.recentErrors.isNotEmpty)
-        'recentErrors': snapshot.recentErrors,
+        'recentErrors': brief
+            ? _compactBriefErrors(snapshot.recentErrors)
+            : snapshot.recentErrors,
+      if (brief && snapshot.recentErrors.isNotEmpty)
+        'errorSummary': _briefErrorSummary(snapshot.recentErrors),
       if (_annotationMode) 'annotationMode': true,
     };
     if (!brief && (sections.isNotEmpty || surfaceOnly)) {
@@ -1400,38 +1408,8 @@ class FlutterScoutRuntime {
         if (scopedRows.isNotEmpty) 'structuredRows': briefRows,
         if (snapshot.scrollables.isNotEmpty)
           'scrollables': [
-            for (final scrollable in snapshot.scrollables.take(6))
-              {
-                'id': scrollable['id'],
-                'scopedId': scrollable['scopedId'],
-                'baseId': scrollable['baseId'],
-                'identity': scrollable['identity'],
-                'axis': scrollable['axis'],
-                'axisDirection': scrollable['axisDirection'],
-                if (scrollable['key'] != null) 'key': scrollable['key'],
-                'parentId': scrollable['parentId'],
-                'nestingDepth': scrollable['nestingDepth'],
-                'scopePath': scrollable['scopePath'],
-                'logicalBounds': scrollable['logicalBounds'],
-                'physicalBounds': scrollable['physicalBounds'],
-                'visibleFraction': scrollable['visibleFraction'],
-                'visibilityEvidence': scrollable['visibilityEvidence'],
-                'geometryEvidence': scrollable['geometryEvidence'],
-                'positionAvailable': scrollable['positionAvailable'],
-                'metricsAvailable': scrollable['metricsAvailable'],
-                'positionEvidence': scrollable['positionEvidence'],
-                'pixels': scrollable['pixels'],
-                'minScrollExtent': scrollable['minScrollExtent'],
-                'maxScrollExtent': scrollable['maxScrollExtent'],
-                'viewportDimension': scrollable['viewportDimension'],
-                'approximateNormalizedPosition':
-                    scrollable['approximateNormalizedPosition'],
-                'normalizedPositionEvidence':
-                    scrollable['normalizedPositionEvidence'],
-                'atStart': scrollable['atStart'],
-                'atEnd': scrollable['atEnd'],
-                'endpointEvidence': scrollable['endpointEvidence'],
-              },
+            for (final scrollable in snapshot.scrollables.take(3))
+              _compactBriefScrollable(scrollable),
           ],
         'omittedSections': <String, Object?>{
           'reason': 'brief_mode',
@@ -1442,8 +1420,8 @@ class FlutterScoutRuntime {
             'controlGroups',
             'annotations',
           ],
-          if (snapshot.scrollables.length > 6)
-            'scrollableItems': snapshot.scrollables.length - 6,
+          if (snapshot.scrollables.length > 3)
+            'scrollableItems': snapshot.scrollables.length - 3,
           'recoverWith':
               'inspect --sections textTargets,scrollables,overlays,visualTree,controlGroups,annotations',
         },
@@ -1546,6 +1524,110 @@ class FlutterScoutRuntime {
 
   List<T> _takeItems<T>(List<T> items, int maxItems) =>
       items.length <= maxItems ? items : items.take(maxItems).toList();
+
+  /// Bounded safety summary for orientation reads. Full perception gaps can
+  /// contain ancestor paths and geometry for many nodes; their aggregate state
+  /// is enough to prevent an agent from treating the snapshot as complete.
+  Map<String, Object?> _compactBriefPerception(ScoutSnapshot snapshot) {
+    final kinds = <String>{
+      for (final gap in snapshot.perceptionGaps)
+        if (gap['kind']?.toString().trim().isNotEmpty ?? false)
+          gap['kind']!.toString(),
+    }.toList()..sort();
+    return <String, Object?>{
+      'observationKind': 'widget_tree_and_render_geometry',
+      'pixelEvidence': 'not_included_in_inspect',
+      'visualStatus': snapshot.perceptionGaps.isEmpty
+          ? 'pixels_not_observed'
+          : 'known_perception_gaps',
+      'captureBackend': <String, Object?>{
+        'status': snapshot.captureBackend['status'],
+        'backend': snapshot.captureBackend['backend'],
+        if (snapshot.captureBackend['reason'] != null)
+          'reason': snapshot.captureBackend['reason'],
+      },
+      'limitationCount': snapshot.perceptionGaps.length,
+      if (kinds.isNotEmpty) 'limitationKinds': _takeItems(kinds, 8),
+      if (kinds.length > 8) 'limitationKindsOmitted': kinds.length - 8,
+      if (snapshot.degradedNodes > 0)
+        'degradedElementCount': snapshot.degradedNodes,
+      'recoverWith': 'inspect --sections perception',
+    };
+  }
+
+  /// Keep only scroll state needed to decide whether a scroll action is a
+  /// viable next step. Geometry, nested provenance, and exact extents belong
+  /// in the explicit scrollables section.
+  Map<String, Object?> _compactBriefScrollable(
+    Map<String, Object?> scrollable,
+  ) => <String, Object?>{
+    'id': scrollable['id'],
+    'scopedId': scrollable['scopedId'],
+    'parentId': scrollable['parentId'],
+    'nestingDepth': scrollable['nestingDepth'],
+    'axis': scrollable['axis'],
+    'axisDirection': scrollable['axisDirection'],
+    'positionAvailable': scrollable['positionAvailable'],
+    'metricsAvailable': scrollable['metricsAvailable'],
+    'atStart': scrollable['atStart'],
+    'atEnd': scrollable['atEnd'],
+  };
+
+  /// Errors remain visible in brief mode, including their severity and
+  /// blocking status. Bound stack-like messages and correlation/provenance
+  /// plumbing, which otherwise dominate an orientation response.
+  List<Map<String, Object?>> _compactBriefErrors(
+    List<Map<String, Object?>> errors,
+  ) {
+    final blocking = errors
+        .where((error) => error['blocking'] == true)
+        .toList();
+    final other = errors.where((error) => error['blocking'] != true).toList();
+    final selected =
+        <Map<String, Object?>>[
+          ..._takeLastItems(blocking, 4),
+          ..._takeLastItems(other, 4),
+        ]..sort(
+          (left, right) => (left['cursor'] as int? ?? 0).compareTo(
+            right['cursor'] as int? ?? 0,
+          ),
+        );
+    return [
+      for (final error in selected)
+        <String, Object?>{
+          'cursor': error['cursor'],
+          'type': error['type'],
+          'severity': error['severity'],
+          'blocking': error['blocking'],
+          if (error['message'] != null)
+            'message': _abbreviateBriefString(error['message'].toString()),
+          'freshness': error['freshness'],
+        },
+    ];
+  }
+
+  Map<String, Object?> _briefErrorSummary(List<Map<String, Object?>> errors) {
+    final blockingCount = errors
+        .where((error) => error['blocking'] == true)
+        .length;
+    return <String, Object?>{
+      'count': errors.length,
+      'blockingCount': blockingCount,
+      if (errors.length > 8) 'omitted': errors.length - 8,
+      'recoverWith': 'inspect (without --brief) or logs for full diagnostics',
+    };
+  }
+
+  List<T> _takeLastItems<T>(List<T> items, int maxItems) {
+    if (items.length <= maxItems) return items;
+    return items.sublist(items.length - maxItems);
+  }
+
+  String _abbreviateBriefString(String value) {
+    const limit = 280;
+    if (value.length <= limit) return value;
+    return '${value.substring(0, limit)}…';
+  }
 
   Map<String, Object?> _compactStructuredRow(Map<String, Object?> row) {
     final text = row['text'];

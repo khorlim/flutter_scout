@@ -111,11 +111,15 @@ void main() {
       final compactPerception = brief['perception']! as Map;
       expect(compactPerception['visualStatus'], 'known_perception_gaps');
       expect(
-        (compactPerception['limitations']! as List).cast<Map>().map(
-          (gap) => gap['kind'],
-        ),
+        compactPerception['limitationCount'],
+        greaterThanOrEqualTo(byKind.length),
+      );
+      expect(
+        (compactPerception['limitationKinds']! as List).cast<String>(),
         containsAll(byKind.keys),
       );
+      expect(compactPerception.containsKey('limitations'), isFalse);
+      expect(compactPerception['recoverWith'], 'inspect --sections perception');
     },
   );
 
@@ -522,12 +526,13 @@ void main() {
           .cast<Map<String, Object?>>()
           .firstWhere((region) => region['id'] == 'scroll.inner_carousel');
       expect(compactInner['parentId'], 'scroll.outer_feed');
-      expect(compactInner['physicalBounds'], isA<List<Object?>>());
-      expect((compactInner['positionEvidence']! as Map)['status'], 'observed');
       expect(
-        (compactInner['normalizedPositionEvidence']! as Map)['status'],
-        'derived_observation',
+        compactInner['scopedId'],
+        'scroll.outer_feed/scroll.inner_carousel',
       );
+      expect(compactInner.containsKey('physicalBounds'), isFalse);
+      expect(compactInner.containsKey('positionEvidence'), isFalse);
+      expect(compactInner.containsKey('normalizedPositionEvidence'), isFalse);
 
       innerController.jumpTo(innerController.position.maxScrollExtent);
       await tester.pump();

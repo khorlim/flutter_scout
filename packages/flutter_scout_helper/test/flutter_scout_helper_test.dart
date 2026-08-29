@@ -1617,6 +1617,61 @@ void main() {
     expect(scrollables.first['axis'], 'vertical');
   });
 
+  testWidgets('brief inspect bounds verbose routing diagnostics', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              for (var index = 0; index < 6; index++)
+                SizedBox(
+                  height: 40,
+                  child: ListView(
+                    key: ValueKey('brief-scroll-$index'),
+                    children: [Text('Scroll item $index')],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final runtime = FlutterScoutHelper.debugRuntime;
+    runtime.debugRecordError('brief diagnostic ${'x' * 1000}');
+    final brief = runtime.debugInspectPayload(brief: true);
+
+    final scrollables = (brief['scrollables']! as List<Object?>)
+        .cast<Map<String, Object?>>();
+    expect(scrollables, hasLength(3));
+    expect(scrollables.first, containsPair('id', isNotNull));
+    expect(scrollables.first, containsPair('axis', isNotNull));
+    expect(scrollables.first.containsKey('logicalBounds'), isFalse);
+    expect(scrollables.first.containsKey('geometryEvidence'), isFalse);
+    expect(scrollables.first.containsKey('scopePath'), isFalse);
+    expect(
+      (brief['omittedSections']! as Map)['scrollableItems'],
+      greaterThan(0),
+    );
+
+    final perception = (brief['perception']! as Map).cast<String, Object?>();
+    expect(perception, containsPair('limitationCount', isA<int>()));
+    expect(perception['recoverWith'], 'inspect --sections perception');
+    expect(perception.containsKey('limitations'), isFalse);
+
+    final errors = (brief['recentErrors']! as List<Object?>)
+        .cast<Map<String, Object?>>();
+    final recorded = errors.lastWhere((error) => error['type'] == 'test_error');
+    expect(recorded['severity'], isNotNull);
+    expect(recorded['blocking'], isNotNull);
+    expect((recorded['message']! as String).length, lessThanOrEqualTo(281));
+    expect(recorded.containsKey('provenance'), isFalse);
+  });
+
   testWidgets('scroll refuses a start point outside the viewport', (
     tester,
   ) async {
