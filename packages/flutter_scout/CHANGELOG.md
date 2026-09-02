@@ -4,6 +4,9 @@
   terminal acknowledgement, preventing slow but successful reloads from being
   reported as `reload_ack_timeout` while keeping the operation bounded.
 
+- Allow acknowledged reloads and restarts to wait for bounded slow helper
+  inspection on large healthy apps instead of reporting a false timeout.
+
 - Bind named launch/ensure storage and launch leases to the resolved Flutter
   project instead of the command working directory. Duplicate legacy roots for
   one label now fail with their competing session/run identities instead of

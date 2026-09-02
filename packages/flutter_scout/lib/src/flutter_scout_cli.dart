@@ -302,6 +302,33 @@ class FlutterScoutCli {
   Duration debugHotUpdateAcknowledgementTimeout(String action) =>
       _hotUpdateAcknowledgementTimeout(action);
 
+  /// Test-only view of the bounded post-update inspection policy.
+  Map<String, Duration> debugPostHotUpdateInspectionPolicy() =>
+      const <String, Duration>{
+        'timeout': _postHotUpdateInspectionTimeout,
+        'probeTimeout': _postHotUpdateInspectProbeTimeout,
+        'stableTimeout': _postHotUpdateWaitStableTimeout,
+      };
+
+  /// Test-only deterministic seam for slow post-update helper responses.
+  Future<Map<String, dynamic>?> debugWaitForPostHotUpdateInspection({
+    required Duration timeout,
+    required Duration probeTimeout,
+    required Future<Map<String, dynamic>?> Function(Duration timeout) inspect,
+    required Future<void> Function(Duration timeout) waitStable,
+    String? previousRuntimeInstanceId,
+    bool requireNewRuntime = false,
+  }) => _waitForPostHotUpdateInspection(
+    timeout: timeout,
+    probeTimeout: probeTimeout,
+    stableTimeout: const Duration(milliseconds: 15),
+    retryDelay: const Duration(milliseconds: 1),
+    inspect: inspect,
+    waitStable: waitStable,
+    previousRuntimeInstanceId: previousRuntimeInstanceId,
+    requireNewRuntime: requireNewRuntime,
+  );
+
   /// Test-only view of `logs --summary` classification.
   Map<String, Object?> debugLogSummary(List<String> lines, {int last = 20}) =>
       _summarizeLogLines(lines, last: last);

@@ -25,6 +25,79 @@ void main() {
     );
   });
 
+  group('post hot-update inspection', () {
+    test(
+      'allows bounded slow helper responses after acknowledgement',
+      () async {
+        final probeBudgets = <Duration>[];
+        var inspectCalls = 0;
+
+        final result = await FlutterScoutCli()
+            .debugWaitForPostHotUpdateInspection(
+              timeout: const Duration(milliseconds: 100),
+              probeTimeout: const Duration(milliseconds: 40),
+              inspect: (timeout) async {
+                probeBudgets.add(timeout);
+                inspectCalls += 1;
+                await Future<void>.delayed(const Duration(milliseconds: 25));
+                return <String, dynamic>{
+                  'ok': true,
+                  'runtimeInstanceId': 'runtime-1',
+                  'inspection': inspectCalls,
+                };
+              },
+              waitStable: (_) async {
+                await Future<void>.delayed(const Duration(milliseconds: 5));
+              },
+            );
+
+        expect(result, isNotNull);
+        expect(result!['inspection'], 2);
+        expect(probeBudgets, hasLength(2));
+        expect(
+          probeBudgets.every(
+            (budget) => budget >= const Duration(milliseconds: 25),
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test('keeps production inspection recovery bounded', () {
+      final policy = FlutterScoutCli().debugPostHotUpdateInspectionPolicy();
+
+      expect(policy['timeout'], const Duration(seconds: 30));
+      expect(policy['probeTimeout'], const Duration(seconds: 12));
+      expect(policy['stableTimeout'], const Duration(seconds: 3));
+      expect(policy['probeTimeout']! < policy['timeout']!, isTrue);
+    });
+
+    test('still requires a new runtime after hot restart', () async {
+      var inspectCalls = 0;
+
+      final result = await FlutterScoutCli()
+          .debugWaitForPostHotUpdateInspection(
+            timeout: const Duration(milliseconds: 100),
+            probeTimeout: const Duration(milliseconds: 20),
+            previousRuntimeInstanceId: 'runtime-before',
+            requireNewRuntime: true,
+            inspect: (_) async {
+              inspectCalls += 1;
+              return <String, dynamic>{
+                'ok': true,
+                'runtimeInstanceId': inspectCalls == 1
+                    ? 'runtime-before'
+                    : 'runtime-after',
+              };
+            },
+            waitStable: (_) async {},
+          );
+
+      expect(result!['runtimeInstanceId'], 'runtime-after');
+      expect(inspectCalls, 3);
+    });
+  });
+
   group('attach run identity recovery', () {
     test('recovers a verified helper from the prior Scout launch', () {
       final recovered = FlutterScoutCli().debugReconcileAttachRunIdentity(
