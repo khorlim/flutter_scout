@@ -97,7 +97,7 @@ void main() {
     ]) {
       expect(compact[key], input[key]);
     }
-    // Compaction is a projection only: verbose and persisted evidence keep the
+    // Compaction is a projection only: the input for verbose output keeps the
     // original diagnostics, including their full perception limitation list.
     expect((details['after'] as Map)['visualTree'], isNotNull);
     expect(

@@ -187,7 +187,10 @@ extension _CliResults on FlutterScoutCli {
         'snapshotId': ?value['snapshotId'],
         'timings': value['timings'],
         'evidence': evidence,
-        'error': ?value['error'],
+        if (value['error'] case final Map error)
+          'error': _compactActionError(error)
+        else
+          'error': ?value['error'],
         'blockingRuntimeErrors': _objectList(value['blockingErrors']).length,
         'blockingLogSignals': _objectList(value['blockingLogSignals']).length,
       };
@@ -340,7 +343,13 @@ extension _CliResults on FlutterScoutCli {
         'afterSnapshotId',
         'structuredError',
       ])
-        if (result.containsKey(key)) key: result[key],
+        if (result.containsKey(key))
+          // Observation trees in errors are diagnostics, not journal identity
+          // or outcome evidence. Reuse the safety-preserving projection before
+          // the journal's byte limit; never truncate unknown/error facts to fit.
+          key: key == 'structuredError' && result[key] is Map
+              ? _compactActionError(result[key] as Map)
+              : result[key],
     };
     final digest = _resultIdempotencyKeyDigest(result);
     final source = _resultIdempotencyKeySource(result);
