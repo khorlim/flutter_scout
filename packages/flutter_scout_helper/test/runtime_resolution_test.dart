@@ -161,6 +161,84 @@ void main() {
     },
   );
 
+  testWidgets(
+    'unique ids outrank shared base ids and fallback ids stay unique',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      String fallbackFor(String baseId) =>
+          'i${baseId.hashCode.abs().toString().padLeft(8, '0').substring(0, 6)}';
+      final fallbackOwners = <String, String>{};
+      String? firstKey;
+      String? secondKey;
+      for (var index = 0; index < 10000; index++) {
+        final key = 'collision_$index';
+        final fallback = fallbackFor('btn.$key');
+        final prior = fallbackOwners[fallback];
+        if (prior != null) {
+          firstKey = prior;
+          secondKey = key;
+          break;
+        }
+        fallbackOwners[fallback] = key;
+      }
+      expect(firstKey, isNotNull, reason: 'expected a bounded hash collision');
+      expect(secondKey, isNotNull, reason: 'expected a bounded hash collision');
+      var firstDispatched = 0;
+      var secondDispatched = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                ElevatedButton(
+                  key: ValueKey(firstKey!),
+                  onPressed: () => firstDispatched++,
+                  child: const Text('Shared action'),
+                ),
+                Padding(
+                  padding: EdgeInsets.zero,
+                  child: ElevatedButton(
+                    key: ValueKey(secondKey!),
+                    onPressed: () => secondDispatched++,
+                    child: const Text('Shared action'),
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.zero,
+                  child: ElevatedButton(
+                    key: ValueKey(secondKey),
+                    onPressed: () {},
+                    child: const Text('Shared action'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final runtime = FlutterScoutHelper.debugRuntime;
+      final snapshot = runtime.debugSnapshot();
+      final fallbackIds = snapshot.interactables
+          .map((node) => node.fallbackId)
+          .toList(growable: false);
+      expect(fallbackIds.toSet(), hasLength(fallbackIds.length));
+
+      final exactId = 'btn.$secondKey';
+      final resolution = runtime.debugResolveTarget(exactId);
+      expect(resolution['status'], 'unique');
+      expect((resolution['target']! as Map)['id'], exactId);
+
+      final response = (await tester.runAsync(
+        () => runtime.debugTapTarget(exactId),
+      ))!;
+      expect(response['ok'], isTrue);
+      expect(firstDispatched, 0);
+      expect(secondDispatched, 1);
+    },
+  );
+
   testWidgets('duplicate field selector never mutates either controller', (
     tester,
   ) async {
@@ -199,7 +277,7 @@ void main() {
 
     final response = (await tester.runAsync(
       () => FlutterScoutHelper.debugRuntime.debugInputTarget(
-        'field.shared_email',
+        'shared-email',
         'must-not-write',
       ),
     ))!;
@@ -234,7 +312,7 @@ void main() {
 
     final response = (await tester.runAsync(
       () => FlutterScoutHelper.debugRuntime.debugScroll({
-        'target': 'scroll.shared_scroll',
+        'target': 'shared-scroll',
         'distance': '80',
       }),
     ))!;

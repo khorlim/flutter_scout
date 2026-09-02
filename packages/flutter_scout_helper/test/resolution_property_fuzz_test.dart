@@ -107,7 +107,7 @@ void main() {
       ),
     );
     await tester.pump();
-    final collision = runtime.debugResolveTarget('btn.pay_now');
+    final collision = runtime.debugResolveTarget('pay_now');
     expect(collision['status'], 'ambiguous', reason: 'seed=$seed');
     expect((collision['candidates']! as List), hasLength(3));
   });
@@ -157,7 +157,6 @@ void main() {
       for (final selector in <String>{
         duplicateKey,
         duplicateLabel,
-        nodes.first.baseId,
         'btn.save',
       }) {
         final resolution = runtime.debugResolveTarget(selector);

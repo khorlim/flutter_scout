@@ -318,7 +318,13 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         ),
       );
     }
-    if (exact.isNotEmpty) return _sortTargetCandidates(exact);
+    if (exact.isNotEmpty) {
+      final ranked = _sortTargetCandidates(exact);
+      final strongestScore = ranked.first.score;
+      return ranked
+          .where((candidate) => candidate.score == strongestScore)
+          .toList(growable: false);
+    }
 
     final caseInsensitive = <_TargetCandidate>[];
     final lower = requested.toLowerCase();
