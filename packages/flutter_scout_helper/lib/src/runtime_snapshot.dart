@@ -277,6 +277,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final offscreenText = <String>{};
     var screen = 'RootWidget';
     var screenDepth = -1;
+    Element? screenElement;
     var degradedNodes = 0;
     final views = WidgetsBinding.instance.platformDispatcher.views;
     final implicitView =
@@ -330,6 +331,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
               _isElementOnActiveHitPath(element)) {
             screen = widgetType;
             screenDepth = elementDepth;
+            screenElement = element;
           }
           final node = _nodeFromElement(
             element,
@@ -652,6 +654,8 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
             'basis': screen == 'RootWidget'
                 ? 'root_widget_fallback'
                 : 'screen_or_page_runtime_type',
+            if (screenElement != null)
+              ..._screenCandidateEvidence(screenElement!),
           };
     _synchronizeVisibleErrorSurfaceSignals(perceptionGaps);
     var snapshot = ScoutSnapshot(

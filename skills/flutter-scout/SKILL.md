@@ -145,6 +145,12 @@ labels; row actions expose stable intent aliases such as `.open` and
 `.more_actions`. Read `selected`, `enabled`, `hitTestable`, `visibleFraction`,
 `enclosingTarget`, `altIds`, and `didYouMean` before guessing.
 
+Use the observed `screen` for `--expect-screen`, not a guessed class name.
+`screenEvidence.screenCandidates` preserves a bounded nearest-first ancestry
+for widget-inferred screens; parent candidates are orientation hints, not
+aliases accepted by the exact screen guard. A visible-text guard can be more
+useful when nested pages or modal surfaces change the reported screen.
+
 ## Orient and navigate with bounds
 
 Use read-only orientation and location before exploratory scrolling:
