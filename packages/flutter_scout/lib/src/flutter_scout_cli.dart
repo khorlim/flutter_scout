@@ -135,6 +135,9 @@ class FlutterScoutCli {
   Map<String, dynamic> debugCompactBriefInspect(Map<String, dynamic> result) =>
       _compactBriefInspect(result);
 
+  Map<String, dynamic> debugCompactWhere(Map<String, dynamic> result) =>
+      _compactWhere(result);
+
   /// Test-only deterministic access to the canonical phase closure used by
   /// responses, compact output, evidence, and durable mutation outcomes.
   Map<String, dynamic> debugCanonicalPhaseTimings(
@@ -2721,7 +2724,7 @@ Usage:
   flutter-scout doctor [--project <path>] [--device <simulator-id>]
   flutter-scout stop [--clear-session]
   flutter-scout inspect [--brief] [--surface] [--max-items <n>] [--sections <list>] [--since <snapshot-id>]
-  flutter-scout where
+  flutter-scout where [--verbose]
   flutter-scout locate (--text <text> | --target <handle>) [--within <scroll-id>]
   flutter-scout reveal (--text <text> | --target <handle>) [--within <scroll-id>] [--direction down|up|right|left] [--max-actions <n>]
   flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|fixed|check]

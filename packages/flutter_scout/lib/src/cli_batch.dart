@@ -926,7 +926,8 @@ extension _CliBatch on FlutterScoutCli {
           ..addFlag('include-stale', defaultsTo: false);
       case 'where':
         return ArgParser()
-          ..addOption('max-response-bytes', defaultsTo: '65536');
+          ..addOption('max-response-bytes', defaultsTo: '65536')
+          ..addFlag('verbose', defaultsTo: false, negatable: false);
       case 'locate':
         return ArgParser()
           ..addOption('text')
