@@ -7,6 +7,13 @@
 - Allow acknowledged reloads and restarts to wait for bounded slow helper
   inspection on large healthy apps instead of reporting a false timeout.
 
+- Bound `inspect --brief` and the default `where` output in the CLI even when
+  an already-running app still uses an older helper that returns full
+  perception, geometry, or provenance payloads. `where --verbose` preserves
+  opt-in access to the complete navigation observation. Compact observation
+  commands emit one machine-JSON line instead of thousands of indentation-only
+  lines.
+
 - Bind named launch/ensure storage and launch leases to the resolved Flutter
   project instead of the command working directory. Duplicate legacy roots for
   one label now fail with their competing session/run identities instead of

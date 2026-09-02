@@ -283,11 +283,16 @@ Scout-owned `launch` and `ensure` responses include a `timing` object when they 
 `inspect` includes a generation-bound `snapshotId`, `fieldsById`, text targets,
 geometry, overlays, visual tree, control groups, perception limitations, and
 scroll-region facts. `inspect --brief` is a bounded operational digest scoped
-to the active top modal/picker/dialog/sheet. Use `--max-items <1-100>`, request
+to the active top modal/picker/dialog/sheet. Its default list bound is 12; use
+`--max-items <1-100>` to override it, request
 specific `--sections`, and use `inspect --since <snapshot-id>` for a bounded
-relative observation. `where` exposes navigation/surface/scroll orientation;
-`locate` ranks without mutation; `reveal` is bounded and requires `--within`
-when multiple scroll regions exist.
+relative observation. Compact observation modes emit one machine-JSON line to
+avoid indentation-only token overhead. `where` exposes
+navigation/surface/scroll orientation;
+its default output is a bounded decision digest, while `where --verbose`
+returns full geometry and provenance. `locate` ranks without mutation;
+`reveal` is bounded and requires `--within` when multiple scroll regions
+exist.
 
 `crop --changed-since <snapshot-id>` derives regions from the helper's retained
 snapshot-relative semantic/render delta, then captures their bounded union and

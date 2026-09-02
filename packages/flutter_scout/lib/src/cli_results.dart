@@ -11,6 +11,8 @@ extension _CliResults on FlutterScoutCli {
     Duration? callTimeout,
     String? captureOutput,
     bool assertNoErrors = true,
+    Map<String, dynamic> Function(Map<String, dynamic>)? outputTransform,
+    bool prettyOutput = true,
     String? expectLog,
     String? rejectLog,
     Duration logExpectationTimeout = const Duration(seconds: 5),
@@ -96,10 +98,12 @@ extension _CliResults on FlutterScoutCli {
       result: enrichedResult,
       record: record,
     );
-    final output = compact
+    final output = outputTransform != null
+        ? outputTransform(enrichedResult)
+        : compact
         ? _compactActionResult(enrichedResult)
         : enrichedResult;
-    _emitActionOutput(output);
+    _emitActionOutput(output, pretty: prettyOutput);
     if (record != null && actionSucceeded && enrichedResult['ok'] == true) {
       await _maybeStartAutoServe();
     }
@@ -555,7 +559,7 @@ extension _CliResults on FlutterScoutCli {
     };
   }
 
-  void _emitActionOutput(Map<String, dynamic> output) {
+  void _emitActionOutput(Map<String, dynamic> output, {bool pretty = true}) {
     final safe = Map<String, dynamic>.from(
       _sanitizeForSerialization(output)! as Map,
     );
@@ -563,7 +567,7 @@ extension _CliResults on FlutterScoutCli {
       _suppressedActionResults.add(safe);
       return;
     }
-    _printJson(safe);
+    _printJson(safe, pretty: pretty);
   }
 
   Future<Map<String, dynamic>> _withRecentLogSignals(
@@ -953,11 +957,191 @@ extension _CliResults on FlutterScoutCli {
   }
 
   Map<String, dynamic> _compactBriefInspect(Map<String, dynamic> result) {
-    final compact = Map<String, dynamic>.from(result);
-    if (compact['protocolMismatch'] == null) {
-      compact.remove('helperProtocolVersion');
+    final payload = _observationPayload(result);
+    final visible = payload['visibleText'];
+    final hitTestable = payload['hitTestableText'];
+    List<Object?>? nonHitTestable;
+    if (visible is List && hitTestable is List) {
+      final hitSet = hitTestable.map((value) => value.toString()).toSet();
+      final difference = <Object?>[
+        for (final value in visible)
+          if (!hitSet.contains(value.toString())) value,
+      ];
+      if (difference.length <= 4) {
+        nonHitTestable = difference;
+      }
     }
-    const safetyKeys = <String>{
+    final compact = <String, dynamic>{
+      ..._compactProtocolSafetyEvidence(result),
+      'ok': result['ok'],
+      if (result['error'] != null) 'error': result['error'],
+      if (result['evidence'] != null) 'evidence': result['evidence'],
+      if (payload['screen'] != null) 'screen': payload['screen'],
+      if (payload['screenEvidence'] is Map)
+        'screenEvidence': payload['screenEvidence'],
+      if (payload['routeGuess'] != null) 'routeGuess': payload['routeGuess'],
+      if (payload['activeSurface'] is Map)
+        'activeSurface': _compactActiveSurface(payload['activeSurface'] as Map),
+      if (payload['surfaceOnly'] != null) 'surfaceOnly': payload['surfaceOnly'],
+      if (payload['viewSignature'] != null)
+        'viewSignature': _compactObservationString(
+          payload['viewSignature'].toString(),
+        ),
+      if (payload['visibleTextHash'] != null)
+        'visibleTextHash': payload['visibleTextHash'],
+      if (payload['idle'] != null) 'idle': payload['idle'],
+      if (payload['viewport'] is Map)
+        'viewport': _compactObservationViewport(payload['viewport'] as Map),
+      if (payload['perception'] is Map)
+        'perception': _compactObservationPerception(
+          payload['perception'] as Map,
+        ),
+      if (payload['keyboard'] is Map) 'keyboard': payload['keyboard'],
+      if (payload['degradedNodes'] != null)
+        'degradedNodes': payload['degradedNodes'],
+      if (_isNonEmptyList(payload['recentErrors']))
+        'recentErrors': _compactObservationSignals(
+          payload['recentErrors'] as List,
+        ),
+      if (payload['errorSummary'] != null)
+        'errorSummary': payload['errorSummary'],
+      if (payload['annotationMode'] == true) 'annotationMode': true,
+      if (_isNonEmptyList(visible)) 'visibleText': visible,
+      if (hitTestable is List &&
+          hitTestable.isNotEmpty &&
+          nonHitTestable == null)
+        'hitTestableText': hitTestable,
+      if (nonHitTestable != null && nonHitTestable.isNotEmpty)
+        'nonHitTestableText': nonHitTestable,
+      if (_isNonEmptyList(payload['offscreenText']))
+        'offscreenText': payload['offscreenText'],
+      if (_isNonEmptyList(payload['interactables']))
+        'interactables': payload['interactables'],
+      if (payload['interactablesOmitted'] != null)
+        'interactablesOmitted': payload['interactablesOmitted'],
+      if (_isNonEmptyList(payload['inspectWarnings']))
+        'inspectWarnings': payload['inspectWarnings'],
+      if (_isNonEmptyList(payload['structuredRows']))
+        'structuredRows': (payload['structuredRows'] as List).take(4).toList(),
+      if (_isNonEmptyList(payload['scrollables']))
+        'scrollables': <Object?>[
+          for (final item in (payload['scrollables'] as List).take(3))
+            if (item is Map) _compactBriefObservationScrollRegion(item),
+        ],
+      if (payload['omittedSections'] != null)
+        'omittedSections': payload['omittedSections'],
+      if (payload['omitted'] != null) 'omitted': payload['omitted'],
+      if (payload['fieldValues'] is Map &&
+          (payload['fieldValues'] as Map).isNotEmpty)
+        'fieldValues': payload['fieldValues'],
+      if (payload['observationEffects'] != null)
+        'observationEffects': payload['observationEffects'],
+      if (result['timings'] != null) 'timings': result['timings'],
+      if (result['warnings'] != null) 'warnings': result['warnings'],
+      if (result['helperProtocol'] != null)
+        'helperProtocol': result['helperProtocol'],
+      if (result['protocolMismatch'] != null)
+        'protocolMismatch': result['protocolMismatch'],
+      if (_isNonEmptyList(result['recentLogSignals']))
+        'recentLogSignals': _lastItems(result['recentLogSignals'] as List, 3),
+      if (result['logCursor'] != null) 'logCursor': result['logCursor'],
+    };
+    return _nestCompactObservation(compact);
+  }
+
+  Map<String, dynamic> _compactWhere(Map<String, dynamic> result) {
+    final payload = _observationPayload(result);
+    final regions = payload['scrollRegions'] is List
+        ? payload['scrollRegions'] as List
+        : const <Object?>[];
+    const maxRegions = 20;
+    final compact = <String, dynamic>{
+      ..._compactProtocolSafetyEvidence(result),
+      'ok': result['ok'],
+      if (result['error'] != null) 'error': result['error'],
+      if (result['evidence'] != null) 'evidence': result['evidence'],
+      'orientation': payload['orientation'] ?? 'where',
+      if (payload['route'] != null) 'route': payload['route'],
+      if (payload['screen'] != null) 'screen': payload['screen'],
+      if (payload['screenEvidence'] is Map)
+        'screenEvidence': payload['screenEvidence'],
+      if (payload['activeSurface'] is Map)
+        'activeSurface': _compactActiveSurface(payload['activeSurface'] as Map),
+      if (_isNonEmptyList(payload['activeTabCandidates']))
+        'activeTabCandidates': payload['activeTabCandidates'],
+      if (_isNonEmptyList(payload['tabSystems']))
+        'tabSystems': payload['tabSystems'],
+      if (_isNonEmptyList(payload['navigators']))
+        'navigators': <Object?>[
+          for (final item in (payload['navigators'] as List).take(8))
+            if (item is Map)
+              <String, Object?>{
+                for (final key in const <String>[
+                  'depth',
+                  'active',
+                  'canPop',
+                  'key',
+                  'rect',
+                ])
+                  if (item.containsKey(key)) key: item[key],
+              },
+        ],
+      if (_isNonEmptyList(payload['overlays']))
+        'overlays': <Object?>[
+          for (final item in (payload['overlays'] as List).take(8))
+            if (item is Map)
+              <String, Object?>{
+                for (final key in const <String>[
+                  'kind',
+                  'widgetType',
+                  'label',
+                  'rect',
+                ])
+                  if (item.containsKey(key)) key: item[key],
+              },
+        ],
+      if (payload['keyboard'] is Map) 'keyboard': payload['keyboard'],
+      'scrollRegions': <Object?>[
+        for (final item in regions.take(maxRegions))
+          if (item is Map) _compactObservationScrollRegion(item),
+      ],
+      if (regions.length > maxRegions)
+        'scrollRegionsOmitted': <String, Object?>{
+          'count': regions.length - maxRegions,
+          'recoverWith': 'where --verbose',
+        },
+      if (_isNonEmptyList(payload['panes'])) 'panes': payload['panes'],
+      if (payload['coordinateFrame'] is Map)
+        'coordinateFrame': _compactObservationCoordinateFrame(
+          payload['coordinateFrame'] as Map,
+        ),
+      if (payload['scope'] is Map) 'scope': payload['scope'],
+      if (_isNonEmptyList(payload['limitations']))
+        'limitations': payload['limitations'],
+      if (payload['observationEffects'] != null)
+        'observationEffects': payload['observationEffects'],
+      if (payload['payloadBounds'] != null)
+        'helperPayloadBounds': payload['payloadBounds'],
+      if (result['timings'] != null) 'timings': result['timings'],
+      if (result['warnings'] != null) 'warnings': result['warnings'],
+      if (result['helperProtocol'] != null)
+        'helperProtocol': result['helperProtocol'],
+      if (result['protocolMismatch'] != null)
+        'protocolMismatch': result['protocolMismatch'],
+      if (_isNonEmptyList(result['recentErrors']))
+        'recentErrors': _compactObservationSignals(
+          result['recentErrors'] as List,
+        ),
+      if (_isNonEmptyList(result['recentLogSignals']))
+        'recentLogSignals': _lastItems(result['recentLogSignals'] as List, 3),
+      if (result['logCursor'] != null) 'logCursor': result['logCursor'],
+    };
+    return _nestCompactObservation(compact);
+  }
+
+  Map<String, dynamic> _nestCompactObservation(Map<String, dynamic> compact) {
+    const envelopeKeys = <String>{
+      'ok',
       'schemaVersion',
       'protocolVersion',
       'minSupportedProtocolVersion',
@@ -974,31 +1158,186 @@ extension _CliResults on FlutterScoutCli {
       'errorCursor',
       'errorsSinceCursor',
       'structuredError',
+      'transport',
+      'dispatch',
+      'observation',
+      'postcondition',
+      'runtimeHealth',
+      'runtimeHealthScope',
+      'activeBlockingSignals',
+      'idempotency',
+      'idempotencyKeyDigest',
+      'idempotencyKeySource',
+      'idempotencyKey',
+      'idempotencyScope',
+      'idempotencyScopeKey',
+      'expectedStateGeneration',
+      'deadlineEpochMs',
+      'reconciledAfterTimeout',
+      'beforeStateGeneration',
+      'beforeSnapshotId',
+      'afterStateGeneration',
+      'afterSnapshotId',
+      'error',
+      'evidence',
       'timings',
+      'warnings',
+      'helperProtocol',
+      'protocolMismatch',
+      'logCursor',
     };
-    compact.removeWhere(
-      (key, value) =>
-          !safetyKeys.contains(key) &&
-          (value == null ||
-              (value is List && value.isEmpty) ||
-              (value is Map && value.isEmpty)),
-    );
-    final visible = compact['visibleText'];
-    final hitTestable = compact['hitTestableText'];
-    if (visible is List && hitTestable is List) {
-      final hitSet = hitTestable.map((value) => value.toString()).toSet();
-      final nonHitTestable = [
-        for (final value in visible)
-          if (!hitSet.contains(value.toString())) value,
-      ];
-      if (nonHitTestable.length <= 4) {
-        compact.remove('hitTestableText');
-        if (nonHitTestable.isNotEmpty) {
-          compact['nonHitTestableText'] = nonHitTestable;
-        }
-      }
+    return <String, dynamic>{
+      for (final entry in compact.entries)
+        if (envelopeKeys.contains(entry.key)) entry.key: entry.value,
+      'result': <String, Object?>{
+        for (final entry in compact.entries)
+          if (!envelopeKeys.contains(entry.key)) entry.key: entry.value,
+      },
+    };
+  }
+
+  Map<String, dynamic> _observationPayload(Map<String, dynamic> result) {
+    final nested = result['result'];
+    if (nested is! Map) return result;
+    return <String, dynamic>{
+      for (final entry in nested.entries) entry.key.toString(): entry.value,
+      for (final entry in result.entries)
+        if (entry.key != 'result') entry.key: entry.value,
+    };
+  }
+
+  Map<String, Object?> _compactObservationViewport(Map viewport) =>
+      <String, Object?>{
+        for (final key in const <String>[
+          'available',
+          'orientation',
+          'logicalSize',
+          'devicePixelRatio',
+        ])
+          if (viewport.containsKey(key)) key: viewport[key],
+      };
+
+  Map<String, Object?> _compactObservationCoordinateFrame(Map frame) =>
+      <String, Object?>{
+        for (final key in const <String>[
+          'primarySpace',
+          'origin',
+          'xDirection',
+          'yDirection',
+          'logicalViewport',
+          'devicePixelRatio',
+        ])
+          if (frame.containsKey(key)) key: frame[key],
+      };
+
+  Map<String, Object?> _compactObservationPerception(Map perception) {
+    final limitations = perception['limitations'];
+    final kinds = <String>{
+      if (limitations is List)
+        for (final item in limitations)
+          if (item is Map && item['kind']?.toString().isNotEmpty == true)
+            item['kind'].toString(),
+      if (perception['limitationKinds'] is List)
+        for (final item in perception['limitationKinds'] as List)
+          if (item.toString().isNotEmpty) item.toString(),
+    }.toList()..sort();
+    final capture = perception['captureBackend'];
+    return <String, Object?>{
+      for (final key in const <String>[
+        'observationKind',
+        'pixelEvidence',
+        'visualStatus',
+        'degradedElementCount',
+        'recoverWith',
+      ])
+        if (perception.containsKey(key)) key: perception[key],
+      if (capture is Map)
+        'captureBackend': <String, Object?>{
+          for (final key in const <String>['status', 'backend', 'reason'])
+            if (capture.containsKey(key)) key: capture[key],
+        },
+      'limitationCount':
+          perception['limitationCount'] ??
+          (limitations is List ? limitations.length : 0),
+      if (kinds.isNotEmpty) 'limitationKinds': kinds.take(8).toList(),
+      if (kinds.length > 8) 'limitationKindsOmitted': kinds.length - 8,
+      if (limitations is List && limitations.isNotEmpty)
+        'recoverWith': 'inspect --sections perception',
+    };
+  }
+
+  Map<String, Object?> _compactObservationScrollRegion(Map region) =>
+      <String, Object?>{
+        for (final key in const <String>[
+          'id',
+          'scopedId',
+          'parentId',
+          'nestingDepth',
+          'axis',
+          'axisDirection',
+          'logicalBounds',
+          'positionAvailable',
+          'metricsAvailable',
+          'pixels',
+          'minScrollExtent',
+          'maxScrollExtent',
+          'approximateNormalizedPosition',
+          'atStart',
+          'atEnd',
+          'canScroll',
+        ])
+          if (region.containsKey(key)) key: region[key],
+      };
+
+  Map<String, Object?> _compactBriefObservationScrollRegion(Map region) =>
+      <String, Object?>{
+        for (final key in const <String>[
+          'id',
+          'scopedId',
+          'parentId',
+          'nestingDepth',
+          'axis',
+          'axisDirection',
+          'positionAvailable',
+          'metricsAvailable',
+          'atStart',
+          'atEnd',
+          'canScroll',
+        ])
+          if (region.containsKey(key)) key: region[key],
+      };
+
+  List<Object?> _compactObservationSignals(List signals) {
+    final blocking = <Object?>[];
+    final other = <Object?>[];
+    for (final signal in signals) {
+      final target = signal is Map && signal['blocking'] == true
+          ? blocking
+          : other;
+      target.add(signal is Map ? _compactObservationSignal(signal) : signal);
     }
-    return compact;
+    return <Object?>[...blocking, ...other.reversed.take(4).toList().reversed];
+  }
+
+  Map<String, Object?> _compactObservationSignal(Map signal) =>
+      <String, Object?>{
+        for (final key in const <String>[
+          'cursor',
+          'type',
+          'severity',
+          'blocking',
+          'freshness',
+          'source',
+          'code',
+        ])
+          if (signal.containsKey(key)) key: signal[key],
+        if (signal['message'] != null)
+          'message': _compactObservationString(signal['message'].toString()),
+      };
+
+  String _compactObservationString(String value) {
+    const limit = 280;
+    return value.length <= limit ? value : '${value.substring(0, limit)}…';
   }
 
   List<Map<String, Object?>> _workflowHints() {

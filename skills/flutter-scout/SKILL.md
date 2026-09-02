@@ -155,6 +155,12 @@ flutter-scout --app template-save locate --target row.customer_acme
 flutter-scout --app template-save locate --text "Acme" --contains
 ```
 
+`where` is compact by default. Use `where --verbose` only when its bounded
+scroll-region, pane, surface, and navigator facts do not contain the geometry
+or provenance needed for the next decision. Compact `where` and
+`inspect --brief` output is one machine-JSON line; parse it as JSON rather than
+requesting verbose output for formatting.
+
 If a unique target is not built or visible, use bounded `reveal`. When more
 than one scroll region exists, pass the exact region returned by `where` or
 `inspect --sections scrollables`; Scout refuses to guess.

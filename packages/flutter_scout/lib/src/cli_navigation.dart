@@ -9,6 +9,12 @@ extension _CliNavigation on FlutterScoutCli {
         'max-response-bytes',
         defaultsTo: '65536',
         help: 'Bound the helper payload (4096-1048576 bytes).',
+      )
+      ..addFlag(
+        'verbose',
+        defaultsTo: false,
+        negatable: false,
+        help: 'Print full navigation geometry and provenance.',
       );
     final parsed = parser.parse(args);
     if (parsed.rest.isNotEmpty) {
@@ -30,6 +36,8 @@ extension _CliNavigation on FlutterScoutCli {
         'maxResponseBytes': '$maxResponseBytes',
       },
       assertNoErrors: false,
+      outputTransform: parsed.flag('verbose') ? null : _compactWhere,
+      prettyOutput: parsed.flag('verbose'),
     );
   }
 

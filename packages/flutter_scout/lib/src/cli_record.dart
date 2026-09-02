@@ -807,6 +807,15 @@ extension _CliRecord on FlutterScoutCli {
   String _prettyJson(Object? value) =>
       const JsonEncoder.withIndent('  ').convert(value);
 
-  void _printJson(Object? value, {bool? success, String? commandName}) =>
-      _writeCliResponse(value, success: success, commandName: commandName);
+  void _printJson(
+    Object? value, {
+    bool? success,
+    String? commandName,
+    bool pretty = true,
+  }) => _writeCliResponse(
+    value,
+    success: success,
+    commandName: commandName,
+    pretty: pretty,
+  );
 }

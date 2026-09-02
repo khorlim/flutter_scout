@@ -1876,13 +1876,108 @@ void main() {
       expect(result, contains('snapshotId'));
       expect(result['errorCursor'], 4);
       expect(result['errorsSinceCursor'], isEmpty);
-      expect(result.containsKey('routeGuess'), isFalse);
-      expect(result.containsKey('hitTestableText'), isFalse);
-      expect(result['nonHitTestableText'], ['Search']);
-      expect(result.containsKey('offscreenText'), isFalse);
-      expect(result.containsKey('fieldValues'), isFalse);
+      final payload = result['result']! as Map;
+      expect(payload.containsKey('routeGuess'), isFalse);
+      expect(payload.containsKey('hitTestableText'), isFalse);
+      expect(payload['nonHitTestableText'], ['Search']);
+      expect(payload.containsKey('offscreenText'), isFalse);
+      expect(payload.containsKey('fieldValues'), isFalse);
     },
   );
+
+  test('brief inspect bounds legacy nested observation payloads', () {
+    final limitations = List<Map<String, Object?>>.generate(
+      80,
+      (index) => <String, Object?>{
+        'kind': 'custom_paint_pixels_unobserved',
+        'geometry': <String, Object?>{
+          'logicalBounds': <num>[0, index, 400, 100],
+          'diagnostic': List<String>.filled(1000, 'x').join(),
+        },
+      },
+    );
+    final result = FlutterScoutCli().debugCompactBriefInspect(<String, dynamic>{
+      'ok': true,
+      'runtimeInstanceId': 'runtime-a',
+      'stateGeneration': 12,
+      'stateDigest': List<String>.filled(64, 'a').join(),
+      'snapshotId': 'g12:${List<String>.filled(64, 'a').join()}',
+      'errorsSinceCursor': const <Object?>[],
+      'result': <String, Object?>{
+        'screen': 'LargeScreen',
+        'visibleText': const <String>['Save'],
+        'perception': <String, Object?>{
+          'visualStatus': 'known_perception_gaps',
+          'limitationCount': limitations.length,
+          'limitations': limitations,
+        },
+        'scrollables': List<Map<String, Object?>>.generate(
+          10,
+          (index) => <String, Object?>{
+            'id': 'scroll.$index',
+            'axis': 'vertical',
+            'logicalBounds': <num>[0, 0, 100, 400],
+            'provenance': List<String>.filled(1000, 'y').join(),
+          },
+        ),
+      },
+    });
+
+    expect(result['runtimeInstanceId'], 'runtime-a');
+    expect(result['snapshotId'], startsWith('g12:'));
+    final payload = result['result']! as Map;
+    final perception = payload['perception']! as Map;
+    expect(perception['limitationCount'], 80);
+    expect(perception['limitationKinds'], <String>[
+      'custom_paint_pixels_unobserved',
+    ]);
+    expect(perception.containsKey('limitations'), isFalse);
+    expect((payload['scrollables']! as List), hasLength(3));
+    expect(jsonEncode(result).length, lessThan(5000));
+  });
+
+  test('where projection bounds geometry and preserves orientation facts', () {
+    final result = FlutterScoutCli().debugCompactWhere(<String, dynamic>{
+      'ok': true,
+      'runtimeInstanceId': 'runtime-a',
+      'stateGeneration': 12,
+      'stateDigest': List<String>.filled(64, 'a').join(),
+      'snapshotId': 'g12:${List<String>.filled(64, 'a').join()}',
+      'result': <String, Object?>{
+        'orientation': 'where',
+        'screen': 'LargeScreen',
+        'scope': const <String, Object?>{'runId': 'run-a'},
+        'scrollRegions': List<Map<String, Object?>>.generate(
+          30,
+          (index) => <String, Object?>{
+            'id': 'scroll.$index',
+            'scopedId': 'scroll.$index',
+            'axis': 'vertical',
+            'logicalBounds': <num>[0, 0, 100, 400],
+            'pixels': index.toDouble(),
+            'atStart': index == 0,
+            'atEnd': false,
+            'identity': <String, Object?>{
+              'diagnostic': List<String>.filled(1000, 'x').join(),
+            },
+          },
+        ),
+      },
+    });
+
+    final payload = result['result']! as Map;
+    expect(payload['orientation'], 'where');
+    expect(payload['screen'], 'LargeScreen');
+    expect(payload['scope'], containsPair('runId', 'run-a'));
+    final regions = payload['scrollRegions']! as List;
+    expect(regions, hasLength(20));
+    expect((regions.first as Map).containsKey('identity'), isFalse);
+    expect(
+      payload['scrollRegionsOmitted'],
+      containsPair('recoverWith', 'where --verbose'),
+    );
+    expect(jsonEncode(result).length, lessThan(12000));
+  });
 
   test(
     'post-action capture is materialized without duplicated base64 output',

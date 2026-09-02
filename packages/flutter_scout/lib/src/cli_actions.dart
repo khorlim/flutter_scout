@@ -134,7 +134,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption(
         'max-items',
         help:
-            'Maximum entries per brief list (1-100, default 20). Request '
+            'Maximum entries per brief list (1-100, default 12). Request '
             'full named data with --sections instead of raising this by default.',
       )
       ..addOption(
@@ -198,7 +198,9 @@ extension _CliActions on FlutterScoutCli {
         if (since != null && since.isNotEmpty) 'since': since,
         if (since != null && since.isNotEmpty)
           'maxResponseBytes': '$maxResponseBytes',
-        'maxItems': ?maxItems,
+        'maxItems':
+            ?(maxItems ??
+            (parsed.flag('brief') || parsed.flag('surface') ? '12' : null)),
       }),
     );
     if (parsed.flag('brief') || parsed.flag('surface')) {
@@ -221,7 +223,10 @@ extension _CliActions on FlutterScoutCli {
     if (_currentRunIdFromSession() case final runId?) {
       result['runId'] = runId;
     }
-    _printJson(result);
+    _printJson(
+      result,
+      pretty: !(parsed.flag('brief') || parsed.flag('surface')),
+    );
     return result['ok'] == false ? 1 : 0;
   }
 
