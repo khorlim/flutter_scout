@@ -262,6 +262,15 @@ evidence cannot be committed after a possible mutation, inspect/reconcile state
 instead of retrying with a new identity. Add `--verbose` only when full
 before/after payloads are needed.
 
+Action events summarize known observation details embedded in errors before
+applying the journal's 128 KiB record limit. Summarized snapshots identify this
+with `observationDetail.presentation: "summary"` and section counts; error,
+dispatch, outcome, identity, and unknown diagnostic facts remain intact. The
+journal is not a full historical snapshot store: a later `inspect` observes
+current state, and `--verbose` changes stdout detail, not journal retention.
+If the remaining required evidence still exceeds the limit, the action reports
+an evidence-persistence failure and requires reconciliation before any retry.
+
 For a mutation that may be retried by an orchestrator, supply one stable global
 key (it may appear before or after the command):
 

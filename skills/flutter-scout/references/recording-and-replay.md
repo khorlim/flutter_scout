@@ -63,3 +63,11 @@ default:
 flutter-scout evidence -o /private/path/checkout-evidence \
   --retention session
 ```
+
+Action-event errors retain safety and outcome facts but summarize known
+observation sections with `observationDetail.presentation: "summary"` and
+counts. Do not treat the journal as a complete historical snapshot or a later
+`inspect` as recovery of that original state. `--verbose` affects response
+detail, not journal retention. If required evidence still exceeds the bounded
+record size, Scout reports persistence failure; reconcile current state before
+considering a retry.
