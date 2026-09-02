@@ -1008,6 +1008,68 @@ void main() {
     expect(snapshot.textTargets.map((node) => node.id), contains('text.5'));
   });
 
+  testWidgets('image-only buttons get safe names from bundled asset stems', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              CupertinoButton(
+                onPressed: () {},
+                child: Image(
+                  image: const AssetImage('assets/navigation/menu-card.png'),
+                  width: 24,
+                  height: 24,
+                  errorBuilder: (_, _, _) =>
+                      const SizedBox.square(dimension: 24),
+                ),
+              ),
+              CupertinoButton(
+                onPressed: () {},
+                child: Image(
+                  image: const ResizeImage(
+                    AssetImage('assets/profile@2x.png'),
+                    width: 24,
+                  ),
+                  width: 24,
+                  height: 24,
+                  errorBuilder: (_, _, _) =>
+                      const SizedBox.square(dimension: 24),
+                ),
+              ),
+              CupertinoButton(
+                onPressed: () {},
+                child: Image(
+                  image: const AssetImage(
+                    'assets/private/access-token-7f4d2c.png',
+                  ),
+                  width: 24,
+                  height: 24,
+                  errorBuilder: (_, _, _) =>
+                      const SizedBox.square(dimension: 24),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    final ids = snapshot.interactables.map((node) => node.id).toList();
+    expect(ids, contains('btn.menu_card'));
+    expect(ids, contains('btn.profile'));
+    expect(ids.join(' '), isNot(contains('access_token')));
+    expect(
+      ids.where((id) => id.startsWith('btn.cupertinobutton')),
+      hasLength(1),
+    );
+  });
+
   testWidgets('deep button text labels replace generic Cupertino handles', (
     tester,
   ) async {
