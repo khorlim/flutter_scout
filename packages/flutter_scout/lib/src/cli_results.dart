@@ -1618,9 +1618,7 @@ extension _CliResults on FlutterScoutCli {
       final acknowledgedAt = DateTime.now();
       final settleStopwatch = Stopwatch()..start();
       final after = await _waitForInspectAfterHotUpdate(
-        timeout: fullRestart
-            ? const Duration(seconds: 15)
-            : const Duration(seconds: 8),
+        timeout: _postHotUpdateInspectionTimeout,
         previousRuntimeInstanceId: beforeRuntimeInstanceId,
         requireNewRuntime: fullRestart,
       );
@@ -1772,7 +1770,7 @@ extension _CliResults on FlutterScoutCli {
         dispatchStopwatch.stop();
         final settleStopwatch = Stopwatch()..start();
         final after = await _waitForInspectAfterHotUpdate(
-          timeout: const Duration(seconds: 8),
+          timeout: _postHotUpdateInspectionTimeout,
         );
         settleStopwatch.stop();
         final deltaStopwatch = Stopwatch()..start();
@@ -2020,41 +2018,20 @@ extension _CliResults on FlutterScoutCli {
     required Duration timeout,
     String? previousRuntimeInstanceId,
     bool requireNewRuntime = false,
-  }) async {
-    final deadline = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(deadline)) {
-      // A restarted isolate can leave an in-flight service-extension call
-      // hanging until the normal 20-second command timeout. Bound each probe
-      // so the loop can reconnect after the new isolate registers instead of
-      // reporting a false restart timeout even though the app is back.
-      final inspect = await _tryInspect(
-        callTimeout: const Duration(seconds: 1),
-      );
-      if (inspect != null && inspect['ok'] == true) {
-        final runtimeInstanceId = inspect['runtimeInstanceId']?.toString();
-        if (requireNewRuntime &&
-            previousRuntimeInstanceId != null &&
-            runtimeInstanceId == previousRuntimeInstanceId) {
-          await Future<void>.delayed(const Duration(milliseconds: 250));
-          continue;
-        }
-        // Reassembly can make inspect reachable slightly before Flutter has
-        // unlocked pointer dispatch. Let the helper observe a stable frame so
-        // the next tap/drag is safe immediately after this command returns.
-        try {
-          await _call('ext.flutter_scout.waitStable', const {
-            'timeoutMs': '1500',
-          }, const Duration(seconds: 3));
-        } catch (_) {
-          await Future<void>.delayed(const Duration(milliseconds: 100));
-        }
-        return await _tryInspect(callTimeout: const Duration(seconds: 1)) ??
-            inspect;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    }
-    return null;
-  }
+  }) => _waitForPostHotUpdateInspection(
+    timeout: timeout,
+    probeTimeout: _postHotUpdateInspectProbeTimeout,
+    stableTimeout: _postHotUpdateWaitStableTimeout,
+    retryDelay: _postHotUpdateInspectRetryDelay,
+    previousRuntimeInstanceId: previousRuntimeInstanceId,
+    requireNewRuntime: requireNewRuntime,
+    inspect: (callTimeout) => _tryInspect(callTimeout: callTimeout),
+    waitStable: (callTimeout) async {
+      await _call('ext.flutter_scout.waitStable', const {
+        'timeoutMs': '1500',
+      }, callTimeout);
+    },
+  );
 
   Future<Map<String, Object?>> _waitForHotUpdateAcknowledgement({
     required String action,
@@ -2135,6 +2112,76 @@ extension _CliResults on FlutterScoutCli {
 Duration _hotUpdateAcknowledgementTimeout(String action) => action == 'restart'
     ? const Duration(seconds: 30)
     : const Duration(seconds: 60);
+
+Future<Map<String, dynamic>?> _waitForPostHotUpdateInspection({
+  required Duration timeout,
+  required Duration probeTimeout,
+  required Duration stableTimeout,
+  required Duration retryDelay,
+  required Future<Map<String, dynamic>?> Function(Duration timeout) inspect,
+  required Future<void> Function(Duration timeout) waitStable,
+  String? previousRuntimeInstanceId,
+  bool requireNewRuntime = false,
+}) async {
+  final elapsed = Stopwatch()..start();
+
+  Duration remaining() {
+    final value = timeout - elapsed.elapsed;
+    return value.isNegative ? Duration.zero : value;
+  }
+
+  Duration bounded(Duration requested) {
+    final available = remaining();
+    return requested < available ? requested : available;
+  }
+
+  Future<void> delayWithinBudget(Duration delay) async {
+    final budget = bounded(delay);
+    if (budget > Duration.zero) await Future<void>.delayed(budget);
+  }
+
+  while (remaining() > Duration.zero) {
+    // Keep each call bounded so a restarted isolate cannot consume the full
+    // command timeout, while allowing a large healthy widget tree enough time
+    // to answer after Flutter has explicitly acknowledged the update.
+    final inspectBudget = bounded(probeTimeout);
+    final inspected = inspectBudget > Duration.zero
+        ? await inspect(inspectBudget)
+        : null;
+    if (inspected != null && inspected['ok'] == true) {
+      final runtimeInstanceId = inspected['runtimeInstanceId']?.toString();
+      if (requireNewRuntime &&
+          previousRuntimeInstanceId != null &&
+          runtimeInstanceId == previousRuntimeInstanceId) {
+        await delayWithinBudget(retryDelay);
+        continue;
+      }
+
+      // Reassembly can make inspect reachable slightly before Flutter has
+      // unlocked pointer dispatch. Let the helper observe a stable frame so
+      // the next tap/drag is safe immediately after this command returns.
+      final stableBudget = bounded(stableTimeout);
+      if (stableBudget > Duration.zero) {
+        try {
+          await waitStable(stableBudget);
+        } catch (_) {
+          await delayWithinBudget(const Duration(milliseconds: 100));
+        }
+      }
+
+      final refreshBudget = bounded(probeTimeout);
+      if (refreshBudget <= Duration.zero) return inspected;
+      return await inspect(refreshBudget) ?? inspected;
+    }
+    await delayWithinBudget(retryDelay);
+  }
+  return null;
+}
+
+const Duration _postHotUpdateInspectionTimeout = Duration(seconds: 30);
+const Duration _postHotUpdateInspectProbeTimeout = Duration(seconds: 12);
+const Duration _postHotUpdateWaitStableTimeout = Duration(seconds: 3);
+const Duration _postHotUpdateInspectRetryDelay = Duration(milliseconds: 250);
 
 const int _maxHotUpdateCompilerDiagnosticLines = 12;
 const int _maxHotUpdateCompilerDiagnosticCharacters = 4096;
