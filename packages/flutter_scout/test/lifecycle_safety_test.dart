@@ -581,6 +581,113 @@ Future<void> main() async {
     );
 
     test(
+      'clear waits for an exact supervisor writer before deleting its run',
+      () async {
+        final temp = await Directory.systemTemp.createTemp(
+          'scout_supervisor_cleanup_race_',
+        );
+        final previous = Directory.current;
+        Process? worker;
+        addTearDown(() async {
+          Directory.current = previous;
+          FlutterScoutCli.debugRegistryPathOverride = null;
+          final process = worker;
+          if (process != null) {
+            process.kill(ProcessSignal.sigterm);
+            await process.exitCode.timeout(
+              const Duration(seconds: 2),
+              onTimeout: () => -1,
+            );
+          }
+          if (temp.existsSync()) temp.deleteSync(recursive: true);
+        });
+        final script = File(p.join(temp.path, 'flutter_scout_writer.dart'));
+        script.writeAsStringSync(r'''
+import 'dart:async';
+import 'dart:io';
+
+Future<void> main(List<String> args) async {
+  await ProcessSignal.sigterm.watch().first;
+  await Future<void>.delayed(const Duration(milliseconds: 350));
+  File(args.last).writeAsStringSync('final supervisor state');
+}
+''');
+        final project = Directory(p.join(temp.path, 'project'))..createSync();
+        final session = Directory(p.join(project.path, '.flutter_scout'))
+          ..createSync();
+        const runId = 'supervisor-cleanup-race';
+        final runDirectory = Directory(p.join(session.path, 'runs', runId))
+          ..createSync(recursive: true);
+        final config = File(p.join(runDirectory.path, 'worker.json'))
+          ..writeAsStringSync(
+            jsonEncode({
+              'runId': runId,
+              'project': project.absolute.path,
+              'device': 'test-device',
+              'flutterArgs': [
+                'run',
+                '-d',
+                'test-device',
+                '--dart-define',
+                'FLUTTER_SCOUT_RUN_ID=$runId',
+                '--dart-define',
+                'FLUTTER_SCOUT_PROJECT=${project.absolute.path}',
+              ],
+            }),
+          );
+        final lateState = p.join(runDirectory.path, 'flutter_exit.json');
+        final process = await Process.start(Platform.resolvedExecutable, [
+          script.path,
+          'flutter-run-worker',
+          '--config',
+          config.absolute.path,
+          lateState,
+        ]);
+        worker = process;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        final identity = await processIdentity(
+          process.pid,
+          commandIdentity: 'flutter_run_worker',
+        );
+        Directory.current = project;
+        FlutterScoutCli.debugRegistryPathOverride = p.join(
+          temp.path,
+          'registry.json',
+        );
+        File(p.join(session.path, 'session_meta.json')).writeAsStringSync(
+          jsonEncode({
+            'mode': 'scout_owned_flutter_run',
+            'state': 'ready',
+            'runId': runId,
+            'project': project.absolute.path,
+            'device': 'test-device',
+            'supervisor': {
+              'type': 'detached_process',
+              'workerPid': process.pid,
+              'runId': runId,
+              'configFile': config.absolute.path,
+              'processIdentity': identity,
+            },
+          }),
+        );
+
+        final stopwatch = Stopwatch()..start();
+        expect(await FlutterScoutCli().run(['stop', '--clear-session']), 0);
+        stopwatch.stop();
+        await process.exitCode.timeout(const Duration(seconds: 2));
+        worker = null;
+
+        expect(
+          stopwatch.elapsed,
+          greaterThanOrEqualTo(const Duration(milliseconds: 300)),
+        );
+        expect(Directory(runDirectory.path).existsSync(), isFalse);
+        expect(File(lateState).existsSync(), isFalse);
+      },
+      onPlatform: const {'windows': Skip('requires POSIX scripts and signals')},
+    );
+
+    test(
       'does not terminate a detached supervisor after PID identity mismatch',
       () async {
         final temp = await Directory.systemTemp.createTemp(

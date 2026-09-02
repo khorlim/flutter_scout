@@ -1950,6 +1950,7 @@ extension _CliSession on FlutterScoutCli {
     }
     final supervisorStop = await _stopRunnerSupervisor(
       ownsFlutterRun ? sessionMeta : null,
+      waitForWriterQuiescence: parsed.flag('clear-session'),
     );
     stopped = stopped || supervisorStop['stopped'] == true;
     // The VM-service listener is an app/runtime process, not a Scout-owned
@@ -1984,47 +1985,67 @@ extension _CliSession on FlutterScoutCli {
     ScoutCliException? sessionCleanupError;
     var sessionClearComplete = true;
     if (parsed.flag('clear-session')) {
-      try {
-        retentionCleanup = _cleanupPrivateArtifacts(
-          now: DateTime.now().toUtc(),
-          includeSession: true,
-          trigger: 'stop_clear_session',
-        );
-      } on ScoutCliException catch (error) {
-        sessionCleanupError = error;
-        retentionCleanup = <String, Object?>{
-          'ok': false,
-          'trigger': 'stop_clear_session',
-          'registry': error.code == 'retention_registry_invalid'
-              ? 'invalid'
-              : 'unavailable',
-          'cleanup': error.code == 'retention_registry_invalid'
-              ? 'not_performed'
-              : 'completion_unknown',
-          'error': <String, Object?>{
-            'code': error.code,
-            'message': error.message,
-            if (error.details.isNotEmpty) 'details': error.details,
-          },
-        };
-      } catch (_) {
+      if (supervisorStop['writersQuiesced'] == false) {
         sessionCleanupError = const ScoutCliException(
-          'retention_cleanup_unavailable',
-          'Private-artifact cleanup ended without a trustworthy completion '
-              'result. Retained artifacts and controls require inspection.',
+          'session_cleanup_incomplete',
+          'The exact runner supervisor did not finish stopping within the '
+              'bounded cleanup wait. Session state was preserved.',
         );
         retentionCleanup = const <String, Object?>{
           'ok': false,
           'trigger': 'stop_clear_session',
-          'registry': 'unavailable',
-          'cleanup': 'completion_unknown',
+          'registry': 'not_inspected',
+          'cleanup': 'not_performed',
           'error': <String, Object?>{
-            'code': 'retention_cleanup_unavailable',
+            'code': 'session_cleanup_incomplete',
             'message':
-                'Private-artifact cleanup ended without a trustworthy '
-                'completion result.',
+                'Session cleanup was not started while the exact supervisor '
+                'could still write final state.',
           },
         };
+      } else {
+        try {
+          retentionCleanup = _cleanupPrivateArtifacts(
+            now: DateTime.now().toUtc(),
+            includeSession: true,
+            trigger: 'stop_clear_session',
+          );
+        } on ScoutCliException catch (error) {
+          sessionCleanupError = error;
+          retentionCleanup = <String, Object?>{
+            'ok': false,
+            'trigger': 'stop_clear_session',
+            'registry': error.code == 'retention_registry_invalid'
+                ? 'invalid'
+                : 'unavailable',
+            'cleanup': error.code == 'retention_registry_invalid'
+                ? 'not_performed'
+                : 'completion_unknown',
+            'error': <String, Object?>{
+              'code': error.code,
+              'message': error.message,
+              if (error.details.isNotEmpty) 'details': error.details,
+            },
+          };
+        } catch (_) {
+          sessionCleanupError = const ScoutCliException(
+            'retention_cleanup_unavailable',
+            'Private-artifact cleanup ended without a trustworthy completion '
+                'result. Retained artifacts and controls require inspection.',
+          );
+          retentionCleanup = const <String, Object?>{
+            'ok': false,
+            'trigger': 'stop_clear_session',
+            'registry': 'unavailable',
+            'cleanup': 'completion_unknown',
+            'error': <String, Object?>{
+              'code': 'retention_cleanup_unavailable',
+              'message':
+                  'Private-artifact cleanup ended without a trustworthy '
+                  'completion result.',
+            },
+          };
+        }
       }
       if (sessionCleanupError == null) {
         // A valid registry can contain one caller-modified artifact. Preserve
