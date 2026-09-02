@@ -1261,13 +1261,27 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
   List<ScoutNode> _disambiguateIds(List<ScoutNode> nodes) {
     final counts = <String, int>{};
+    final fallbackIds = <String>{};
     return [
       for (final node in nodes)
-        _disambiguateNode(
-          node,
-          counts.update(node.id, (value) => value + 1, ifAbsent: () => 1),
+        _disambiguateFallbackId(
+          _disambiguateNode(
+            node,
+            counts.update(node.id, (value) => value + 1, ifAbsent: () => 1),
+          ),
+          fallbackIds,
         ),
     ];
+  }
+
+  ScoutNode _disambiguateFallbackId(ScoutNode node, Set<String> fallbackIds) {
+    final base = node.fallbackId;
+    var candidate = base;
+    var ordinal = 2;
+    while (!fallbackIds.add(candidate)) {
+      candidate = '${base}_${ordinal++}';
+    }
+    return candidate == base ? node : node.copyWith(fallbackId: candidate);
   }
 
   ScoutNode _disambiguateNode(ScoutNode node, int ordinal) {
