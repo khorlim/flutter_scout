@@ -669,6 +669,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       if (semantic != null && semantic.trim().isNotEmpty) {
         return semantic.trim();
       }
+      return _imageAssetLabel(widget.image);
     }
     // A bare single-glyph Text/RichText (an icon font used without an Icon
     // widget) still carries its font family in its style.
@@ -677,6 +678,58 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       return _iconLabelForText(own, fontFamily: _textFontFamily(widget));
     }
     return null;
+  }
+
+  /// A bundled image's basename is app-owned, deterministic metadata that can
+  /// name an otherwise anonymous image-only control. Never inspect network,
+  /// file, or memory providers: their identities may contain credentials,
+  /// user paths, or other private data. Only expose the final asset stem, and
+  /// reject sensitive or opaque stems rather than turning them into handles.
+  String? _imageAssetLabel(ImageProvider provider) {
+    var current = provider;
+    var unwrapBudget = 4;
+    while (current is ResizeImage && unwrapBudget-- > 0) {
+      current = current.imageProvider;
+    }
+
+    final String? assetName;
+    if (current is AssetImage) {
+      assetName = current.assetName;
+    } else if (current is ExactAssetImage) {
+      assetName = current.assetName;
+    } else {
+      return null;
+    }
+
+    final normalized = assetName.replaceAll('\\', '/');
+    var basename = normalized.split('/').last.trim();
+    if (basename.isEmpty) return null;
+    final extension = basename.lastIndexOf('.');
+    if (extension > 0) basename = basename.substring(0, extension);
+    basename = basename.replaceFirst(RegExp(r'@[1-9][0-9]*x$'), '');
+    if (basename.isEmpty || !_hasWord(basename)) return null;
+    if (_sensitiveDescriptor(basename) ||
+        _containsKnownSensitiveValue(basename) ||
+        basename.contains('@')) {
+      return null;
+    }
+
+    final slug = _slug(basename);
+    if (slug.isEmpty ||
+        RegExp(r'^\d+$').hasMatch(slug) ||
+        RegExp(r'^[a-f0-9]{12,}$').hasMatch(slug) ||
+        RegExp(r'^[a-z0-9]{24,}$').hasMatch(slug) ||
+        const {
+          'asset',
+          'icon',
+          'image',
+          'img',
+          'photo',
+          'picture',
+        }.contains(slug)) {
+      return null;
+    }
+    return basename;
   }
 
   String? _iconLabelForText(String value, {String? fontFamily}) {
