@@ -389,8 +389,9 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
   }
 
   Future<Map<String, Object?>> _stopRunnerSupervisor(
-    Map<String, dynamic>? meta,
-  ) async {
+    Map<String, dynamic>? meta, {
+    bool waitForWriterQuiescence = false,
+  }) async {
     final supervisor = meta?['supervisor'];
     if (supervisor is! Map) {
       return const {'configured': false, 'stopped': false};
@@ -437,10 +438,12 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
       }
       final exists = await _processExists(workerPid);
       if (!exists) {
-        return const {
+        return {
           'configured': true,
           'stopped': true,
           'alreadyStopped': true,
+          if (waitForWriterQuiescence) 'writersQuiesced': true,
+          if (waitForWriterQuiescence) 'writerQuiescenceWaitMs': 0,
         };
       }
       final trustedWorker = await _matchesRunnerWorker(
@@ -456,10 +459,15 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
           'reason': 'supervisor_process_identity_mismatch',
         };
       }
+      final stopped = Process.killPid(workerPid);
+      final quiescence = waitForWriterQuiescence
+          ? await _waitForSupervisorWriterQuiescence(workerPid)
+          : null;
       return {
         'configured': true,
-        'stopped': Process.killPid(workerPid),
+        'stopped': stopped,
         'pid': workerPid,
+        ...?quiescence,
       };
     }
 
@@ -535,11 +543,44 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
         result.exitCode != 0 &&
         (message.contains('Could not find service') ||
             message.contains('No such process'));
+    final quiescence = waitForWriterQuiescence && liveWorkerPid != null
+        ? await _waitForSupervisorWriterQuiescence(liveWorkerPid)
+        : waitForWriterQuiescence
+        ? const <String, Object?>{
+            'writersQuiesced': true,
+            'writerQuiescenceWaitMs': 0,
+          }
+        : null;
     return {
       'configured': true,
       'stopped': result.exitCode == 0 || alreadyStopped,
       'label': label,
       if (result.exitCode != 0 && !alreadyStopped) 'error': message,
+      ...?quiescence,
+    };
+  }
+
+  Future<Map<String, Object?>> _waitForSupervisorWriterQuiescence(
+    int workerPid,
+  ) async {
+    const timeout = Duration(seconds: 10);
+    const pollInterval = Duration(milliseconds: 50);
+    final stopwatch = Stopwatch()..start();
+    while (stopwatch.elapsed < timeout) {
+      if (!await _processExists(workerPid)) {
+        stopwatch.stop();
+        return <String, Object?>{
+          'writersQuiesced': true,
+          'writerQuiescenceWaitMs': stopwatch.elapsedMilliseconds,
+        };
+      }
+      await Future<void>.delayed(pollInterval);
+    }
+    stopwatch.stop();
+    return <String, Object?>{
+      'writersQuiesced': false,
+      'writerQuiescenceWaitMs': stopwatch.elapsedMilliseconds,
+      'writerQuiescenceReason': 'supervisor_process_still_present',
     };
   }
 }
