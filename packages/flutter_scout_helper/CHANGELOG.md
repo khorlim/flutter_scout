@@ -1,5 +1,9 @@
 ## Unreleased
 
+* Scope every opt-in inspect section to the active modal surface when surface
+  focus is explicit or automatic. Background scrollables, rows, control groups,
+  visual-tree branches, overlays, semantic diagnostics, and offscreen text no
+  longer leak into a modal-focused response.
 * Restore the bottom-left session badge for Scout-owned launches so concurrent
   named agent windows remain distinguishable. The launch badge is passive,
   pointer-transparent, and absent from semantics until annotation or recording

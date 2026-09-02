@@ -1409,6 +1409,124 @@ void main() {
     expect(ids, isNot(contains('btn.open_payment')));
   });
 
+  testWidgets('automatic surface inspect scopes opt-in modal sections', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Stack(
+              children: [
+                for (var index = 0; index < 12; index++)
+                  Positioned(
+                    left: (index % 4) * 90,
+                    top: (index ~/ 4) * 90,
+                    width: 180,
+                    height: 160,
+                    child: ListView(
+                      key: ValueKey('background_$index'),
+                      children: [
+                        ListTile(
+                          onTap: () {},
+                          title: Text('Background service $index'),
+                          subtitle: const Text('Off-surface row'),
+                        ),
+                      ],
+                    ),
+                  ),
+                Center(
+                  child: ElevatedButton(
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        title: const Text('Choose service'),
+                        content: SizedBox(
+                          width: 320,
+                          height: 220,
+                          child: ListView(
+                            key: const ValueKey('modal_service_list'),
+                            children: [
+                              ListTile(
+                                onTap: () {},
+                                title: const Text('Modal service'),
+                                subtitle: const Text('Active-surface row'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    child: const Text('Open services'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open services'));
+    await tester.pumpAndSettle();
+
+    final runtime = FlutterScoutHelper.debugRuntime;
+    const sections = {
+      'textTargets',
+      'scrollables',
+      'rows',
+      'controlGroups',
+      'overlays',
+    };
+    final unscoped = runtime.debugInspectPayload(sections: sections);
+    final surface = runtime.debugInspectPayload(
+      brief: true,
+      sections: sections,
+    );
+
+    expect(
+      surface['surfaceOnly'],
+      allOf(containsPair('applied', true), containsPair('automatic', true)),
+    );
+    final unscopedScrollables = (unscoped['scrollables']! as List)
+        .cast<Map<String, Object?>>();
+    final surfaceScrollables = (surface['scrollables']! as List)
+        .cast<Map<String, Object?>>();
+    expect(unscopedScrollables.length, greaterThan(10));
+    expect(surfaceScrollables, hasLength(1));
+    expect(surfaceScrollables.single['key'], 'modal_service_list');
+
+    final surfaceText = (surface['textTargets']! as List)
+        .cast<Map<String, Object?>>();
+    expect(surfaceText.any((node) => node['label'] == 'Modal service'), isTrue);
+    expect(
+      surfaceText.any(
+        (node) => node['label'].toString().startsWith('Background service'),
+      ),
+      isFalse,
+    );
+    final surfaceRows = (surface['structuredRows']! as List)
+        .cast<Map<String, Object?>>();
+    expect(
+      surfaceRows.any(
+        (row) => row['label'].toString().contains('Modal service'),
+      ),
+      isTrue,
+    );
+    expect(
+      surfaceRows.where(
+        (row) => row['label'].toString().contains('Background service'),
+      ),
+      isEmpty,
+    );
+    final surfaceOverlays = (surface['overlays']! as List)
+        .cast<Map<String, Object?>>();
+    expect(
+      surfaceOverlays.any((overlay) => overlay['kind'] == 'modalBarrier'),
+      isTrue,
+    );
+  });
+
   testWidgets('tap rejects a background target blocked by a modal barrier', (
     tester,
   ) async {
