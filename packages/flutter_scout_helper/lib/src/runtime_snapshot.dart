@@ -382,7 +382,11 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
                         element.state is ScrollableState
                     ? element.state as ScrollableState
                     : null,
-                treeOrdinal: rawScrollables.length,
+                // Use the same node-walk coordinate as overlays and active
+                // surface anchors. Counting only scrollables makes this value
+                // incomparable with a modal barrier/title ordinal and prevents
+                // surface-only inspect from excluding background scroll views.
+                treeOrdinal: nodes.length,
                 coordinateDevicePixelRatio: viewMetricsAvailable
                     ? devicePixelRatio
                     : null,

@@ -1188,9 +1188,13 @@ class FlutterScoutRuntime {
     final snapshot = _snapshot();
     final focusSurface =
         surfaceOnly || (brief && snapshot.activeSurface != null);
-    final surfaceRect = focusSurface ? _surfaceRectFor(snapshot) : null;
+    final surfaceRect = focusSurface
+        ? _rectFromJson(snapshot.activeSurface?['rect']) ??
+              _surfaceRectFor(snapshot)
+        : null;
     final surfaceAnchorOrdinal = focusSurface
-        ? _surfaceAnchorOrdinal(snapshot)
+        ? _modalContentStartOrdinal(snapshot.overlays) ??
+              _surfaceAnchorOrdinal(snapshot)
         : null;
     final surfaceApplied =
         focusSurface && (surfaceRect != null || surfaceAnchorOrdinal != null);
@@ -1209,6 +1213,40 @@ class FlutterScoutRuntime {
       surfaceRect,
       surfaceAnchorOrdinal,
     );
+    final scrollables = focusSurface
+        ? _scrollablesForSurface(
+            snapshot.scrollables,
+            surfaceRect,
+            surfaceAnchorOrdinal,
+          )
+        : snapshot.scrollables;
+    final overlays = focusSurface
+        ? _overlaysForSurface(
+            snapshot.overlays,
+            surfaceRect,
+            surfaceAnchorOrdinal,
+          )
+        : snapshot.overlays;
+    final surfaceSnapshot = focusSurface
+        ? snapshot.copyWith(
+            interactables: interactables,
+            fields: fields,
+            textTargets: textTargets,
+            scrollables: scrollables,
+            overlays: overlays,
+          )
+        : snapshot;
+    final controlGroups = focusSurface
+        ? _buildControlGroups(surfaceSnapshot)
+        : snapshot.controlGroups;
+    final structuredRows = focusSurface
+        ? _buildStructuredRows(
+            surfaceSnapshot.copyWith(controlGroups: controlGroups),
+          )
+        : snapshot.structuredRows;
+    final visualTree = focusSurface
+        ? _buildVisualTree(surfaceSnapshot, controlGroups)
+        : snapshot.visualTree;
     final fullScreenSurface =
         focusSurface &&
         surfaceRect != null &&
@@ -1363,22 +1401,13 @@ class FlutterScoutRuntime {
       );
       final briefVisibleText = _takeItems(visibleText, maxItems);
       final briefHitTestableText = _takeItems(hitTestableText, maxItems);
-      final briefOffscreenText = _takeItems(
-        snapshot.offscreenText,
-        (maxItems ~/ 2).clamp(4, 20).toInt(),
-      );
-      final surfaceTargetIds = {
-        for (final node in interactables) node.id,
-        for (final node in interactables) node.baseId,
-        for (final node in interactables) ...node.altIds,
-      };
-      final scopedRows = focusSurface
-          ? [
-              for (final row in snapshot.structuredRows)
-                if (surfaceTargetIds.contains(row['primaryTarget'])) row,
-            ]
-          : snapshot.structuredRows;
-      final briefRows = scopedRows
+      final briefOffscreenText = focusSurface
+          ? const <String>[]
+          : _takeItems(
+              snapshot.offscreenText,
+              (maxItems ~/ 2).clamp(4, 20).toInt(),
+            );
+      final briefRows = structuredRows
           .take((maxItems ~/ 4).clamp(2, 6).toInt())
           .map(_compactStructuredRow)
           .toList(growable: false);
@@ -1388,7 +1417,7 @@ class FlutterScoutRuntime {
         if (briefHitTestableText.isNotEmpty &&
             !_sameStringLists(briefVisibleText, briefHitTestableText))
           'hitTestableText': briefHitTestableText,
-        if (!surfaceOnly && briefOffscreenText.isNotEmpty)
+        if (!focusSurface && briefOffscreenText.isNotEmpty)
           'offscreenText': briefOffscreenText,
         'interactables': [
           for (final node in briefInteractables.take(maxItems))
@@ -1405,10 +1434,10 @@ class FlutterScoutRuntime {
                 'Use inspect --sections interactables when these low-label controls matter.',
           },
         if (inspectWarnings.isNotEmpty) 'inspectWarnings': inspectWarnings,
-        if (scopedRows.isNotEmpty) 'structuredRows': briefRows,
-        if (snapshot.scrollables.isNotEmpty)
+        if (structuredRows.isNotEmpty) 'structuredRows': briefRows,
+        if (scrollables.isNotEmpty)
           'scrollables': [
-            for (final scrollable in snapshot.scrollables.take(3))
+            for (final scrollable in scrollables.take(3))
               _compactBriefScrollable(scrollable),
           ],
         'omittedSections': <String, Object?>{
@@ -1420,16 +1449,16 @@ class FlutterScoutRuntime {
             'controlGroups',
             'annotations',
           ],
-          if (snapshot.scrollables.length > 3)
-            'scrollableItems': snapshot.scrollables.length - 3,
+          if (scrollables.length > 3) 'scrollableItems': scrollables.length - 3,
           'recoverWith':
               'inspect --sections textTargets,scrollables,overlays,visualTree,controlGroups,annotations',
         },
         if (visibleText.length > briefVisibleText.length ||
             hitTestableText.length > briefHitTestableText.length ||
-            snapshot.offscreenText.length > briefOffscreenText.length ||
+            (!focusSurface &&
+                snapshot.offscreenText.length > briefOffscreenText.length) ||
             briefInteractables.length > maxItems ||
-            scopedRows.length > briefRows.length ||
+            structuredRows.length > briefRows.length ||
             fields.length > maxItems)
           'omitted': {
             if (visibleText.length > briefVisibleText.length)
@@ -1437,13 +1466,14 @@ class FlutterScoutRuntime {
             if (hitTestableText.length > briefHitTestableText.length)
               'hitTestableText':
                   hitTestableText.length - briefHitTestableText.length,
-            if (snapshot.offscreenText.length > briefOffscreenText.length)
+            if (!focusSurface &&
+                snapshot.offscreenText.length > briefOffscreenText.length)
               'offscreenText':
                   snapshot.offscreenText.length - briefOffscreenText.length,
             if (briefInteractables.length > maxItems)
               'interactables': briefInteractables.length - maxItems,
-            if (scopedRows.length > briefRows.length)
-              'structuredRows': scopedRows.length - briefRows.length,
+            if (structuredRows.length > briefRows.length)
+              'structuredRows': structuredRows.length - briefRows.length,
             if (fields.length > maxItems) 'fields': fields.length - maxItems,
             'hint': 'Use inspect --sections <name> for full detail.',
           },
@@ -1458,7 +1488,7 @@ class FlutterScoutRuntime {
         'text' => {
           'visibleText': visibleText,
           'hitTestableText': hitTestableText,
-          if (!surfaceOnly) 'offscreenText': snapshot.offscreenText,
+          if (!focusSurface) 'offscreenText': snapshot.offscreenText,
         },
         'interactables' => {
           'interactables': [for (final node in interactables) node.toJson()],
@@ -1472,11 +1502,11 @@ class FlutterScoutRuntime {
         'textTargets' => {
           'textTargets': [for (final node in textTargets) node.toJson()],
         },
-        'scrollables' => {'scrollables': snapshot.scrollables},
-        'overlays' => {'overlays': snapshot.overlays},
-        'visualTree' => {'visualTree': snapshot.visualTree},
-        'controlGroups' => {'controlGroups': snapshot.controlGroups},
-        'rows' => {'structuredRows': snapshot.structuredRows},
+        'scrollables' => {'scrollables': scrollables},
+        'overlays' => {'overlays': overlays},
+        'visualTree' => {'visualTree': visualTree},
+        'controlGroups' => {'controlGroups': controlGroups},
+        'rows' => {'structuredRows': structuredRows},
         'annotations' => {
           'annotations': _annotationJsonList(liveTargets: _annotationTargets()),
         },
@@ -1486,7 +1516,10 @@ class FlutterScoutRuntime {
             scopedInteractables: interactables,
             scopedFields: fields,
           ),
-          'semanticDiagnostics': _semanticDiagnostics(snapshot),
+          'semanticDiagnostics': _semanticDiagnostics(
+            snapshot,
+            scopedInteractables: interactables,
+          ),
         },
         'geometry' => {
           'devicePixelRatio': snapshot.devicePixelRatio,
@@ -1754,8 +1787,11 @@ class FlutterScoutRuntime {
   /// Concrete, factual follow-up to the compact semantic-quality counters.
   /// This is deliberately opt-in: it identifies handles and evidence but does
   /// not make a subjective UX judgment.
-  Map<String, Object?> _semanticDiagnostics(ScoutSnapshot snapshot) {
-    final visible = snapshot.interactables
+  Map<String, Object?> _semanticDiagnostics(
+    ScoutSnapshot snapshot, {
+    List<ScoutNode>? scopedInteractables,
+  }) {
+    final visible = (scopedInteractables ?? snapshot.interactables)
         .where((node) => node.visibleFraction > 0)
         .toList(growable: false);
     Map<String, Object?> nodeJson(ScoutNode node, String evidence) => {
@@ -1868,6 +1904,55 @@ class FlutterScoutRuntime {
             if (rect.overlaps(surfaceRect) || surfaceRect.contains(rect.center))
               node,
     ];
+  }
+
+  List<Map<String, Object?>> _scrollablesForSurface(
+    List<Map<String, Object?>> scrollables,
+    Rect? surfaceRect,
+    int? minimumOrdinal,
+  ) {
+    if (surfaceRect == null && minimumOrdinal == null) return scrollables;
+    return [
+      for (final scrollable in scrollables)
+        if ((minimumOrdinal == null ||
+                (scrollable['treeOrdinal'] as int? ?? -1) >= minimumOrdinal) &&
+            _mapOverlapsSurface(scrollable, surfaceRect))
+          scrollable,
+    ];
+  }
+
+  List<Map<String, Object?>> _overlaysForSurface(
+    List<Map<String, Object?>> overlays,
+    Rect? surfaceRect,
+    int? minimumOrdinal,
+  ) {
+    if (surfaceRect == null && minimumOrdinal == null) return overlays;
+    final barriers = [
+      for (final overlay in overlays)
+        if (overlay['kind'] == 'modalBarrier') overlay,
+    ];
+    final topBarrier = barriers.isEmpty ? null : barriers.last;
+    return [
+      for (final overlay in overlays)
+        if (identical(overlay, topBarrier) ||
+            (overlay['kind'] != 'modalBarrier' &&
+                (minimumOrdinal == null ||
+                    (overlay['ordinal'] as int? ?? -1) >= minimumOrdinal) &&
+                _mapOverlapsSurface(overlay, surfaceRect)))
+          overlay,
+    ];
+  }
+
+  bool _mapOverlapsSurface(Map<String, Object?> value, Rect? surfaceRect) {
+    if (surfaceRect == null) return true;
+    final rect =
+        _rectFromJson(value['visibleRect']) ?? _rectFromJson(value['rect']);
+    return rect != null && _rectOverlapsSurface(rect, surfaceRect);
+  }
+
+  bool _rectOverlapsSurface(Rect rect, Rect? surfaceRect) {
+    if (surfaceRect == null) return true;
+    return rect.overlaps(surfaceRect) || surfaceRect.contains(rect.center);
   }
 
   List<String> _labelsFrom(Iterable<ScoutNode> nodes) {
