@@ -1,6 +1,6 @@
 ---
 name: flutter-scout
-description: Use Flutter Scout to give AI agents factual eyes and hands for Flutter apps on simulators: launch or attach, inspect, act, reload, verify, record, and collect evidence.
+description: "Use Flutter Scout to give AI agents factual eyes and hands for Flutter apps on simulators: launch or attach, inspect, act, reload, verify, record, and collect evidence."
 ---
 
 # Flutter Scout
@@ -188,6 +188,17 @@ flutter-scout input --target field.name --stdin --expect-field field.name=Ava
 flutter-scout fill --file /private/path/owner-only-values.json \
   --expect-text "Ready"
 ```
+
+Choose a gate from observed UI facts, not a guessed screen class. For a known
+local transition, a short explicit `--expect-timeout 1000` can bound an
+exploratory check; keep or increase the default 5000 ms for asynchronous work
+such as network-backed saves. This bounds the expectation wait, not total
+command time. `--wait-ms`, where supported, controls separate action settling;
+it is not an expectation timeout. See the
+[wait-budget guidance](references/command-reference.md#wait-budgets).
+If a gate fails after dispatch, inspect the resulting state before any retry.
+A stable tree or `already_selected` result does not prove delayed work cannot
+still complete.
 
 Use `--stdin` or an owner-only regular `0600` file for any secret. Use direct
 value/`--json` arguments only for deliberately non-sensitive data; process
