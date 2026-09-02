@@ -3,6 +3,42 @@ part of 'flutter_scout_binding.dart';
 // part: node post-processing: compaction, label inference, disambiguation, visual tree, geometry helpers.
 
 extension _RuntimeNodes on FlutterScoutRuntime {
+  /// Orientation hints, not aliases accepted by the exact screen guard. Keep
+  /// only the selected widget's own ancestry before an Overlay/Navigator so a
+  /// sibling, covered route, or outer navigator shell cannot masquerade as the
+  /// current screen. Active modal-surface guesses do not use this evidence.
+  Map<String, Object?> _screenCandidateEvidence(Element primary) {
+    const limit = 8;
+    final candidates = <String>[primary.widget.runtimeType.toString()];
+    var truncated = false;
+    primary.visitAncestorElements((ancestor) {
+      // Route entries are siblings under an Overlay. Stop at public widget
+      // boundaries instead of calling ModalRoute.of: that registers inherited
+      // dependencies on inspected app elements, changing their rebuilds.
+      if (ancestor.widget is Overlay || ancestor.widget is Navigator) {
+        return false;
+      }
+      final type = ancestor.widget.runtimeType.toString();
+      if (!(type.endsWith('Screen') || type.endsWith('Page')) ||
+          _RuntimeSnapshot._frameworkScreenWidgets.contains(type)) {
+        return true;
+      }
+      if (candidates.length == limit) {
+        truncated = true;
+        return false;
+      }
+      candidates.add(type);
+      return true;
+    });
+    return <String, Object?>{
+      'screenCandidates': candidates,
+      'candidateScope': 'primary_widget_ancestry',
+      'candidateBoundary': 'nearest_overlay_or_navigator',
+      'candidateLimit': limit,
+      'candidatesTruncated': truncated,
+    };
+  }
+
   String _screenName(Element root, String? route) {
     if (route != null && route.isNotEmpty) return route;
     var screen = 'RootWidget';
