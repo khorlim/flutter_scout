@@ -294,6 +294,10 @@ class FlutterScoutCli {
     startCursor: 0,
   );
 
+  /// Test-only view of the bounded Flutter-tool acknowledgement policy.
+  Duration debugHotUpdateAcknowledgementTimeout(String action) =>
+      _hotUpdateAcknowledgementTimeout(action);
+
   /// Test-only view of `logs --summary` classification.
   Map<String, Object?> debugLogSummary(List<String> lines, {int last = 20}) =>
       _summarizeLogLines(lines, last: last);

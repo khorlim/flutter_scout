@@ -1588,9 +1588,7 @@ extension _CliResults on FlutterScoutCli {
       final acknowledgement = await _waitForHotUpdateAcknowledgement(
         action: action,
         sinceCursor: logCursor,
-        timeout: fullRestart
-            ? const Duration(seconds: 30)
-            : const Duration(seconds: 20),
+        timeout: _hotUpdateAcknowledgementTimeout(action),
       );
       logsStopwatch.stop();
       if (acknowledgement['ok'] != true) {
@@ -2133,6 +2131,10 @@ extension _CliResults on FlutterScoutCli {
     };
   }
 }
+
+Duration _hotUpdateAcknowledgementTimeout(String action) => action == 'restart'
+    ? const Duration(seconds: 30)
+    : const Duration(seconds: 60);
 
 const int _maxHotUpdateCompilerDiagnosticLines = 12;
 const int _maxHotUpdateCompilerDiagnosticCharacters = 4096;

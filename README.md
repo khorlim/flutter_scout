@@ -230,7 +230,7 @@ dart run bin/flutter_scout.dart reload
 dart run bin/flutter_scout.dart restart
 ```
 
-`reload` preserves app state. `restart` resets Dart state without reinstalling, and requires a Scout-owned `launch`/`ensure` process so Scout can signal the Flutter tool. Both commands wait for an explicit Flutter-tool acknowledgement; Dart frontend diagnostics also close the outcome as rejected when Flutter omits a terminal rejection line, with bounded details under `acknowledgement.compilerDiagnostics`. Restart additionally requires a newly registered helper runtime, so an inspectable old isolate can no longer produce a false early success. Native, plugin, asset, or `pubspec.yaml` changes can still require a full relaunch/rebuild.
+`reload` preserves app state. `restart` resets Dart state without reinstalling, and requires a Scout-owned `launch`/`ensure` process so Scout can signal the Flutter tool. Both commands wait for an explicit Flutter-tool acknowledgement; reload allows up to 60 seconds so a slow but successful Flutter reassembly does not produce a false timeout. Dart frontend diagnostics also close the outcome as rejected when Flutter omits a terminal rejection line, with bounded details under `acknowledgement.compilerDiagnostics`. Restart additionally requires a newly registered helper runtime, so an inspectable old isolate can no longer produce a false early success. Native, plugin, asset, or `pubspec.yaml` changes can still require a full relaunch/rebuild.
 
 Drive the smoke-regression screen when changing form, text, row, or scroll behavior:
 
