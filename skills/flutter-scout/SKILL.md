@@ -218,6 +218,12 @@ and phase timings. If dispatch is `dispatch_outcome_unknown` or evidence
 persistence fails after a possible mutation, inspect/reconcile current state;
 never retry under a fresh identity merely because transport timed out.
 
+Default action output summarizes snapshot details inside failures too. Read
+`*Omitted` counts as presentation limits, not proof that a delta is complete;
+use a fresh `inspect --brief` or selected sections to reconcile current state.
+Choose `--verbose` before an action only when full diagnostics are needed;
+never repeat a mutation just to obtain a larger response.
+
 Use `wait-for` for a state not caused by the current command:
 
 ```bash

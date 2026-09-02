@@ -103,7 +103,7 @@ extension _CliResults on FlutterScoutCli {
         : compact
         ? _compactActionResult(enrichedResult)
         : enrichedResult;
-    _emitActionOutput(output, pretty: prettyOutput);
+    _emitActionOutput(output, pretty: prettyOutput && !compact);
     if (record != null && actionSucceeded && enrichedResult['ok'] == true) {
       await _maybeStartAutoServe();
     }
@@ -712,6 +712,14 @@ extension _CliResults on FlutterScoutCli {
   }
 
   Map<String, dynamic> _compactActionResult(Map<String, dynamic> result) {
+    // Helper failure envelopes repeat the action payload inside error details.
+    // Project those diagnostic observations too; otherwise the supposedly
+    // compact response still contains full trees (often twice after wrapping).
+    result = <String, dynamic>{
+      ...result,
+      for (final key in const ['structuredError', 'error', 'priorActionError'])
+        if (result[key] is Map) key: _compactActionError(result[key] as Map),
+    };
     if (result['ok'] == false) {
       final before = result['before'];
       final after = result['after'];
@@ -897,6 +905,78 @@ extension _CliResults on FlutterScoutCli {
       if (result['runId'] != null) 'runId': result['runId'],
     };
   }
+
+  Map<String, Object?> _compactActionError(Map error) {
+    final details = error['details'];
+    return <String, Object?>{
+      for (final entry in error.entries) entry.key.toString(): entry.value,
+      if (details is Map)
+        'details': <String, Object?>{
+          for (final entry in details.entries)
+            entry.key.toString(): switch (entry.key) {
+              'before' || 'after' || 'failureSnapshot'
+                  when entry.value is Map =>
+                _compactActionDiagnosticSnapshot(entry.value as Map),
+              'delta' when entry.value is Map => _compactDelta(
+                entry.value as Map,
+              ),
+              'visibleText' when entry.value is List => _firstItems(
+                entry.value as List,
+                12,
+              ),
+              _ => entry.value,
+            },
+          if (details['visibleText'] is List &&
+              (details['visibleText'] as List).length > 12)
+            'visibleTextOmitted': (details['visibleText'] as List).length - 12,
+        },
+    };
+  }
+
+  /// Only known observation detail is summarized. Unknown fields and all
+  /// error, dispatch, identity, stability, and guard facts remain untouched.
+  Map<String, Object?> _compactActionDiagnosticSnapshot(Map snapshot) {
+    const detailKeys = <String>{
+      'visibleText',
+      'hitTestableText',
+      'offscreenText',
+      'textTargets',
+      'interactables',
+      'fields',
+      'fieldsById',
+      'visualTree',
+      'controlGroups',
+      'structuredRows',
+      'scrollables',
+      'suggestedActions',
+    };
+    return <String, Object?>{
+      for (final entry in snapshot.entries)
+        if (!detailKeys.contains(entry.key))
+          entry.key.toString(): entry.key == 'perception' && entry.value is Map
+              ? _compactActionPerception(entry.value as Map)
+              : entry.value,
+      'observationDetail': <String, Object?>{
+        'presentation': 'summary',
+        'recoverWith': 'inspect --brief or inspect --sections <section>',
+        'counts': <String, int>{
+          for (final key in detailKeys)
+            if (snapshot[key] is List)
+              key: (snapshot[key] as List).length
+            else if (snapshot[key] is Map)
+              key: (snapshot[key] as Map).length,
+        },
+      },
+    };
+  }
+
+  Map<String, Object?> _compactActionPerception(Map perception) => {
+    // Preserve source/coverage/unknown future facts; only the repeated detailed
+    // gap list is replaced by its count and kinds.
+    for (final entry in perception.entries)
+      if (entry.key != 'limitations') entry.key.toString(): entry.value,
+    ..._compactObservationPerception(perception),
+  };
 
   /// Protocol evidence is safety-critical and must survive compact output.
   /// Agents need these fields to distinguish an observed success from an
@@ -1443,6 +1523,8 @@ extension _CliResults on FlutterScoutCli {
       'changedGeometry',
       'newInteractables',
       'removedInteractables',
+      'controlStateChanges',
+      'changedRegions',
     };
     final compact = <String, Object?>{};
     for (final entry in delta.entries) {
@@ -1451,7 +1533,24 @@ extension _CliResults on FlutterScoutCli {
       if (listKeys.contains(key)) {
         if (value is List && value.isNotEmpty) {
           compact[key] = _firstItems(value, 12);
+          if (value.length > 12) compact['${key}Omitted'] = value.length - 12;
         }
+        continue;
+      }
+      if (key == 'scroll' && value is Map) {
+        const scrollLists = {'newRegions', 'removedRegions', 'changedRegions'};
+        compact[key] = <String, Object?>{
+          for (final entry in value.entries)
+            entry.key.toString():
+                scrollLists.contains(entry.key) && entry.value is List
+                ? _firstItems(entry.value as List, 12)
+                : entry.value,
+          for (final entry in value.entries)
+            if (scrollLists.contains(entry.key) &&
+                entry.value is List &&
+                (entry.value as List).length > 12)
+              '${entry.key}Omitted': (entry.value as List).length - 12,
+        };
         continue;
       }
       if (value == true || (value != null && value != false)) {
