@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Allow Scout-owned hot reloads up to 60 seconds to receive the Flutter tool's
+  terminal acknowledgement, preventing slow but successful reloads from being
+  reported as `reload_ack_timeout` while keeping the operation bounded.
+
 - Bind named launch/ensure storage and launch leases to the resolved Flutter
   project instead of the command working directory. Duplicate legacy roots for
   one label now fail with their competing session/run identities instead of

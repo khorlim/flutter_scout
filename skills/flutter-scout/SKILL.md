@@ -231,6 +231,11 @@ lists scripts the VM did not expose. Test sources are reported under `skipped`
 rather than `notLoaded`, because a running app never loads them. Native/plugin/pubspec changes require a
 fresh launch.
 
+Scout-owned reloads wait up to 60 seconds for the Flutter tool's terminal
+acknowledgement. A large app may spend tens of seconds compiling and
+reassembling without producing another log line; leave the command running
+while it remains inside that bound.
+
 If reload is rejected, do not clear the session or relaunch immediately. Use
 this recovery ladder:
 

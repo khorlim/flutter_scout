@@ -12,6 +12,19 @@ void main() {
     expect(FlutterScoutCli(), isA<FlutterScoutCli>());
   });
 
+  test('hot reload allows slow Flutter-tool acknowledgements', () {
+    final cli = FlutterScoutCli();
+
+    expect(
+      cli.debugHotUpdateAcknowledgementTimeout('reload'),
+      const Duration(seconds: 60),
+    );
+    expect(
+      cli.debugHotUpdateAcknowledgementTimeout('restart'),
+      const Duration(seconds: 30),
+    );
+  });
+
   group('attach run identity recovery', () {
     test('recovers a verified helper from the prior Scout launch', () {
       final recovered = FlutterScoutCli().debugReconcileAttachRunIdentity(
