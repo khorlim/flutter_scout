@@ -542,7 +542,11 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       if (iconText != null) return iconText;
       if (_hasWord(own)) return own.trim();
     }
-    final text = _textBelow(element, maxDepth: deepText ? 18 : 5);
+    final text = _textBelow(
+      element,
+      maxDepth: deepText ? 18 : 5,
+      wordsOnly: true,
+    );
     if (text != null &&
         text.isNotEmpty &&
         _hasWord(text) &&
@@ -639,7 +643,14 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return null;
   }
 
-  static final RegExp _wordChar = RegExp(r'[A-Za-z0-9]');
+  // Visible app text is not necessarily Latin. Unicode letters/numbers keep
+  // short CJK labels and RTL scripts without treating symbols or icon glyphs
+  // as words. Combining marks alone are deliberately not a word.
+  static final RegExp _wordChar = RegExp(r'[\p{L}\p{N}]', unicode: true);
+  static final RegExp _nonAsciiWordChar = RegExp(
+    r'(?![\x00-\x7f])[\p{L}\p{N}]',
+    unicode: true,
+  );
   bool _hasWord(String value) => _wordChar.hasMatch(value);
 
   String? _validationMessageForFieldWidget(Widget widget) {
@@ -838,21 +849,32 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   bool _isUsefulVisibleText(String value) {
     final trimmed = value.trim();
     if (trimmed.isEmpty) return false;
-    if (trimmed.runes.length <= 2 &&
-        !RegExp(r'[A-Za-z0-9]').hasMatch(trimmed)) {
+    if (trimmed.runes.length <= 2 && !_hasWord(trimmed)) {
       return false;
     }
     return true;
   }
 
-  String? _textBelow(Element element, {int depth = 0, int maxDepth = 5}) {
+  String? _textBelow(
+    Element element, {
+    int depth = 0,
+    int maxDepth = 5,
+    bool wordsOnly = false,
+  }) {
     if (depth > maxDepth) return null;
     if (_isInsideSensitiveEditable(element)) return null;
     final own = _ownText(element.widget);
-    if (own != null && own.trim().isNotEmpty) return own.trim();
+    if (own != null && own.trim().isNotEmpty && (!wordsOnly || _hasWord(own))) {
+      return own.trim();
+    }
     String? result;
     element.visitChildElements((Element child) {
-      result ??= _textBelow(child, depth: depth + 1, maxDepth: maxDepth);
+      result ??= _textBelow(
+        child,
+        depth: depth + 1,
+        maxDepth: maxDepth,
+        wordsOnly: wordsOnly,
+      );
     });
     return result;
   }
@@ -1202,6 +1224,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       return true;
     }
     return _actionLabelRank(trimmed) > 0 ||
+        _nonAsciiWordChar.hasMatch(trimmed) ||
         (trimmed.length >= 3 && RegExp(r'[A-Za-z]').hasMatch(trimmed));
   }
 

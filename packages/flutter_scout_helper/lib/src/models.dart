@@ -1327,7 +1327,10 @@ class _ActionSnapshotResult {
 String _scoutSlug(String value) {
   final slug = value
       .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+      // Preserve localized labels/keys, including decomposed letter marks.
+      // ASCII handles remain unchanged; unrelated CJK labels no longer
+      // collapse to the same empty slug.
+      .replaceAll(RegExp(r'[^\p{L}\p{N}\p{M}]+', unicode: true), '_')
       .replaceAll(RegExp(r'_+'), '_');
   return slug.replaceAll(RegExp(r'^_|_$'), '');
 }

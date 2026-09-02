@@ -1,5 +1,11 @@
 ## Unreleased
 
+* Recognize ordinary non-Latin text and short localized control labels. Keep
+  Unicode letters, numbers, and combining marks in discovered handles instead
+  of collapsing them to empty slugs, and prefer a card's visible text over its
+  leading icon. Existing ASCII handles are unchanged; re-inspect localized
+  controls after upgrading. Symbol/icon filtering and duplicate abstention
+  remain in effect.
 * Scope every opt-in inspect section to the active modal surface when surface
   focus is explicit or automatic. Background scrollables, rows, control groups,
   visual-tree branches, overlays, semantic diagnostics, and offscreen text no
