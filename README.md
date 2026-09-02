@@ -334,6 +334,12 @@ resolved helper package before debugging an app.
 
 Target taps require a visible safe point. If a handle exists but is currently offscreen, `tap <handle>` returns `target_not_visible` instead of dispatching a gesture to an offscreen rect center. Scroll the control into view first, then tap the same handle.
 
+Localized text uses the same discovery and targeting path as English, including
+short labels such as `菜单` and `保存`. Use returned handles (for example
+`btn.保存`) or exact `tap-text` labels; no per-control Scout annotations are
+needed. Re-inspect after a helper upgrade because localized handles now retain
+their Unicode letters rather than collapsing to empty or ASCII-only slugs.
+
 `tap-text` resolves visible text and its actionable owner through the same
 uniqueness, active-surface, visibility, occlusion, and immediate hit-test gate
 as handle actions. It returns both the activated `target` and matched
