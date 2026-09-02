@@ -2659,7 +2659,8 @@ Native capability:
 Flutter Scout: $command
 
 Usage:
-  flutter-scout screenshot [-o <path>] [--target <target>] [--native]
+  flutter-scout screenshot [-o <path>] [--target <target>] [--annotated]
+      [--native] [--retention session|24h|7d|manual]
   flutter-scout crop <target> | crop --text <text> | crop --rect x,y,w,h [-o <path>] [--native]
   flutter-scout crop --changed-since <snapshot-id> [-o <path>] [--padding <0..256>]
 
@@ -2760,7 +2761,7 @@ Usage:
   flutter-scout restart [--verbose]
   flutter-scout deeplink (--url-file <0600-path> | --url-stdin)
   flutter-scout logs [--last <n>] [--contains <text>] [--summary]
-  flutter-scout screenshot [-o <path>] [--target <target>] [--native] [--retention session|24h|7d|manual]
+  flutter-scout screenshot [-o <path>] [--target <target>] [--annotated] [--native] [--retention session|24h|7d|manual]
   flutter-scout crop <target> | crop --text <visible text> | crop --rect x,y,w,h | crop --changed-since <snapshot-id> [-o <path>] [--native] [--retention session|24h|7d|manual]
   flutter-scout evidence [-o <dir>] [--last <n>] [--audit] [--retention session|24h|7d|manual]
   flutter-scout replay [session.json] [--var-file <0600-json> | --var-stdin] [--verbose]

@@ -53,7 +53,6 @@ Capture visual evidence when appearance matters:
 ```bash
 flutter-scout screenshot -o /tmp/screen.png
 flutter-scout screenshot --annotated -o /tmp/marks.png
-flutter-scout screenshot --annotated --annotate-filter fields -o /tmp/fields.png
 flutter-scout crop field.email -o /tmp/email.png
 flutter-scout crop --changed-since '<snapshot-id>' -o /tmp/changed.png
 ```
@@ -94,6 +93,6 @@ Manager's `Status: ok`. An unknown
 dispatch still requires state reconciliation under the original idempotency
 key.
 
-Annotated screenshots return a mark legend. Dense overlaps can be omitted;
-filter to buttons or fields when necessary. Geometry and semantics are factual
-signals, not proof of visual quality—inspect the produced image.
+Annotated screenshots return a mark legend. Dense overlaps can be omitted from
+the rendered marks and legend. Geometry and semantics are factual signals, not
+proof of visual quality—inspect the produced image.

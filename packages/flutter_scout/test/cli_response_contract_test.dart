@@ -248,6 +248,33 @@ void main() {
       },
     );
 
+    test('screenshot help and shipped guidance agree on annotations', () async {
+      final help = await _captureRun(FlutterScoutCli(), const <String>[
+        'help',
+        'screenshot',
+      ]);
+      expect(help.exitCode, 0);
+      expect(help.stderr, isEmpty);
+      expect(help.stdout, contains('[--annotated]'));
+      expect(help.stdout, isNot(contains('--annotate-filter')));
+
+      final guidance = File(
+        p.normalize(
+          p.join(
+            _packageRoot,
+            '..',
+            '..',
+            'skills',
+            'flutter-scout',
+            'references',
+            'gestures-and-visuals.md',
+          ),
+        ),
+      ).readAsStringSync();
+      expect(guidance, contains('screenshot --annotated'));
+      expect(guidance, isNot(contains('--annotate-filter')));
+    });
+
     test('mixed endpoint mutations commit evidence and reads do not', () async {
       await _withTemporaryWorkspace((temporary) async {
         for (final arguments in const <List<String>>[
