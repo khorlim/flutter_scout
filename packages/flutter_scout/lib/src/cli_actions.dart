@@ -305,14 +305,18 @@ extension _CliActions on FlutterScoutCli {
     );
   }
 
-  Future<int> _tap(List<String> args) async {
+  ArgParser _tapArgumentParser() {
     final parser = ArgParser()
       ..addOption('x')
       ..addOption('y')
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('verbose', defaultsTo: false);
     _addExpectOptions(parser);
-    final parsed = parser.parse(args);
+    return parser;
+  }
+
+  Future<int> _tap(List<String> args) async {
+    final parsed = _tapArgumentParser().parse(args);
     final target = parsed.rest.isEmpty ? null : parsed.rest.first;
     final x = parsed.option('x');
     final y = parsed.option('y');

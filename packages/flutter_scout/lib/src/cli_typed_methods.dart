@@ -1218,11 +1218,16 @@ _validatePersistentTypedPayload(Map<dynamic, dynamic> decoded) {
       );
     }
     if (value != null && !entry.value.accepts(value)) {
+      final bounds = <String>[
+        if (entry.value.minimum != null) 'minimum ${entry.value.minimum}',
+        if (entry.value.maximum != null) 'maximum ${entry.value.maximum}',
+      ];
       return (
         call: null,
         issue: _TypedContractIssue(
           'invalid_parameter_value',
-          'Parameter `${entry.key}` violates its ${entry.value.jsonType} contract.',
+          'Parameter `${entry.key}` violates its ${entry.value.jsonType} '
+              'contract${bounds.isEmpty ? '' : ' (${bounds.join(', ')})'}.',
         ),
       );
     }
@@ -1351,6 +1356,14 @@ Map<String, Object?> _persistentCallDiscriminators() => <String, Object?>{
 /// Source-contract probes used by schema generation and parity tests. They do
 /// not execute a CLI command or contact an application.
 extension FlutterScoutTypedProtocolContract on FlutterScoutCli {
+  /// Check ordinary CLI aliases against the same strict server contract.
+  /// This probe never dispatches and returns no raw argument values.
+  Map<String, Object?> debugValidatePersistentCliArguments(List<String> args) =>
+      debugValidatePersistentTypedCall(<String, Object?>{
+        'method': args.first,
+        'args': _persistentProxyArguments(args),
+      });
+
   Map<String, Object?> debugPersistentTypedMethodContract() =>
       _persistentTypedMethodCatalog();
 

@@ -388,7 +388,7 @@ extension _CliServe on FlutterScoutCli {
         jsonEncode({
           'method': args.first,
           'idempotencyKey': proxyIdempotencyKey,
-          'args': args.skip(1).toList(growable: false),
+          'args': _persistentProxyArguments(args),
         }),
       );
       final response = await request.close().timeout(
@@ -436,6 +436,34 @@ extension _CliServe on FlutterScoutCli {
     } finally {
       client.close(force: true);
     }
+  }
+
+  List<String> _persistentProxyArguments(List<String> args) {
+    final arguments = args.skip(1).toList(growable: false);
+    if (args.first != 'tap') return arguments;
+    final ArgResults parsed;
+    try {
+      parsed = _tapArgumentParser().parse(arguments);
+    } on FormatException {
+      // Preserve normal typed validation for invalid syntax. A user argument
+      // error must not be mistaken for a transport failure by the proxy.
+      return arguments;
+    }
+    if (parsed.rest.length != 2 ||
+        !parsed.rest.every(_isNumeric) ||
+        parsed.option('x') != null ||
+        parsed.option('y') != null) {
+      return arguments;
+    }
+    // The CLI supports `tap x y`; the typed API intentionally accepts only
+    // one positional target. Normalize this CLI alias without relaxing the
+    // server's coordinate bounds, target exclusivity, or parameter types.
+    return _typedParamsToArgs(<String, Object?>{
+      'x': parsed.rest[0],
+      'y': parsed.rest[1],
+      for (final name in parsed.options)
+        if (parsed.wasParsed(name)) name: parsed[name],
+    });
   }
 
   bool _proxyCommandMayMutate(List<String> args) {
