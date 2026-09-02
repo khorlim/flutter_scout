@@ -2269,9 +2269,25 @@ extension _CliSession on FlutterScoutCli {
           'excludedToolPaths': <String>['.flutter_scout/'],
         };
       }
-      final status = await Process.run('git', <String>[
+      final repositoryRootResult = await Process.run('git', <String>[
         '-C',
         project,
+        'rev-parse',
+        '--show-toplevel',
+      ]);
+      final repositoryRoot = '${repositoryRootResult.stdout}'.trim();
+      if (repositoryRootResult.exitCode != 0 || repositoryRoot.isEmpty) {
+        return <String, Object?>{
+          'status': 'partial',
+          'commit': commit.toLowerCase(),
+          'workingTreeStatus': 'unavailable',
+          'reason': 'git_repository_root_unavailable',
+          'excludedToolPaths': const <String>['.flutter_scout/'],
+        };
+      }
+      final status = await Process.run('git', <String>[
+        '-C',
+        repositoryRoot,
         'status',
         '--porcelain=v1',
         '--untracked-files=normal',
@@ -2279,6 +2295,8 @@ extension _CliSession on FlutterScoutCli {
         '.',
         ':(exclude).flutter_scout',
         ':(exclude).flutter_scout/**',
+        ':(glob,exclude)**/.flutter_scout',
+        ':(glob,exclude)**/.flutter_scout/**',
       ]);
       if (status.exitCode != 0) {
         return <String, Object?>{
@@ -2315,6 +2333,8 @@ extension _CliSession on FlutterScoutCli {
             .toString(),
         'statusDigestAlgorithm': 'sha256',
         'statusPathsPersisted': false,
+        'workingTreeScope': 'repository',
+        'repositoryRootPersisted': false,
         'excludedToolPaths': const <String>['.flutter_scout/'],
       };
     } catch (_) {

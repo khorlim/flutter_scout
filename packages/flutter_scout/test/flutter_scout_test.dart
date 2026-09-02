@@ -366,6 +366,68 @@ void main() {
   });
 
   test(
+    'source identity includes sibling changes in the project repository',
+    () async {
+      final repository = Directory.systemTemp.createTempSync(
+        'flutter_scout_source_identity_',
+      );
+      addTearDown(() => repository.deleteSync(recursive: true));
+      final app = Directory(p.join(repository.path, 'apps', 'example'))
+        ..createSync(recursive: true);
+      final sharedSource = File(
+        p.join(repository.path, 'packages', 'shared', 'lib', 'shared.dart'),
+      )..createSync(recursive: true);
+      sharedSource.writeAsStringSync('const value = 1;\n');
+      File(
+        p.join(app.path, 'pubspec.yaml'),
+      ).writeAsStringSync('name: example\n');
+      await _runGit(repository.path, ['init']);
+      await _runGit(repository.path, ['config', 'user.email', 'test@local']);
+      await _runGit(repository.path, ['config', 'user.name', 'Scout Test']);
+      await _runGit(repository.path, ['add', '.']);
+      await _runGit(repository.path, ['commit', '-m', 'initial']);
+
+      sharedSource.writeAsStringSync('const value = 2;\n');
+      final identity = await FlutterScoutCli().debugProjectSourceIdentity(
+        app.path,
+      );
+
+      expect(identity['status'], 'dirty_worktree');
+      expect(identity['workingTreeDirty'], isTrue);
+      expect(identity['workingTreeEntryCount'], 1);
+      expect(identity['workingTreeScope'], 'repository');
+      expect(identity['repositoryRootPersisted'], isFalse);
+      expect(identity['statusPathsPersisted'], isFalse);
+    },
+  );
+
+  test('source identity excludes nested Scout session artifacts', () async {
+    final repository = Directory.systemTemp.createTempSync(
+      'flutter_scout_source_identity_',
+    );
+    addTearDown(() => repository.deleteSync(recursive: true));
+    final app = Directory(p.join(repository.path, 'apps', 'example'))
+      ..createSync(recursive: true);
+    File(p.join(app.path, 'pubspec.yaml')).writeAsStringSync('name: example\n');
+    await _runGit(repository.path, ['init']);
+    await _runGit(repository.path, ['config', 'user.email', 'test@local']);
+    await _runGit(repository.path, ['config', 'user.name', 'Scout Test']);
+    await _runGit(repository.path, ['add', '.']);
+    await _runGit(repository.path, ['commit', '-m', 'initial']);
+    File(p.join(app.path, '.flutter_scout', 'session_meta.json'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('{}');
+
+    final identity = await FlutterScoutCli().debugProjectSourceIdentity(
+      app.path,
+    );
+
+    expect(identity['status'], 'clean_commit');
+    expect(identity['workingTreeDirty'], isFalse);
+    expect(identity['workingTreeEntryCount'], 0);
+  });
+
+  test(
     'launch keeps polling through a bounded post-build worker identity race',
     () {
       final cli = FlutterScoutCli();
@@ -2262,6 +2324,17 @@ Future<void> _withTempCwd(Future<void> Function() body) async {
     if (await temp.exists()) {
       await temp.delete(recursive: true);
     }
+  }
+}
+
+Future<void> _runGit(String repository, List<String> arguments) async {
+  final result = await Process.run('git', <String>[
+    '-C',
+    repository,
+    ...arguments,
+  ]);
+  if (result.exitCode != 0) {
+    throw StateError('git ${arguments.join(' ')} failed: ${result.stderr}');
   }
 }
 

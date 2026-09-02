@@ -190,6 +190,10 @@ class FlutterScoutCli {
     return timing.toJson();
   }
 
+  /// Test-only access to the repository-scoped launch source identity.
+  Future<Map<String, Object?>> debugProjectSourceIdentity(String project) =>
+      _projectSourceIdentity(project);
+
   /// Test-only guard for the iOS post-build VM-service handoff race.
   bool debugShouldAwaitPostBuildVmService({
     required DateTime now,
