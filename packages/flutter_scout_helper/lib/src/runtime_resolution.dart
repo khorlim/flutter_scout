@@ -99,6 +99,11 @@ class _TargetResolution {
 }
 
 extension _RuntimeResolution on FlutterScoutRuntime {
+  static final _typedTargetSelector = RegExp(
+    r'^(btn|tap|field|text|scroll|row)\.',
+    caseSensitive: false,
+  );
+
   String _scopedGeneratedHandle(ScoutNode node) => '${node.id}#${node.ordinal}';
 
   _TargetResolution _resolveFocusedField(
@@ -269,6 +274,11 @@ extension _RuntimeResolution on FlutterScoutRuntime {
     List<ScoutNode> nodes,
     String requested,
   ) {
+    final requestedKind = _typedTargetSelector
+        .firstMatch(requested)
+        ?.group(1)
+        ?.toLowerCase();
+    final typedSelector = requestedKind != null;
     final selectors = <String>{requested};
     for (final row in snapshot.structuredRows) {
       final handles = row['handles'];
@@ -304,9 +314,12 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         if (node.id == selector) kinds.add('id');
         if (node.baseId == selector) kinds.add('baseId');
         if (node.fallbackId == selector) kinds.add('fallbackId');
-        if (node.key == selector) kinds.add('key');
+        if (node.key == selector &&
+            (!typedSelector || requestedKind == node.kind)) {
+          kinds.add('key');
+        }
         if (node.altIds.contains(selector)) kinds.add('alias');
-        if (node.label == selector) kinds.add('label');
+        if (!typedSelector && node.label == selector) kinds.add('label');
       }
       if (kinds.isEmpty) continue;
       exact.add(
@@ -325,6 +338,13 @@ extension _RuntimeResolution on FlutterScoutRuntime {
           .where((candidate) => candidate.score == strongestScore)
           .toList(growable: false);
     }
+
+    // Published typed ids/handles are exact selectors, including row and
+    // alternate aliases. A missing `text.form` must not become `btn.form`
+    // through suffix matching, or shadow an exact text in the fallback pool.
+    // Labels, normalization, and fuzzy suffixes remain available to untyped
+    // queries; literal text that resembles a handle uses the text-query API.
+    if (typedSelector) return const [];
 
     final caseInsensitive = <_TargetCandidate>[];
     final lower = requested.toLowerCase();
