@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Add an opt-in leading `--single-json` prefix for finite commands: emit one
+  compact final response on stdout after evidence completion, including errors,
+  while retaining progress, warnings, and intermediate responses on stderr.
+  Default output and persistent HTTP contracts remain unchanged.
+
 - Allow Scout-owned hot reloads up to 60 seconds to receive the Flutter tool's
   terminal acknowledgement, preventing slow but successful reloads from being
   reported as `reload_ack_timeout` while keeping the operation bounded.

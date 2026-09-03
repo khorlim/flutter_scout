@@ -56,6 +56,21 @@ flutter-scout attach --device <simulator-id>
 flutter-scout attach --debug-url-file /private/path/vm-service-url
 ```
 
+For scripts that decode stdout once, put `--single-json` first:
+
+```bash
+flutter-scout --single-json ensure \
+  --device <simulator-id> --project <app> --name template-save \
+  > result.json 2> progress.jsonl
+```
+
+This emits one compact final JSON envelope on stdout, including failures,
+after evidence completion. Keep stderr separate: it carries live heartbeats,
+warnings, and intermediate responses. Check the exit code and final `ok`;
+all identity, outcome, and safety fields remain present. Default output is
+unchanged. The prefix is for finite commands; `serve`/`explore` reject it,
+and explicit help still emits prose.
+
 Address named sessions from any directory with `--app <name>`. Use
 `flutter-scout apps` for live entries, `apps --all` for missing entries, and
 `apps --prune` to remove stale registry entries.
@@ -144,6 +159,11 @@ Prefer semantic handles (`btn.save`, `field.template_name`,
 labels; row actions expose stable intent aliases such as `.open` and
 `.more_actions`. Read `selected`, `enabled`, `hitTestable`, `visibleFraction`,
 `enclosingTarget`, `altIds`, and `didYouMean` before guessing.
+
+Typed handles (`btn.*`, `tap.*`, `field.*`, `text.*`, `scroll.*`, `row.*`)
+require an exact published identity, alias, or same-kind widget key. Missing
+handles do not fall back to similar labels or a different kind. Use an untyped
+query for fuzzy matching, or `--text`/`tap-text` for literal text.
 
 Use the observed `screen` for `--expect-screen`, not a guessed class name.
 `screenEvidence.screenCandidates` preserves a bounded nearest-first ancestry

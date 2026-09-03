@@ -49,6 +49,7 @@ accessible because all parts share one library).
 | `runtime_navigation.dart` | Read-only `where`/`locate`, bounded exactly-once `reveal`, scroll-region selection/restoration, and bounded snapshot history for `inspect --since`. |
 | `runtime_snapshot.dart` | Fault-isolated widget-tree snapshots, scroll metrics, perception limitations/blind spots, annotation target collection, and hit testing. |
 | `runtime_nodes.dart` | Node post-processing: compaction, label inference, id disambiguation, visual tree, geometry helpers. *(largest part; a future split candidate.)* |
+| `runtime_switch_labels.dart` | Conservative structural label aliases for ordinary settings rows containing one switch. |
 | `runtime_internals.dart` | Low-level pointer dispatch, tree walk, factual before/after delta, and `_ok`/`_fail` routing. |
 | `runtime_privacy.dart` | Earliest-source sensitive-field classification, value tokens, recursive response redaction, and recorder/action echo protection. |
 | `runtime_recorder.dart` | In-app flow capture plus private, atomic, lock-serialized helper persistence with safe CLI delegation. |

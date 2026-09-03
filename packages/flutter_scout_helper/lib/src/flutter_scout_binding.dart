@@ -29,6 +29,7 @@ part 'runtime_resolution.dart';
 part 'runtime_navigation.dart';
 part 'runtime_snapshot.dart';
 part 'runtime_nodes.dart';
+part 'runtime_switch_labels.dart';
 part 'runtime_internals.dart';
 part 'runtime_recorder.dart';
 

@@ -60,6 +60,8 @@ class FlutterScoutCli {
   String? _activeCommandName;
   Stopwatch? _activeCommandStopwatch;
   int _heartbeatCursor = 0;
+  bool _singleJsonOutput = false;
+  String? _pendingJsonResponse;
   String? _implicitlySelectedSessionName;
   final Set<String> _activeSensitiveValues = <String>{};
   final Map<String, String> _protectedSecretIngress = <String, String>{};
@@ -640,6 +642,13 @@ class FlutterScoutCli {
   }
 
   Future<int> run(List<String> args) async {
+    if (args.isNotEmpty && args.first == '--single-json') {
+      return _runSingleJson(args.skip(1).toList(growable: false));
+    }
+    return _run(args);
+  }
+
+  Future<int> _run(List<String> args) async {
     if (args.isEmpty || args.first == '--help' || args.first == '-h') {
       _printUsage();
       return 0;
@@ -849,6 +858,16 @@ class FlutterScoutCli {
     _activeSensitiveValues.clear();
     _protectedSecretIngress.clear();
     try {
+      if (_singleJsonOutput &&
+          (command == 'serve' ||
+              command == 'explore' ||
+              _infrastructureCommands.contains(command))) {
+        throw const ScoutCliException(
+          'usage',
+          '--single-json is for finite commands; run persistent servers '
+              'and internal workers without this prefix.',
+        );
+      }
       _preloadProtectedSecretIngress(command, rest);
       _registerSensitiveCommandArgs(command, rest);
       _warnAboutLegacySecretIngress(command, rest);
@@ -2712,7 +2731,10 @@ Run `flutter-scout help` for the complete command list.
 Flutter Scout
 
 Usage:
-  flutter-scout [--app <name>] [--idempotency-key <key>] <command> [options]
+  flutter-scout [--single-json] [--app <name>] [--idempotency-key <key>] <command> [options]
+    Put --single-json first for one compact final JSON response on stdout,
+    including failures; progress/warnings go to stderr. Help remains prose.
+    This prefix is unavailable for serve, explore, and internal workers.
     --idempotency-key accepts 1-128 safe ASCII characters. Reuse one key only
     for the same business mutation; retries replay/reconcile the first outcome.
   flutter-scout attach [--device <simulator-id>] [--debug-url-file <0600-path> | --debug-url-stdin]

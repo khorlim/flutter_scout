@@ -61,6 +61,14 @@ Update: `reload`, `restart`.
 
 Automation: `batch`, `serve`, `explore`, `record`, `export-batch`, `replay`.
 
+Output framing: put `--single-json` before all other arguments for one compact
+final JSON response on stdout, including command failures. Live heartbeats,
+warnings, and intermediate responses go to stderr; do not merge the streams
+before decoding. The final response follows command evidence completion and
+retains the normal envelope, redaction, and payload bounds. Help stays prose;
+`serve`, `explore`, and internal workers reject this prefix. Default streams
+and persistent HTTP contracts are unchanged.
+
 Global exactly-once option: `--idempotency-key <1-128-safe-ASCII-chars>`.
 Use one stable key when an orchestrator may retry a mutation. The same key and
 business request replays/reconciles the original outcome across CLI processes;

@@ -149,6 +149,19 @@ dart run bin/flutter_scout.dart launch --device macos --project ../../apps/scout
 
 Successful launch and attach responses include `ready`. If the VM service is available but the helper extension is missing, the command returns `ready:false` with `reason:"helper_extension_missing"` and the expected initializer.
 
+For a script that parses stdout once, put `--single-json` first:
+
+```bash
+flutter-scout --single-json ensure --device macos --project <app> --name feature-a > result.json 2> progress.jsonl
+```
+
+The prefix emits one compact final JSON envelope on stdout, including errors,
+after command evidence completion. Stderr retains live heartbeats, warnings,
+and intermediate responses. Keep the streams separate and check both the exit
+code and final `ok`. No envelope fields are removed. Default output and
+persistent HTTP contracts are unchanged; `serve`, `explore`, and internal
+workers reject this prefix, and explicit help remains prose.
+
 Or attach to an already running app:
 
 ```bash
@@ -348,6 +361,14 @@ short labels such as `菜单` and `保存`. Use returned handles (for example
 `btn.保存`) or exact `tap-text` labels; no per-control Scout annotations are
 needed. Re-inspect after a helper upgrade because localized handles now retain
 their Unicode letters rather than collapsing to empty or ASCII-only slugs.
+
+Single-switch settings rows expose their title and an alias such as
+`btn.enable_overall_remark`, alongside the original switch or key handle.
+Scout uses the row structure, including title/subtitle stacks and RTL layouts,
+and keeps competing labels or rows with multiple controls unlabeled. Repeated
+titles remain ambiguous; inspect the returned `selected` and `enabled` facts
+before acting on a switch. Built offscreen rows retain their alias for
+`locate`/`reveal`; visibility still gates dispatch.
 
 `tap-text` resolves visible text and its actionable owner through the same
 uniqueness, active-surface, visibility, occlusion, and immediate hit-test gate
