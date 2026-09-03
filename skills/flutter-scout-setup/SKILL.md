@@ -142,6 +142,12 @@ Launch through Flutter Scout when you intentionally need a new Scout-owned run:
 flutter-scout launch --device <simulator-id> --project <flutter-app-path> --name add-member
 ```
 
+On macOS, when an outer command temporarily unlocks a signing Keychain, add
+`--inherit-launch-context` to `launch` or `ensure` and keep the outer command
+alive until Scout reports ready. This bypasses Scout's normal launchd security
+context for that run, so it has no launchd crash recovery and will not survive
+logout. Do not use it for ordinary builds.
+
 If permanent integration is not appropriate yet, verify with a generated,
 zero-diff bootstrap:
 

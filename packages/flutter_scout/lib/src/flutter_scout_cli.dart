@@ -2623,6 +2623,15 @@ Flutter Scout: $command
 Usage:
   flutter-scout $command --device <simulator-id> [--project <path>]
       [--dart-define-from-file <owner-only-0600-file>]
+      [--inherit-launch-context]
+
+macOS signing context:
+  Scout normally uses launchd so owned runs survive terminal cleanup. When an
+  outer signing command temporarily unlocks a Keychain, pass
+  `--inherit-launch-context` so the detached runner retains that caller security
+  context. Keep the outer command alive until Scout reports ready. The tradeoff
+  is that this runner does not receive launchd crash recovery and will not
+  survive logout.
 
 Compile-time value handling:
   Define files are bounded to 1 MiB, strict UTF-8, regular, non-symlink, and
@@ -2744,8 +2753,8 @@ Usage:
     --idempotency-key accepts 1-128 safe ASCII characters. Reuse one key only
     for the same business mutation; retries replay/reconcile the first outcome.
   flutter-scout attach [--device <simulator-id>] [--debug-url-file <0600-path> | --debug-url-stdin]
-  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper] [--dart-define-from-file <0600-path>] [--launch-timeout <s>] [--launch-idle-timeout <s>]
-  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper] [--dart-define-from-file <0600-path>] [--launch-timeout <s>] [--launch-idle-timeout <s>]
+  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper] [--inherit-launch-context] [--dart-define-from-file <0600-path>] [--launch-timeout <s>] [--launch-idle-timeout <s>]
+  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper] [--inherit-launch-context] [--dart-define-from-file <0600-path>] [--launch-timeout <s>] [--launch-idle-timeout <s>]
   flutter-scout status
   flutter-scout devices
   flutter-scout apps [--all] [--prune]

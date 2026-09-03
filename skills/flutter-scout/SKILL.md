@@ -112,6 +112,12 @@ cleaned up, while explicit Ctrl-C during launch and `stop` still cancel the
 exact session. `status` includes supervisor state and the last recorded Flutter
 exit. A normal Flutter exit is diagnostic, not an automatic app relaunch.
 
+If an outer command temporarily unlocks a signing Keychain, launch with
+`--inherit-launch-context` inside that command. This keeps the detached Scout
+runner in the caller's macOS security context until the build is signed and
+Scout reports ready. Do not use the flag for ordinary launches: it trades away
+launchd crash recovery and does not survive logout.
+
 ## Inspect
 
 Start with bounded output:

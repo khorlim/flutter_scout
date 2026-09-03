@@ -32,9 +32,14 @@ extension _CliSupervisor on FlutterScoutCli {
     required String configFile,
     required String runId,
     required String outputFile,
+    required bool inheritLaunchContext,
   }) async {
-    if (Platform.isMacOS &&
-        Platform.environment['FLUTTER_SCOUT_DISABLE_LAUNCHD'] != '1') {
+    if (_shouldUseLaunchdRunnerSupervisor(
+      isMacOS: Platform.isMacOS,
+      launchdDisabledByEnvironment:
+          Platform.environment['FLUTTER_SCOUT_DISABLE_LAUNCHD'] == '1',
+      inheritLaunchContext: inheritLaunchContext,
+    )) {
       try {
         return await _startLaunchdRunnerSupervisor(
           configFile: configFile,
@@ -595,6 +600,12 @@ ${home == null || home.isEmpty ? '' : '    <key>HOME</key>\n    <string>${_xmlEs
   }
 }
 
+bool _shouldUseLaunchdRunnerSupervisor({
+  required bool isMacOS,
+  required bool launchdDisabledByEnvironment,
+  required bool inheritLaunchContext,
+}) => isMacOS && !launchdDisabledByEnvironment && !inheritLaunchContext;
+
 Object? _selectRunnerWorkerIdentity({
   required Object? initialIdentity,
   required String? expectedRunId,
@@ -631,6 +642,16 @@ bool _matchesRunnerWorkerIdentity(
 }
 
 extension FlutterScoutCliSupervisorTesting on FlutterScoutCli {
+  bool debugShouldUseLaunchdRunnerSupervisor({
+    required bool isMacOS,
+    required bool launchdDisabledByEnvironment,
+    required bool inheritLaunchContext,
+  }) => _shouldUseLaunchdRunnerSupervisor(
+    isMacOS: isMacOS,
+    launchdDisabledByEnvironment: launchdDisabledByEnvironment,
+    inheritLaunchContext: inheritLaunchContext,
+  );
+
   Object? debugSelectRunnerWorkerIdentity({
     required Object? initialIdentity,
     required String? expectedRunId,

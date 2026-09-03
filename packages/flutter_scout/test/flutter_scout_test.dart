@@ -2382,6 +2382,43 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
     expect(plist, isNot(contains('<key>KeepAlive</key>\n  <true/>')));
   });
 
+  test('inherited launch context bypasses the macOS launchd supervisor', () {
+    final cli = FlutterScoutCli();
+
+    expect(
+      cli.debugShouldUseLaunchdRunnerSupervisor(
+        isMacOS: true,
+        launchdDisabledByEnvironment: false,
+        inheritLaunchContext: false,
+      ),
+      isTrue,
+    );
+    expect(
+      cli.debugShouldUseLaunchdRunnerSupervisor(
+        isMacOS: true,
+        launchdDisabledByEnvironment: false,
+        inheritLaunchContext: true,
+      ),
+      isFalse,
+    );
+    expect(
+      cli.debugShouldUseLaunchdRunnerSupervisor(
+        isMacOS: true,
+        launchdDisabledByEnvironment: true,
+        inheritLaunchContext: false,
+      ),
+      isFalse,
+    );
+    expect(
+      cli.debugShouldUseLaunchdRunnerSupervisor(
+        isMacOS: false,
+        launchdDisabledByEnvironment: false,
+        inheritLaunchContext: false,
+      ),
+      isFalse,
+    );
+  });
+
   test('launch poll accepts the worker identity recorded after Dart exec', () {
     final cli = FlutterScoutCli();
     final initialIdentity = <String, Object?>{

@@ -18,6 +18,11 @@ lost worker. If the Flutter process survived, the new worker adopts it instead
 of launching a duplicate. A normal Flutter-tool exit is recorded and returns a
 successful supervisor result, so it does not create a relaunch loop or reset
 the app unexpectedly. Other platforms retain the detached-worker fallback.
+When a macOS build must inherit a temporarily unlocked signing Keychain, pass
+`--inherit-launch-context` from inside the command that owns that Keychain.
+Scout then uses the detached-worker fallback for that run. It preserves the
+caller security context through signing, but has no launchd crash recovery and
+does not survive logout.
 If the app remains reachable after its Scout-owned Flutter runner exits,
 `status` reclassifies the session as attach-only and reports
 `ownershipLossReason: owner_process_exited`. The app remains available for

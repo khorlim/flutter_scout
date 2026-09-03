@@ -95,6 +95,15 @@ extension _CliSession on FlutterScoutCli {
       )
       ..addOption('helper-path')
       ..addFlag('replace', defaultsTo: false, negatable: false)
+      ..addFlag(
+        'inherit-launch-context',
+        defaultsTo: false,
+        negatable: false,
+        help:
+            'On macOS, start the detached runner in the caller security '
+            'context instead of launchd. Use this while an outer command '
+            'keeps a temporary signing keychain available.',
+      )
       ..addMultiOption(
         'dart-define',
         splitCommas: false,
@@ -321,6 +330,7 @@ extension _CliSession on FlutterScoutCli {
         configFile: workerConfigFile,
         runId: launchLease.runId,
         outputFile: supervisorOutputFile,
+        inheritLaunchContext: parsed.flag('inherit-launch-context'),
       );
       final supervisorOwnershipMeta = <String, dynamic>{
         'mode': 'scout_owned_flutter_run',
@@ -1343,6 +1353,14 @@ extension _CliSession on FlutterScoutCli {
       ..addOption('name')
       ..addFlag('temporary-helper', defaultsTo: false, negatable: false)
       ..addOption('helper-path')
+      ..addFlag(
+        'inherit-launch-context',
+        defaultsTo: false,
+        negatable: false,
+        help:
+            'On macOS, start the detached runner in the caller security '
+            'context instead of launchd.',
+      )
       ..addMultiOption(
         'dart-define',
         splitCommas: false,
@@ -1519,6 +1537,7 @@ extension _CliSession on FlutterScoutCli {
         '--helper-path',
         parsed.option('helper-path')!,
       ],
+      if (parsed.flag('inherit-launch-context')) '--inherit-launch-context',
       if (parsed.option('launch-timeout') != null) ...[
         '--launch-timeout',
         parsed.option('launch-timeout')!,
