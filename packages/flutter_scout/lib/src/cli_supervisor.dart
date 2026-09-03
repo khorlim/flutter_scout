@@ -4,7 +4,7 @@ part of 'flutter_scout_cli.dart';
 
 // Source and Pub JIT snapshots need a script after the Dart executable. AOT
 // executables are already the script, so repeating it becomes a CLI command.
-// Compare file identity too so invocation through a symlink keeps working.
+// Resolve the script path too so invocation through a symlink keeps working.
 List<String> _scoutSelfArguments(List<String> arguments) {
   final script = Platform.script.toFilePath();
   final isNativeExecutable =
