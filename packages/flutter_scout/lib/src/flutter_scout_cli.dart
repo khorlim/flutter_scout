@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate' as isolate;
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -240,6 +241,11 @@ class FlutterScoutCli {
     );
     return setup.toJson();
   }
+
+  /// Test-only view of bundled helper discovery. This deliberately exercises
+  /// the same package-resolution fallback used by a globally activated CLI.
+  Future<String?> debugDiscoverBundledHelperPath() =>
+      _discoverBundledHelperPath();
 
   Future<Map<String, Object?>> debugCleanupTemporaryHelper(
     Map<String, Object?> setup,

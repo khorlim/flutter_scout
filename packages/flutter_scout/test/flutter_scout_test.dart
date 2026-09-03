@@ -98,6 +98,26 @@ void main() {
     });
   });
 
+  test(
+    'bundled helper discovery works outside the repository checkout',
+    () async {
+      final originalDirectory = Directory.current;
+      final unrelatedDirectory = await Directory.systemTemp.createTemp(
+        'scout_helper_discovery_',
+      );
+      addTearDown(() {
+        Directory.current = originalDirectory;
+        unrelatedDirectory.deleteSync(recursive: true);
+      });
+      Directory.current = unrelatedDirectory;
+
+      final helper = await FlutterScoutCli().debugDiscoverBundledHelperPath();
+
+      expect(helper, isNotNull);
+      expect(File(p.join(helper!, 'pubspec.yaml')).existsSync(), isTrue);
+    },
+  );
+
   group('attach run identity recovery', () {
     test('recovers a verified helper from the prior Scout launch', () {
       final recovered = FlutterScoutCli().debugReconcileAttachRunIdentity(

@@ -931,6 +931,26 @@ extension _CliSession on FlutterScoutCli {
         p.join(Directory.current.path, 'packages', 'flutter_scout_helper'),
       ),
     ];
+    // A globally activated Dart executable is launched from the pub cache's
+    // bin directory, so neither its CWD nor Platform.script necessarily
+    // identifies the checkout that supplied this package. Resolve this CLI's
+    // own package URI instead: its sibling helper is shipped in the same
+    // Flutter Scout repository (including git-cache checkouts).
+    try {
+      final packageUri = await isolate.Isolate.resolvePackageUri(
+        Uri.parse('package:flutter_scout/flutter_scout.dart'),
+      );
+      if (packageUri != null && packageUri.isScheme('file')) {
+        final packageLibrary = packageUri.toFilePath();
+        final packageRoot = p.dirname(p.dirname(packageLibrary));
+        candidates.add(
+          p.normalize(p.join(packageRoot, '..', 'flutter_scout_helper')),
+        );
+      }
+    } on UnsupportedError {
+      // Source locations are unavailable in some compiled embeddings; the
+      // existing CWD/script fallbacks below remain valid in those contexts.
+    }
     for (final candidate in candidates) {
       if (File(p.join(candidate, 'pubspec.yaml')).existsSync()) {
         return candidate;
