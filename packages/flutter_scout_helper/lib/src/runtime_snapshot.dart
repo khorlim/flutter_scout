@@ -405,14 +405,18 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
               : _ownText(element.widget);
           if (text != null && _isUsefulVisibleText(text)) {
             final rect = _rectFor(element);
+            final visibleRect = rect == null
+                ? null
+                : _visiblePerceptionRectFor(element, rect);
             final trimmed = text.trim();
-            if (rect == null || _visibleRectFor(rect) == null) {
+            if (visibleRect == null) {
               offscreenText.add(trimmed);
             } else {
               visibleText.add(trimmed);
-              final point = _visibleCenter(rect);
-              if (point != null &&
-                  _hitTestable(point, target: element.renderObject)) {
+              if (_hitTestable(
+                visibleRect.center,
+                target: element.renderObject,
+              )) {
                 hitTestableText.add(trimmed);
               }
             }
