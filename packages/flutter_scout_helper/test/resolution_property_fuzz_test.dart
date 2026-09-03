@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -130,11 +131,13 @@ void main() {
                 for (var index = 0; index < duplicateCount; index += 1)
                   Padding(
                     padding: EdgeInsets.zero,
-                    child: IconButton(
+                    child: CupertinoButton(
                       key: ValueKey<String>(duplicateKey),
-                      tooltip: duplicateLabel,
                       onPressed: () => dispatches += 1,
-                      icon: const Icon(Icons.save),
+                      child: Semantics(
+                        label: duplicateLabel,
+                        child: const Icon(Icons.save),
+                      ),
                     ),
                   ),
               ],
@@ -154,6 +157,11 @@ void main() {
           .where((node) => node.key == duplicateKey)
           .toList(growable: false);
       expect(nodes, hasLength(duplicateCount), reason: context);
+      expect(
+        nodes.every((node) => node.altIds.contains('btn.save')),
+        isTrue,
+        reason: 'The duplicate alias must actually be published. $context',
+      );
       for (final selector in <String>{
         duplicateKey,
         duplicateLabel,

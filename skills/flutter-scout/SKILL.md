@@ -145,6 +145,11 @@ labels; row actions expose stable intent aliases such as `.open` and
 `.more_actions`. Read `selected`, `enabled`, `hitTestable`, `visibleFraction`,
 `enclosingTarget`, `altIds`, and `didYouMean` before guessing.
 
+Typed handles (`btn.*`, `tap.*`, `field.*`, `text.*`, `scroll.*`, `row.*`)
+require an exact published identity, alias, or same-kind widget key. Missing
+handles do not fall back to similar labels or a different kind. Use an untyped
+query for fuzzy matching, or `--text`/`tap-text` for literal text.
+
 Use the observed `screen` for `--expect-screen`, not a guessed class name.
 `screenEvidence.screenCandidates` preserves a bounded nearest-first ancestry
 for widget-inferred screens; parent candidates are orientation hints, not
