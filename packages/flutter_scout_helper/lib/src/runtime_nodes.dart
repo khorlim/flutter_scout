@@ -250,8 +250,8 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         if (altId != baseId) altIds.add(altId);
       }
     }
-    final visibleRect = _visibleRectFor(rect);
-    final suggestedTapPoint = _visibleCenter(rect);
+    final visibleRect = _visiblePerceptionRectFor(element, rect);
+    final suggestedTapPoint = visibleRect?.center;
     return ScoutNode(
       id: baseId,
       baseId: baseId,
@@ -1061,12 +1061,6 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   double _rectArea(Rect rect) => rect.width * rect.height;
-
-  Offset? _visibleCenter(Rect rect) {
-    final visible = _visibleRectFor(rect);
-    if (visible == null) return null;
-    return visible.center;
-  }
 
   bool _hitTestable(Offset point, {RenderObject? target}) {
     try {

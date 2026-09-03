@@ -4,6 +4,10 @@
   alias such as `btn.enable_overall_remark`, while preserving raw switch/key
   handles and selected/enabled state. Keep subtitles separate, support localized
   and RTL labels, and abstain on competing labels or multiple controls.
+* Keep desktop sibling panes usable when a nested navigator contains a sheet
+  or dialog. Only viewport-owned surfaces restrict the global active surface;
+  local barriers still block covered controls, and root dialogs retain their
+  own title instead of borrowing a background pane's heading.
 * Recognize ordinary non-Latin text and short localized control labels. Keep
   Unicode letters, numbers, and combining marks in discovered handles instead
   of collapsing them to empty slugs, and prefer a card's visible text over its
