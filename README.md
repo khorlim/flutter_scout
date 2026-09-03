@@ -149,6 +149,19 @@ dart run bin/flutter_scout.dart launch --device macos --project ../../apps/scout
 
 Successful launch and attach responses include `ready`. If the VM service is available but the helper extension is missing, the command returns `ready:false` with `reason:"helper_extension_missing"` and the expected initializer.
 
+For a script that parses stdout once, put `--single-json` first:
+
+```bash
+flutter-scout --single-json ensure --device macos --project <app> --name feature-a > result.json 2> progress.jsonl
+```
+
+The prefix emits one compact final JSON envelope on stdout, including errors,
+after command evidence completion. Stderr retains live heartbeats, warnings,
+and intermediate responses. Keep the streams separate and check both the exit
+code and final `ok`. No envelope fields are removed. Default output and
+persistent HTTP contracts are unchanged; `serve`, `explore`, and internal
+workers reject this prefix, and explicit help remains prose.
+
 Or attach to an already running app:
 
 ```bash

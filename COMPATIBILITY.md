@@ -59,6 +59,14 @@ usage prose into stdout. `cleanup` is a retained internal alias for `stop`;
 not public commands. All other dispatchable commands are included in the
 public command catalog used for discovery and suggestions.
 
+The opt-in leading `--single-json` prefix emits exactly one compact final
+response on stdout for finite machine commands, including errors, after command
+evidence completion. Heartbeats, warnings, and intermediate responses remain
+on stderr. Help remains a prose surface. `serve`, `explore`, and internal
+workers reject this prefix before starting; persistent HTTP contracts and
+default CLI stream routing are unchanged. This is presentation framing only:
+all envelope fields, redaction, and payload bounds remain in force.
+
 ## Language and framework toolchains
 
 | Layer | Declared constraint | Tested release evidence | Support statement |

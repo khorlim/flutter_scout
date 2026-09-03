@@ -56,6 +56,21 @@ flutter-scout attach --device <simulator-id>
 flutter-scout attach --debug-url-file /private/path/vm-service-url
 ```
 
+For scripts that decode stdout once, put `--single-json` first:
+
+```bash
+flutter-scout --single-json ensure \
+  --device <simulator-id> --project <app> --name template-save \
+  > result.json 2> progress.jsonl
+```
+
+This emits one compact final JSON envelope on stdout, including failures,
+after evidence completion. Keep stderr separate: it carries live heartbeats,
+warnings, and intermediate responses. Check the exit code and final `ok`;
+all identity, outcome, and safety fields remain present. Default output is
+unchanged. The prefix is for finite commands; `serve`/`explore` reject it,
+and explicit help still emits prose.
+
 Address named sessions from any directory with `--app <name>`. Use
 `flutter-scout apps` for live entries, `apps --all` for missing entries, and
 `apps --prune` to remove stale registry entries.
