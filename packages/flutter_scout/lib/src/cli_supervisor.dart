@@ -2,6 +2,20 @@ part of 'flutter_scout_cli.dart';
 
 // part: detached ownership of Scout-started Flutter tool processes.
 
+// Source and Pub JIT snapshots need a script after the Dart executable. AOT
+// executables are already the script, so repeating it becomes a CLI command.
+// Resolve the script path too so invocation through a symlink keeps working.
+List<String> _scoutSelfArguments(List<String> arguments) {
+  final script = Platform.script.toFilePath();
+  final isNativeExecutable =
+      p.equals(Platform.resolvedExecutable, script) ||
+      p.equals(
+        Platform.resolvedExecutable,
+        File(script).resolveSymbolicLinksSync(),
+      );
+  return [if (!isNativeExecutable) script, ...arguments];
+}
+
 extension _CliSupervisor on FlutterScoutCli {
   Future<String> _resolveFlutterExecutable() async {
     final result = await Process.run('which', ['flutter']);
@@ -38,12 +52,11 @@ extension _CliSupervisor on FlutterScoutCli {
       }
     }
 
-    final process = await Process.start(Platform.resolvedExecutable, [
-      Platform.script.toFilePath(),
-      'flutter-run-worker',
-      '--config',
-      configFile,
-    ], mode: ProcessStartMode.detached);
+    final process = await Process.start(
+      Platform.resolvedExecutable,
+      _scoutSelfArguments(['flutter-run-worker', '--config', configFile]),
+      mode: ProcessStartMode.detached,
+    );
     final processIdentity = await _readProcessOwnershipIdentity(
       process.pid,
       role: _flutterWorkerProcessRole,
@@ -134,10 +147,7 @@ extension _CliSupervisor on FlutterScoutCli {
   }) {
     final arguments = <String>[
       Platform.resolvedExecutable,
-      Platform.script.toFilePath(),
-      'flutter-run-worker',
-      '--config',
-      configFile,
+      ..._scoutSelfArguments(['flutter-run-worker', '--config', configFile]),
     ];
     final argumentXml = arguments
         .map((value) => '    <string>${_xmlEscape(value)}</string>')

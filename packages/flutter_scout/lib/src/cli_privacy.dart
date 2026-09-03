@@ -645,8 +645,7 @@ extension _CliPrivacy on FlutterScoutCli {
     );
     return _VmLogListenerLaunchSpec(
       uriFile: uriFile.path,
-      arguments: <String>[
-        Platform.script.toFilePath(),
+      arguments: _scoutSelfArguments([
         'vm-log-listener',
         '--vm-uri-file',
         uriFile.path,
@@ -656,7 +655,7 @@ extension _CliPrivacy on FlutterScoutCli {
         _sessionDir.path,
         '--owner-pid',
         '$ownerPid',
-      ],
+      ]),
     );
   }
 }
