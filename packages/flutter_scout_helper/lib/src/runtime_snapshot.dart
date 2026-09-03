@@ -272,6 +272,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final perceptionGaps = <Map<String, Object?>>[];
     final perceptionGapFingerprints = <String>{};
     final overlays = <Map<String, Object?>>[];
+    final viewportOverlayIndices = <int>{};
     final visibleText = <String>{};
     final hitTestableText = <String>{};
     final offscreenText = <String>{};
@@ -398,6 +399,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           final overlay = _overlayFor(element);
           if (overlay != null) {
             overlay['ordinal'] = nodes.length;
+            if (_modalOwnerCoversViewport(element, logicalSize)) {
+              viewportOverlayIndices.add(overlays.length);
+            }
             overlays.add(overlay);
           }
           final text = _isInsideSensitiveEditable(element)
@@ -405,14 +409,18 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
               : _ownText(element.widget);
           if (text != null && _isUsefulVisibleText(text)) {
             final rect = _rectFor(element);
+            final visibleRect = rect == null
+                ? null
+                : _visiblePerceptionRectFor(element, rect);
             final trimmed = text.trim();
-            if (rect == null || _visibleRectFor(rect) == null) {
+            if (visibleRect == null) {
               offscreenText.add(trimmed);
             } else {
               visibleText.add(trimmed);
-              final point = _visibleCenter(rect);
-              if (point != null &&
-                  _hitTestable(point, target: element.renderObject)) {
+              if (_hitTestable(
+                visibleRect.center,
+                target: element.renderObject,
+              )) {
                 hitTestableText.add(trimmed);
               }
             }
@@ -585,15 +593,19 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final rawRoute = root == null ? null : ModalRoute.of(root)?.settings.name;
     final route = rawRoute == null ? null : _redactSensitiveText(rawRoute);
     final modalScreenName = root == null ? null : _modalScreenName(root);
-    final concreteModalSurface = root != null && _hasConcreteModalSurface(root);
+    final concreteModalSurface =
+        root != null && _hasConcreteModalSurface(root, logicalSize);
     final genericModal =
         concreteModalSurface &&
         _genericModalSurfaceNames.contains(modalScreenName);
-    final hasConcreteOverlaySurface = overlays.any(
+    final viewportOverlays = [
+      for (final index in viewportOverlayIndices) overlays[index],
+    ];
+    final hasConcreteOverlaySurface = viewportOverlays.any(
       (overlay) =>
           overlay['kind'] == 'dialog' || overlay['kind'] == 'bottomSheet',
     );
-    final hasViewportModalBarrier = overlays.any(
+    final hasViewportModalBarrier = viewportOverlays.any(
       (overlay) =>
           overlay['kind'] == 'modalBarrier' &&
           _coversViewport(overlay, logicalSize),
@@ -603,11 +615,12 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       // stack. They are not dialogs: treating any such barrier as modal made
       // Scout relabel a normal page using the first prominent row title.
       // A bare barrier is modal evidence only when it covers this app view;
-      // standard Dialog/BottomSheet surfaces remain valid at any size.
+      // Dialog/BottomSheet content can be small, but its owning navigator
+      // must also cover the view before it can restrict sibling panes.
       modalActive:
           hasConcreteOverlaySurface || hasViewportModalBarrier || genericModal,
       allowVisibleTextFallback: genericModal,
-      overlays: overlays,
+      overlays: viewportOverlays,
       visibleText: visibleText,
       textTargets: textTargets,
       logicalSize: logicalSize,
@@ -1395,8 +1408,15 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     for (final overlay in overlays.reversed) {
       if (overlay['kind'] == 'modalBarrier') continue;
       final rect = _rectFromJsonList(overlay['rect']);
+      final ordinal = overlay['ordinal'];
+      final surfaceTextTargets = [
+        for (final node in textTargets)
+          if (ordinal is! int || (node._treeOrdinal ?? -1) >= ordinal) node,
+      ];
       final title = _surfaceTitleForRegion(
-        textTargets: textTargets,
+        // Dialog render bounds may cover the viewport. Earlier sibling-pane
+        // titles inside those bounds still belong to the background.
+        textTargets: surfaceTextTargets,
         region: rect,
         fallbackLabel: overlay['label']?.toString(),
         logicalSize: logicalSize,
@@ -1406,7 +1426,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final displayLabel = _surfaceDisplayLabel(label);
       final anchors =
           [
-            for (final node in textTargets)
+            for (final node in surfaceTextTargets)
               if ((node.label ?? '').trim() == label) node,
           ]..sort(
             (a, b) => (a._treeOrdinal ?? 1 << 30).compareTo(
@@ -1670,17 +1690,38 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     return widget.runtimeType.toString().contains('ModalBarrier');
   }
 
-  bool _hasConcreteModalSurface(Element root) {
+  bool _hasConcreteModalSurface(Element root, Size logicalSize) {
     var found = false;
     _walkVisible(root, (Element element) {
       if (found) return;
       final kind = _modalSurfaceKind(element.widget);
       if (kind == null) return;
+      if (!_modalOwnerCoversViewport(element, logicalSize)) return;
       final rect = _rectFor(element);
       if (rect == null || _visibleRectFor(rect) == null) return;
       found = true;
     });
     return found;
+  }
+
+  /// A modal belongs to its nearest navigator, which may occupy just one
+  /// desktop pane. Its widget type or title cannot establish a global scope.
+  bool _modalOwnerCoversViewport(Element element, Size logicalSize) {
+    Element? owner;
+    element.visitAncestorElements((ancestor) {
+      if (ancestor.widget is Navigator) {
+        owner = ancestor;
+        return false;
+      }
+      return true;
+    });
+    // Standalone widget trees have no navigator to narrow their scope.
+    if (owner == null) return true;
+    final rect = _rectFor(owner!);
+    if (rect == null) return false;
+    return _coversViewport({
+      'visibleRect': [rect.left, rect.top, rect.width, rect.height],
+    }, logicalSize);
   }
 
   /// The kind of modal surface a widget represents, or null.
