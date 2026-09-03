@@ -349,6 +349,14 @@ short labels such as `菜单` and `保存`. Use returned handles (for example
 needed. Re-inspect after a helper upgrade because localized handles now retain
 their Unicode letters rather than collapsing to empty or ASCII-only slugs.
 
+Single-switch settings rows expose their title and an alias such as
+`btn.enable_overall_remark`, alongside the original switch or key handle.
+Scout uses the row structure, including title/subtitle stacks and RTL layouts,
+and keeps competing labels or rows with multiple controls unlabeled. Repeated
+titles remain ambiguous; inspect the returned `selected` and `enabled` facts
+before acting on a switch. Built offscreen rows retain their alias for
+`locate`/`reveal`; visibility still gates dispatch.
+
 `tap-text` resolves visible text and its actionable owner through the same
 uniqueness, active-surface, visibility, occlusion, and immediate hit-test gate
 as handle actions. It returns both the activated `target` and matched
