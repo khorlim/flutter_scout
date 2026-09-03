@@ -310,15 +310,18 @@ extension _CliServe on FlutterScoutCli {
     if (name == null || name.isEmpty || meta?['serve'] is Map) return;
     if (Platform.script.scheme != 'file') return;
     try {
-      await Process.start(Platform.resolvedExecutable, [
-        Platform.script.toFilePath(),
-        '--app',
-        name,
-        'serve',
-        '--idle-timeout',
-        '600',
-        '--auto',
-      ], mode: ProcessStartMode.detached);
+      await Process.start(
+        Platform.resolvedExecutable,
+        _scoutSelfArguments([
+          '--app',
+          name,
+          'serve',
+          '--idle-timeout',
+          '600',
+          '--auto',
+        ]),
+        mode: ProcessStartMode.detached,
+      );
       final deadline = DateTime.now().add(const Duration(seconds: 2));
       while (DateTime.now().isBefore(deadline)) {
         await Future<void>.delayed(const Duration(milliseconds: 50));
