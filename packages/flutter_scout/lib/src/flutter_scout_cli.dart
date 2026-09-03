@@ -2748,6 +2748,7 @@ Usage:
   flutter-scout drag-end [--to x,y | --by dx,dy] [--verbose]
   flutter-scout drag-status | drag-cancel
   flutter-scout back [--verbose]
+  flutter-scout dismiss [--verbose]
   flutter-scout wait stable [--timeout <ms>] [--verbose]
   flutter-scout wait-for [--text <text>] [--gone <text>] [--target <handle>]
   flutter-scout health [--include-stale]
