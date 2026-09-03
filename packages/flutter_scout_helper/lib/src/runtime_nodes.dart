@@ -198,11 +198,13 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final editable = kind == 'field' ? _editableStateBelow(element) : null;
     final rawValue = editable?.widget.controller.text;
     final obscured = editable?.widget.obscureText ?? false;
-    final rawLabel = _labelFor(
+    final ownLabel = _labelFor(
       element,
       widget,
       deepText: _usesDeepTextLabel(widget),
     );
+    final rowLabel = ownLabel == null ? _switchRowLabel(element) : null;
+    final rawLabel = ownLabel ?? rowLabel;
     final rawKey = _keyLabel(widget.key);
     final redacted =
         kind == 'field' &&
@@ -224,13 +226,18 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         : _redactSensitiveText(rawValidationMessage);
     final baseId = key != null && key.isNotEmpty
         ? '$kind.${_slug(key)}'
-        : label != null && label.isNotEmpty
+        : rowLabel == null && label != null && label.isNotEmpty
         ? '$kind.${_slug(label)}'
         : '$kind.${_slug(widgetType)}';
     // Alternate handles from the other label sources, so the node stays
     // addressable when its primary label source flickers (e.g. an
     // async-loaded Semantics username appearing after first paint).
     final altIds = <String>{};
+    // Row context enriches switches without replacing their existing handles.
+    if (rowLabel != null && label != null) {
+      final alias = '$kind.${_slug(label)}';
+      if (alias != baseId) altIds.add(alias);
+    }
     if (kind == 'btn' || kind == 'tap') {
       for (final alternate in [
         _iconLabelBelow(element),
@@ -265,7 +272,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
           ? false
           : _hitTestable(suggestedTapPoint, target: element.renderObject),
       enabled: _enabledFor(widget) && !(editable?.widget.readOnly ?? false),
-      confidence: label == null ? 0.65 : 0.94,
+      confidence: label == null ? 0.65 : (rowLabel == null ? 0.94 : 0.84),
       coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: kind == 'text' ? null : _selectedStateFor(element, widget),
       altIds: altIds.toList(growable: false),
@@ -1132,7 +1139,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         .toList(growable: false);
     return [
       for (final node in nodes)
-        if (_isStateControlWidgetType(node.widgetType))
+        if (_isStateControlWidgetType(node.widgetType) &&
+            node.widgetType != 'Switch' &&
+            node.widgetType != 'CupertinoSwitch')
           node.withoutLabel(confidence: 0.65)
         else if ((node.kind == 'tap' || node.kind == 'btn') &&
             !_isStateControlWidgetType(node.widgetType) &&
@@ -1379,7 +1388,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
       if (bestButtonIndex == -1 || bestOverlap < 0.7) continue;
       final button = result[bestButtonIndex];
-      if (button.label == null && node.label != null) {
+      if (button.label == null &&
+          node.label != null &&
+          !_isStateControlWidgetType(button.widgetType)) {
         result[bestButtonIndex] = button.copyWith(
           label: node.label,
           confidence: node.confidence,

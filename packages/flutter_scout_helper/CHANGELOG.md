@@ -1,5 +1,9 @@
 ## Unreleased
 
+* Give ordinary single-switch settings rows their visible title and a readable
+  alias such as `btn.enable_overall_remark`, while preserving raw switch/key
+  handles and selected/enabled state. Keep subtitles separate, support localized
+  and RTL labels, and abstain on competing labels or multiple controls.
 * Recognize ordinary non-Latin text and short localized control labels. Keep
   Unicode letters, numbers, and combining marks in discovered handles instead
   of collapsing them to empty slugs, and prefer a card's visible text over its
