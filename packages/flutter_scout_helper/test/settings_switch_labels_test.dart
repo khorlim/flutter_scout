@@ -30,6 +30,53 @@ Future<void> showSettings(WidgetTester tester, List<Widget> rows) async {
 }
 
 void main() {
+  testWidgets('built offscreen rows retain aliases while taps remain hidden', (
+    tester,
+  ) async {
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
+    await showSettings(tester, [
+      SizedBox(
+        height: 160,
+        child: SingleChildScrollView(
+          controller: scroll,
+          child: Column(
+            children: [
+              const SizedBox(height: 700),
+              settingsRow(
+                'Enable Overall Remark',
+                CupertinoSwitch(value: false, onChanged: (_) {}),
+              ),
+              const SizedBox(height: 200),
+            ],
+          ),
+        ),
+      ),
+    ]);
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final before = runtime.debugSnapshot().interactables.singleWhere(
+      (node) => node.widgetType == 'CupertinoSwitch',
+    );
+    expect(before.altIds, contains('btn.enable_overall_remark'));
+    expect(before.visibleFraction, 0);
+    expect(
+      runtime.debugResolveTarget('btn.enable_overall_remark')['status'],
+      'hidden',
+    );
+    scroll.jumpTo(700);
+    await tester.pump();
+    final after = runtime.debugSnapshot().interactables.singleWhere(
+      (node) => node.widgetType == 'CupertinoSwitch',
+    );
+    expect(after.id, before.id);
+    expect(after.altIds, before.altIds);
+    expect(after.visibleFraction, 1);
+    expect(
+      runtime.debugResolveTarget('btn.enable_overall_remark')['status'],
+      'unique',
+    );
+  });
+
   testWidgets('wide settings rows expose the title and preserve raw handles', (
     tester,
   ) async {
@@ -182,7 +229,7 @@ void main() {
     expect(changes, 1);
   });
 
-  testWidgets('a heading outside the switch row is not a switch label', (
+  testWidgets('outside headings and hidden text are not switch labels', (
     tester,
   ) async {
     await showSettings(tester, [
@@ -193,12 +240,33 @@ void main() {
           CupertinoSwitch(value: false, onChanged: (_) {}),
         ],
       ),
+      Row(
+        children: [
+          const Offstage(child: Text('Offstage setting')),
+          CupertinoSwitch(value: false, onChanged: (_) {}),
+        ],
+      ),
+      Row(
+        children: [
+          const Visibility(
+            visible: false,
+            maintainState: true,
+            maintainAnimation: true,
+            maintainSize: true,
+            child: Text('Hidden setting'),
+          ),
+          CupertinoSwitch(value: false, onChanged: (_) {}),
+        ],
+      ),
     ]);
-    final node = FlutterScoutHelper.debugRuntime
+    final switches = FlutterScoutHelper.debugRuntime
         .debugSnapshot()
         .interactables
-        .singleWhere((node) => node.widgetType == 'CupertinoSwitch');
-    expect(node.label, isNull);
-    expect(node.altIds, isEmpty);
+        .where((node) => node.widgetType == 'CupertinoSwitch');
+    expect(switches, hasLength(3));
+    for (final node in switches) {
+      expect(node.label, isNull);
+      expect(node.altIds, isEmpty);
+    }
   });
 }

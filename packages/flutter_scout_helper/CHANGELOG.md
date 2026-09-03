@@ -1,9 +1,10 @@
 ## Unreleased
 
-* Give ordinary single-switch settings rows their visible title and a readable
+* Give ordinary single-switch settings rows their title and a readable
   alias such as `btn.enable_overall_remark`, while preserving raw switch/key
   handles and selected/enabled state. Keep subtitles separate, support localized
-  and RTL labels, and abstain on competing labels or multiple controls.
+  and RTL labels, retain aliases while scrolling, and abstain on competing
+  labels or multiple controls.
 * Keep desktop sibling panes usable when a nested navigator contains a sheet
   or dialog. Only viewport-owned surfaces restrict the global active surface;
   local barriers still block covered controls, and root dialogs retain their

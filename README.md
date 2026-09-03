@@ -354,7 +354,8 @@ Single-switch settings rows expose their title and an alias such as
 Scout uses the row structure, including title/subtitle stacks and RTL layouts,
 and keeps competing labels or rows with multiple controls unlabeled. Repeated
 titles remain ambiguous; inspect the returned `selected` and `enabled` facts
-before acting on a switch.
+before acting on a switch. Built offscreen rows retain their alias for
+`locate`/`reveal`; visibility still gates dispatch.
 
 `tap-text` resolves visible text and its actionable owner through the same
 uniqueness, active-surface, visibility, occlusion, and immediate hit-test gate

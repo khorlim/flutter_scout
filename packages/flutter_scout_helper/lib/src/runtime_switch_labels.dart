@@ -76,7 +76,8 @@ extension _RuntimeSwitchLabels on FlutterScoutRuntime {
     final texts = textBranches.single
       ..sort((a, b) => a.rect.top.compareTo(b.rect.top));
     final title = texts.first;
-    if (_visibleRectFor(title.rect) == null) return null;
+    // Built offscreen rows retain their name for locate/reveal. Visibility and
+    // dispatch are independently enforced on the switch by target resolution.
     // A vertical title/subtitle stack has one primary label. Side-by-side
     // texts, overlapping titles, or a separate column of text are ambiguous.
     for (final subtitle in texts.skip(1)) {
