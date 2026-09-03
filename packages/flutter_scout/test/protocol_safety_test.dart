@@ -788,20 +788,23 @@ void main() {
     });
 
     test(
-      'bounded CLI registry fails closed instead of evicting receipts',
+      'bounded CLI registry compacts closed receipts into tombstone filter',
       () async {
         final fake = await _FakeVmService.start();
         addTearDown(fake.close);
 
         await _withProtocolSession(fake.uri, () async {
+          final keys = [
+            for (var index = 0; index < 512; index++) 'old-key-$index',
+          ];
           final records = <String, Object?>{
-            for (var index = 0; index < 512; index++)
+            for (final key in keys)
               crypto.sha256
-                  .convert(utf8.encode('old-key-$index'))
+                  .convert(utf8.encode(key))
                   .toString(): <String, Object?>{
                 'phase': 'tombstone',
                 'businessFingerprint': crypto.sha256
-                    .convert(utf8.encode('old-request-$index'))
+                    .convert(utf8.encode('old-request-$key'))
                     .toString(),
               },
           };
@@ -826,9 +829,38 @@ void main() {
               'btn.save',
               '--wait-ms=-14980',
             ]),
+            0,
+          );
+          expect(fake.dispatchCount, 1);
+
+          final compacted =
+              jsonDecode(
+                    File(
+                      p.join(directory.path, 'registry.json'),
+                    ).readAsStringSync(),
+                  )
+                  as Map<String, dynamic>;
+          expect((compacted['records'] as Map).length, 512);
+          expect(compacted['tombstoneFilter'], isA<String>());
+
+          final compactedRecords = compacted['records'] as Map<String, dynamic>;
+          final prunedKey = keys.firstWhere(
+            (key) => !compactedRecords.containsKey(
+              crypto.sha256.convert(utf8.encode(key)).toString(),
+            ),
+          );
+
+          expect(
+            await FlutterScoutCli().run([
+              '--idempotency-key',
+              prunedKey,
+              'tap',
+              'btn.save',
+              '--wait-ms=-14980',
+            ]),
             1,
           );
-          expect(fake.dispatchCount, 0);
+          expect(fake.dispatchCount, 1);
         });
       },
     );

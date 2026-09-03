@@ -14,6 +14,10 @@ const int _maxIdempotencyReceipts = 512;
 const int _maxReplayableIdempotencyOutcomes = 64;
 const int _maxIdempotencyRegistryBytes = 16 * 1024 * 1024;
 const int _maxStoredIdempotencyOutcomeBytes = 128 * 1024;
+const int _idempotencyTombstoneFilterBitCount = 65536;
+const int _idempotencyTombstoneFilterHashCount = 4;
+const int _idempotencyTombstoneFilterByteCount =
+    _idempotencyTombstoneFilterBitCount ~/ 8;
 
 final Expando<_CliIdempotencyContext> _cliIdempotencyContexts =
     Expando<_CliIdempotencyContext>('flutter_scout_cli_idempotency');
@@ -57,6 +61,77 @@ class _PreTransportIdempotencyDecision {
 
   final Map<String, dynamic>? immediate;
   final _MutationInvocation? uncertainInvocation;
+}
+
+/// Compact no-false-negative memory for receipts removed from the exact
+/// registry. A false positive only abstains with `idempotency_outcome_pruned`;
+/// a false negative would be unsafe because it could redispatch a mutation.
+class _IdempotencyTombstoneFilter {
+  _IdempotencyTombstoneFilter([Uint8List? bytes])
+    : _bytes = bytes ?? Uint8List(_idempotencyTombstoneFilterByteCount) {
+    if (_bytes.length != _idempotencyTombstoneFilterByteCount) {
+      throw const ScoutCliException(
+        'idempotency_registry_corrupt',
+        'The durable idempotency tombstone filter has an invalid size. Scout '
+            'will not dispatch a mutation.',
+      );
+    }
+  }
+
+  final Uint8List _bytes;
+
+  Iterable<int> _positions(String keyDigest) sync* {
+    final digest = crypto.sha256.convert(utf8.encode(keyDigest)).bytes;
+    for (
+      var offset = 0;
+      offset < _idempotencyTombstoneFilterHashCount;
+      offset++
+    ) {
+      final value =
+          (digest[offset * 4] << 24) |
+          (digest[offset * 4 + 1] << 16) |
+          (digest[offset * 4 + 2] << 8) |
+          digest[offset * 4 + 3];
+      yield value & (_idempotencyTombstoneFilterBitCount - 1);
+    }
+  }
+
+  void add(String keyDigest) {
+    for (final position in _positions(keyDigest)) {
+      final byte = position ~/ 8;
+      _bytes[byte] |= 1 << (position % 8);
+    }
+  }
+
+  bool mightContain(String keyDigest) {
+    for (final position in _positions(keyDigest)) {
+      final byte = position ~/ 8;
+      if ((_bytes[byte] & (1 << (position % 8))) == 0) return false;
+    }
+    return true;
+  }
+
+  String encode() => base64UrlEncode(_bytes);
+
+  static _IdempotencyTombstoneFilter decode(Object? encoded) {
+    if (encoded == null) return _IdempotencyTombstoneFilter();
+    if (encoded is! String || encoded.isEmpty) {
+      throw const ScoutCliException(
+        'idempotency_registry_corrupt',
+        'The durable idempotency tombstone filter is invalid. Scout will not '
+            'dispatch a mutation.',
+      );
+    }
+    try {
+      return _IdempotencyTombstoneFilter(base64Url.decode(encoded));
+    } on FormatException {
+      throw const ScoutCliException(
+        'idempotency_registry_corrupt',
+        'The durable idempotency tombstone filter is not valid base64. Scout '
+            'will not dispatch a mutation.',
+      );
+    }
+  }
 }
 
 extension _CliIdempotency on FlutterScoutCli {
@@ -193,8 +268,22 @@ extension _CliIdempotency on FlutterScoutCli {
         body: () {
           final registry = _readIdempotencyRegistry();
           final records = registry['records']! as Map<String, Object?>;
+          final tombstoneFilter = _readIdempotencyTombstoneFilter(registry);
           final rawReceipt = records[keyDigest];
-          if (rawReceipt is! Map) return null;
+          if (rawReceipt is! Map) {
+            if (!tombstoneFilter.mightContain(keyDigest)) return null;
+            return _PreTransportIdempotencyDecision(
+              immediate: _idempotencyUnknownWithoutInvocation(
+                code: 'idempotency_outcome_pruned',
+                message:
+                    'The bounded outcome was pruned. Scout will not redispatch.',
+                method: method,
+                runId: runId,
+                idempotencyKey: key,
+                idempotencyKeyDigest: keyDigest,
+              ),
+            );
+          }
           final receipt = Map<String, Object?>.from(rawReceipt);
           if (receipt['businessFingerprint'] != fingerprint) {
             return _PreTransportIdempotencyDecision(
@@ -436,6 +525,7 @@ extension _CliIdempotency on FlutterScoutCli {
             'will not dispatch a mutation.',
       );
     }
+    _IdempotencyTombstoneFilter.decode(decoded['tombstoneFilter']);
     final records = <String, Object?>{};
     for (final entry in (decoded['records'] as Map).entries) {
       final digest = entry.key.toString();
@@ -463,6 +553,10 @@ extension _CliIdempotency on FlutterScoutCli {
       'records': records,
     };
   }
+
+  _IdempotencyTombstoneFilter _readIdempotencyTombstoneFilter(
+    Map<String, Object?> registry,
+  ) => _IdempotencyTombstoneFilter.decode(registry['tombstoneFilter']);
 
   void _writeIdempotencyRegistry(Map<String, Object?> registry) {
     final encoded = const JsonEncoder.withIndent(' ').convert(registry);
@@ -495,6 +589,7 @@ extension _CliIdempotency on FlutterScoutCli {
       body: () {
         final registry = _readIdempotencyRegistry();
         final records = registry['records']! as Map<String, Object?>;
+        final tombstoneFilter = _readIdempotencyTombstoneFilter(registry);
         final existingValue = records[proposed.idempotencyKeyDigest];
         if (existingValue is Map) {
           final existing = Map<String, Object?>.from(existingValue);
@@ -614,12 +709,32 @@ extension _CliIdempotency on FlutterScoutCli {
           return _DurableInvocationDecision(invocation: stored);
         }
 
+        if (tombstoneFilter.mightContain(proposed.idempotencyKeyDigest)) {
+          return _DurableInvocationDecision(
+            failure: _unknownDispatchProtocolFailure(
+              code: 'idempotency_outcome_pruned',
+              message:
+                  'The bounded outcome was pruned. Scout will not redispatch.',
+              invocation: proposed,
+            ),
+          );
+        }
+
+        if (records.length >= _maxIdempotencyReceipts) {
+          final compacted = _compactIdempotencyReceipts(
+            records,
+            tombstoneFilter,
+          );
+          if (compacted) {
+            registry['tombstoneFilter'] = tombstoneFilter.encode();
+          }
+        }
         if (records.length >= _maxIdempotencyReceipts) {
           return _DurableInvocationDecision(
             failure: _notDispatchedProtocolFailure(
               code: 'idempotency_registry_capacity_reached',
               message:
-                  'The bounded idempotency registry is full. Scout fails closed instead of evicting a receipt that could permit a duplicate mutation.',
+                  'The bounded idempotency registry is full of active or uncertain receipts. Scout fails closed instead of evicting a receipt that could permit a duplicate mutation.',
               method: method,
               runId: proposed.runId,
             ),
@@ -643,6 +758,35 @@ extension _CliIdempotency on FlutterScoutCli {
         return _DurableInvocationDecision(invocation: proposed);
       },
     );
+  }
+
+  bool _compactIdempotencyReceipts(
+    Map<String, Object?> records,
+    _IdempotencyTombstoneFilter tombstoneFilter,
+  ) {
+    final compactable =
+        records.entries.where((entry) {
+          final receipt = entry.value;
+          if (receipt is! Map) return false;
+          final phase = receipt['phase'];
+          return phase == 'completed' || phase == 'tombstone';
+        }).toList()..sort((first, second) {
+          String timestamp(Map<String, Object?> entry) =>
+              (entry['updatedAt'] ?? entry['createdAt'] ?? '').toString();
+          final byTime = timestamp(
+            first.value as Map<String, Object?>,
+          ).compareTo(timestamp(second.value as Map<String, Object?>));
+          return byTime != 0 ? byTime : first.key.compareTo(second.key);
+        });
+
+    var compacted = false;
+    for (final entry in compactable) {
+      if (records.length < _maxIdempotencyReceipts) break;
+      tombstoneFilter.add(entry.key);
+      records.remove(entry.key);
+      compacted = true;
+    }
+    return compacted;
   }
 
   Map<String, Object?> _invocationIdentityForReceipt(
