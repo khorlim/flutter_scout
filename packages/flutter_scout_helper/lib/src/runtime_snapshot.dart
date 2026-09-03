@@ -1226,6 +1226,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       final node = nodes[index];
       final rect = node.rect;
       if ((node.kind != 'btn' && node.kind != 'tap') ||
+          // Switch labels require a unique structural row association.
+          node.widgetType == 'Switch' ||
+          node.widgetType == 'CupertinoSwitch' ||
           rect == null ||
           node.key != null ||
           rect.width > 96 ||

@@ -1915,6 +1915,7 @@ void main() {
                       children: [
                         const SizedBox(height: 700),
                         ElevatedButton(
+                          key: const ValueKey('deep_target'),
                           onPressed: () {},
                           child: const Text('Deep target'),
                         ),
@@ -1933,6 +1934,12 @@ void main() {
 
     final targetPanel = tester.getRect(
       find.byKey(const ValueKey('target_panel')),
+    );
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    expect(
+      snapshot.interactables.any((node) => node.id == 'btn.deep_target'),
+      isTrue,
+      reason: 'Alignment requires a published exact selector.',
     );
     final origin = FlutterScoutHelper.debugRuntime.debugScrollStartFor(
       'down',
