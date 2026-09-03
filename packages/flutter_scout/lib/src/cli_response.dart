@@ -35,6 +35,29 @@ const Set<String> _cliEnvelopeMetadataKeys = <String>{
 };
 
 extension _CliResponse on FlutterScoutCli {
+  Future<int> _runSingleJson(List<String> args) async {
+    // Nested batch/replay commands share the outer final-response buffer.
+    if (_singleJsonOutput) return _run(args);
+    _singleJsonOutput = true;
+    try {
+      if (args.isEmpty) {
+        _writeStructuredError(
+          'missing_command',
+          'A command is required after --single-json.',
+        );
+        return 1;
+      }
+      return await _run(args);
+    } finally {
+      // _run completes its evidence transaction before publishing the final
+      // result. A late evidence failure therefore replaces a pending success.
+      final response = _pendingJsonResponse;
+      _pendingJsonResponse = null;
+      _singleJsonOutput = false;
+      if (response != null) stdout.writeln(response);
+    }
+  }
+
   Map<String, Object?> _cliResponseEnvelope(
     Object? value, {
     bool? success,
@@ -311,6 +334,10 @@ extension _CliResponse on FlutterScoutCli {
       success: success,
       commandName: commandName,
     );
+    final retainFinal =
+        _singleJsonOutput && envelope['messageType'] != 'warning';
+    if (_singleJsonOutput) pretty = false;
+    if (retainFinal) toStderr = false;
     envelope = _withCliSerializeProbe(
       Map<String, dynamic>.from(envelope),
       probeValue: envelope,
@@ -323,7 +350,15 @@ extension _CliResponse on FlutterScoutCli {
       pretty: pretty,
       valueIsSanitized: true,
     );
-    (toStderr ? stderr : stdout).writeln(encoded);
+    if (retainFinal) {
+      // Preserve intermediate command/evidence responses on the diagnostic
+      // stream, keeping only one bounded, already-sanitized final response.
+      final previous = _pendingJsonResponse;
+      if (previous != null) stderr.writeln(previous);
+      _pendingJsonResponse = encoded;
+    } else {
+      (toStderr ? stderr : stdout).writeln(encoded);
+    }
   }
 
   void _writeStructuredError(
@@ -366,6 +401,7 @@ extension _CliResponse on FlutterScoutCli {
     Map<String, Object?> progress = const <String, Object?>{},
     bool toStderr = true,
   ]) {
+    if (_singleJsonOutput) toStderr = true;
     final elapsedMs =
         _activeCommandStopwatch?.elapsedMilliseconds ??
         _nullableNonNegativeInt(progress['elapsedMs']) ??
