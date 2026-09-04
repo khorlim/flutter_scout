@@ -2380,34 +2380,6 @@ extension _CliSession on FlutterScoutCli {
       var flutterStatus = 'not_recorded';
       var runQuiesced = true;
 
-      if (workerPid != null && await _processExists(workerPid)) {
-        final workerTrusted = await _matchesRunnerWorker(
-          workerPid,
-          expectedIdentity: state['workerProcessIdentity'],
-          expectedRunId: runId,
-          expectedConfigFile: recordedConfigFile,
-        );
-        if (workerTrusted) {
-          final signaled = Process.killPid(workerPid);
-          stoppedAny = stoppedAny || signaled;
-          workerStatus = signaled ? 'signaled' : 'signal_failed';
-          if (waitForWriterQuiescence) {
-            final quiescence = await _waitForSupervisorWriterQuiescence(
-              workerPid,
-            );
-            runQuiesced = quiescence['writersQuiesced'] == true;
-            workerStatus = runQuiesced ? 'stopped' : 'stop_timeout';
-          }
-        } else if (state['workerExitingNormally'] == true) {
-          workerStatus = 'completed_pid_reused';
-        } else {
-          workerStatus = 'identity_mismatch';
-          runQuiesced = false;
-        }
-      } else if (workerPid != null) {
-        workerStatus = 'already_stopped';
-      }
-
       if (flutterPid != null && await _processExists(flutterPid)) {
         final flutterMeta = <String, dynamic>{
           ...ownershipMeta,
@@ -2442,6 +2414,38 @@ extension _CliSession on FlutterScoutCli {
         }
       } else if (flutterPid != null) {
         flutterStatus = 'already_stopped';
+      }
+
+      // Stop the exact Flutter tool while its parent association is still
+      // intact. Its worker will normally exit after observing that child exit;
+      // signal the worker afterward only when it remains live.
+      if (workerPid != null && await _processExists(workerPid)) {
+        final workerTrusted = await _matchesRunnerWorker(
+          workerPid,
+          expectedIdentity: state['workerProcessIdentity'],
+          expectedRunId: runId,
+          expectedConfigFile: recordedConfigFile,
+        );
+        if (workerTrusted) {
+          final signaled = Process.killPid(workerPid);
+          stoppedAny = stoppedAny || signaled;
+          workerStatus = signaled ? 'signaled' : 'signal_failed';
+          if (waitForWriterQuiescence) {
+            final quiescence = await _waitForSupervisorWriterQuiescence(
+              workerPid,
+            );
+            final workerQuiesced = quiescence['writersQuiesced'] == true;
+            runQuiesced = runQuiesced && workerQuiesced;
+            workerStatus = workerQuiesced ? 'stopped' : 'stop_timeout';
+          }
+        } else if (state['workerExitingNormally'] == true) {
+          workerStatus = 'completed_pid_reused';
+        } else {
+          workerStatus = 'identity_mismatch';
+          runQuiesced = false;
+        }
+      } else if (workerPid != null) {
+        workerStatus = 'already_stopped';
       }
 
       allQuiesced = allQuiesced && runQuiesced;
@@ -2491,7 +2495,7 @@ extension _CliSession on FlutterScoutCli {
       role: _flutterRunProcessRole,
     );
     if (currentIdentity == null ||
-        !_sameProcessOwnershipIdentity(expectedIdentity, currentIdentity)) {
+        !_matchesFlutterRunIdentity(expectedIdentity, currentIdentity)) {
       return false;
     }
     if (!await _matchesFlutterSupervisorAssociation(meta!, expectedIdentity)) {

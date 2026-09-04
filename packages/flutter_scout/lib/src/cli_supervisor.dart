@@ -641,7 +641,33 @@ bool _matchesRunnerWorkerIdentity(
       p.dirname(expectedExecutable) == p.dirname(currentExecutable);
 }
 
+bool _matchesFlutterRunIdentity(
+  Map<Object?, Object?> expected,
+  Map<String, Object?> current,
+) {
+  if (_sameProcessOwnershipIdentity(expected, current)) return true;
+
+  final expectedExecutable = expected['executable']?.toString();
+  final currentExecutable = current['executable']?.toString();
+  final expectedLauncher = expectedExecutable == null
+      ? null
+      : p.basename(expectedExecutable);
+  return int.tryParse('${expected['pid'] ?? ''}') == current['pid'] &&
+      int.tryParse('${expected['parentPid'] ?? ''}') == current['parentPid'] &&
+      expected['startedAt']?.toString() == current['startedAt'] &&
+      expected['commandIdentity'] == _flutterRunProcessRole &&
+      current['commandIdentity'] == _flutterRunProcessRole &&
+      const {'env', 'flutter', 'sh', 'bash'}.contains(expectedLauncher) &&
+      currentExecutable != null &&
+      p.basename(currentExecutable) == 'dartvm';
+}
+
 extension FlutterScoutCliSupervisorTesting on FlutterScoutCli {
+  bool debugMatchesFlutterRunIdentity(
+    Map<Object?, Object?> expected,
+    Map<String, Object?> current,
+  ) => _matchesFlutterRunIdentity(expected, current);
+
   bool debugShouldUseLaunchdRunnerSupervisor({
     required bool isMacOS,
     required bool launchdDisabledByEnvironment,

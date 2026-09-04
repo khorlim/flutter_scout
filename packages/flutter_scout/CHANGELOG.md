@@ -4,6 +4,9 @@
   state when top-level session metadata is missing. New launches now refuse to
   replace unresolved live-run records, and `stop --clear-session` preserves
   them unless every recorded writer is proven quiescent.
+- Revalidate the exact Flutter tool after its recorded `env`/shell launcher
+  execs into `dartvm`, while still requiring the same PID, parent, start time,
+  process role, and run/project/device command tokens before signaling it.
 
 - Start every Scout-owned `flutter run` with Flutter's dedicated signal PID
   file, require its handler-registration acknowledgement before declaring the
