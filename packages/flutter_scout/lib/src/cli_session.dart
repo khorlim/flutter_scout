@@ -212,7 +212,36 @@ extension _CliSession on FlutterScoutCli {
       // A normally exited macOS worker leaves an inactive launchd job loaded.
       // Once this launch owns the session lease, unload the previous exact job
       // before replacing its metadata with the new run.
-      await _stopRunnerSupervisor(previousSessionMeta);
+      final previousSupervisorStop = await _stopRunnerSupervisor(
+        previousSessionMeta,
+        waitForWriterQuiescence: true,
+      );
+      final recordedRunStop = await _stopRecordedRunProcesses(
+        waitForWriterQuiescence: true,
+      );
+      final previousWorkerPid =
+          switch (previousSessionMeta?['supervisor']?['workerPid']) {
+            final num value => value.toInt(),
+            final String value => int.tryParse(value),
+            _ => null,
+          };
+      final previousSupervisorStillLive =
+          previousSupervisorStop['configured'] == true &&
+          previousSupervisorStop['stopped'] != true &&
+          previousWorkerPid != null &&
+          await _processExists(previousWorkerPid);
+      if (previousSupervisorStillLive || recordedRunStop['ok'] != true) {
+        throw ScoutCliException(
+          'previous_runner_cleanup_unverified',
+          'Flutter Scout found an older live runner for this session but '
+              'could not prove that it stopped. The existing ownership '
+              'records were preserved; inspect `stop` output before retrying.',
+          details: <String, Object?>{
+            'supervisor': previousSupervisorStop,
+            'recordedRuns': recordedRunStop,
+          },
+        );
+      }
       // The detached worker writes a newly discovered, validated capability
       // URL to this single designated store. Remove any stale predecessor
       // before it starts so the parent cannot adopt a credential from an older
@@ -2030,6 +2059,10 @@ extension _CliSession on FlutterScoutCli {
       waitForWriterQuiescence: parsed.flag('clear-session'),
     );
     stopped = stopped || supervisorStop['stopped'] == true;
+    final recordedRunStop = await _stopRecordedRunProcesses(
+      waitForWriterQuiescence: parsed.flag('clear-session'),
+    );
+    stopped = stopped || recordedRunStop['stopped'] == true;
     // The VM-service listener is an app/runtime process, not a Scout-owned
     // daemon. Terminating the exact Flutter tool is the supported lifecycle
     // operation; a separately surviving app is intentionally left untouched.
@@ -2062,11 +2095,12 @@ extension _CliSession on FlutterScoutCli {
     ScoutCliException? sessionCleanupError;
     var sessionClearComplete = true;
     if (parsed.flag('clear-session')) {
-      if (supervisorStop['writersQuiesced'] == false) {
+      if (supervisorStop['writersQuiesced'] == false ||
+          recordedRunStop['ok'] != true) {
         sessionCleanupError = const ScoutCliException(
           'session_cleanup_incomplete',
-          'The exact runner supervisor did not finish stopping within the '
-              'bounded cleanup wait. Session state was preserved.',
+          'One or more recorded Scout runners did not finish stopping within '
+              'the bounded cleanup wait. Session state was preserved.',
         );
         retentionCleanup = const <String, Object?>{
           'ok': false,
@@ -2202,6 +2236,7 @@ extension _CliSession on FlutterScoutCli {
         'serveExisted': serveExisted,
         'serveKillSkippedReason': ?serveKillSkippedReason,
         'supervisor': supervisorStop,
+        'recordedRuns': recordedRunStop,
         'stopped': stopped,
         'pidKillSkippedReason': ?pidKillSkippedReason,
         'vmLogListenerKillSkippedReason': ?vmLogListenerKillSkippedReason,
@@ -2223,6 +2258,216 @@ extension _CliSession on FlutterScoutCli {
       }, success: commandOk);
     }
     return commandOk ? 0 : 1;
+  }
+
+  Future<Map<String, Object?>> _stopRecordedRunProcesses({
+    required bool waitForWriterQuiescence,
+  }) async {
+    final runsDirectory = Directory(p.join(_sessionDir.path, 'runs'));
+    if (FileSystemEntity.typeSync(runsDirectory.path, followLinks: false) !=
+        FileSystemEntityType.directory) {
+      return const <String, Object?>{
+        'ok': true,
+        'configured': false,
+        'stopped': false,
+        'examined': 0,
+        'unresolved': <Object?>[],
+      };
+    }
+
+    final reports = <Map<String, Object?>>[];
+    var stoppedAny = false;
+    var allQuiesced = true;
+    final runDirectories = runsDirectory
+        .listSync(followLinks: false)
+        .whereType<Directory>()
+        .where(
+          (directory) =>
+              FileSystemEntity.typeSync(directory.path, followLinks: false) ==
+              FileSystemEntityType.directory,
+        )
+        .toList(growable: false);
+
+    for (final runDirectory in runDirectories) {
+      final configFile = File(p.join(runDirectory.path, 'flutter_worker.json'));
+      final stateFile = File(
+        p.join(runDirectory.path, 'supervisor_state.json'),
+      );
+      if (FileSystemEntity.typeSync(configFile.path, followLinks: false) !=
+              FileSystemEntityType.file ||
+          FileSystemEntity.typeSync(stateFile.path, followLinks: false) !=
+              FileSystemEntityType.file) {
+        continue;
+      }
+
+      Map<String, dynamic>? config;
+      Map<String, dynamic>? state;
+      try {
+        final decodedConfig = jsonDecode(configFile.readAsStringSync());
+        final decodedState = jsonDecode(stateFile.readAsStringSync());
+        if (decodedConfig is Map && decodedState is Map) {
+          config = Map<String, dynamic>.from(decodedConfig);
+          state = Map<String, dynamic>.from(decodedState);
+        }
+      } catch (_) {}
+      final runId = config?['runId']?.toString();
+      final project = config?['project']?.toString();
+      final device = config?['device']?.toString();
+      final configuredSessionDirectory = config?['sessionDirectory']
+          ?.toString();
+      final configuredStateFile = config?['stateFile']?.toString();
+      final recordedConfigFile =
+          configuredSessionDirectory == null || runId == null
+          ? null
+          : p.join(
+              configuredSessionDirectory,
+              'runs',
+              runId,
+              'flutter_worker.json',
+            );
+      final workerPid = switch (state?['workerPid']) {
+        final num value => value.toInt(),
+        final String value => int.tryParse(value),
+        _ => null,
+      };
+      final flutterPid = switch (state?['flutterPid']) {
+        final num value => value.toInt(),
+        final String value => int.tryParse(value),
+        _ => null,
+      };
+      final ownershipMeta = <String, dynamic>{
+        'mode': 'scout_owned_flutter_run',
+        'runId': runId,
+        'project': project,
+        'device': device,
+      };
+      final recordsTrusted =
+          config != null &&
+          state != null &&
+          runId != null &&
+          runId.isNotEmpty &&
+          p.basename(runDirectory.path) == runId &&
+          state['runId']?.toString() == runId &&
+          configuredSessionDirectory != null &&
+          _resolvedOwnershipPath(configuredSessionDirectory) ==
+              _resolvedOwnershipPath(_sessionDir.path) &&
+          recordedConfigFile != null &&
+          _resolvedOwnershipPath(recordedConfigFile) ==
+              _resolvedOwnershipPath(configFile.path) &&
+          configuredStateFile != null &&
+          _resolvedOwnershipPath(configuredStateFile) ==
+              _resolvedOwnershipPath(stateFile.path) &&
+          _isWithinSessionOwnershipBoundary(configFile.path) &&
+          _isWithinSessionOwnershipBoundary(stateFile.path) &&
+          _runnerConfigMatchesOwnership(configFile.path, ownershipMeta);
+      if (!recordsTrusted) {
+        final recordedProcessStillLive =
+            (workerPid != null && await _processExists(workerPid)) ||
+            (flutterPid != null && await _processExists(flutterPid));
+        reports.add(<String, Object?>{
+          'runId': runId ?? p.basename(runDirectory.path),
+          'status': recordedProcessStillLive
+              ? 'records_untrusted_live_process'
+              : 'records_untrusted_no_live_process',
+          'workerPid': ?workerPid,
+          'flutterPid': ?flutterPid,
+        });
+        allQuiesced = allQuiesced && !recordedProcessStillLive;
+        continue;
+      }
+
+      var workerStatus = 'not_recorded';
+      var flutterStatus = 'not_recorded';
+      var runQuiesced = true;
+
+      if (workerPid != null && await _processExists(workerPid)) {
+        final workerTrusted = await _matchesRunnerWorker(
+          workerPid,
+          expectedIdentity: state['workerProcessIdentity'],
+          expectedRunId: runId,
+          expectedConfigFile: recordedConfigFile,
+        );
+        if (workerTrusted) {
+          final signaled = Process.killPid(workerPid);
+          stoppedAny = stoppedAny || signaled;
+          workerStatus = signaled ? 'signaled' : 'signal_failed';
+          if (waitForWriterQuiescence) {
+            final quiescence = await _waitForSupervisorWriterQuiescence(
+              workerPid,
+            );
+            runQuiesced = quiescence['writersQuiesced'] == true;
+            workerStatus = runQuiesced ? 'stopped' : 'stop_timeout';
+          }
+        } else if (state['workerExitingNormally'] == true) {
+          workerStatus = 'completed_pid_reused';
+        } else {
+          workerStatus = 'identity_mismatch';
+          runQuiesced = false;
+        }
+      } else if (workerPid != null) {
+        workerStatus = 'already_stopped';
+      }
+
+      if (flutterPid != null && await _processExists(flutterPid)) {
+        final flutterMeta = <String, dynamic>{
+          ...ownershipMeta,
+          'processIdentity': state['flutterProcessIdentity'],
+        };
+        final flutterTrusted = await _matchesOwnedFlutterRun(
+          flutterPid,
+          flutterMeta,
+        );
+        if (flutterTrusted) {
+          if (workerStatus != 'signaled' && workerStatus != 'stopped') {
+            final signaled = Process.killPid(flutterPid);
+            stoppedAny = stoppedAny || signaled;
+            flutterStatus = signaled ? 'signaled' : 'signal_failed';
+          } else {
+            flutterStatus = 'signaled_by_worker';
+          }
+          if (waitForWriterQuiescence) {
+            final quiescence = await _waitForSupervisorWriterQuiescence(
+              flutterPid,
+            );
+            final flutterQuiesced = quiescence['writersQuiesced'] == true;
+            runQuiesced = runQuiesced && flutterQuiesced;
+            flutterStatus = flutterQuiesced ? 'stopped' : 'stop_timeout';
+          }
+        } else if (state['workerExitingNormally'] == true ||
+            state['exitedAt'] != null) {
+          flutterStatus = 'completed_pid_reused';
+        } else {
+          flutterStatus = 'identity_mismatch';
+          runQuiesced = false;
+        }
+      } else if (flutterPid != null) {
+        flutterStatus = 'already_stopped';
+      }
+
+      allQuiesced = allQuiesced && runQuiesced;
+      reports.add(<String, Object?>{
+        'runId': runId,
+        'status': runQuiesced ? 'quiesced' : 'unresolved',
+        'workerPid': ?workerPid,
+        'workerStatus': workerStatus,
+        'flutterPid': ?flutterPid,
+        'flutterStatus': flutterStatus,
+      });
+    }
+
+    return <String, Object?>{
+      'ok': allQuiesced,
+      'configured': reports.isNotEmpty,
+      'stopped': stoppedAny,
+      'examined': reports.length,
+      'runs': reports,
+      'unresolved': <Object?>[
+        for (final report in reports)
+          if (report['status'] == 'unresolved' ||
+              report['status'] == 'records_untrusted_live_process')
+            report['runId'],
+      ],
+    };
   }
 
   Future<bool> _matchesOwnedFlutterRun(

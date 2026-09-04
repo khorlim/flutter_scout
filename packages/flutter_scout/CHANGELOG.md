@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Recover and stop exactly recorded Flutter workers from per-run ownership
+  state when top-level session metadata is missing. New launches now refuse to
+  replace unresolved live-run records, and `stop --clear-session` preserves
+  them unless every recorded writer is proven quiescent.
+
 - Start every Scout-owned `flutter run` with Flutter's dedicated signal PID
   file, require its handler-registration acknowledgement before declaring the
   session ready, and use that exact PID for `SIGUSR1` hot reload and `SIGUSR2`

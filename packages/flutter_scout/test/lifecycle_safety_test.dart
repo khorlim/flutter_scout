@@ -783,6 +783,182 @@ Future<void> main() async {
     );
 
     test(
+      'clear stops an exactly recorded orphan when session metadata is gone',
+      () async {
+        final temp = await Directory.systemTemp.createTemp(
+          'scout_recorded_orphan_',
+        );
+        final previous = Directory.current;
+        Process? worker;
+        addTearDown(() async {
+          Directory.current = previous;
+          final process = worker;
+          if (process != null) {
+            process.kill(ProcessSignal.sigterm);
+            await process.exitCode.timeout(
+              const Duration(seconds: 2),
+              onTimeout: () => -1,
+            );
+          }
+          if (temp.existsSync()) temp.deleteSync(recursive: true);
+        });
+
+        final script = File(
+          p.join(temp.path, 'flutter_scout_orphan_worker.dart'),
+        );
+        script.writeAsStringSync(r'''
+import 'dart:io';
+Future<void> main() async {
+  await ProcessSignal.sigterm.watch().first;
+}
+''');
+        final project = Directory(p.join(temp.path, 'project'))..createSync();
+        final session = Directory(p.join(project.path, '.flutter_scout'))
+          ..createSync();
+        const runId = 'recorded-orphan-run';
+        final runDirectory = Directory(p.join(session.path, 'runs', runId))
+          ..createSync(recursive: true);
+        final config = File(p.join(runDirectory.path, 'flutter_worker.json'));
+        final state = File(p.join(runDirectory.path, 'supervisor_state.json'));
+        config.writeAsStringSync(
+          jsonEncode({
+            'runId': runId,
+            'project': project.absolute.path,
+            'device': 'test-device',
+            'sessionDirectory': session.absolute.path,
+            'stateFile': state.absolute.path,
+            'flutterArgs': [
+              'run',
+              '-d',
+              'test-device',
+              '--dart-define',
+              'FLUTTER_SCOUT_RUN_ID=$runId',
+              '--dart-define',
+              'FLUTTER_SCOUT_PROJECT=${project.absolute.path}',
+            ],
+          }),
+        );
+        final process = await Process.start(Platform.resolvedExecutable, [
+          script.path,
+          'flutter-run-worker',
+          '--config',
+          config.absolute.path,
+        ]);
+        worker = process;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        final identity = await processIdentity(
+          process.pid,
+          commandIdentity: 'flutter_run_worker',
+        );
+        state.writeAsStringSync(
+          jsonEncode({
+            'runId': runId,
+            'workerPid': process.pid,
+            'workerProcessIdentity': identity,
+          }),
+        );
+
+        Directory.current = project;
+        expect(await FlutterScoutCli().run(['stop', '--clear-session']), 0);
+        await process.exitCode.timeout(const Duration(seconds: 2));
+        worker = null;
+        expect(config.existsSync(), isFalse);
+        expect(state.existsSync(), isFalse);
+      },
+      onPlatform: const {'windows': Skip('requires POSIX scripts and signals')},
+    );
+
+    test(
+      'clear preserves orphan records when a live pid identity is stale',
+      () async {
+        final temp = await Directory.systemTemp.createTemp(
+          'scout_untrusted_orphan_',
+        );
+        final previous = Directory.current;
+        Process? worker;
+        addTearDown(() async {
+          Directory.current = previous;
+          final process = worker;
+          if (process != null) {
+            process.kill(ProcessSignal.sigterm);
+            await process.exitCode.timeout(
+              const Duration(seconds: 2),
+              onTimeout: () => -1,
+            );
+          }
+          if (temp.existsSync()) temp.deleteSync(recursive: true);
+        });
+
+        final script = File(
+          p.join(temp.path, 'flutter_scout_untrusted_orphan.dart'),
+        );
+        script.writeAsStringSync(r'''
+import 'dart:io';
+Future<void> main() async {
+  await ProcessSignal.sigterm.watch().first;
+}
+''');
+        final project = Directory(p.join(temp.path, 'project'))..createSync();
+        final session = Directory(p.join(project.path, '.flutter_scout'))
+          ..createSync();
+        const runId = 'untrusted-orphan-run';
+        final runDirectory = Directory(p.join(session.path, 'runs', runId))
+          ..createSync(recursive: true);
+        final config = File(p.join(runDirectory.path, 'flutter_worker.json'));
+        final state = File(p.join(runDirectory.path, 'supervisor_state.json'));
+        config.writeAsStringSync(
+          jsonEncode({
+            'runId': runId,
+            'project': project.absolute.path,
+            'device': 'test-device',
+            'sessionDirectory': session.absolute.path,
+            'stateFile': state.absolute.path,
+            'flutterArgs': [
+              'run',
+              '-d',
+              'test-device',
+              '--dart-define',
+              'FLUTTER_SCOUT_RUN_ID=$runId',
+              '--dart-define',
+              'FLUTTER_SCOUT_PROJECT=${project.absolute.path}',
+            ],
+          }),
+        );
+        final process = await Process.start(Platform.resolvedExecutable, [
+          script.path,
+          'flutter-run-worker',
+          '--config',
+          config.absolute.path,
+        ]);
+        worker = process;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        final identity = await processIdentity(
+          process.pid,
+          commandIdentity: 'flutter_run_worker',
+        );
+        state.writeAsStringSync(
+          jsonEncode({
+            'runId': runId,
+            'workerPid': process.pid,
+            'workerProcessIdentity': {
+              ...identity,
+              'startedAt': 'Mon Jan  1 00:00:00 1990',
+            },
+          }),
+        );
+
+        Directory.current = project;
+        expect(await FlutterScoutCli().run(['stop', '--clear-session']), 1);
+        expect(config.existsSync(), isTrue);
+        expect(state.existsSync(), isTrue);
+        expect(process.kill(ProcessSignal.sigterm), isTrue);
+        await process.exitCode.timeout(const Duration(seconds: 2));
+        worker = null;
+      },
+      onPlatform: const {'windows': Skip('requires POSIX scripts and signals')},
+    );
+
+    test(
       'hot-update capability rejects command-shaped stale ownership',
       () async {
         final temp = await Directory.systemTemp.createTemp(

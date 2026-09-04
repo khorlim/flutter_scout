@@ -71,6 +71,12 @@ all identity, outcome, and safety fields remain present. Default output is
 unchanged. The prefix is for finite commands; `serve`/`explore` reject it,
 and explicit help still emits prose.
 
+Keep that one `ensure --single-json` process attached until it finishes. While
+its structured heartbeats continue, consume them as progress and do not start
+parallel `status` polling or a second launch. Poll only after the command has
+ended without a usable final envelope or heartbeats have stopped long enough
+to require diagnosis.
+
 Address named sessions from any directory with `--app <name>`. Use
 `flutter-scout apps` for live entries, `apps --all` for missing entries, and
 `apps --prune` to remove stale registry entries.
@@ -88,6 +94,13 @@ Check `status` when ownership is unclear. Stop every Scout-owned run when done:
 ```bash
 flutter-scout --app template-save stop --clear-session
 ```
+
+For one-off verification, stop immediately after saving the requested
+evidence. Keep a run alive only when an immediate follow-up is expected, and
+say so explicitly. On clear, require final `ok: true`, `sessionCleared: true`,
+and an empty `recordedRuns.unresolved` list. Scout scans exact per-run ownership
+records before deletion; if a recorded live process cannot be revalidated, it
+fails closed and preserves those records instead of hiding a possible orphan.
 
 Read the response's `operability` object when diagnosis matters. It separates
 CLI-supported protocol from the helper range actually observed, live app
