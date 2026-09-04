@@ -2419,6 +2419,40 @@ A Dart VM Service is available at: http://127.0.0.1:51000/owned=/
     );
   });
 
+  test(
+    'Scout-owned launches register Flutter signal hot-update handlers',
+    () async {
+      await _withTempCwd(() async {
+        final cli = FlutterScoutCli();
+        final original = <String>['run', '-d', 'macos'];
+        final signalPidFile = p.join('run', 'flutter_tool_signal.pid');
+        final arguments = cli.debugEnableFlutterToolSignalHotUpdates(
+          original,
+          pidFile: signalPidFile,
+        );
+
+        expect(original, <String>['run', '-d', 'macos']);
+        expect(arguments, <String>[
+          'run',
+          '-d',
+          'macos',
+          '--pid-file',
+          p.absolute(signalPidFile),
+        ]);
+
+        final acknowledgement = File(signalPidFile)
+          ..createSync(recursive: true)
+          ..writeAsStringSync('4242\n');
+        expect(cli.debugReadFlutterToolSignalPid(acknowledgement.path), 4242);
+
+        acknowledgement.writeAsStringSync('0\n');
+        expect(cli.debugReadFlutterToolSignalPid(acknowledgement.path), isNull);
+        acknowledgement.writeAsStringSync('4242 trailing');
+        expect(cli.debugReadFlutterToolSignalPid(acknowledgement.path), isNull);
+      });
+    },
+  );
+
   test('launch poll accepts the worker identity recorded after Dart exec', () {
     final cli = FlutterScoutCli();
     final initialIdentity = <String, Object?>{

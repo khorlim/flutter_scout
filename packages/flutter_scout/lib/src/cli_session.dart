@@ -15,6 +15,44 @@ String get _launchLockInfoFile => '$_launchLockFile.info.json';
 // narrow, post-build identity race into a destructive stop of a healthy app.
 const Duration _postBuildVmServiceGrace = Duration(seconds: 45);
 
+// Flutter only installs its SIGUSR1/SIGUSR2 hot-update handlers when
+// `flutter run` is given --pid-file. Keep that tool-owned registration file
+// separate from Scout's durable flutter.pid session record: Flutter creates
+// and removes this file along with the signal handlers.
+const String _flutterToolSignalPidFileName = 'flutter_tool_signal.pid';
+
+List<String> _enableFlutterToolSignalHotUpdates(
+  List<String> flutterArgs, {
+  required String pidFile,
+}) => <String>[...flutterArgs, '--pid-file', _absoluteNormalized(pidFile)];
+
+int? _readFlutterToolSignalPid(String path) {
+  try {
+    if (FileSystemEntity.typeSync(path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      return null;
+    }
+    final raw = File(path).readAsStringSync();
+    if (!RegExp(r'^[1-9][0-9]{0,9}\s*$').hasMatch(raw)) return null;
+    return int.tryParse(raw.trim());
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<int?> _waitForFlutterToolSignalPid(
+  String path, {
+  Duration timeout = const Duration(seconds: 3),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    final processId = _readFlutterToolSignalPid(path);
+    if (processId != null) return processId;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  return _readFlutterToolSignalPid(path);
+}
+
 /// A live helper retains the launch run ID compiled into the application. An
 /// attach command normally gets a new ID, which is correct for a third-party
 /// app, but would make a healthy Scout-owned app inspect-only after its launch
@@ -201,11 +239,11 @@ extension _CliSession on FlutterScoutCli {
       );
 
       _ensureSessionDir();
-      final runLogFile = p.join(
-        _sessionDir.path,
-        'runs',
-        launchLease.runId,
-        'logs.txt',
+      final runDirectory = p.join(_sessionDir.path, 'runs', launchLease.runId);
+      final runLogFile = p.join(runDirectory, 'logs.txt');
+      final flutterToolSignalPidFile = p.join(
+        runDirectory,
+        _flutterToolSignalPidFileName,
       );
       _writePrivateSessionString(runLogFile, '');
       _writeSessionMeta({
@@ -237,7 +275,7 @@ extension _CliSession on FlutterScoutCli {
           'updatedAt': DateTime.now().toUtc().toIso8601String(),
         });
       }
-      final flutterArgs = <String>[
+      final flutterArgs = _enableFlutterToolSignalHotUpdates(<String>[
         'run',
         '-d',
         resolvedDevice.id,
@@ -271,7 +309,7 @@ extension _CliSession on FlutterScoutCli {
         '--dart-define',
         '$kScoutRunIdDefine=${launchLease.runId}',
         if (parsed.flag('verbose')) '--verbose',
-      ];
+      ], pidFile: flutterToolSignalPidFile);
 
       _writeProgress('start_flutter_run', {
         'device': resolvedDevice.id,
@@ -487,18 +525,16 @@ extension _CliSession on FlutterScoutCli {
 
       final wsUri = _normalizeVmUri(vmUri);
       _persistValidatedVmUri(wsUri);
-      final flutterToolPid =
-          await _findScoutFlutterToolPid(
-            project: project,
-            instanceName: instanceName,
-          ) ??
-          initialWorkerPid;
+      final flutterToolPid = await _waitForFlutterToolSignalPid(
+        flutterToolSignalPidFile,
+      );
       if (flutterToolPid == null) {
         await _stopRunnerSupervisor(supervisorOwnershipMeta);
         throw const ScoutCliException(
           'flutter_runner_pid_not_found',
-          'The supervised Flutter runner became ready but its process id '
-              'could not be verified.',
+          'The supervised Flutter runner became ready, but Flutter did not '
+              'confirm that its SIGUSR1/SIGUSR2 hot-update handlers were '
+              'installed.',
         );
       }
       final flutterProcessIdentity = await _readProcessOwnershipIdentity(
@@ -523,6 +559,7 @@ extension _CliSession on FlutterScoutCli {
         'runId': launchLease.runId,
         'name': ?instanceName,
         'pid': flutterToolPid,
+        'hotUpdateSignalHandlers': 'registered',
         'processIdentity': ?flutterProcessIdentity,
         'processIdentityUnavailable': flutterProcessIdentity == null,
         'vmLogListenerPid': ?vmLogListenerPid,
@@ -564,6 +601,7 @@ extension _CliSession on FlutterScoutCli {
         'flutterToolchain': launchProvenance['flutterToolchain'],
         'runId': launchLease.runId,
         'pid': flutterToolPid,
+        'hotUpdateSignalHandlers': 'registered',
         'vmLogListenerPid': ?vmLogListenerPid,
         'supervisor': supervisor.toJson(),
         'vmServiceUri': wsUri,
@@ -2532,6 +2570,16 @@ bool _sameProcessOwnershipIdentity(
 /// Narrow process-level test seam for proving launch-lease contention and
 /// crash recovery without starting Flutter or touching the user's sessions.
 extension FlutterScoutCliLaunchLeaseTesting on FlutterScoutCli {
+  /// Test-only view of the Flutter-tool signal-registration launch contract.
+  List<String> debugEnableFlutterToolSignalHotUpdates(
+    List<String> flutterArgs, {
+    required String pidFile,
+  }) => _enableFlutterToolSignalHotUpdates(flutterArgs, pidFile: pidFile);
+
+  /// Test-only reader for Flutter's signal-handler PID acknowledgement.
+  int? debugReadFlutterToolSignalPid(String path) =>
+      _readFlutterToolSignalPid(path);
+
   Future<T> debugWithLaunchLease<T>({
     required String sessionDirectory,
     required String project,

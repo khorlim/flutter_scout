@@ -1,5 +1,11 @@
 ## Unreleased
 
+- Start every Scout-owned `flutter run` with Flutter's dedicated signal PID
+  file, require its handler-registration acknowledgement before declaring the
+  session ready, and use that exact PID for `SIGUSR1` hot reload and `SIGUSR2`
+  hot restart. This restores truthful hot-update acknowledgement for detached
+  and inherited-launch-context macOS sessions.
+
 - Preserve a temporary-helper bootstrap while its exact detached or launchd
   build worker is still alive. A follow-up `status` or `doctor` command can no
   longer mistake an interrupted launch command for an abandoned build and
