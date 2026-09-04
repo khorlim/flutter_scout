@@ -1,5 +1,10 @@
 ## Unreleased
 
+- Preserve a temporary-helper bootstrap while its exact detached or launchd
+  build worker is still alive. A follow-up `status` or `doctor` command can no
+  longer mistake an interrupted launch command for an abandoned build and
+  delete the Dart target while Xcode is compiling it.
+
 - Add an opt-in leading `--single-json` prefix for finite commands: emit one
   compact final response on stdout after evidence completion, including errors,
   while retaining progress, warnings, and intermediate responses on stderr.

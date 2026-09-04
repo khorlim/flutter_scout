@@ -263,8 +263,9 @@ class FlutterScoutCli {
   /// Test-only entry point for the same project-local startup repair scanner
   /// used by real commands.
   Future<Map<String, Object?>> debugRecoverTemporaryHelperProject(
-    String project,
-  ) => _recoverTemporaryHelperProject(project, preserveLive: false);
+    String project, {
+    bool preserveLive = false,
+  }) => _recoverTemporaryHelperProject(project, preserveLive: preserveLive);
 
   /// Test-only ownership reconciliation for a reachable VM service.
   Future<bool> debugReconcileReachableSessionOwnership(String vmUri) =>

@@ -299,6 +299,145 @@ void main() {
       );
     },
   );
+
+  test(
+    'startup preserves a helper owned by a live detached build worker',
+    () async {
+      if (Platform.isWindows) return;
+      final fixture = await _TemporaryProject.create(lockExists: false);
+      addTearDown(fixture.dispose);
+      final projectPath = fixture.project.resolveSymbolicLinksSync();
+      final packageRoot = Directory.current.absolute.path;
+      final ownerFixture = p.join(
+        packageRoot,
+        'test',
+        'fixtures',
+        'temporary_helper_owner.dart',
+      );
+      final owner = await Process.run(Platform.resolvedExecutable, [
+        ownerFixture,
+        projectPath,
+        fixture.helper.path,
+      ], workingDirectory: packageRoot);
+      expect(owner.exitCode, 0, reason: '${owner.stderr}');
+
+      final scoutRoot = p.join(projectPath, '.flutter_scout');
+      const runId = 'test';
+      final recordPath = p.join(
+        scoutRoot,
+        'temporary_helper',
+        'transactions',
+        runId,
+        'repair.json',
+      );
+      final targetPath = p.join(scoutRoot, 'bootstrap_$runId.dart');
+      final workerScript = File(p.join(scoutRoot, 'flutter_scout_worker.dart'))
+        ..writeAsStringSync('''
+import 'dart:async';
+
+Future<void> main(List<String> args) async {
+  await Future<void>.delayed(const Duration(minutes: 1));
+}
+''');
+      final config = File(p.join(scoutRoot, 'runs', runId, 'worker.json'));
+      config.parent.createSync(recursive: true);
+      config.writeAsStringSync('{}');
+      final worker = await Process.start(Platform.resolvedExecutable, [
+        workerScript.path,
+        'flutter-run-worker',
+        '--config',
+        config.path,
+      ]);
+      addTearDown(() async {
+        if (await _processIsAlive(worker.pid)) {
+          worker.kill(ProcessSignal.sigterm);
+          await worker.exitCode.timeout(const Duration(seconds: 2));
+        }
+      });
+      final workerReadyDeadline = DateTime.now().add(
+        const Duration(seconds: 2),
+      );
+      while (!await _processIsAlive(worker.pid) &&
+          DateTime.now().isBefore(workerReadyDeadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      expect(await _processIsAlive(worker.pid), isTrue);
+      final identity = await _processIdentity(
+        worker.pid,
+        commandIdentity: 'flutter_run_worker',
+      );
+      File(p.join(scoutRoot, 'session_meta.json')).writeAsStringSync(
+        jsonEncode(<String, Object?>{
+          'mode': 'scout_owned_flutter_run',
+          'state': 'building',
+          'runId': runId,
+          'project': projectPath,
+          'temporarySetup': <String, Object?>{
+            'transactionRecordPath': recordPath,
+          },
+          'supervisor': <String, Object?>{
+            'type': 'detached_process',
+            'workerPid': worker.pid,
+            'runId': runId,
+            'configFile': config.path,
+            'processIdentity': identity,
+          },
+        }),
+      );
+      final active = await FlutterScoutCli().debugWithLaunchLease(
+        sessionDirectory: scoutRoot,
+        project: projectPath,
+        device: 'test-device',
+        body: (_) {
+          return FlutterScoutCli().debugRecoverTemporaryHelperProject(
+            projectPath,
+            preserveLive: true,
+          );
+        },
+      );
+      expect(active['status'], 'active', reason: '$active');
+      expect(File(targetPath).existsSync(), isTrue);
+      expect(File(recordPath).existsSync(), isTrue);
+
+      worker.kill(ProcessSignal.sigterm);
+      await worker.exitCode.timeout(const Duration(seconds: 2));
+      final repaired = await FlutterScoutCli().debugWithLaunchLease(
+        sessionDirectory: scoutRoot,
+        project: projectPath,
+        device: 'test-device',
+        body: (_) => FlutterScoutCli().debugRecoverTemporaryHelperProject(
+          projectPath,
+          preserveLive: true,
+        ),
+      );
+      expect(repaired['status'], 'repaired', reason: '$repaired');
+      expect(File(targetPath).existsSync(), isFalse);
+    },
+  );
+}
+
+Future<Map<String, Object?>> _processIdentity(
+  int pid, {
+  required String commandIdentity,
+}) async {
+  Future<String> field(String name) async {
+    final result = await Process.run('ps', ['-p', '$pid', '-o', '$name=']);
+    expect(result.exitCode, 0);
+    return '${result.stdout}'.trim();
+  }
+
+  return <String, Object?>{
+    'pid': pid,
+    'parentPid': int.parse(await field('ppid')),
+    'startedAt': await field('lstart'),
+    'executable': await field('comm'),
+    'commandIdentity': commandIdentity,
+  };
+}
+
+Future<bool> _processIsAlive(int pid) async {
+  final result = await Process.run('ps', ['-p', '$pid', '-o', 'pid=']);
+  return result.exitCode == 0 && '${result.stdout}'.trim().isNotEmpty;
 }
 
 Future<ProcessResult> _successfulFakePubGet(String project) async {

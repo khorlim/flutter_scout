@@ -923,14 +923,56 @@ Future<void> main() async {
       if (decoded['state'] != 'ready' && decoded['state'] != 'building') {
         return false;
       }
+      final temporarySetup = decoded['temporarySetup'];
+      final recordPath = record['recordPath']?.toString();
+      final ownsTemporarySetup =
+          temporarySetup is Map &&
+          recordPath != null &&
+          temporarySetup['transactionRecordPath']?.toString() == recordPath;
+      final supervisor = decoded['supervisor'];
+      if (ownsTemporarySetup && supervisor is Map) {
+        final supervisorRunId = supervisor['runId']?.toString();
+        final configFile = supervisor['configFile']?.toString();
+        final initialWorkerPid = int.tryParse(
+          '${supervisor['workerPid'] ?? ''}',
+        );
+        final supervisorType = supervisor['type']?.toString();
+        int? liveWorkerPid = supervisorType == 'detached_process'
+            ? initialWorkerPid
+            : null;
+        if (supervisorType == 'launchd') {
+          final domain = supervisor['domain']?.toString();
+          final label = supervisor['label']?.toString();
+          if (domain != null && label != null) {
+            liveWorkerPid = await _launchdServicePid(
+              domain: domain,
+              label: label,
+            );
+          }
+        }
+        if (liveWorkerPid != null && supervisorRunId == record['runId']) {
+          final state = _readSessionConfiguredJson('supervisorStateFile');
+          final expectedIdentity = _selectRunnerWorkerIdentity(
+            initialIdentity: supervisor['processIdentity'],
+            expectedRunId: supervisorRunId,
+            liveWorkerPid: liveWorkerPid,
+            supervisorState: state,
+          );
+          if (await _matchesRunnerWorker(
+            liveWorkerPid,
+            expectedIdentity: expectedIdentity,
+            expectedRunId: supervisorRunId,
+            expectedConfigFile: configFile,
+          )) {
+            return true;
+          }
+        }
+      }
       final processId = (decoded['pid'] as num?)?.toInt();
       final expected = decoded['processIdentity'];
       if (processId == null) return false;
       if (expected is! Map) {
-        final setup = decoded['temporarySetup'];
-        return setup is Map &&
-            setup['transactionRecordPath'] == record['recordPath'] &&
-            await _processExists(processId);
+        return ownsTemporarySetup && await _processExists(processId);
       }
       final current = await _readProcessOwnershipIdentity(
         processId,
