@@ -828,6 +828,10 @@
       "meaning": "Scout reports the stable origin not allowed failure condition.",
       "family": "operation"
     },
+    "previous_runner_cleanup_unverified": {
+      "family": "lifecycle",
+      "meaning": "An older runner may still be live and Scout could not verify its shutdown. Ownership records are preserved; inspect stop output before retrying."
+    },
     "private_permissions_failed": {
       "meaning": "The private permissions operation failed.",
       "family": "persistence_or_security"

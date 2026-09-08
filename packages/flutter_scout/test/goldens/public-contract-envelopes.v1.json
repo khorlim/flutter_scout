@@ -33389,6 +33389,148 @@
       }
     },
     {
+      "code": "previous_runner_cleanup_unverified",
+      "meaning": "An older runner may still be live and Scout could not verify its shutdown. Ownership records are preserved; inspect stop output before retrying.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "previous_runner_cleanup_unverified",
+          "message": "An older runner may still be live and Scout could not verify its shutdown. Ownership records are preserved; inspect stop output before retrying."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
       "code": "private_permissions_failed",
       "meaning": "The private permissions operation failed.",
       "canonicalEnvelope": {
