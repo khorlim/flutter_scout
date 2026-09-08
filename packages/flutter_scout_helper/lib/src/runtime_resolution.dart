@@ -528,7 +528,8 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         textNode: textNode,
       );
     }
-    if (safety != _TargetSafety.mutate) {
+    if (safety == _TargetSafety.identify ||
+        safety == _TargetSafety.observeVisible) {
       return _TargetResolution(
         status: _TargetResolutionStatus.unique,
         requested: requested,

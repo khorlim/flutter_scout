@@ -245,6 +245,11 @@ If a gate fails after dispatch, inspect the resulting state before any retry.
 A stable tree or `already_selected` result does not prove delayed work cannot
 still complete.
 
+For a custom PIN control whose underlying field already owns keyboard focus,
+use `input --stdin` without `--target`. Focused input checks the active surface,
+visibility, editability, and focus again before typing; it does not require a
+pointer hit on the hidden editor. Explicit field targets still require hit testing.
+
 Use `--stdin` or an owner-only regular `0600` file for any secret. Use direct
 value/`--json` arguments only for deliberately non-sensitive data; process
 arguments can be observed by other local tooling. Replay variables follow the

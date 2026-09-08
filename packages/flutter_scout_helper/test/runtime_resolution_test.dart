@@ -23,6 +23,44 @@ void main() {
         '${DateTime.now().add(const Duration(minutes: 1)).millisecondsSinceEpoch}',
   };
 
+  testWidgets('focused input rejects a read-only pointer-blocked field', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    final focus = FocusNode();
+    final controller = TextEditingController(text: 'unchanged');
+    addTearDown(focus.dispose);
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              TextField(
+                focusNode: focus,
+                controller: controller,
+                readOnly: true,
+              ),
+              const Positioned.fill(child: AbsorbPointer()),
+            ],
+          ),
+        ),
+      ),
+    );
+    focus.requestFocus();
+    await tester.pump();
+    expect(focus.hasFocus, isTrue);
+    final result = (await tester.runAsync(
+      () => FlutterScoutHelper.debugRuntime.debugInputTarget(
+        'focused',
+        'replacement',
+      ),
+    ))!;
+    expect(result['ok'], isFalse);
+    expect(resolutionOf(result)['status'], 'disabled');
+    expect(controller.text, 'unchanged');
+  });
+
   testWidgets(
     'duplicate labels, keys, and tap-text matches abstain with ranked evidence',
     (tester) async {
