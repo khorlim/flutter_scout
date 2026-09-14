@@ -23,3 +23,17 @@ split, no real-app integration, and no claimed simulator episode simply because
 the source and deterministic contract tests exist.
 
 Run app checks from this directory with `flutter analyze` and `flutter test`.
+
+## Eye/hand concurrency probe
+
+Stress Lab → Eye-hand probe runs timed work with persistent, transient, or absent
+pause requests. The app shows callback timestamps and counts pauses after work
+has already finished. It is a deterministic verification fixture, not a
+production integration pattern or independent protected benchmark oracle.
+See [`agent-session-verification.md`](../../docs/agent-session-verification.md)
+for measured results and limits. After navigating to this screen, run the
+shipped runtime check from the repository root:
+
+```bash
+node tool/agent_runtime_smoke.mjs <named-session> <cli-binary> hold flash quiet
+```

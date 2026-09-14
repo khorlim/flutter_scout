@@ -35,6 +35,7 @@
     "errorsSinceCursor",
     "expectedStateGeneration",
     "idempotencyKey",
+    "requireLiveRendering",
     "runId",
     "runtimeInstanceId",
     "schemaVersion"

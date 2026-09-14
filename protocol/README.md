@@ -59,6 +59,15 @@ request fields and persistent method parameters are rejected by the runtime.
 Protocol compatibility is negotiated from explicit minimum/maximum versions
 and capabilities before any mutation.
 
+Optional `renderingStateV1` observations report framework scheduler/lifecycle
+availability without claiming compositor pixels or scheduling frames. Clients
+using `liveRenderingGuardV1` may send `requireLiveRendering:"true"`; the helper
+rejects disabled rendering immediately before mutation dispatch. Missing
+capability is not permission to ignore this guard. Existing finite commands
+do not require it. The separate CLI `agent` JSONL protocol 1 composes passive
+observations, short action tickets, condition waits and one-shot reactions;
+see the [agent contract](../skills/flutter-scout/references/agent-session.md).
+
 Every helper service-extension request accepts only the common protocol
 envelope plus the method-specific parameters in `helper-methods.json`.
 `errorsSinceCursor` remains an alias for `errorCursor`, and `tapText.target`

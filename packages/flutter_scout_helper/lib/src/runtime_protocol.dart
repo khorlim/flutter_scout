@@ -22,6 +22,8 @@ const Map<String, bool> _scoutProtocolCapabilities = <String, bool>{
   'changedRegionCaptureV1': true,
   'semanticStabilityV1': true,
   'observationNonInterferenceV1': true,
+  'renderingStateV1': true,
+  'liveRenderingGuardV1': true,
   'overlayExplicitOptInV1': true,
   'strictTypedParametersV1': true,
   'boundedHelperRequestsV1': true,
@@ -67,6 +69,7 @@ const Map<String, int> _protocolParameterByteLimits = <String, int>{
   'isolateId': _maxVmTransportIsolateIdBytes,
   'expectedStateGeneration': 32,
   'deadlineEpochMs': 32,
+  'requireLiveRendering': 5,
 };
 
 // The VM service requires `isolateId` to route an extension call and forwards
@@ -84,6 +87,7 @@ const Set<String> _commonProtocolParameters = <String>{
   'errorCursor',
   // Protocol-15 migration alias, documented in protocol/README.md.
   'errorsSinceCursor',
+  'requireLiveRendering',
   'idempotencyKey',
   'runtimeInstanceId',
   'expectedStateGeneration',
@@ -653,6 +657,13 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
   developer.ServiceExtensionResponse? _staticMutationEnvelopeError(
     Map<String, String> params,
   ) {
+    if (params.containsKey('requireLiveRendering') &&
+        !const {'true', 'false'}.contains(params['requireLiveRendering'])) {
+      return _fail(
+        'invalid_live_rendering_guard',
+        'requireLiveRendering must be true or false.',
+      );
+    }
     final missing = [
       for (final name in _requiredMutationEnvelopeParameters)
         if ((params[name] ?? '').trim().isEmpty) name,
@@ -709,6 +720,13 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
   developer.ServiceExtensionResponse?
   _validateMutationImmediatelyBeforeDispatch(_RequestContext context) {
     final params = context.params;
+    if (params['requireLiveRendering'] == 'true' &&
+        !WidgetsBinding.instance.framesEnabled) {
+      return _fail(
+        'agent_live_view_unavailable',
+        'Rendering is suspended; restore visibility and observe again.',
+      );
+    }
     if (params['runtimeInstanceId'] != _runtimeInstanceId) {
       return _fail(
         'runtime_instance_mismatch',

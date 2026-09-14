@@ -1,5 +1,11 @@
 ## Unreleased
 
+* Report passive scheduler/lifecycle and completed framework-frame facts on
+  inspect, distinguishing quiet active screens from suspended rendering without
+  scheduling frames. Add optional `requireLiveRendering` mutation guard and
+  advertise `renderingStateV1`/`liveRenderingGuardV1`; compositor pixels remain
+  unobserved. Existing protocol-15 callers are unchanged.
+
 * Give ordinary single-switch settings rows their title and a readable
   alias such as `btn.enable_overall_remark`, while preserving raw switch/key
   handles and selected/enabled state. Keep subtitles separate, support localized

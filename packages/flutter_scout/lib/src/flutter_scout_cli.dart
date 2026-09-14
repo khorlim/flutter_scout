@@ -12,9 +12,14 @@ import 'package:path/path.dart' as p;
 import 'package:vm_service/vm_service.dart';
 import 'package:vm_service/vm_service_io.dart';
 
+import 'live_view_loop.dart';
+import 'agent_session.dart';
+
 part 'cli_batch.dart';
 part 'cli_typed_methods.dart';
 part 'cli_serve.dart';
+part 'cli_live.dart';
+part 'cli_agent.dart';
 part 'cli_models.dart';
 part 'cli_session.dart';
 part 'cli_temporary_helper.dart';
@@ -522,6 +527,22 @@ class FlutterScoutCli {
   static void Function(String normalizedUri)? debugVmServiceConnectObserver;
 
   bool _reuseVmConnection = false;
+  Map<String, dynamic>? _liveDecisionView;
+  bool _agentRequiresLiveRendering = false;
+
+  /// Test seam for the agent request boundary; never enters a handler.
+  void debugValidateAgentAction(Map<String, dynamic> action) =>
+      _validateAgentAction(action);
+
+  /// Test seam for the observation checked at the mutation preflight boundary.
+  void debugSetLiveDecisionView(
+    Map<String, dynamic>? view, {
+    bool requireLiveRendering = false,
+  }) {
+    _liveDecisionView = view;
+    _agentRequiresLiveRendering = requireLiveRendering;
+  }
+
   VmService? _cachedVmService;
   String? _cachedVmUri;
 
@@ -867,6 +888,8 @@ class FlutterScoutCli {
     try {
       if (_singleJsonOutput &&
           (command == 'serve' ||
+              command == 'live' ||
+              command == 'agent' ||
               command == 'explore' ||
               _infrastructureCommands.contains(command))) {
         throw const ScoutCliException(
@@ -878,7 +901,9 @@ class FlutterScoutCli {
       _preloadProtectedSecretIngress(command, rest);
       _registerSensitiveCommandArgs(command, rest);
       _warnAboutLegacySecretIngress(command, rest);
-      if (!_infrastructureCommands.contains(command)) {
+      if (!_infrastructureCommands.contains(command) &&
+          command != 'live' &&
+          command != 'agent') {
         longOperationHeartbeat = Timer.periodic(const Duration(seconds: 5), (
           _,
         ) {
@@ -979,6 +1004,8 @@ class FlutterScoutCli {
         'batch' => _batch(rest),
         'export-batch' => _exportBatch(rest),
         'serve' => _serve(rest),
+        'live' => _live(rest),
+        'agent' => _agent(rest),
         'explore' => _explore(rest),
         'devices' => _devices(rest),
         'apps' => _apps(rest),
@@ -2569,6 +2596,8 @@ print(String(data: data, encoding: .utf8)!)
     'export-batch',
     'serve',
     'explore',
+    'live',
+    'agent',
     'devices',
     'apps',
     'reload',
@@ -2750,7 +2779,7 @@ Usage:
   flutter-scout [--single-json] [--app <name>] [--idempotency-key <key>] <command> [options]
     Put --single-json first for one compact final JSON response on stdout,
     including failures; progress/warnings go to stderr. Help remains prose.
-    This prefix is unavailable for serve, explore, and internal workers.
+    This prefix is unavailable for serve, explore, live, agent, and internal workers.
     --idempotency-key accepts 1-128 safe ASCII characters. Reuse one key only
     for the same business mutation; retries replay/reconcile the first outcome.
   flutter-scout attach [--device <simulator-id>] [--debug-url-file <0600-path> | --debug-url-stdin]
@@ -2793,6 +2822,8 @@ Usage:
   flutter-scout batch '<command>; <command>' [--var-file <0600-json> | --var-stdin] [--keep-going] [--verbose]
   flutter-scout export-batch [-o <path>] [--retention session|24h|7d|manual]
   flutter-scout serve [--port <port>] [--port-file <path>] [--credential-file <path>] [--idle-timeout <seconds>] [--request-timeout <seconds>] [--max-body-bytes <n>] [--allow-legacy-run]
+  flutter-scout live [--interval-ms <250..10000>] [--max-items <1..100>] # JSONL stdin/stdout; images remain manual
+  flutter-scout agent [--interval-ms <100..10000>] [--max-items <1..100>] # concurrent eyes, action tickets, bounded reactions; JSONL
   flutter-scout explore [--port <port>] [--port-file <path>] [--credential-file <path>] [--once]
   flutter-scout record run <name> [--var-file <0600-json> | --var-stdin]
   flutter-scout record start|stop|list|show|pause|resume|undo|save-last

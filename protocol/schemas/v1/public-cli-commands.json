@@ -10,6 +10,7 @@
   },
   "humanOnlyInvocations": ["--help", "-h", "no-command"],
   "commands": {
+    "agent": {"surface": "machine", "operation": "orchestration", "persistentMethod": false},
     "annotations": {"surface": "machine", "operation": "mixed", "persistentMethod": true},
     "apps": {"surface": "machine", "operation": "lifecycle", "persistentMethod": true},
     "attach": {"surface": "machine", "operation": "lifecycle", "persistentMethod": false},
@@ -36,6 +37,7 @@
     "input": {"surface": "machine", "operation": "mutation", "persistentMethod": true},
     "inspect": {"surface": "machine", "operation": "read", "persistentMethod": true},
     "launch": {"surface": "machine", "operation": "lifecycle", "persistentMethod": false},
+    "live": {"surface": "machine", "operation": "orchestration", "persistentMethod": false},
     "locate": {"surface": "machine", "operation": "read", "persistentMethod": true},
     "logs": {"surface": "machine", "operation": "read", "persistentMethod": true},
     "long-press": {"surface": "machine", "operation": "mutation", "persistentMethod": true},

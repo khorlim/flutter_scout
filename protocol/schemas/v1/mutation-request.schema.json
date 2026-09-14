@@ -51,7 +51,8 @@
         "runtimeInstanceId": {"type": "string", "minLength": 1, "maxLength": 256},
         "expectedStateGeneration": {"type": "string", "pattern": "^[0-9]+$"},
         "deadlineEpochMs": {"type": "string", "pattern": "^[0-9]+$"},
-        "errorCursor": {"type": "string", "pattern": "^[0-9]+$"}
+        "errorCursor": {"type": "string", "pattern": "^[0-9]+$"},
+        "requireLiveRendering": {"type": "string", "enum": ["true", "false"], "description": "Optional liveRenderingGuardV1 capability-gated requirement checked immediately before dispatch."}
       },
       "additionalProperties": {"type": "string"}
     }

@@ -76,6 +76,22 @@
       "meaning": "The action may have completed, but its required durable evidence could not be committed.",
       "family": "persistence_or_security"
     },
+    "agent_action_outcome_unknown": {
+      "meaning": "An agent action lost its authoritative result; reconcile state without automatic retry.",
+      "family": "operation"
+    },
+    "agent_live_view_unavailable": {
+      "meaning": "Active rendering or the required rendering guard could not be proven; no input was dispatched.",
+      "family": "request_rejected"
+    },
+    "agent_observation_unavailable": {
+      "meaning": "The agent observer could not obtain a valid view and stopped further input.",
+      "family": "operation"
+    },
+    "agent_request_rejected": {
+      "meaning": "The bounded agent session rejected an invalid, unsafe or stale request before dispatch.",
+      "family": "request_rejected"
+    },
     "ambiguous_recording": {
       "meaning": "Scout reports the stable ambiguous recording failure condition.",
       "family": "persistence_or_security"
@@ -504,6 +520,10 @@
       "meaning": "Scout reports the stable internal server error failure condition.",
       "family": "operation"
     },
+    "invalid_agent_request": {
+      "meaning": "An agent JSONL request was malformed or exceeded session limits; nothing was dispatched for that request.",
+      "family": "request_rejected"
+    },
     "invalid_app": {
       "meaning": "The supplied app is invalid.",
       "family": "request_rejected"
@@ -562,6 +582,18 @@
     },
     "invalid_json": {
       "meaning": "The supplied json is invalid.",
+      "family": "request_rejected"
+    },
+    "invalid_live_action": {
+      "meaning": "The requested live action is unsupported or has invalid fields; no action was dispatched.",
+      "family": "request_rejected"
+    },
+    "invalid_live_rendering_guard": {
+      "meaning": "The optional requireLiveRendering mutation guard was not a strict boolean string; nothing was dispatched.",
+      "family": "request_rejected"
+    },
+    "invalid_live_request": {
+      "meaning": "The live request is not a valid bounded JSON request; no action was dispatched.",
       "family": "request_rejected"
     },
     "invalid_navigation_query": {
@@ -675,6 +707,26 @@
     "legacy_run_disabled": {
       "meaning": "Scout reports the stable legacy run disabled failure condition.",
       "family": "operation"
+    },
+    "live_action_outcome_unknown": {
+      "meaning": "A live action failed without closing its dispatch outcome and must be reconciled before retry.",
+      "family": "execution_or_reconciliation"
+    },
+    "live_observation_unavailable": {
+      "meaning": "The live observer could not obtain a current view and invalidated its cached actionable state.",
+      "family": "operation"
+    },
+    "live_request_too_large": {
+      "meaning": "A live request exceeded the 64 KiB line limit and the live session was closed.",
+      "family": "request_rejected"
+    },
+    "live_view_changed": {
+      "meaning": "The agent decision refers to an older view; no action was dispatched and the current view must be reconsidered.",
+      "family": "request_rejected"
+    },
+    "live_view_unavailable": {
+      "meaning": "No current actionable live view exists; no action was dispatched.",
+      "family": "request_rejected"
     },
     "local_mutation_dispatch_outcome_unknown": {
       "meaning": "A local mutation did not close whether dispatch occurred and must be reconciled before retry.",

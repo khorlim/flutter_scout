@@ -1143,7 +1143,10 @@ extension _CliServe on FlutterScoutCli {
       return {'exitCode': 1, 'error': 'missing command'};
     }
     final command = argv[commandIndex];
-    if (command == 'serve' || command == 'explore') {
+    if (command == 'serve' ||
+        command == 'explore' ||
+        command == 'live' ||
+        command == 'agent') {
       return {
         'exitCode': 1,
         'error': 'nested persistent mode is not supported',

@@ -25,6 +25,7 @@ dependencies:
     git:
       url: https://github.com/khorlim/flutter_scout.git
       path: packages/flutter_scout_helper
+      ref: <verified-main-commit-sha>
 ```
 
 Run:
@@ -180,6 +181,14 @@ schema/protocol envelope with the expected run/runtime identity, negotiated
 capabilities, visible text, interactables, fields, field geometry, and no setup
 error.
 For exploratory agent loops after setup, `flutter-scout explore --once` prints the persistent daemon command/endpoints without starting it; `flutter-scout explore --port-file /tmp/scout.port` starts the fast loop. While that daemon is active, normal inspect/action CLI commands automatically reuse it.
+
+For concurrent hand/eye operation, prefer the installed Flutter Scout skill's
+`scripts/agent_client.mjs` and `flutter-scout --app <name> agent`. Read that
+skill's `references/agent-session.md` first. Confirm inspect exposes rendering
+state and capability `liveRenderingGuardV1:true`; old protocol-15 helpers can
+still run ordinary commands but cannot authorize this new mode's actions.
+After changing the pinned helper dependency, resolve packages and fully
+relaunch the debug app. Refreshing the CLI alone does not update a running app.
 
 `ensure`, `launch`, and `attach` report `ready` when they connect to or start a VM service. A `ready:false` response means the VM service is reachable but setup is incomplete; fix the reported `reason` before continuing.
 

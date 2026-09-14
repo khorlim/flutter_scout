@@ -11,6 +11,148 @@
   },
   "commands": [
     {
+      "command": "agent",
+      "surface": "machine",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": true,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "public-command-contract",
+        "cliCommandId": "public-command-contract",
+        "commandName": "agent",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": {
+          "contractKind": "public_command",
+          "command": "agent"
+        },
+        "structuredError": null,
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
       "command": "annotations",
       "surface": "machine",
       "canonicalEnvelope": {
@@ -3567,6 +3709,148 @@
       }
     },
     {
+      "command": "live",
+      "surface": "machine",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": true,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "public-command-contract",
+        "cliCommandId": "public-command-contract",
+        "commandName": "live",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": {
+          "contractKind": "public_command",
+          "command": "live"
+        },
+        "structuredError": null,
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
       "command": "locate",
       "surface": "machine",
       "canonicalEnvelope": {
@@ -6608,6 +6892,574 @@
         "structuredError": {
           "code": "action_evidence_persistence_failed",
           "message": "The action may have completed, but its required durable evidence could not be committed."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "agent_action_outcome_unknown",
+      "meaning": "An agent action lost its authoritative result; reconcile state without automatic retry.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "agent_action_outcome_unknown",
+          "message": "An agent action lost its authoritative result; reconcile state without automatic retry."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "agent_live_view_unavailable",
+      "meaning": "Active rendering or the required rendering guard could not be proven; no input was dispatched.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "agent_live_view_unavailable",
+          "message": "Active rendering or the required rendering guard could not be proven; no input was dispatched."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "agent_observation_unavailable",
+      "meaning": "The agent observer could not obtain a valid view and stopped further input.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "agent_observation_unavailable",
+          "message": "The agent observer could not obtain a valid view and stopped further input."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "agent_request_rejected",
+      "meaning": "The bounded agent session rejected an invalid, unsafe or stale request before dispatch.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "agent_request_rejected",
+          "message": "The bounded agent session rejected an invalid, unsafe or stale request before dispatch."
         },
         "timings": {
           "totalMs": null,
@@ -21887,6 +22739,148 @@
       }
     },
     {
+      "code": "invalid_agent_request",
+      "meaning": "An agent JSONL request was malformed or exceeded session limits; nothing was dispatched for that request.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "invalid_agent_request",
+          "message": "An agent JSONL request was malformed or exceeded session limits; nothing was dispatched for that request."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
       "code": "invalid_app",
       "meaning": "The supplied app is invalid.",
       "canonicalEnvelope": {
@@ -23932,6 +24926,432 @@
         "structuredError": {
           "code": "invalid_json",
           "message": "The supplied json is invalid."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "invalid_live_action",
+      "meaning": "The requested live action is unsupported or has invalid fields; no action was dispatched.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "invalid_live_action",
+          "message": "The requested live action is unsupported or has invalid fields; no action was dispatched."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "invalid_live_rendering_guard",
+      "meaning": "The optional requireLiveRendering mutation guard was not a strict boolean string; nothing was dispatched.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "invalid_live_rendering_guard",
+          "message": "The optional requireLiveRendering mutation guard was not a strict boolean string; nothing was dispatched."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "invalid_live_request",
+      "meaning": "The live request is not a valid bounded JSON request; no action was dispatched.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "invalid_live_request",
+          "message": "The live request is not a valid bounded JSON request; no action was dispatched."
         },
         "timings": {
           "totalMs": null,
@@ -27908,6 +29328,716 @@
         "structuredError": {
           "code": "legacy_run_disabled",
           "message": "Scout reports the stable legacy run disabled failure condition."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "live_action_outcome_unknown",
+      "meaning": "A live action failed without closing its dispatch outcome and must be reconciled before retry.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "live_action_outcome_unknown",
+          "message": "A live action failed without closing its dispatch outcome and must be reconciled before retry."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "live_observation_unavailable",
+      "meaning": "The live observer could not obtain a current view and invalidated its cached actionable state.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "live_observation_unavailable",
+          "message": "The live observer could not obtain a current view and invalidated its cached actionable state."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "live_request_too_large",
+      "meaning": "A live request exceeded the 64 KiB line limit and the live session was closed.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "live_request_too_large",
+          "message": "A live request exceeded the 64 KiB line limit and the live session was closed."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "live_view_changed",
+      "meaning": "The agent decision refers to an older view; no action was dispatched and the current view must be reconsidered.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "live_view_changed",
+          "message": "The agent decision refers to an older view; no action was dispatched and the current view must be reconsidered."
+        },
+        "timings": {
+          "totalMs": null,
+          "status": "partial",
+          "phases": {
+            "connect": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "snapshot": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "match": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "dispatch": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "settle": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "delta": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "helper",
+              "reason": "current_source_contract_fixture"
+            },
+            "logs": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            },
+            "serialize": {
+              "status": "unavailable",
+              "elapsedMs": null,
+              "owner": "cli",
+              "reason": "current_source_contract_fixture"
+            }
+          },
+          "actionOverheadExcludingSettle": {
+            "status": "unavailable",
+            "elapsedMs": null,
+            "reason": "required_phase_measurements_unavailable",
+            "unavailablePhases": [
+              "connect",
+              "snapshot",
+              "match",
+              "dispatch",
+              "delta",
+              "logs",
+              "serialize"
+            ],
+            "excludes": "settle"
+          }
+        },
+        "logCursor": 0,
+        "eventCursor": null,
+        "payloadBounds": {
+          "maxSerializedBytes": 4194304,
+          "maxStringCharacters": 65536,
+          "maxCollectionEntries": 1024,
+          "maxDepth": 24,
+          "truncated": false,
+          "truncationCount": 0,
+          "safetyDisposition": "complete"
+        },
+        "safetyEvidenceStatus": "complete"
+      }
+    },
+    {
+      "code": "live_view_unavailable",
+      "meaning": "No current actionable live view exists; no action was dispatched.",
+      "canonicalEnvelope": {
+        "messageType": "response",
+        "ok": false,
+        "schemaVersion": 1,
+        "protocolVersion": 15,
+        "minSupportedProtocolVersion": 15,
+        "maxSupportedProtocolVersion": 15,
+        "protocolRange": {
+          "minimum": 15,
+          "maximum": 15,
+          "compatibility": "within_supported_range"
+        },
+        "capabilities": {
+          "activeRuntimeSignalsV1": true,
+          "boundedCliPayloadsV1": true,
+          "callerIdempotencyKeysV1": true,
+          "cliResponseEnvelopeV1": true,
+          "closedMutationOutcomes": true,
+          "correlatedEventCursorsV1": true,
+          "durableIdempotencyReceiptsV1": true,
+          "heldDragExclusion": true,
+          "idempotencyTombstonesV1": true,
+          "idempotentMutations": true,
+          "phaseTimingsV1": true,
+          "runtimeErrorCursor": true,
+          "runtimeSignalProvenanceV1": true,
+          "semanticStabilityV1": true,
+          "serializedMutations": true,
+          "sourceRedaction": true,
+          "stableIdempotencyFingerprintV1": true,
+          "stateDigestSha256": true,
+          "stateGeneration": true,
+          "strictMutationEnvelope": true,
+          "structuredHeartbeatsV1": true,
+          "typedEnvelopeV1": true
+        },
+        "capabilitySource": "cli",
+        "commandId": "stable-error-contract",
+        "cliCommandId": "stable-error-contract",
+        "commandName": "error-contract",
+        "runId": null,
+        "runtimeInstanceId": null,
+        "stateGeneration": null,
+        "identityStatus": "partial",
+        "identityAvailability": {
+          "commandId": "available",
+          "cliCommandId": "available",
+          "runId": "unavailable",
+          "runtimeInstanceId": "unavailable",
+          "stateGeneration": "unavailable"
+        },
+        "result": null,
+        "structuredError": {
+          "code": "live_view_unavailable",
+          "message": "No current actionable live view exists; no action was dispatched."
         },
         "timings": {
           "totalMs": null,

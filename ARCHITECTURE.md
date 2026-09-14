@@ -82,6 +82,8 @@ concerns live in extensions and top-level helpers.
 | `cli_batch.dart` | Bounded command batching and private replay-script export. |
 | `cli_record.dart` | Recording store/list/run plus retained owner-only export operations and the central JSON printer. |
 | `cli_serve.dart` | Persistent HTTP bridge: legacy `/run`, typed `/v1/schema` + `/v1/call`, health, and shutdown. |
+| `cli_live.dart` + `live_view_loop.dart` | Experimental persistent JSONL agent loop, serialized latest semantic observations, stale decision rejection at mutation preflight, and action-plus-next-view responses. No automatic images. |
+| `cli_agent.dart` + `agent_session.dart` | Independent observer and single-hand CLI contexts/VM connections; correlated JSONL requests; revision-bound action tickets, retained events, bounded condition waits and authorized one-shot reactions. The shipped `skills/flutter-scout/scripts/agent_client.mjs` is the thin pipe client. |
 | `cli_results.dart` | VM connection/invocation, action evidence transaction, protocol diagnostics, runtime-loss mapping, and safety-preserving compaction. |
 | `cli_protocol.dart` | CLI protocol envelope validation, mutation preflight/identity/deadline/idempotency construction, timeout reconciliation, and closed mutation outcomes. |
 | `cli_response.dart` | Bounded additive response envelopes, structured errors/heartbeats, operability identity, and output serialization. |

@@ -1,5 +1,20 @@
 ## Unreleased
 
+- Add `agent`: independent passive eyes and a single guarded hand, immediate
+  acceptance tickets, short canonical input receipts, independent condition
+  waits, explicit cancellation scope, bounded retained events and one-shot
+  authorized reactions. Ship a persistent Node client and usage contract.
+  Rendering is rechecked by both CLI preflight and the helper at dispatch;
+  screenshots remain manual and no action is automatically retried.
+
+- Add experimental `live` JSONL navigation with a serialized latest semantic
+  view, bundled post-action observations, and stale-decision rejection. Images
+  stay manual. The initial macOS agent comparison did not show a speed benefit;
+  this is not a replacement default or continuous model perception.
+- Observe bounded readiness before handing off a transient live action's next
+  view, retaining its original outcome and separate settling evidence. Add a
+  local direct-pipe Node experiment to avoid terminal write/poll latency.
+
 - Wait for Flutter signal-handler registration within the launch idle/hard limits instead of stopping a healthy app three seconds after early VM discovery.
 
 ## Unreleased

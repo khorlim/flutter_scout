@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Add CLI `agent` JSONL session protocol 1, independent from persistent-call
+  protocol 2, with bounded action tickets, observations, waits and reactions.
+- Add optional helper `requireLiveRendering` mutation metadata, enforced
+  immediately before dispatch when true, and optional inspect rendering facts.
+  New capabilities are `renderingStateV1` and `liveRenderingGuardV1`. Existing
+  protocol-15 calls remain compatible; agent actions require the new guard.
+
+- Register the experimental CLI-only `live` semantic-view action loop and its
+  fail-closed view/request errors. Screenshots remain manual; no helper wire
+  field or protocol capability changed.
 - Define the immutable schema-1 document set under `protocol/schemas/v1/` and
   bind every document to a deterministic release schema manifest.
 - Coordinate protocol 15 across the CLI and helper, including typed envelopes,

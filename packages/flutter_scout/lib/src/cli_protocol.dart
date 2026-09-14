@@ -47,6 +47,8 @@ const Set<String> _requiredMutationCapabilities = <String>{
 };
 
 const Set<String> _knownPreDispatchErrors = <String>{
+  'agent_live_view_unavailable',
+  'invalid_live_rendering_guard',
   'missing_mutation_envelope',
   'incompatible_schema',
   'incompatible_protocol',
@@ -331,6 +333,49 @@ extension _CliProtocol on FlutterScoutCli {
         ),
       );
     }
+    final decisionView = _liveDecisionView;
+    final rendering = _observationPayload(preflight)['rendering'];
+    if (_agentRequiresLiveRendering &&
+        ((preflight['capabilities'] as Map?)?['liveRenderingGuardV1'] != true ||
+            rendering is! Map ||
+            rendering['status'] != 'active' ||
+            rendering['framesEnabled'] != true)) {
+      return (
+        invocation: null,
+        replay: null,
+        failure: withPreflightTiming(
+          _notDispatchedProtocolFailure(
+            code: 'agent_live_view_unavailable',
+            message:
+                'Rendering is suspended or unavailable. Restore visibility and observe again; nothing was dispatched.',
+            method: method,
+            runId: runId,
+          ),
+        ),
+      );
+    }
+    if (decisionView != null &&
+        (decisionView['snapshotId'] != snapshotId ||
+            decisionView['runtimeInstanceId'] != runtimeInstanceId ||
+            decisionView['runId'] != runId)) {
+      return (
+        invocation: null,
+        replay: null,
+        failure: withPreflightTiming(
+          _notDispatchedProtocolFailure(
+            code: 'live_view_changed',
+            message:
+                'The screen changed since the agent observation. Read the returned view and choose again.',
+            method: method,
+            runId: runId,
+            details: {
+              'observedSnapshotId': decisionView['snapshotId'],
+              'currentSnapshotId': snapshotId,
+            },
+          ),
+        ),
+      );
+    }
     final errorCursor = switch (preflight['errorCursor']) {
       final num value => value.toInt(),
       final String value => int.tryParse(value),
@@ -361,6 +406,7 @@ extension _CliProtocol on FlutterScoutCli {
       'runtimeInstanceId': runtimeInstanceId,
       'expectedStateGeneration': '$stateGeneration',
       'deadlineEpochMs': '$deadlineEpochMs',
+      if (_agentRequiresLiveRendering) 'requireLiveRendering': 'true',
       if (errorCursor != null) 'errorCursor': '$errorCursor',
     };
     final proposed = _MutationInvocation(

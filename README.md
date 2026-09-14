@@ -29,6 +29,12 @@ Start here based on what you need:
 
 ## Capabilities
 
+- **Concurrent hand/eye session** — `flutter-scout --app <name> agent` provides
+  independent passive observations, short action tickets/receipts, separate
+  condition waits, rendering-aware guards, and authorized one-shot reactions.
+  A shipped Node client keeps one pipe open; screenshots remain manual.
+  See [the agent session contract](skills/flutter-scout/references/agent-session.md).
+
 - **Sessions & lifecycle** — isolated named sessions and run logs, launch locking/joining, explicit replacement, crash-repairable zero-diff temporary helper injection, exact device resolution, `doctor`/`status`/`stop`, and launch timing metrics.
 - **Perception** — compact `inspect` snapshots with generation-bound SHA-256 identities, unique scoped handles, top-modal scoping, split text visibility (`visibleText`/`hitTestableText`/`offscreenText`), logical/physical viewport facts, explicit visual blind spots/degradation, nested scroll metrics, and duplicate abstention.
 - **Navigation** — read-only `where` and ranked `locate`, bounded exactly-once `reveal` with explicit scroll-region scope/restoration, and `inspect --since <snapshot-id>` relative observations.

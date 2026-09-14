@@ -240,6 +240,8 @@ extension _CliSessionRecovery on FlutterScoutCli {
     'batch',
     'export-batch',
     'serve',
+    'live',
+    'agent',
     'explore',
     'reload',
     'restart',

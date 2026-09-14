@@ -1078,6 +1078,7 @@ extension _RuntimeNavigation on FlutterScoutRuntime {
       final baseline = lookup.baseline;
       return _navigationBoundedOk(<String, Object?>{
         'operation': 'inspect_since',
+        'rendering': _renderingState(),
         'result': 'delta',
         'observationEffects': _observationEffects(
           _FrameAdvancePolicy.observeOnly,

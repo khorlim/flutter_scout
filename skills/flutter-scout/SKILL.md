@@ -338,6 +338,26 @@ Never use `stop --clear-session` solely because a Dart reload was rejected.
 
 ## Fast exploratory loops
 
+Prefer one persistent `flutter-scout --app <name> agent` connection for
+interactive navigation. Read [the agent session contract](references/agent-session.md)
+before using it; import the shipped `scripts/agent_client.mjs` in a persistent
+Node tool session. Independent passive eyes run while one guarded action is
+in flight. `start` returns an acceptance ticket, `next` delivers view changes
+and input receipts, and `watch` verifies a later condition without blocking
+the hand. Consume events while waiting; never treat acceptance as success.
+
+Use the latest observed revision and exact target. On changed state, reconsider
+instead of automatically retrying. `rendering.status:suspended` requires
+restoring app visibility, not trusting an old tree or asking Scout to pump
+frames. Images remain manual. For an explicitly authorized time-sensitive
+response, `react` can perform one observed exact tap or stop future actions,
+bounded to 30 seconds. Cancelling a wait never cancels the app's operation.
+Use finite commands with same-call gates for straightforward sequential checks.
+
+The earlier experimental `live` mode remains a serialized comparison path,
+not the concurrent hand/eye interface. Both streaming modes reject
+`--single-json`; prefer a persistent pipe over PTY echo/polling.
+
 After three successful plain CLI actions, Scout automatically starts a
 persistent transport for the named session and reuses it for follow-up
 commands. It expires after ten idle minutes. `batch` remains best for a known

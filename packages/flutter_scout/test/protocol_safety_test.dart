@@ -9,6 +9,71 @@ import 'package:test/test.dart';
 
 void main() {
   group('v15 mutation protocol', () {
+    for (final mode in ['active', 'suspended', 'old-helper']) {
+      test('agent rendering preflight: $mode', () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        fake.preflightExtra = {
+          'capabilities': {
+            ...fake._capabilities(),
+            if (mode != 'old-helper') 'liveRenderingGuardV1': true,
+          },
+          'result': {
+            'rendering': {'status': mode, 'framesEnabled': mode == 'active'},
+          },
+        };
+        await _withProtocolSession(fake.uri, () async {
+          final cli = FlutterScoutCli()
+            ..debugSetLiveDecisionView({
+              'runId': 'test-run',
+              'runtimeInstanceId': 'runtime-a',
+              'snapshotId': 'g7:${List.filled(64, 'a').join()}',
+            }, requireLiveRendering: true);
+          expect(await cli.run(['tap', 'btn.save']), mode == 'active' ? 0 : 1);
+        });
+        expect(fake.dispatchCount, mode == 'active' ? 1 : 0);
+        if (mode == 'active') {
+          expect(fake.mutationParams.single['requireLiveRendering'], 'true');
+        }
+      });
+    }
+    test(
+      'live stale decision is rejected at fresh mutation preflight',
+      () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        await _withProtocolSession(fake.uri, () async {
+          final cli = FlutterScoutCli()
+            ..debugSetLiveDecisionView({
+              'runId': 'test-run',
+              'runtimeInstanceId': 'runtime-a',
+              'snapshotId': 'old-screen',
+            });
+          expect(await cli.run(['tap', 'btn.save']), 1);
+        });
+        expect(fake.dispatchCount, 0);
+        expect(fake.extensionMethods, ['ext.flutter_scout.inspect']);
+      },
+    );
+
+    test(
+      'live matching observation preserves normal guarded dispatch',
+      () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        await _withProtocolSession(fake.uri, () async {
+          final cli = FlutterScoutCli()
+            ..debugSetLiveDecisionView({
+              'runId': 'test-run',
+              'runtimeInstanceId': 'runtime-a',
+              'snapshotId': 'g7:${List.filled(64, 'a').join()}',
+            });
+          expect(await cli.run(['tap', 'btn.save']), 0);
+        });
+        expect(fake.dispatchCount, 1);
+      },
+    );
+
     test('preflights and sends a complete exactly-once envelope', () async {
       final fake = await _FakeVmService.start();
       addTearDown(fake.close);
@@ -1081,6 +1146,7 @@ Future<void> _withProtocolSession(
 }
 
 class _FakeVmService {
+  Map<String, Object?> preflightExtra = {};
   _FakeVmService._(
     this._server,
     this.incompatible,
@@ -1225,6 +1291,7 @@ class _FakeVmService {
     'result': const <String, Object?>{},
     'structuredError': null,
     'timings': _fakeHelperTimings(totalMs: 1, mutating: false),
+    ...preflightExtra,
   };
 
   Map<String, Object?> _mutation(

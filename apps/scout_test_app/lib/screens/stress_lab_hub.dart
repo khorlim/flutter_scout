@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'fault_injection_screen.dart';
+import 'eye_hand_probe_screen.dart';
 import 'stress_lab_screens.dart';
 
 /// A destination in the stress lab.
@@ -22,6 +23,13 @@ class _Destination {
 }
 
 final List<_Destination> _destinations = [
+  _Destination(
+    id: 'eye_hand_probe',
+    title: 'Eye-hand probe',
+    subtitle: 'Work with delayed and transient pause requests',
+    icon: Icons.sync,
+    builder: (_) => const EyeHandProbeScreen(),
+  ),
   _Destination(
     id: 'long_list',
     title: 'Long list',

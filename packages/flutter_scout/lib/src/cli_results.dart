@@ -1079,6 +1079,7 @@ extension _CliResults on FlutterScoutCli {
       if (payload['visibleTextHash'] != null)
         'visibleTextHash': payload['visibleTextHash'],
       if (payload['idle'] != null) 'idle': payload['idle'],
+      if (payload['rendering'] is Map) 'rendering': payload['rendering'],
       if (payload['viewport'] is Map)
         'viewport': _compactObservationViewport(payload['viewport'] as Map),
       if (payload['perception'] is Map)

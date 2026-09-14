@@ -23,6 +23,7 @@ part 'runtime_annotations.dart';
 part 'runtime_actions.dart';
 part 'runtime_privacy.dart';
 part 'runtime_timings.dart';
+part 'runtime_rendering.dart';
 part 'runtime_typed_methods.dart';
 part 'runtime_protocol.dart';
 part 'runtime_resolution.dart';
@@ -115,6 +116,9 @@ class FlutterScoutRuntime {
   // exposed to tests so observation commands can prove they never reach the
   // mutation-settling machinery, including while engine frames are disabled.
   int _manualMutationFrameAdvanceCount = 0;
+  final Stopwatch _renderingClock = Stopwatch()..start();
+  int _completedFrameworkFrames = 0;
+  int? _lastFrameworkFrameAt;
   int _nextSyntheticPointer = 1000000;
   int _nextAnnotationId = 1;
   int _annotationHandoffSeq = 0;
@@ -219,6 +223,7 @@ class FlutterScoutRuntime {
   bool Function()? debugRuntimeAvailabilityProbe;
 
   void install() {
+    _installRenderingProbe();
     _installErrorHooks();
     _registerExtension('ext.flutter_scout.inspect', _handleNavigationInspect);
     _registerExtension('ext.flutter_scout.reveal', _handleReveal);
@@ -1166,6 +1171,7 @@ class FlutterScoutRuntime {
           sections: sections,
           surfaceOnly: params['surfaceOnly'] == 'true',
         ),
+        'rendering': _renderingState(),
         'observationEffects': _observationEffects(
           _FrameAdvancePolicy.observeOnly,
         ),
