@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Wait for Flutter signal-handler registration within the launch idle/hard limits instead of stopping a healthy app three seconds after early VM discovery.
+
+## Unreleased
+
 - Recover and stop exactly recorded Flutter workers from per-run ownership
   state when top-level session metadata is missing. New launches now refuse to
   replace unresolved live-run records, and `stop --clear-session` preserves

@@ -111,6 +111,10 @@ revalidated process proof. `actionState` reports an active held drag,
 `unavailable` fact as unknown; never infer a version, runtime, device, or source
 match from absence.
 
+A VM-service URL can appear before Flutter finishes attaching and syncing
+files. Scout keeps waiting for Flutter's signal-handler PID acknowledgement
+under the same launch idle/hard limits; VM discovery alone is not readiness.
+
 A launch ends on silence, not on elapsed time: it fails once the runner prints
 nothing for `--launch-idle-timeout` seconds (default 180), bounded by
 `--launch-timeout` (default 1200). A cold first build that spends minutes in

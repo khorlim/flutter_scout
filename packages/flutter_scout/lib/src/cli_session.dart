@@ -40,19 +40,6 @@ int? _readFlutterToolSignalPid(String path) {
   }
 }
 
-Future<int?> _waitForFlutterToolSignalPid(
-  String path, {
-  Duration timeout = const Duration(seconds: 3),
-}) async {
-  final deadline = DateTime.now().add(timeout);
-  while (DateTime.now().isBefore(deadline)) {
-    final processId = _readFlutterToolSignalPid(path);
-    if (processId != null) return processId;
-    await Future<void>.delayed(const Duration(milliseconds: 50));
-  }
-  return _readFlutterToolSignalPid(path);
-}
-
 /// A live helper retains the launch run ID compiled into the application. An
 /// attach command normally gets a new ID, which is correct for a third-party
 /// app, but would make a healthy Scout-owned app inspect-only after its launch
@@ -438,6 +425,8 @@ extension _CliSession on FlutterScoutCli {
       }
 
       String? vmUri;
+      int? flutterToolPid;
+      var reportedVmService = false;
       var readLineCount = 0;
       var lastHeartbeat = DateTime.now();
       // A cold build is slow but not stuck: pod install alone can run for
@@ -461,10 +450,16 @@ extension _CliSession on FlutterScoutCli {
           }
           readLineCount = currentLines.length;
           vmUri ??= _readVmUri();
-          if (vmUri != null) {
+          if (vmUri != null && !reportedVmService) {
+            reportedVmService = true;
             _writeProgress('vm_service_found');
+            _writeProgress('await_flutter_signal_handlers');
           }
-          if (vmUri != null) break;
+          // The helper broadcasts its VM URI before Flutter finishes DevFS
+          // setup. Keep consuming progress under the existing idle/hard
+          // deadlines until Flutter itself confirms signal registration.
+          flutterToolPid = _readFlutterToolSignalPid(flutterToolSignalPidFile);
+          if (vmUri != null && flutterToolPid != null) break;
         }
         final now = DateTime.now();
         final awaitPostBuildVmService = _shouldAwaitPostBuildVmService(
@@ -554,9 +549,6 @@ extension _CliSession on FlutterScoutCli {
 
       final wsUri = _normalizeVmUri(vmUri);
       _persistValidatedVmUri(wsUri);
-      final flutterToolPid = await _waitForFlutterToolSignalPid(
-        flutterToolSignalPidFile,
-      );
       if (flutterToolPid == null) {
         await _stopRunnerSupervisor(supervisorOwnershipMeta);
         throw const ScoutCliException(
