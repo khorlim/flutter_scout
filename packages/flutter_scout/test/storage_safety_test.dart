@@ -15,16 +15,6 @@ void main() {
           await _withStorageTempCwd((temp) async {
             final cli = FlutterScoutCli();
             cli.debugRecordAction({'cmd': 'tap', 'target': 'button.save'});
-            expect(
-              await cli.run([
-                'record',
-                'save-last',
-                'permission-check',
-                '--feature',
-                'storage',
-              ]),
-              0,
-            );
             expect(await cli.run(['evidence', '--last', '1']), 0);
             final listener = cli.debugVmLogListenerLaunchSpec(
               vmUri: 'ws://127.0.0.1:8181/credential/ws',
@@ -600,100 +590,58 @@ void main() {
         });
       });
 
-      test(
-        'annotation and serve sinks are atomic, private, and symlink-safe',
-        () async {
-          await _withStorageTempCwd((temp) async {
-            final cli = FlutterScoutCli();
-            cli.debugWriteAnnotationManifest(const <Map<String, Object?>>[
-              <String, Object?>{'id': 'ann_001', 'note': 'private note'},
-            ]);
-            final manifest = p.join(
-              temp.path,
-              '.flutter_scout',
-              'annotations.json',
-            );
-            expect(_permissions(manifest), 0x180);
+      test('annotation sinks are atomic, private, and symlink-safe', () async {
+        await _withStorageTempCwd((temp) async {
+          final cli = FlutterScoutCli();
+          cli.debugWriteAnnotationManifest(const <Map<String, Object?>>[
+            <String, Object?>{'id': 'ann_001', 'note': 'private note'},
+          ]);
+          final manifest = p.join(
+            temp.path,
+            '.flutter_scout',
+            'annotations.json',
+          );
+          expect(_permissions(manifest), 0x180);
 
-            final crop = p.join(
-              temp.path,
-              '.flutter_scout',
-              'crops',
-              'ann_001_before.png',
-            );
-            cli.debugWriteAnnotationCrop(crop, const <int>[1, 2, 3, 4]);
-            expect(File(crop).readAsBytesSync(), <int>[1, 2, 3, 4]);
-            expect(_permissions(crop), 0x180);
+          final crop = p.join(
+            temp.path,
+            '.flutter_scout',
+            'crops',
+            'ann_001_before.png',
+          );
+          cli.debugWriteAnnotationCrop(crop, const <int>[1, 2, 3, 4]);
+          expect(File(crop).readAsBytesSync(), <int>[1, 2, 3, 4]);
+          expect(_permissions(crop), 0x180);
 
-            final outside = File(p.join(temp.path, 'outside-private'))
-              ..writeAsStringSync('untouched');
-            File(manifest).deleteSync();
-            Link(manifest).createSync(outside.path);
-            expect(
-              () =>
-                  cli.debugWriteAnnotationManifest(const <Map<String, Object?>>[
-                    <String, Object?>{'id': 'ann_002'},
-                  ]),
-              throwsA(
-                isA<ScoutCliException>().having(
-                  (error) => error.code,
-                  'code',
-                  'unsafe_storage_path',
-                ),
+          final outside = File(p.join(temp.path, 'outside-private'))
+            ..writeAsStringSync('untouched');
+          File(manifest).deleteSync();
+          Link(manifest).createSync(outside.path);
+          expect(
+            () => cli.debugWriteAnnotationManifest(const <Map<String, Object?>>[
+              <String, Object?>{'id': 'ann_002'},
+            ]),
+            throwsA(
+              isA<ScoutCliException>().having(
+                (error) => error.code,
+                'code',
+                'unsafe_storage_path',
               ),
-            );
-            expect(outside.readAsStringSync(), 'untouched');
+            ),
+          );
+          expect(outside.readAsStringSync(), 'untouched');
 
-            File(crop).deleteSync();
-            Link(crop).createSync(outside.path);
-            expect(
-              () => cli.debugWriteAnnotationCrop(crop, const <int>[9]),
-              throwsA(isA<ScoutCliException>()),
-            );
-            expect(outside.readAsStringSync(), 'untouched');
+          File(crop).deleteSync();
+          Link(crop).createSync(outside.path);
+          expect(
+            () => cli.debugWriteAnnotationCrop(crop, const <int>[9]),
+            throwsA(isA<ScoutCliException>()),
+          );
+          expect(outside.readAsStringSync(), 'untouched');
 
-            final callerDirectory = Directory(
-              p.join(temp.path, 'caller-output'),
-            )..createSync();
-            Process.runSync('chmod', <String>['755', callerDirectory.path]);
-            final portFile = p.join(callerDirectory.path, 'serve.port');
-            final credentialFile = p.join(
-              callerDirectory.path,
-              'serve.credential',
-            );
-            cli.debugWriteServePortFile(portFile, 8787);
-            cli.debugWriteServeCredentialFile(credentialFile, 'a' * 43);
-            expect(File(portFile).readAsStringSync(), '8787');
-            expect(
-              File(credentialFile).readAsStringSync(),
-              'Authorization: Bearer ${'a' * 43}\n',
-            );
-            expect(_permissions(portFile), 0x180);
-            expect(_permissions(credentialFile), 0x180);
-            expect(_permissions(callerDirectory.path), 0x1ed);
-            expect(
-              callerDirectory.listSync().where(
-                (entity) => entity.path.endsWith('.tmp'),
-              ),
-              isEmpty,
-            );
-
-            File(portFile).deleteSync();
-            Link(portFile).createSync(outside.path);
-            expect(
-              () => cli.debugWriteServePortFile(portFile, 9999),
-              throwsA(isA<ScoutCliException>()),
-            );
-            File(credentialFile).deleteSync();
-            Link(credentialFile).createSync(outside.path);
-            expect(
-              () => cli.debugWriteServeCredentialFile(credentialFile, 'b' * 43),
-              throwsA(isA<ScoutCliException>()),
-            );
-            expect(outside.readAsStringSync(), 'untouched');
-          });
-        },
-      );
+          expect(outside.readAsStringSync(), 'untouched');
+        });
+      });
     },
     skip: Platform.isWindows ? 'POSIX storage contract' : false,
   );

@@ -55,16 +55,17 @@ void main() {
     await tester.pump();
 
     final result = await tester.runAsync(() async {
+      Future<void> pendingPump = Future<void>.value();
       final timer = Timer(const Duration(milliseconds: 60), () {
         update(() => status = 'Ready');
-        expectationMet = true;
-        unawaited(tester.pump());
+        pendingPump = tester.pump().then((_) => expectationMet = true);
       });
       final observed = await runtime.debugObserveStability(
         timeoutMs: 600,
         stopWhen: () => expectationMet,
       );
       timer.cancel();
+      await pendingPump;
       return observed;
     });
     final observed = stability(result!);

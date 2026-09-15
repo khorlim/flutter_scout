@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Hard-cutover public CLI contract v2 lives under schemas/v2/. Agent JSONL
+  protocol 2 adds query, acknowledge and reconcile, with exclusive ownership,
+  receipt delivery gating and no legacy interaction entrypoints. Helper wire
+  protocol 15/schema 1 is unchanged; old CLI/HTTP artifacts are historical.
+
 - Add CLI `agent` JSONL session protocol 1, independent from persistent-call
   protocol 2, with bounded action tickets, observations, waits and reactions.
 - Add optional helper `requireLiveRendering` mutation metadata, enforced

@@ -62,4 +62,21 @@ void main() {
       returnsNormally,
     );
   });
+  test('input cannot silently concatenate a mistaken field argument', () {
+    expect(
+      () => cli.debugValidateAgentAction({
+        'method': 'input',
+        'args': ['field.name', 'Actual value'],
+      }),
+      throwsFormatException,
+    );
+    expect(
+      () => cli.debugValidateAgentAction({
+        'method': 'input',
+        'args': ['Actual value with spaces'],
+        'params': {'target': 'field.name'},
+      }),
+      returnsNormally,
+    );
+  });
 }

@@ -172,21 +172,20 @@ Confirm the bridge:
 ```bash
 flutter-scout doctor --project <flutter-app-path> --device <simulator-id>
 flutter-scout status
-flutter-scout inspect
+flutter-scout --app <name> agent
 flutter-scout version
 ```
 
-Successful setup means `status` reports running and `inspect` returns a typed
-schema/protocol envelope with the expected run/runtime identity, negotiated
-capabilities, visible text, interactables, fields, field geometry, and no setup
-error.
-For exploratory agent loops after setup, `flutter-scout explore --once` prints the persistent daemon command/endpoints without starting it; `flutter-scout explore --port-file /tmp/scout.port` starts the fast loop. While that daemon is active, normal inspect/action CLI commands automatically reuse it.
+Successful setup means status reports running and the agent ready response
+has ok:true, agentProtocol:2, the expected run/runtime, and a usable view.
+The agent command is a persistent JSONL pipe, not a finite shell check.
 
-For concurrent hand/eye operation, prefer the installed Flutter Scout skill's
+For all observation and input, use the installed Flutter Scout skill's
 `scripts/agent_client.mjs` and `flutter-scout --app <name> agent`. Read that
 skill's `references/agent-session.md` first. Confirm inspect exposes rendering
-state and capability `liveRenderingGuardV1:true`; old protocol-15 helpers can
-still run ordinary commands but cannot authorize this new mode's actions.
+state and capability `liveRenderingGuardV1:true`. Standalone interactions and
+legacy transports are removed; there is no fallback to old commands. Scout
+does not require any model or ChatGPT/Codex Fast mode setting.
 After changing the pinned helper dependency, resolve packages and fully
 relaunch the debug app. Refreshing the CLI alone does not update a running app.
 
@@ -202,7 +201,7 @@ session when no default session exists. If multiple names are current, pass
 - `not_attached`: run `attach` or `launch` first.
 - `vm_service_uri_not_found`: run the app in debug mode, save the VM service URL to an owner-only 0600 file, then use `attach --debug-url-file`. Scout supports only explicit loopback hosts with an explicit port; remote VM-service egress is unsupported.
 - `helper_extension_missing`: the VM service is reachable but Flutter Scout was not registered; add the helper initializer shown in `expected`.
-- `helper_extension_check_failed`: retry `status` and `inspect`; if `inspect` works, the app is reachable and the readiness check likely raced startup. If `inspect` fails, relaunch or fix the reported helper initializer.
+- `helper_extension_check_failed`: check `status`, then use the persistent agent's `observe()`; a usable view means readiness likely raced startup. Otherwise fix the reported helper initializer or relaunch when required.
 - `hot_restart_unavailable`: start or reconnect through `flutter-scout ensure --device <simulator-id> --project <path>` so Scout owns the Flutter tool process, or perform a normal relaunch.
 - `reload_sources_failed` or `reload_rejected`: VM reload was rejected and the app is likely still running previous code. Check the same named session with `status`; if it remains reachable, preserve it and retry through its Scout-owned Flutter tool or owning terminal. Relaunch only when the app is dead or the change requires rebuilding.
 - `vm_reload_unavailable`: the attached session cannot hot reload through VM service; use the owning Flutter terminal/IDE, use a Scout-owned `ensure`/`launch` session, or relaunch after non-Dart changes.
@@ -216,7 +215,7 @@ session when no default session exists. If multiple names are current, pass
   retry with a new idempotency key.
 - `logs` returns `source:"attach_only_session"` and `available:false`: Scout is attached to a VS Code/Cursor/terminal-owned Flutter run. Scout can inspect and act, but cannot read the owner console logs. Use the owning console, run `flutter logs` separately, or start through `flutter-scout ensure`/`launch` when Scout should own log capture.
 - `logs --contains` returns `matched:0`: Scout read a non-empty Scout-owned log, but no line matched the filter. Use a broader filter or add app-side logging for the event you need.
-- `staleRefreshed:true`: the saved VM service URL was stale, but Scout discovered and saved the current URI; continue with `inspect` or actions.
+- `staleRefreshed:true`: the saved VM service URL was stale, but Scout discovered and saved the current URI; continue through the persistent agent connection.
 - `missingVmServiceUriRestored:true`: the URI file was missing, but Scout recovered it from the verified owned run log and kept the existing app.
 - `session_selection_required`: more than one named session exists in this project; rerun with `--app <name>`.
 - `stale_vm_service_uri` or `staleCleared`: the saved VM service URL was unreachable and Scout could not discover a replacement; run `attach` or `launch` again.
@@ -238,6 +237,7 @@ flutter-scout evidence -o /private/path/flutter_scout_evidence \
   --retention session
 ```
 
-It writes status, logs, inspect data when attached, the replay session when present, and a screenshot when the target supports capture.
+It writes status, logs, available inspection data and historical session evidence,
+plus a screenshot when the target supports capture. It does not execute replay.
 
-After setup works, use `$flutter-scout` for the normal inspect/act/replay workflow.
+After setup works, use `$flutter-scout` for the persistent observation/action workflow.

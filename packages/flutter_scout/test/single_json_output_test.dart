@@ -65,8 +65,7 @@ void main() {
         ['--app', 'missing-json-session', 'inspect'],
         ['--idempotency-key'],
         ['unknown-scout-command'],
-        ['serve'],
-        ['explore', '--once'],
+        ['agent'],
       ]) {
         final failure = await _capture(cli, ['--single-json', ...args]);
         expect(
@@ -232,30 +231,6 @@ void main() {
     expect(result.out, contains('Flutter Scout'));
     expect(result.err, isEmpty);
     expect(Directory('.flutter_scout').existsSync(), isFalse);
-  });
-
-  test('verbose batch keeps intermediate responses off final stdout', () async {
-    final result = await _capture(FlutterScoutCli(), [
-      '--single-json',
-      'batch',
-      'inspect --brief; inspect --brief',
-      '--keep-going',
-      '--verbose',
-    ]);
-    expect(result.code, 1); // No VM is attached in this isolated workspace.
-    final finalResponse = _singleEnvelope(result.out);
-    expect(finalResponse['commandName'], 'batch');
-    expect(finalResponse['ok'], isFalse);
-    final diagnostics = result.err
-        .split('\n')
-        .where((line) => line.isNotEmpty)
-        .map(jsonDecode)
-        .cast<Map>();
-    expect(
-      diagnostics.any((row) => row['stage'] == 'batch_step_started'),
-      isTrue,
-    );
-    expect(diagnostics.any((row) => row['ok'] == false), isTrue);
   });
 }
 

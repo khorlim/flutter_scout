@@ -5,7 +5,7 @@
     "status": "observed",
     "cli": {
       "package": "flutter_scout",
-      "packageVersion": "2.0.0-dev.1"
+      "packageVersion": "2.0.0-dev.2"
     },
     "helper": {
       "status": "unavailable",

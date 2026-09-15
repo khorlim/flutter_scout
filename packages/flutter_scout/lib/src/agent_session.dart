@@ -10,6 +10,24 @@ typedef AgentValidate = void Function(AgentView action);
 /// One guarded hand, independent passive eyes, and bounded one-shot reactions.
 /// No routes, app-specific logic, automatic retries, or implicit success waits.
 class AgentSession {
+  static const actionMethods = {
+    'tap',
+    'tap-text',
+    'long-press',
+    'input',
+    'fill',
+    'scroll',
+    'swipe',
+    'scroll-to',
+    'back',
+    'dismiss',
+    'reveal',
+    'drag-start',
+    'drag-move',
+    'drag-end',
+    'drag-cancel',
+    'deeplink',
+  };
   AgentSession({
     required this.read,
     required this.act,
@@ -46,16 +64,27 @@ class AgentSession {
   int _ticket = 0;
   int _observedAt = 0;
   String? _pendingAction;
+  String? _unacknowledgedAction;
+  AgentView? _receipt;
+  bool _receiptDelivered = false;
+  int _receiptReadCount = 0;
   int reads = 0;
   int actions = 0;
 
   AgentView get scene => {
+    'actionable':
+        !_closed &&
+        _halt == null &&
+        _safe &&
+        _acting == null &&
+        _unacknowledgedAction == null,
     'viewRevision': _revision,
     'viewAgeMs': _clock.elapsedMilliseconds - _observedAt,
     'view': _view,
     'images': 'manual',
     'hand': {
       'pendingAction': _pendingAction,
+      'unacknowledgedAction': _unacknowledgedAction,
       'halted': _halt,
       'closed': _closed,
     },
@@ -74,7 +103,7 @@ class AgentSession {
     _schedule();
     return {
       'ok': _view?['ok'] == true && _halt == null,
-      'agentProtocol': 1,
+      'agentProtocol': 2,
       ...scene,
     };
   }
@@ -206,10 +235,56 @@ class AgentSession {
     }
   }
 
+  /// Explicit native activation shares the hand, without fabricating frames
+  /// or acknowledging an outstanding input receipt.
+  Future<AgentView> foreground(Future<void> Function() activate) async {
+    final knownFailure =
+        _halt == 'agent_action_failed' &&
+        _receiptDelivered &&
+        const {'not_dispatched', 'dispatched'}.contains(_receipt?['dispatch']);
+    if (_closed ||
+        (_halt != null && !knownFailure) ||
+        _acting != null ||
+        (_unacknowledgedAction != null && !knownFailure) ||
+        _view?['ok'] != true) {
+      throw StateError('Reconcile the existing hand before activating its app');
+    }
+    final done = Completer<void>();
+    _acting = done.future;
+    try {
+      await activate();
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      do {
+        await observe();
+        if (_live ||
+            _closed ||
+            (_halt != null &&
+                (!knownFailure || _halt != 'agent_action_failed'))) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      } while (DateTime.now().isBefore(deadline));
+    } finally {
+      _acting = null;
+      done.complete();
+    }
+    return {
+      'ok':
+          _safe &&
+          !_closed &&
+          (_halt == null || (knownFailure && _halt == 'agent_action_failed')),
+      'foregroundRequested': true,
+      'inputDispatched': false,
+      ...scene,
+    };
+  }
+
   AgentView start(int revision, AgentView action, {String? reactionId}) {
     _authorize(revision);
-    if (_acting != null) {
-      throw StateError('agent_hand_busy: nothing queued or dispatched');
+    if (_acting != null || _unacknowledgedAction != null) {
+      throw StateError(
+        'agent_receipt_required: consume and acknowledge the previous receipt before another input',
+      );
     }
     validate(action);
     // Clone caller-owned maps before crossing an asynchronous boundary.
@@ -217,6 +292,9 @@ class AgentSession {
     final observed = jsonDecode(jsonEncode(_view)) as AgentView;
     final id = 'a${++_ticket}';
     _pendingAction = id;
+    _unacknowledgedAction = id;
+    _receipt = null;
+    _receiptDelivered = false;
     actions++;
     final started = _clock.elapsedMilliseconds;
     final done = Completer<void>();
@@ -234,6 +312,8 @@ class AgentSession {
       }
       _pendingAction = null;
       _acting = null;
+      _receipt = result;
+      _receiptReadCount = reads;
       if (result['ok'] != true) _stop('agent_action_failed');
       _emit('action', {
         'actionId': id,
@@ -254,6 +334,50 @@ class AgentSession {
       'dispatch': 'not_yet_established',
       'businessCompletion': 'not_asserted',
     };
+  }
+
+  /// A received successful input receipt must be acknowledged before more
+  /// input. Failed input additionally needs a fresh explicit reconciliation.
+  AgentView acknowledge(String actionId) {
+    _requireReceipt(actionId);
+    if (_receipt?['ok'] != true) {
+      throw StateError(
+        'agent_reconciliation_required: inspect the failure and observe before reconcile',
+      );
+    }
+    _unacknowledgedAction = null;
+    return {'ok': true, ...scene};
+  }
+
+  void _requireReceipt(String actionId) {
+    if (actionId != _unacknowledgedAction ||
+        _receipt == null ||
+        !_receiptDelivered) {
+      throw StateError(
+        'agent_receipt_required: consume the matching action event first',
+      );
+    }
+  }
+
+  AgentView reconcile(String actionId, int revision) {
+    _requireReceipt(actionId);
+    if (_closed ||
+        _halt != 'agent_action_failed' ||
+        revision != _revision ||
+        reads <= _receiptReadCount ||
+        !_safe ||
+        !const {
+          'not_dispatched',
+          'dispatched',
+        }.contains(_receipt?['dispatch'])) {
+      throw StateError(
+        'agent_reconciliation_unavailable: a fresh safe view and known dispatch outcome are required; unknown outcomes stay halted',
+      );
+    }
+    _halt = null;
+    _unacknowledgedAction = null;
+    _schedule();
+    return {'ok': true, 'previousActionRetried': false, ...scene};
   }
 
   AgentView watch(
@@ -394,7 +518,7 @@ class AgentSession {
         _stop('agent_reaction_stop');
         break;
       }
-      if (_acting != null) {
+      if (_acting != null || _unacknowledgedAction != null) {
         // Latch evidence, but never dispatch a stale queued reaction later.
         if (!job.notified) {
           job.notified = true;
@@ -502,6 +626,7 @@ class AgentSession {
       final waiter = _eventWaiter!;
       _eventWaiter = null;
       _eventTimeout?.cancel();
+      _markDelivered(event);
       waiter.complete(event);
       return;
     }
@@ -513,7 +638,11 @@ class AgentSession {
       throw ArgumentError('timeoutMs must be 0..30000');
     }
     if (_eventWaiter != null) throw StateError('Only one pending next request');
-    if (_events.isNotEmpty) return Future.value(_events.removeAt(0));
+    if (_events.isNotEmpty) {
+      final event = _events.removeAt(0);
+      _markDelivered(event);
+      return Future.value(event);
+    }
     if (_closed) return Future.value({'type': 'closed'});
     final waiter = _eventWaiter = Completer<AgentView>();
     _eventTimeout = Timer(Duration(milliseconds: timeoutMs), () {
@@ -521,6 +650,13 @@ class AgentSession {
       waiter.complete({'type': 'timeout'});
     });
     return waiter.future;
+  }
+
+  void _markDelivered(AgentView event) {
+    if (event['type'] == 'action' &&
+        event['actionId'] == _unacknowledgedAction) {
+      _receiptDelivered = true;
+    }
   }
 
   Future<void> close() async {

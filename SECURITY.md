@@ -61,28 +61,16 @@ file.
 
 ## Local authenticated transport
 
-The persistent `serve` transport is local-only and must preserve all of these
-properties:
-
-- bind to loopback, never a wildcard or externally routable address;
-- generate a fresh bearer credential for each daemon lifetime;
-- store the authorization header in an owner-only credential file;
-- require that credential for calls, mutations, and daemon shutdown;
-- accept mutations only through `POST`;
-- reject query parameters, unexpected paths, invalid UTF-8, wrong content
-  types, oversized bodies, expired deadlines, and unknown typed parameters;
-- compare credentials without an early-exit string comparison;
-- reject cross-site browser requests and non-matching browser origins;
-- keep legacy free-form `/run` disabled unless the operator explicitly enables
-  it with `--allow-legacy-run`;
-- serialize daemon operations so a timed-out, uncancellable mutation cannot
-  overlap a later mutation.
-
-`GET /health` and `GET /v1/schema` may expose daemon health and method schema but
-must not expose application state or perform a mutation. The credential is
-ephemeral and its file is removed on clean shutdown when ownership still
-matches. A crash may leave an inert credential file; it must not authenticate a
-future daemon.
+CLI 2 exposes UI observation and input only through a persistent JSONL agent
+pipe. HTTP serve/explore, standalone interaction, batch and replay execution
+are removed; there is no legacy override. The pipe accepts bounded strict-UTF-8
+JSON lines (64 KiB), correlated request IDs and documented typed methods only.
+One exclusive session lease owns the hand, while passive observation uses an
+independent VM connection. Each input requires a current safe view; another
+input is blocked until the canonical receipt is delivered and acknowledged.
+Known failures require explicit fresh-view reconciliation. Unknown outcomes
+halt, without retry. A verified older daemon also blocks a new hand; only
+identity-bound cleanup of historical daemon artifacts remains.
 
 The Dart VM service is a separate debugging interface with its own capability
 URI and authentication token. Scout validates every explicit, log-discovered,
@@ -120,8 +108,8 @@ serializing observed state:
 - known sensitive values are scrubbed from derived labels, handles, validation
   messages, errors, snapshots, before/after payloads, and other extension
   response strings;
-- recordings store placeholders rather than input/fill plaintext, and replay
-  requires the value to be supplied again;
+- historical recordings contain placeholders rather than input/fill plaintext;
+  current CLI versions do not execute replay;
 - command journals and Scout-owned logs redact recognized credential names and
   bearer values before persistence;
 - VM-service URIs are passed to Scout and helper processes through owner-only
@@ -149,25 +137,19 @@ particular:
 
 Use protected ingress whenever a value may be sensitive:
 
-- `input --file <path>` or `input --stdin` for one text value;
-- `fill --file <path>` or `fill --stdin` for a JSON object of string
-  field/value pairs;
+- agent `input`, `fill` and `deeplink` values through the persistent JSON stdin
+  pipe, never through process arguments;
 - `attach --debug-url-file <path>` or `attach --debug-url-stdin` for a
   VM-service capability URL;
-- `deeplink --url-file <path>` or `deeplink --url-stdin` for a deep-link URL;
 - `launch|ensure --dart-define-from-file <path>` for Flutter compile-time
-  values;
-- `--var-file <path>` or `--var-stdin` with `replay`, `record run`, and `batch`
-  for a JSON object of string placeholder/value pairs.
+  values.
 
-Protected action/variable input is bounded to 1 MiB; VM-service capability URLs
-have a tighter 16 KiB limit. Every source is decoded as strict UTF-8. Protected
+Agent input is bounded by the 64 KiB request-line limit; VM-service capability
+URLs have a tighter 16 KiB limit. Every source is decoded as strict UTF-8. Protected
 files must be regular files, must not be symbolic links, and on POSIX must
 already be exactly `0600`; Scout fails closed and never chmods caller-owned
-input. Variable names are bounded and reject `=`, leading/trailing whitespace,
-and C0/C1 control characters. Every variable source is parsed and every
-required placeholder is preflighted before the first mutation. Duplicate names
-across sources fail.
+input. Agent requests do not accept file/stdin source flags or replay variables;
+their values are already inside the protected process pipe.
 
 Dart define files use the same 1 MiB, strict-UTF-8, regular-file, non-symlink,
 exact-`0600` boundary. Scout validates the caller-owned file before any session

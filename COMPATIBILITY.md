@@ -16,7 +16,9 @@ The current source contract is:
 
 | Contract | Current source value | Status |
 | --- | --- | --- |
-| CLI package | `flutter_scout` 2.0.0-dev.1 | Unreleased prerelease identifier for the breaking protocol-15 candidate; not a published or release-ratified version. |
+| CLI package | `flutter_scout` 2.0.0-dev.2 | Hard-cutover agent-session-only candidate; not a published or release-ratified version. |
+| Agent JSONL protocol | 2 | Receipts require acknowledgement; focused queries and explicit failure reconciliation. Protocol-1 clients must upgrade. |
+| Public CLI contract | 2 | Standalone interaction and alternate transports removed. Lifecycle and manual diagnostics remain. |
 | Helper package | `flutter_scout_helper` 0.2.0-dev.1 | Unreleased prerelease identifier for the helper's pre-1.0 compatibility-boundary change; not published or release-ratified. |
 | Core response schema | 1 | Machine-readable schemas exist under `protocol/schemas/v1/`; release immutability is not established until a signed release contains them. |
 | CLI protocol range | 15 through 15 | Implemented in the current source. |

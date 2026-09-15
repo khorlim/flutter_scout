@@ -48,9 +48,8 @@ void main() {
   });
 
   test(
-    'generated input/fill secret never reaches artifacts or process argv',
+    'agent input/fill persistence and evidence never retain plaintext',
     () async {
-      final packageRoot = Directory.current.absolute.path;
       await _withPrivacyTempCwd((temp) async {
         final sentinel =
             'SCOUT_SENTINEL_${DateTime.now().microsecondsSinceEpoch}_$pid';
@@ -83,55 +82,6 @@ void main() {
           everyElement(startsWith(' VAR:')),
         );
 
-        expect(
-          cli.debugResolveRecordedAction(input, {
-            'field.account_name': sentinel,
-          })['value'],
-          sentinel,
-        );
-        final resolvedFill = cli.debugResolveRecordedAction(fill, {
-          'field.email': sentinel,
-          'field.note': 'prefix-$sentinel-suffix',
-        });
-        expect(jsonDecode(resolvedFill['values']!)['field.email'], sentinel);
-
-        final batchScript = [
-          'input --target field.batch ${FlutterScoutCli.quoteBatchArg(sentinel)}',
-          'fill --json ${FlutterScoutCli.quoteBatchArg(jsonEncode({'field.batch': sentinel}))}',
-        ].join('; ');
-        expect(
-          await cli.run(['batch', batchScript, '--keep-going']),
-          1,
-          reason: 'the privacy batch intentionally has no attached app',
-        );
-
-        expect(
-          await cli.run([
-            'record',
-            'save-last',
-            'privacy-flow',
-            '--last',
-            '2',
-            '--feature',
-            'privacy',
-          ]),
-          0,
-        );
-        final exportPath = p.join(temp.path, 'privacy-flow.json');
-        expect(
-          await cli.run([
-            'record',
-            'export',
-            'privacy-flow',
-            '--feature',
-            'privacy',
-            '--out',
-            exportPath,
-          ]),
-          0,
-        );
-        final batchPath = p.join(temp.path, 'privacy-flow.scout');
-        expect(await cli.run(['export-batch', '--output', batchPath]), 0);
         final evidencePath = p.join(temp.path, 'evidence');
         expect(
           await cli.run(['evidence', '--output', evidencePath, '--last', '1']),
@@ -152,31 +102,6 @@ void main() {
         );
         expect(sanitizedDiagnostic, isNot(contains(sentinel)));
         expect(sanitizedDiagnostic, contains('<redacted>'));
-
-        final show = await Process.run(Platform.resolvedExecutable, [
-          '--packages=${p.join(packageRoot, '.dart_tool', 'package_config.json')}',
-          p.join(packageRoot, 'bin', 'flutter_scout.dart'),
-          'record',
-          'show',
-          'privacy-flow',
-          '--feature',
-          'privacy',
-          '--steps',
-        ], workingDirectory: temp.path);
-        expect(show.exitCode, 0, reason: '${show.stderr}');
-        expect('${show.stdout}${show.stderr}', isNot(contains(sentinel)));
-
-        final withoutVars = await Process.run(Platform.resolvedExecutable, [
-          '--packages=${p.join(packageRoot, '.dart_tool', 'package_config.json')}',
-          p.join(packageRoot, 'bin', 'flutter_scout.dart'),
-          'replay',
-          exportPath,
-        ], workingDirectory: temp.path);
-        expect(withoutVars.exitCode, isNot(0));
-        expect(
-          '${withoutVars.stdout}${withoutVars.stderr}',
-          allOf(contains('missing_var'), isNot(contains(sentinel))),
-        );
 
         final vmCredential =
             'ws://127.0.0.1:12345/VM_URI_SENTINEL_$sentinel/ws';

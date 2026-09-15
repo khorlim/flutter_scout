@@ -3,7 +3,7 @@
 This repo is **Flutter Scout** — an agent-oriented eyes-and-hands bridge for Flutter
 simulator apps. Two packages cooperate over the Dart VM service:
 
-- `packages/flutter_scout` — the `flutter-scout` CLI (stateless command process, **pure Dart**).
+- `packages/flutter_scout` — the persistent agent-session CLI (**pure Dart**).
 - `packages/flutter_scout_helper` — the in-app binding that registers VM service
   extensions and renders the annotation overlay (**Flutter** package).
 
@@ -27,6 +27,11 @@ cd packages/flutter_scout_helper && flutter analyze && flutter test
 ```
 
 For behavior changes, smoke-test on a simulator using the flow in `SKILL.md`.
+
+All UI navigation uses the agent session. Standalone interaction, waits,
+live/serve/explore/batch/record/replay are removed. Do not enable model Fast mode
+or change a user's service tier to use Scout. Consult the current shipped skill,
+not historical command examples in old protocol/evaluation documents.
 
 ## After pushing changes
 

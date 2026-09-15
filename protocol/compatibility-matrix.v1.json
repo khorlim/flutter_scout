@@ -11,7 +11,7 @@
   "currentContract": {
     "cliPackage": {
       "name": "flutter_scout",
-      "version": "2.0.0-dev.1",
+      "version": "2.0.0-dev.2",
       "releaseState": "unreleased_prerelease"
     },
     "helperPackage": {

@@ -12,13 +12,12 @@ import 'package:path/path.dart' as p;
 import 'package:vm_service/vm_service.dart';
 import 'package:vm_service/vm_service_io.dart';
 
-import 'live_view_loop.dart';
 import 'agent_session.dart';
 
-part 'cli_batch.dart';
+part 'cli_vm_connection.dart';
 part 'cli_typed_methods.dart';
-part 'cli_serve.dart';
-part 'cli_live.dart';
+part 'cli_agent_dispatch.dart';
+part 'cli_agent_io.dart';
 part 'cli_agent.dart';
 part 'cli_models.dart';
 part 'cli_session.dart';
@@ -40,7 +39,7 @@ part 'cli_response.dart';
 part 'cli_operability.dart';
 part 'cli_results.dart';
 part 'cli_timings.dart';
-part 'cli_record.dart';
+part 'cli_json_output.dart';
 part 'cli_secret_ingress.dart';
 part 'cli_storage.dart';
 part 'cli_event_journal.dart';
@@ -56,7 +55,7 @@ Map<String, String> _flutterToolEnvironment([
 };
 
 class FlutterScoutCli {
-  static const String packageVersion = '2.0.0-dev.1';
+  static const String packageVersion = '2.0.0-dev.2';
   static String? _sessionDirectoryOverride;
   static void Function()? debugEventJournalAfterHeadCommitHook;
   static void Function()? debugEventProjectionDiskLoadHook;
@@ -416,13 +415,6 @@ class FlutterScoutCli {
     progress: progress,
   );
 
-  /// Test-only proof that stored placeholders become VM parameters only when
-  /// the caller explicitly supplies their runtime variables.
-  Map<String, String> debugResolveRecordedAction(
-    Map<String, Object?> action,
-    Map<String, String> variables,
-  ) => _recordCallParams(_redactRecordedAction(action), variables);
-
   /// Test-only launch spec. It deliberately returns the URI-file path and
   /// child argv separately so a regression can inspect the process surface.
   Map<String, Object?> debugVmLogListenerLaunchSpec({
@@ -456,12 +448,6 @@ class FlutterScoutCli {
 
   void debugWriteAnnotationCrop(String path, List<int> bytes) =>
       _writePrivateArtifactBytes(path, bytes);
-
-  void debugWriteServePortFile(String path, int port) =>
-      _writeServePortFile(path, port);
-
-  void debugWriteServeCredentialFile(String path, String credential) =>
-      _writeServeCredentialFile(path, credential);
 
   int debugAppendEventStrict(Map<String, Object?> event) =>
       _appendEventStrict(event);
@@ -518,7 +504,7 @@ class FlutterScoutCli {
   }
 
   // Batch-mode connection cache: one WebSocket serves every step of a batch
-  // instead of connect/dispose per command. See cli_batch.dart.
+  // instead of connect/dispose per command. See cli_vm_connection.dart.
   /// Test-only native-process seam. Production always leaves this null.
   static NativeProcessDebugRunner? debugNativeProcessRunner;
 
@@ -529,6 +515,64 @@ class FlutterScoutCli {
   bool _reuseVmConnection = false;
   Map<String, dynamic>? _liveDecisionView;
   bool _agentRequiresLiveRendering = false;
+  // Private dispatch authority, set only on lanes owned by an agent session.
+  // Neither argv nor a typed request can grant this authority.
+  bool _agentLane = false;
+
+  /// Unit-test seam for the shared handlers beneath the agent transport.
+  /// This is not a command/flag and is never used by a deployed client.
+  Future<int> debugRunHandler(List<String> args) async {
+    final previous = _agentLane;
+    _agentLane = true;
+    try {
+      return await run(args);
+    } finally {
+      _agentLane = previous;
+    }
+  }
+
+  static const _removedTransports = {
+    'serve',
+    'explore',
+    'live',
+    'batch',
+    'export-batch',
+    'replay',
+    'record',
+  };
+
+  static const _retiredInteractionCommands = {
+    'inspect',
+    'where',
+    'locate',
+    'bounds',
+    'reveal',
+    'tap',
+    'tap-text',
+    'long-press',
+    'input',
+    'fill',
+    'scroll',
+    'scroll-to',
+    'swipe',
+    'drag-start',
+    'drag-move',
+    'drag-end',
+    'drag-cancel',
+    'drag-status',
+    'back',
+    'dismiss',
+    'wait',
+    'wait-for',
+    'deeplink',
+    'serve',
+    'explore',
+    'live',
+    'batch',
+    'export-batch',
+    'replay',
+    'record',
+  };
 
   /// Test seam for the agent request boundary; never enters a handler.
   void debugValidateAgentAction(Map<String, dynamic> action) =>
@@ -545,12 +589,6 @@ class FlutterScoutCli {
 
   VmService? _cachedVmService;
   String? _cachedVmUri;
-
-  // Batch mode keeps normal action methods intact while collecting their
-  // compact results into one final timeline instead of printing a large JSON
-  // document per step.
-  bool _suppressActionOutput = false;
-  final List<Map<String, dynamic>> _suppressedActionResults = [];
 
   /// Splits a batch script into commands on `;` and newlines, honoring
   /// single/double quotes so quoted arguments can contain separators.
@@ -702,6 +740,13 @@ class FlutterScoutCli {
           command = arg;
           break;
         }
+      }
+      if (_retiredInteractionCommands.contains(command)) {
+        _writeStructuredError(
+          'agent_session_required',
+          'Standalone `$command` was removed. Use flutter-scout --app <name> agent and the shipped agent_client.mjs.',
+        );
+        return 1;
       }
       _printUsage(command: command);
       return 0;
@@ -886,6 +931,13 @@ class FlutterScoutCli {
     _activeSensitiveValues.clear();
     _protectedSecretIngress.clear();
     try {
+      if (_removedTransports.contains(command) ||
+          (_retiredInteractionCommands.contains(command) && !_agentLane)) {
+        throw ScoutCliException(
+          'agent_session_required',
+          'Standalone `$command` was removed. Open flutter-scout --app <name> agent; use observe/query, start/acknowledge, and watch. No legacy fallback is available.',
+        );
+      }
       if (_singleJsonOutput &&
           (command == 'serve' ||
               command == 'live' ||
@@ -935,16 +987,6 @@ class FlutterScoutCli {
             _sessionDirectoryOverride!,
             project: pendingSessionProject,
           );
-        }
-      }
-      if (!_reuseVmConnection &&
-          _commandsEligibleForServeProxy.contains(command) &&
-          !_usesProtectedStdin(command, rest)) {
-        final proxied = await _tryProxyToActiveServe(effectiveArgs);
-        if (proxied != null) {
-          handledByProxy = true;
-          exitCode = proxied;
-          return proxied;
         }
       }
       final clearsSession =
@@ -1001,12 +1043,7 @@ class FlutterScoutCli {
         'wait' => _wait(rest),
         'wait-for' => _waitFor(rest),
         'health' => _health(rest),
-        'batch' => _batch(rest),
-        'export-batch' => _exportBatch(rest),
-        'serve' => _serve(rest),
-        'live' => _live(rest),
         'agent' => _agent(rest),
-        'explore' => _explore(rest),
         'devices' => _devices(rest),
         'apps' => _apps(rest),
         'reload' => _reload(rest),
@@ -1018,8 +1055,6 @@ class FlutterScoutCli {
         'screenshot' => _screenshot(rest),
         'crop' => _crop(rest),
         'evidence' => _evidence(rest),
-        'replay' => _replay(rest),
-        'record' => _record(rest),
         'version' => _version(),
         'help' => _help(rest),
         _ => _unknown(command),
@@ -1172,8 +1207,6 @@ class FlutterScoutCli {
     }
     return redacted;
   }
-
-  int _appendEvent(Map<String, Object?> event) => _appendEventStrict(event);
 
   int _appendEventStrict(Map<String, Object?> event) =>
       _appendSegmentedEventStrict(event);
@@ -1624,15 +1657,6 @@ print(String(data: data, encoding: .utf8)!)
       if (width != null && width > 0) return source.width / width;
     }
     return 1;
-  }
-
-  Map<String, String> _stringMap(Map<String, Object?> value) {
-    final result = <String, String>{};
-    for (final entry in value.entries) {
-      if (entry.key == 'cmd' || entry.value == null) continue;
-      result[entry.key] = entry.value.toString();
-    }
-    return result;
   }
 
   Future<String> _findMainIsolate(VmService service) async {
@@ -2562,89 +2586,26 @@ print(String(data: data, encoding: .utf8)!)
   }
 
   static const Set<String> _commands = {
-    'attach',
-    'launch',
-    'ensure',
-    'status',
-    'doctor',
-    'stop',
-    'inspect',
-    'where',
-    'locate',
-    'reveal',
-    'annotations',
-    'bounds',
-    'tap',
-    'tap-text',
-    'long-press',
-    'input',
-    'fill',
-    'scroll',
-    'scroll-to',
-    'swipe',
-    'drag-start',
-    'drag-move',
-    'drag-end',
-    'drag-cancel',
-    'drag-status',
-    'back',
-    'dismiss',
-    'wait',
-    'wait-for',
-    'health',
-    'batch',
-    'export-batch',
-    'serve',
-    'explore',
-    'live',
     'agent',
-    'devices',
-    'apps',
-    'reload',
-    'restart',
-    'deeplink',
-    'logs',
-    'screenshot',
-    'crop',
-    'evidence',
-    'replay',
-    'record',
-    'version',
-    'help',
-  };
-
-  static const Set<String> _commandsEligibleForServeProxy = {
-    'inspect',
-    'where',
-    'locate',
-    'reveal',
     'annotations',
-    'bounds',
-    'tap',
-    'tap-text',
-    'long-press',
-    'input',
-    'fill',
-    'scroll',
-    'scroll-to',
-    'swipe',
-    'drag-start',
-    'drag-move',
-    'drag-end',
-    'drag-cancel',
-    'drag-status',
-    'back',
-    'dismiss',
-    'wait',
-    'wait-for',
+    'apps',
+    'attach',
+    'crop',
+    'devices',
+    'doctor',
+    'ensure',
+    'evidence',
     'health',
+    'help',
+    'launch',
+    'logs',
     'reload',
     'restart',
-    'logs',
     'screenshot',
-    'crop',
+    'status',
+    'stop',
+    'version',
   };
-
   void _printUsage({String? command}) {
     if (command == 'launch' || command == 'ensure') {
       stdout.writeln('''
@@ -2694,30 +2655,6 @@ VM-service transport:
 ''');
       return;
     }
-    if (command == 'deeplink') {
-      stdout.writeln('''
-Flutter Scout: deeplink
-
-Usage:
-  flutter-scout [--idempotency-key <key>] deeplink
-      (--url-file <owner-only-0600-file> | --url-stdin)
-
-Secret handling:
-  Deep-link URLs can contain session tokens. Protected file/stdin ingress keeps
-  the URL out of argv and stores only a replay placeholder/provenance. A legacy
-  positional URL remains compatible but emits a structured warning.
-
-Native capability:
-  Requires an exact recorded iOS Simulator or Android Emulator and a successful
-  read-only platform-tool preflight plus a live protocol-valid observation from
-  the exact selected session immediately before dispatch. Android uses bounded
-  local-argv ADB with a single-quoted URL for the remote shell and requires
-  Activity Manager `Status: ok`. Unsupported
-  targets abstain before app dispatch; uncertain dispatch must be reconciled
-  under the original idempotency key.
-''');
-      return;
-    }
     if (command == 'screenshot' || command == 'crop') {
       stdout.writeln('''
 Flutter Scout: $command
@@ -2746,96 +2683,28 @@ Native capability:
 ''');
       return;
     }
-    if (command != null &&
-        const {'tap', 'tap-text', 'input', 'fill'}.contains(command)) {
-      stdout.writeln('''
-Flutter Scout: $command
+    stdout.writeln('''Flutter Scout — agent-session interaction API
 
-Protected value input:
-  ${command == 'input' ? '--file <0600-path> | --stdin' : '--file <0600-json> | --stdin'}
-                             Keep values out of process argv. Protected input
-                             is bounded to 1 MiB; files must be regular,
-                             non-symlink, valid UTF-8, and exactly 0600 on POSIX.
+Lifecycle: ensure, launch, attach, status, doctor, devices, apps, reload, restart, stop
+Manual evidence: screenshot, crop, logs, health, evidence, annotations
+Interaction: flutter-scout --app <name> agent [--interval-ms 250] [--max-items 60]
 
-Guarded action options:
-  --expect-text <text>       Wait for visible text.
-  --expect-gone <text>       Wait for text to disappear.
-  --expect-target <handle>   Wait for a visible target.
-  --expect-screen <screen>   Wait for a screen name.
-  --expect-timeout <ms>      Expectation timeout (default 5000).
-  --capture <path>           Capture the exact successful expectation frame.
-  --expect-log <text>        Wait for fresh Scout-owned log text.
-  --reject-log <text>        Fail if fresh logs contain this text.
-  --allow-errors             Permit fresh blocking errors (failed by default).
+Use the shipped scripts/agent_client.mjs in one persistent Node session.
+Agent protocol 2: observe, query, start, next, acknowledge, reconcile,
+watch, react, cancel, status, close. Images are manual.
+A ticket is not success. Consume the canonical receipt before another input.
+Failed input requires fresh reconciliation; unknown dispatch stays halted.
 
-Run `flutter-scout help` for the complete command list.
-''');
-      return;
-    }
-    stdout.writeln('''
-Flutter Scout
+Standalone inspect/actions/waits, live, serve, explore, batch, record and replay
+were removed. There is no compatibility switch or automatic fallback.
+This protocol is independent of your model and does not require Fast mode.
 
-Usage:
-  flutter-scout [--single-json] [--app <name>] [--idempotency-key <key>] <command> [options]
-    Put --single-json first for one compact final JSON response on stdout,
-    including failures; progress/warnings go to stderr. Help remains prose.
-    This prefix is unavailable for serve, explore, live, agent, and internal workers.
-    --idempotency-key accepts 1-128 safe ASCII characters. Reuse one key only
-    for the same business mutation; retries replay/reconcile the first outcome.
-  flutter-scout attach [--device <simulator-id>] [--debug-url-file <0600-path> | --debug-url-stdin]
-  flutter-scout launch --device <simulator-id> [--project <path>] [--name <label>] [--replace] [--temporary-helper] [--inherit-launch-context] [--dart-define-from-file <0600-path>] [--launch-timeout <s>] [--launch-idle-timeout <s>]
-  flutter-scout ensure --device <simulator-id> [--project <path>] [--name <label>] [--temporary-helper] [--inherit-launch-context] [--dart-define-from-file <0600-path>] [--launch-timeout <s>] [--launch-idle-timeout <s>]
-  flutter-scout status
-  flutter-scout devices
-  flutter-scout apps [--all] [--prune]
-  flutter-scout version | --version | -V
-  flutter-scout doctor [--project <path>] [--device <simulator-id>]
-  flutter-scout stop [--clear-session]
-  flutter-scout inspect [--brief] [--surface] [--max-items <n>] [--sections <list>] [--since <snapshot-id>]
-  flutter-scout where [--verbose]
-  flutter-scout locate (--text <text> | --target <handle>) [--within <scroll-id>]
-  flutter-scout reveal (--text <text> | --target <handle>) [--within <scroll-id>] [--direction down|up|right|left] [--max-actions <n>]
-  flutter-scout annotations [list|targets|enable|disable|clear|resolve|dismiss|reopen|fixed|check]
-  flutter-scout annotations wait [--timeout <seconds>] [--poll <ms>]
-  flutter-scout annotations fixed <annotation-id> [--note <text>]
-  flutter-scout bounds [target]
-  flutter-scout tap <target> [--expect-text <text>] [--expect-log <text>] [--reject-log <text>] [--allow-errors] [--verbose]
-  flutter-scout tap <x> <y> | tap --x <x> --y <y>
-  flutter-scout tap-text <visible text> | tap-text --text <visible text> [--allow-mismatch] [--verbose]
-  flutter-scout long-press <target> [--verbose]
-  flutter-scout input [--target <field>] (--file <0600-path> | --stdin) [--verbose]
-  flutter-scout input [--target <field>] <value> [--verbose]  # insecure legacy argv
-  flutter-scout fill (--file <0600-json> | --stdin) [--verbose]
-  flutter-scout fill --json <object> [--verbose]  # insecure legacy argv
-  flutter-scout scroll [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--verbose]
-  flutter-scout scroll-to <target> [--max-scrolls <n>] [--direction down|up|left|right] [--distance <px>] [--verbose]
-  flutter-scout swipe [up|down|left|right] [--target <target>] [--distance <px>] [--x <x> --y <y> | --from x,y] [--to x,y] [--verbose]
-  flutter-scout drag-start [--target <target> | --from x,y]
-  flutter-scout drag-move (--to x,y | --by dx,dy) [--screenshot <path>] [--verbose]
-  flutter-scout drag-end [--to x,y | --by dx,dy] [--verbose]
-  flutter-scout drag-status | drag-cancel
-  flutter-scout back [--verbose]
-  flutter-scout dismiss [--verbose]
-  flutter-scout wait stable [--timeout <ms>] [--verbose]
-  flutter-scout wait-for [--text <text>] [--gone <text>] [--target <handle>]
-  flutter-scout health [--include-stale]
-  flutter-scout batch '<command>; <command>' [--var-file <0600-json> | --var-stdin] [--keep-going] [--verbose]
-  flutter-scout export-batch [-o <path>] [--retention session|24h|7d|manual]
-  flutter-scout serve [--port <port>] [--port-file <path>] [--credential-file <path>] [--idle-timeout <seconds>] [--request-timeout <seconds>] [--max-body-bytes <n>] [--allow-legacy-run]
-  flutter-scout live [--interval-ms <250..10000>] [--max-items <1..100>] # JSONL stdin/stdout; images remain manual
-  flutter-scout agent [--interval-ms <100..10000>] [--max-items <1..100>] # concurrent eyes, action tickets, bounded reactions; JSONL
-  flutter-scout explore [--port <port>] [--port-file <path>] [--credential-file <path>] [--once]
-  flutter-scout record run <name> [--var-file <0600-json> | --var-stdin]
-  flutter-scout record start|stop|list|show|pause|resume|undo|save-last
-  flutter-scout reload [--verbose]
-  flutter-scout restart [--verbose]
-  flutter-scout deeplink (--url-file <0600-path> | --url-stdin)
-  flutter-scout logs [--last <n>] [--contains <text>] [--summary]
-  flutter-scout screenshot [-o <path>] [--target <target>] [--annotated] [--native] [--retention session|24h|7d|manual]
-  flutter-scout crop <target> | crop --text <visible text> | crop --rect x,y,w,h | crop --changed-since <snapshot-id> [-o <path>] [--native] [--retention session|24h|7d|manual]
-  flutter-scout evidence [-o <dir>] [--last <n>] [--audit] [--retention session|24h|7d|manual]
-  flutter-scout replay [session.json] [--var-file <0600-json> | --var-stdin] [--verbose]
-  flutter-scout help [command]
+Named lifecycle example:
+flutter-scout --single-json ensure --device macos --project <app> --name <name>
+flutter-scout --app <name> stop --clear-session
+
+--single-json is available for finite lifecycle/diagnostic commands, not agent.
+Read skills/flutter-scout/SKILL.md and references/agent-session.md for contracts.
 ''');
   }
 

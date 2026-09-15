@@ -334,8 +334,10 @@ void main() {
       final workerScript = File(p.join(scoutRoot, 'flutter_scout_worker.dart'))
         ..writeAsStringSync('''
 import 'dart:async';
+import 'dart:io';
 
 Future<void> main(List<String> args) async {
+  stdout.writeln('worker-ready');
   await Future<void>.delayed(const Duration(minutes: 1));
 }
 ''');
@@ -343,6 +345,9 @@ Future<void> main(List<String> args) async {
       config.parent.createSync(recursive: true);
       config.writeAsStringSync('{}');
       final worker = await Process.start(Platform.resolvedExecutable, [
+        // The temporary app deliberately has a fake package_config. Use this
+        // test package's real config so the worker survives compilation.
+        '--packages=${p.join(packageRoot, '.dart_tool', 'package_config.json')}',
         workerScript.path,
         'flutter-run-worker',
         '--config',
@@ -354,13 +359,16 @@ Future<void> main(List<String> args) async {
           await worker.exitCode.timeout(const Duration(seconds: 2));
         }
       });
-      final workerReadyDeadline = DateTime.now().add(
-        const Duration(seconds: 2),
+      // A PID can exist while the Dart launcher is still replacing itself.
+      // Capture ownership only after the actual fixture worker is running.
+      expect(
+        await worker.stdout
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .first
+            .timeout(const Duration(seconds: 15)),
+        'worker-ready',
       );
-      while (!await _processIsAlive(worker.pid) &&
-          DateTime.now().isBefore(workerReadyDeadline)) {
-        await Future<void>.delayed(const Duration(milliseconds: 25));
-      }
       expect(await _processIsAlive(worker.pid), isTrue);
       final identity = await _processIdentity(
         worker.pid,

@@ -102,7 +102,8 @@ Proof keys resolve to these files:
 - `P-NO-EGRESS`: default-deny direct-network inventory and source gate; this
   key is not independent runtime proof that no OS process made an outbound
   connection.
-- `P-SERVE`: authenticated bounded loopback transport contract tests.
+- `P-SERVE`: historical transport proof key; current bounded agent-session and
+  protocol tests. HTTP-specific requirements are retired, not live-tested.
 - `P-PROTOCOL-ARTIFACTS`: published machine protocol schemas and method catalog.
 - `P-CROSS-VERSION`: explicit current-source protocol-14/15/16 pairings,
   bilateral pre-dispatch gates, required-field/capability semantics, and tests;

@@ -1,5 +1,22 @@
 ## Unreleased
 
+- Add explicit macOS `foreground()` on the persistent agent connection. Activate
+  only the connected VM's app process, then observe actual rendering; preserve
+  exclusive-hand, receipt and failure guards without automatic focus stealing.
+- Hard cutover to agent session protocol 2 (CLI 2.0.0-dev.2). Remove standalone
+  UI observation/input/waits and live/serve/explore/batch/record/replay entrypoints;
+  no legacy override or automatic server fallback. Lifecycle, annotations and
+  manual evidence remain available. The serialized live-loop implementation is
+  removed; v1 command/HTTP artifacts describe historical contracts.
+- Require delivered input receipts to be acknowledged before another input.
+  Known failures require explicit fresh reconciliation; unknown outcomes stay
+  halted. Allow only one agent connection per named app.
+- Add focused read-only queries and a bounded one-input client helper, retain
+  intervening alerts, prevent out-of-order reads from regressing the latest
+  view, and preserve query correlation around canonical response envelopes.
+- Rewrite current usage guidance around the sole session contract. Do not
+  require or change any model or Fast/priority service setting.
+
 - Add `agent`: independent passive eyes and a single guarded hand, immediate
   acceptance tickets, short canonical input receipts, independent condition
   waits, explicit cancellation scope, bounded retained events and one-shot

@@ -38,6 +38,7 @@ for (const mode of modes.length ? modes : ['hold', 'flash', 'quiet']) {
     assert.equal(receipt?.ok, true);
     assert.equal(receipt.dispatch, 'dispatched');
     assert.equal(receipt.postcondition, 'postcondition_not_requested');
+    assert.equal((await agent.acknowledge(ticket.actionId)).ok, true);
     const receiptMs = Date.now() - startTime;
     const working = await agent.observe();
     assert.ok(working.view.visibleText.includes('Phase: Working'));
@@ -66,6 +67,7 @@ for (const mode of modes.length ? modes : ['hold', 'flash', 'quiet']) {
         await readEvent();
       }
       assert.equal(events.find(event => event.type === 'action' && event.actionId === triggered.actionId)?.result?.ok, true);
+      assert.equal((await agent.acknowledge(triggered.actionId)).ok, true);
     }
     const final = await agent.observe();
     const callbacks = Object.fromEntries(final.view.visibleText.flatMap(text => {

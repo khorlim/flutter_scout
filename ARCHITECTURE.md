@@ -8,12 +8,15 @@ agent ──> flutter-scout CLI ──(VM service ext.flutter_scout.*)──> in
           packages/flutter_scout            packages/flutter_scout_helper
 ```
 
-The CLI is a stateless command process; the helper is a binding installed inside
-the app that registers VM-service extensions and renders the annotation overlay.
+UI interaction uses one persistent agent-session process. Finite commands are
+reserved for lifecycle and manual diagnostics. The helper registers VM-service
+extensions and renders the annotation overlay. No model or paid service tier
+is required by the protocol.
 
 ## Request flow
 
-1. The agent runs `flutter-scout <command>` (e.g. `tap btn.save`).
+1. The agent opens `flutter-scout --app <name> agent` and keeps one JSONL pipe.
+   Standalone interaction and alternate transport commands are rejected.
 2. `FlutterScoutCli.run()` resolves the named session, repairs an interrupted
    temporary-helper transaction, and performs fail-closed registered-artifact
    expiry before reserving a durable, cursor-addressed command event. It then
@@ -30,6 +33,10 @@ the app that registers VM-service extensions and renders the annotation overlay.
    postcondition/runtime outcomes, commits replay and event evidence, then
    prints a bounded sanitized response. Evidence failure converts possible
    success into an explicit reconcile-before-retry outcome.
+6. Agent protocol 2 requires the canonical input event to be delivered and
+   acknowledged before another input. Failed input needs fresh explicit
+   reconciliation; unknown dispatch cannot be cleared. Observations continue
+   independently. Business conditions use bounded watch jobs.
 
 ## packages/flutter_scout_helper (in-app runtime)
 
@@ -78,11 +85,11 @@ concerns live in extensions and top-level helpers.
 | `cli_capture.dart` | screenshot / crop, `_inAppCapture`, `_cropPngBytes`. |
 | `cli_native_platform.dart` | Exact recorded-emulator capability routing, bounded local-argv platform processes (including explicit Android remote-shell URL encoding), full PNG decode/provenance, TERM-to-KILL containment, and deterministic process seams. |
 | `cli_vm_transport.dart` | Central VM-service capability-URL validation, loopback-only transport policy, endpoint-only disclosure, guarded persistence, and deterministic no-egress probes. |
-| `cli_evidence.dart` | Fresh, completion-gated retained evidence bundles, replay, and transcript formatting. |
-| `cli_batch.dart` | Bounded command batching and private replay-script export. |
-| `cli_record.dart` | Recording store/list/run plus retained owner-only export operations and the central JSON printer. |
-| `cli_serve.dart` | Persistent HTTP bridge: legacy `/run`, typed `/v1/schema` + `/v1/call`, health, and shutdown. |
-| `cli_live.dart` + `live_view_loop.dart` | Experimental persistent JSONL agent loop, serialized latest semantic observations, stale decision rejection at mutation preflight, and action-plus-next-view responses. No automatic images. |
+| `cli_evidence.dart` | Fresh, completion-gated retained evidence bundles and non-executable transcripts. |
+| `cli_vm_connection.dart` | Cleanup of the agent's cached VM connections. |
+| `cli_json_output.dart` | Canonical JSON printer and the historical journal redaction marker. |
+| `cli_agent_dispatch.dart` | Internal typed agent dispatch and canonical receipt capture; no HTTP listener. Exact legacy-daemon ownership matching remains solely for safe cleanup. |
+| `cli_agent_io.dart` | Bounded JSONL input framing for the sole agent transport. The experimental serialized live loop was removed. |
 | `cli_agent.dart` + `agent_session.dart` | Independent observer and single-hand CLI contexts/VM connections; correlated JSONL requests; revision-bound action tickets, retained events, bounded condition waits and authorized one-shot reactions. The shipped `skills/flutter-scout/scripts/agent_client.mjs` is the thin pipe client. |
 | `cli_results.dart` | VM connection/invocation, action evidence transaction, protocol diagnostics, runtime-loss mapping, and safety-preserving compaction. |
 | `cli_protocol.dart` | CLI protocol envelope validation, mutation preflight/identity/deadline/idempotency construction, timeout reconciliation, and closed mutation outcomes. |
@@ -100,6 +107,9 @@ concerns live in extensions and top-level helpers.
   persistent calls, mutation requests/outcomes, navigation, helper responses,
   CLI envelopes, events, and heartbeats. Additive v1 changes must tolerate
   unknown optional fields; incompatible changes require a new schema directory.
+- `protocol/schemas/v2/public-cli-commands.json` describes the hard-cutover
+  CLI surface. Agent JSONL protocol 2 is independent of the retained helper
+  protocol 15/schema-1 envelope. V1 public command/HTTP artifacts are historical.
 - `evaluation/` is a separate pure-Dart package. It owns task/catalog/config/
   schedule/raw-episode/report schemas, an independent-oracle boundary,
   deterministic paired scheduling, immutable SHA-256 archives, Wilson/McNemar/
@@ -136,8 +146,9 @@ commands. Key pieces:
 
 - Each `part` file is one concern — start there, not in the 1,300-line shells.
 - The runtime is one library: any new private member is visible to all parts.
-- Keep the public API (`run()`, `FlutterScoutRuntime` public methods, the
-  `RuntimeAnnotations` extension) stable; tests call these directly.
+- The public CLI intentionally breaks legacy interaction recipes. Preserve
+  shared handler safety coverage separately from positive agent-transport
+  integration coverage; debug test seams are not supported client APIs.
 - After changes, keep both packages green — the CLI is pure Dart, the helper is a
   Flutter package: `dart analyze`/`dart test` in `packages/flutter_scout`,
   `flutter analyze`/`flutter test` in `packages/flutter_scout_helper`. For behavior

@@ -406,7 +406,7 @@ Future<_CliOutcome> _runTap(_FakeCompatibilityHelper helper) async {
         'vmServiceUri': '${helper.uri}',
       }),
     );
-    final exitCode = await FlutterScoutCli().run(<String>[
+    final exitCode = await FlutterScoutCli().debugRunHandler(<String>[
       'tap',
       'btn.save',
       '--wait-ms=-14000',

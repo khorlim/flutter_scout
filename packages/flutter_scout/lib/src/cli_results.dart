@@ -104,9 +104,7 @@ extension _CliResults on FlutterScoutCli {
         ? _compactActionResult(enrichedResult)
         : enrichedResult;
     _emitActionOutput(output, pretty: prettyOutput && !compact);
-    if (record != null && actionSucceeded && enrichedResult['ok'] == true) {
-      await _maybeStartAutoServe();
-    }
+    if (record != null && actionSucceeded && enrichedResult['ok'] == true) {}
     return enrichedResult['ok'] == false ? 1 : 0;
   }
 
@@ -572,10 +570,6 @@ extension _CliResults on FlutterScoutCli {
     final safe = Map<String, dynamic>.from(
       _sanitizeForSerialization(output)! as Map,
     );
-    if (_suppressActionOutput) {
-      _suppressedActionResults.add(safe);
-      return;
-    }
     _printJson(safe, pretty: pretty);
   }
 

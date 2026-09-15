@@ -4,6 +4,13 @@ This pure-Dart package supplies the measurement contracts required before
 Flutter Scout can make benchmark or release claims. It is a harness foundation,
 not a benchmark result, and it publishes no scores.
 
+The v1 process-per-command tool-simulator/endurance adapters and archived action
+plans target the historical v1 CLI. They cannot operate CLI 2's agent-only UI
+contract, and are not current live acceptance evidence. Use the persistent
+agent client and `../tool/agent_runtime_smoke.mjs` for current live checks;
+there is no legacy transport fallback. Deterministic archive/schema tests
+remain useful independently of those historical adapters.
+
 The strict performance and observation non-interference contract is documented
 separately in [`PERFORMANCE.md`](PERFORMANCE.md). Its typed config, immutable raw
 samples, schemas, and reporter cover §11/§13.6 evidence without treating the

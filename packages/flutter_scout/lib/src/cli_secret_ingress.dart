@@ -10,8 +10,6 @@ const int _maxProtectedIngressBytes = 1024 * 1024;
 const int _maxProtectedVariableCount = 512;
 const int _maxProtectedVariableNameLength = 256;
 const String _protectedActionIngressKey = 'action';
-const String _protectedVariableFileIngressKey = 'variables:file';
-const String _protectedVariableStdinIngressKey = 'variables:stdin';
 const String _protectedVmUriIngressKey = 'vm-service-uri';
 const String _protectedDeeplinkIngressKey = 'deeplink-url';
 const String _protectedDeeplinkSourceKey = 'deeplink-url-source';
@@ -92,37 +90,6 @@ extension _CliSecretIngress on FlutterScoutCli {
           _registerSensitiveValue(raw);
         }
       }
-    }
-
-    if (!_acceptsReplayVariables(command, args)) return;
-    final variableFile = _protectedPathOption(args, 'var-file');
-    if (variableFile != null) {
-      if (variableFile.isEmpty) {
-        throw const ScoutCliException(
-          'invalid_var_file',
-          '`--var-file` requires a non-empty path.',
-        );
-      }
-      final raw = _readOwnerOnlySecretFile(variableFile);
-      _protectedSecretIngress[_protectedVariableFileIngressKey] = raw;
-      _registerSensitiveValue(
-        _decodeProtectedStringObject(
-          raw,
-          source: 'variable file',
-          allowEmpty: true,
-        ),
-      );
-    }
-    if (_protectedFlag(args, 'var-stdin')) {
-      final raw = _readBoundedProtectedStdin();
-      _protectedSecretIngress[_protectedVariableStdinIngressKey] = raw;
-      _registerSensitiveValue(
-        _decodeProtectedStringObject(
-          raw,
-          source: 'variable standard input',
-          allowEmpty: true,
-        ),
-      );
     }
   }
 
@@ -452,11 +419,6 @@ extension _CliSecretIngress on FlutterScoutCli {
     return values;
   }
 
-  bool _acceptsReplayVariables(String command, List<String> args) =>
-      command == 'batch' ||
-      command == 'replay' ||
-      (command == 'record' && args.isNotEmpty && args.first == 'run');
-
   bool _hasExactFlag(List<String> args, String name) =>
       args.any((argument) => argument == '--$name');
 
@@ -510,15 +472,6 @@ extension _CliSecretIngress on FlutterScoutCli {
     return result;
   }
 
-  bool _usesProtectedStdin(String command, List<String> args) =>
-      (command == 'input' || command == 'fill') &&
-          _hasExactFlag(args, 'stdin') ||
-      _acceptsReplayVariables(command, args) &&
-          _hasExactFlag(args, 'var-stdin') ||
-      (command == 'attach' || command == 'ensure') &&
-          _hasExactFlag(args, 'debug-url-stdin') ||
-      command == 'deeplink' && _hasExactFlag(args, 'url-stdin');
-
   String? _protectedVmUriInput(ArgResults parsed) {
     if (parsed.option('debug-url') == null &&
         parsed.option('debug-url-file') == null &&
@@ -556,123 +509,6 @@ extension _CliSecretIngress on FlutterScoutCli {
       );
     }
     return value;
-  }
-
-  void _addReplayVariableOptions(ArgParser parser) {
-    parser
-      ..addMultiOption(
-        'var',
-        splitCommas: false,
-        help:
-            'Deprecated for secrets: resolve name=value from process argv. '
-            'Prefer --var-file or --var-stdin.',
-      )
-      ..addOption(
-        'var-file',
-        help:
-            'Read variables from an owner-only 0600 JSON object of '
-            'string name/value pairs.',
-      )
-      ..addFlag(
-        'var-stdin',
-        defaultsTo: false,
-        negatable: false,
-        help:
-            'Read variables from one bounded JSON object on protected '
-            'standard input.',
-      );
-  }
-
-  Map<String, String> _replayVariablesFromSources(ArgResults parsed) {
-    final variables = <String, String>{};
-    final inline = _parseReplayVariables(parsed.multiOption('var'));
-    for (final entry in inline.entries) {
-      _putReplayVariable(variables, entry.key, entry.value, source: '--var');
-    }
-
-    final variableFile = parsed.option('var-file');
-    if (variableFile != null) {
-      final raw = _protectedSecretIngress[_protectedVariableFileIngressKey];
-      if (raw == null) {
-        throw const ScoutCliException(
-          'protected_input_unavailable',
-          'The protected variable file was not available for execution.',
-        );
-      }
-      final decoded = _decodeProtectedStringObject(
-        raw,
-        source: 'variable file',
-        allowEmpty: true,
-      );
-      for (final entry in decoded.entries) {
-        _putReplayVariable(
-          variables,
-          entry.key,
-          entry.value,
-          source: '--var-file',
-        );
-      }
-    }
-
-    if (parsed.flag('var-stdin')) {
-      final raw = _protectedSecretIngress[_protectedVariableStdinIngressKey];
-      if (raw == null) {
-        throw const ScoutCliException(
-          'protected_input_unavailable',
-          'Protected variable standard input was not available for execution.',
-        );
-      }
-      final decoded = _decodeProtectedStringObject(
-        raw,
-        source: 'variable standard input',
-        allowEmpty: true,
-      );
-      for (final entry in decoded.entries) {
-        _putReplayVariable(
-          variables,
-          entry.key,
-          entry.value,
-          source: '--var-stdin',
-        );
-      }
-    }
-    return variables;
-  }
-
-  void _putReplayVariable(
-    Map<String, String> variables,
-    String name,
-    String value, {
-    required String source,
-  }) {
-    _validateProtectedVariableName(name);
-    if (!_isWellFormedUnicode(value)) {
-      throw const ScoutCliException(
-        'invalid_var_value',
-        'Variable values must contain well-formed Unicode.',
-      );
-    }
-    if (utf8.encode(value).length > _maxProtectedIngressBytes) {
-      throw const ScoutCliException(
-        'secret_input_too_large',
-        'A replay variable exceeds the 1 MiB limit.',
-      );
-    }
-    if (variables.containsKey(name)) {
-      throw ScoutCliException(
-        'duplicate_var',
-        'Variable `$name` was supplied more than once; remove the duplicate '
-            'from $source before any action can run.',
-      );
-    }
-    if (variables.length >= _maxProtectedVariableCount) {
-      throw const ScoutCliException(
-        'too_many_vars',
-        'At most 512 replay variables may be supplied.',
-      );
-    }
-    variables[name] = value;
-    _registerSensitiveValue(value);
   }
 
   void _validateProtectedVariableName(String name) {
@@ -909,57 +745,6 @@ extension _CliSecretIngress on FlutterScoutCli {
     if (command == 'fill' && _optionValue(args, 'json') != null) {
       sources.add('fill --json');
     }
-    if (_acceptsReplayVariables(command, args) &&
-        args.any(
-          (argument) => argument == '--var' || argument.startsWith('--var='),
-        )) {
-      sources.add('--var');
-    }
-    if (command == 'batch') {
-      String? script;
-      final filePath = _optionValue(args, 'file');
-      if (filePath != null && filePath.isNotEmpty) {
-        try {
-          script = File(filePath).readAsStringSync();
-        } catch (_) {
-          // The batch parser reports the authoritative file error.
-        }
-      } else {
-        final positional = <String>[];
-        var skipNext = false;
-        for (final argument in args) {
-          if (skipNext) {
-            skipNext = false;
-            continue;
-          }
-          if (argument == '--file' ||
-              argument == '--var' ||
-              argument == '--var-file') {
-            skipNext = true;
-            continue;
-          }
-          if (!argument.startsWith('-')) positional.add(argument);
-        }
-        if (positional.isNotEmpty) script = positional.join(' ');
-      }
-      if (script != null) {
-        for (final line in FlutterScoutCli.splitBatchScript(script)) {
-          final nested = FlutterScoutCli.splitCommandLine(line);
-          if (nested.isEmpty) continue;
-          final nestedCommand = nested.first;
-          final nestedArgs = nested.skip(1).toList(growable: false);
-          if (nestedCommand == 'input' &&
-              _optionValue(nestedArgs, 'file') == null &&
-              !_hasExactFlag(nestedArgs, 'stdin')) {
-            sources.add('batch input positional value');
-          }
-          if (nestedCommand == 'fill' &&
-              _optionValue(nestedArgs, 'json') != null) {
-            sources.add('batch fill --json');
-          }
-        }
-      }
-    }
     if (sources.isEmpty) return;
     _writeStructuredWarning(<String, Object?>{
       'code': 'insecure_secret_source',
@@ -968,8 +753,7 @@ extension _CliSecretIngress on FlutterScoutCli {
       'message':
           'A value entered through process argv may already be visible '
           'to shell history or same-user process inspection. Use '
-          '--file/--stdin for input or fill and '
-          '--var-file/--var-stdin for replay variables, '
+          'the persistent agent JSONL pipe for UI input, '
           '--debug-url-file/--debug-url-stdin for VM-service URLs, and '
           '--url-file/--url-stdin for deep-link URLs. For Flutter compile-time '
           'values, use an owner-only `--dart-define-from-file`; secret-looking '

@@ -11,7 +11,7 @@ Use this skill when a reviewer has left Flutter Scout annotation pins on a runni
 check pins -> fix one pin -> delete that fixed pin -> repeat -> report
 ```
 
-Assume a Scout session is already attached. For attach, launch, inspect, tap, reload, or setup mechanics, use the `flutter-scout` skill and `flutter-scout-setup` only if needed. Run commands as `flutter-scout <cmd>`, adding `--app <name>` when targeting a named session.
+Assume a Scout session is already attached. Use the `flutter-scout` skill for all navigation and verification: one persistent agent connection, never standalone inspect/tap or legacy transports. Use `flutter-scout-setup` only if needed. The annotation and lifecycle commands below remain public; always add `--app <name>` for the intended named session. Do not change the user's model or enable Fast mode.
 
 ## 1. Check Pins
 

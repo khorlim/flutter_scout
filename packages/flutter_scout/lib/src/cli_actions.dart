@@ -529,9 +529,7 @@ extension _CliActions on FlutterScoutCli {
         parsed.flag('verbose') ? result : _compactActionResult(result),
       ),
     );
-    if (actionSucceeded && result['ok'] == true) {
-      await _maybeStartAutoServe();
-    }
+    if (actionSucceeded && result['ok'] == true) {}
     return result['ok'] == false ? 1 : 0;
   }
 
@@ -1162,6 +1160,28 @@ extension _CliActions on FlutterScoutCli {
           callTimeout: const Duration(seconds: 2),
         );
         final expectedRunId = _currentRunIdFromSession();
+        if (_agentRequiresLiveRendering) {
+          final rendering = before == null
+              ? null
+              : _observationPayload(before)['rendering'];
+          final decision = _liveDecisionView;
+          if (before == null ||
+              decision == null ||
+              rendering is! Map ||
+              rendering['status'] != 'active' ||
+              rendering['framesEnabled'] != true ||
+              before['runId'] != decision['runId'] ||
+              before['runtimeInstanceId'] != decision['runtimeInstanceId'] ||
+              before['snapshotId'] != decision['snapshotId']) {
+            return _notDispatchedProtocolFailure(
+              code: 'agent_live_view_unavailable',
+              message:
+                  'Native input requires the same fresh actively rendering agent view. Nothing was dispatched.',
+              method: target.deeplinkMethod,
+              runId: expectedRunId,
+            );
+          }
+        }
         final observationIssue = _nativeDeeplinkObservationIssue(
           before,
           expectedRunId: expectedRunId,

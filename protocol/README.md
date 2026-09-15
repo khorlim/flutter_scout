@@ -1,8 +1,12 @@
 # Flutter Scout protocol contracts
 
-This directory is the immutable, machine-readable contract for Scout protocol
-schema version 1 and helper protocol version 15. A published schema directory
-is never edited incompatibly; breaking changes require a new schema directory.
+This directory contains the current public CLI catalog in `schemas/v2` and
+helper protocol 15 contracts in `schemas/v1`. Agent sessions use protocol 2.
+A published schema directory is never edited incompatibly; breaking changes
+require a new schema directory. V1 HTTP/persistent-call and public-command
+artifacts are historical: the HTTP, live, batch, record and replay transports
+are no longer available. Internal agent actions still share typed parameter
+validation; this does not expose a compatibility endpoint.
 
 The VM service method name is transported out of band by `vm_service`. The
 request schemas represent that call as `{method, params}` so validators and
@@ -112,14 +116,14 @@ result is never emitted partially.
 human-rendered prose surfaces. They are not machine-response records. Unknown
 commands return one typed error on stderr without a second usage stream.
 
-[`public-contract-envelopes.v1.json`](../packages/flutter_scout/test/goldens/public-contract-envelopes.v1.json)
-materializes one deterministic bounded canonical envelope for every machine
-command and every stable error meaning. The `help` row is deliberately present
-with a null envelope and its prose-only reason. Contract tests compare the
-independent catalogs with the production command dispatcher, authenticated
-persistent-method catalog, and source emission sites; an added, removed, or
-reclassified command/code fails until the independent artifact and goldens are
-reviewed together. These are source-envelope proofs only: they do not claim the
+[`public-contract-envelopes.v2.sha256.json`](../packages/flutter_scout/test/goldens/public-contract-envelopes.v2.sha256.json)
+stores the exact digest of deterministic bounded canonical envelopes for every
+current machine command and every stable error meaning. The `help` row has a
+null envelope and its prose-only reason. Contract tests compare the independent
+v2 catalog with production dispatch and current source emission sites. Historical
+v1 error meanings remain fixed, with an explicit retired-code allowlist.
+An added or reclassified command/code fails until the independent artifact and
+golden are reviewed together. These are source-envelope proofs only: they do not claim the
 commands or errors were exercised on an app, simulator, device, or release
 binary. Schema-v1 unknown optional response fields remain accepted, while every
 missing required response field is rejected by the production compatibility

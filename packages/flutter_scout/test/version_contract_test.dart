@@ -29,7 +29,7 @@ void main() {
     );
     expect(compatibility, contains('`flutter_scout` $cliVersion'));
     expect(compatibility, contains('`flutter_scout_helper` $helperVersion'));
-    expect(cliChangelog, contains('`$cliVersion`'));
+    expect(cliChangelog, contains(cliVersion));
     expect(helperChangelog, contains('`$helperVersion`'));
 
     final blockingFlutter = RegExp(

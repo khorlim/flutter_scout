@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_scout/flutter_scout.dart';
 import 'package:test/test.dart';
 
@@ -10,15 +11,11 @@ void main() {
   final packageRoot = Directory.current.path;
   final commandContract = readContractJson(
     packageRoot,
-    '../../protocol/schemas/v1/public-cli-commands.json',
+    '../../protocol/schemas/v2/public-cli-commands.json',
   );
   final errorContract = readContractJson(
     packageRoot,
     '../../protocol/schemas/v1/stable-errors.json',
-  );
-  final persistentContract = readContractJson(
-    packageRoot,
-    '../../protocol/schemas/v1/persistent-methods.json',
   );
   final helperResponseSchema = readContractJson(
     packageRoot,
@@ -31,7 +28,7 @@ void main() {
       commandContract['artifactKind'],
       'flutter_scout_public_cli_command_contract',
     );
-    expect(commandContract['schemaVersion'], 1);
+    expect(commandContract['schemaVersion'], 2);
     expect(commandContract['protocolVersion'], 15);
     expect(
       commands.keys.toList(),
@@ -61,15 +58,12 @@ void main() {
         .toSet();
     expect(dispatched, containsAll(productionCommands));
 
-    final persistent = (persistentContract['methods']! as Map<String, dynamic>)
-        .keys
-        .toSet();
-    final declaredPersistent = <String>{
-      for (final entry in commands.entries)
-        if ((entry.value as Map)['persistentMethod'] == true) entry.key,
-    };
-    expect(declaredPersistent, persistent);
-    expect(productionCommands, containsAll(persistent));
+    expect(
+      commands.values.cast<Map>().every(
+        (definition) => definition['persistentMethod'] == false,
+      ),
+      isTrue,
+    );
 
     final humanOnly = <String>{
       for (final entry in commands.entries)
@@ -109,23 +103,41 @@ void main() {
     final emitted = _sourceStructuredCodes(packageRoot, errorContract);
     final declared = <String>{...errors.keys, ...nonErrors.keys};
     expect(
-      declared,
-      emitted,
+      emitted.difference(declared),
+      isEmpty,
       reason:
-          'A source-emitted code was added/removed, or a checked-in stable '
-          'meaning no longer has an emission site. '
-          'uncatalogued=${emitted.difference(declared).toList()..sort()}; '
-          'withoutEmission=${declared.difference(emitted).toList()..sort()}',
+          'Every currently emitted structured code must have one checked-in '
+          'stable meaning.',
+    );
+    expect(
+      declared.difference(emitted),
+      _retiredV1StructuredCodes,
+      reason:
+          'Schema v1 keeps fixed meanings for deliberately retired public '
+          'features. Only this reviewed historical set may lack an emission '
+          'site in the cutover source.',
     );
   });
 
   test('every public command and stable error matches its bounded golden', () {
     final expected = readContractJson(
       packageRoot,
-      'test/goldens/public-contract-envelopes.v1.json',
+      'test/goldens/public-contract-envelopes.v2.sha256.json',
     );
     final current = buildPublicContractGoldens(packageRoot);
-    expect(current, expected);
+    final encoded = jsonEncode(current);
+    expect(expected['schemaVersion'], current['schemaVersion']);
+    expect(expected['protocolVersion'], current['protocolVersion']);
+    expect(expected['artifactKind'], current['artifactKind']);
+    expect(expected['commandCount'], (current['commands']! as List).length);
+    expect(expected['errorCount'], (current['errors']! as List).length);
+    expect(
+      crypto.sha256.convert(utf8.encode(encoded)).toString(),
+      expected['sha256'],
+      reason:
+          'The deterministic public-command/error envelope contract changed. '
+          'Review the contract change before updating this digest.',
+    );
 
     final commandRows = (current['commands']! as List).cast<Map>();
     expect(
@@ -189,6 +201,61 @@ void main() {
     },
   );
 }
+
+const Set<String> _retiredV1StructuredCodes = <String>{
+  'ambiguous_recording',
+  'batch_argument_bounds_exceeded',
+  'batch_command_forbidden',
+  'batch_command_invalid',
+  'batch_command_schema_invalid',
+  'batch_command_too_large',
+  'batch_empty',
+  'batch_input_conflict',
+  'batch_nested_secret_source_forbidden',
+  'batch_placeholder_scope_invalid',
+  'batch_script_invalid',
+  'batch_step_failed',
+  'batch_too_many_commands',
+  'batch_unterminated_quote',
+  'credential_file_exists',
+  'cross_site_request_rejected',
+  'duplicate_var',
+  'internal_server_error',
+  'invalid_credential',
+  'invalid_live_action',
+  'invalid_live_request',
+  'invalid_utf8',
+  'invalid_var',
+  'invalid_var_file',
+  'invalid_var_value',
+  'legacy_run_disabled',
+  'live_action_outcome_unknown',
+  'live_observation_unavailable',
+  'live_view_unavailable',
+  'loopback_required',
+  'method_not_allowed',
+  'missing_var',
+  'no_actions',
+  'no_recorded_actions',
+  'origin_not_allowed',
+  'query_not_allowed',
+  'record_name_taken',
+  'record_not_found',
+  'recording_persistence_failed',
+  'replay_element_invalid',
+  'replay_empty',
+  'replay_input_conflict',
+  'replay_invalid',
+  'replay_invalid_json',
+  'replay_parameter_bounds_exceeded',
+  'replay_too_many_actions',
+  'request_body_too_large',
+  'request_deadline_exceeded',
+  'too_many_vars',
+  'unexpected_body',
+  'unknown_endpoint',
+  'unsupported_content_type',
+};
 
 Set<String> _sourceStructuredCodes(
   String packageRoot,

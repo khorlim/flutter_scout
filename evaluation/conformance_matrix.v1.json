@@ -102,10 +102,10 @@
       "../packages/flutter_scout/test/protocol_schema_test.dart"
     ],
     "P-COMMAND-GOLDENS": [
-      "../protocol/schemas/v1/public-cli-commands.json",
+      "../protocol/schemas/v2/public-cli-commands.json",
       "../protocol/schemas/v1/stable-errors.json",
       "../packages/flutter_scout/test/public_contract_goldens_test.dart",
-      "../packages/flutter_scout/test/goldens/public-contract-envelopes.v1.json",
+      "../packages/flutter_scout/test/goldens/public-contract-envelopes.v2.sha256.json",
       "../packages/flutter_scout/tool/update_public_contract_goldens.dart"
     ],
     "P-HELPER-PROTOCOL": [
@@ -120,11 +120,11 @@
       "../protocol/schemas/v1/persistent-call.schema.json"
     ],
     "P-BOUNDED-INPUT": [
-      "../packages/flutter_scout/lib/src/cli_batch.dart",
+      "../packages/flutter_scout/lib/src/cli_agent_io.dart",
       "../packages/flutter_scout/lib/src/cli_evidence.dart",
       "../packages/flutter_scout/lib/src/cli_privacy.dart",
-      "../packages/flutter_scout/test/bounded_batch_replay_test.dart",
-      "../docs/bounded-batch-replay.md"
+      "../packages/flutter_scout/test/agent_cutover_boundary_test.dart",
+      "../skills/flutter-scout/references/agent-session.md"
     ],
     "P-PERCEPTION": [
       "../packages/flutter_scout_helper/lib/src/runtime_nodes.dart",
@@ -186,7 +186,7 @@
       "../packages/flutter_scout/lib/src/cli_session.dart",
       "../packages/flutter_scout/lib/src/cli_annotations.dart",
       "../packages/flutter_scout/lib/src/cli_evidence.dart",
-      "../packages/flutter_scout/lib/src/cli_record.dart",
+      "../packages/flutter_scout/lib/src/cli_json_output.dart",
       "../packages/flutter_scout/test/artifact_retention_test.dart",
       "../packages/flutter_scout/test/storage_safety_test.dart",
       "../SECURITY.md"
@@ -244,7 +244,7 @@
       "../packages/flutter_scout/lib/src/cli_secret_ingress.dart",
       "../packages/flutter_scout_helper/lib/src/runtime_privacy.dart",
       "../packages/flutter_scout/test/privacy_redaction_test.dart",
-      "../packages/flutter_scout/test/protected_secret_ingress_test.dart",
+      "../packages/flutter_scout/test/agent_cutover_boundary_test.dart",
       "../packages/flutter_scout/test/dart_define_ingress_test.dart",
       "../packages/flutter_scout/test/adversarial_privacy_corpus_test.dart",
       "../packages/flutter_scout_helper/test/adversarial_privacy_corpus_test.dart",
@@ -267,7 +267,7 @@
       "test/network_egress_policy_test.dart"
     ],
     "P-SERVE": [
-      "../packages/flutter_scout/lib/src/cli_serve.dart",
+      "../packages/flutter_scout/lib/src/cli_agent.dart",
       "../packages/flutter_scout/test/flutter_scout_test.dart"
     ],
     "P-PROTOCOL-ARTIFACTS": [

@@ -88,8 +88,20 @@
       "meaning": "The agent observer could not obtain a valid view and stopped further input.",
       "family": "operation"
     },
+    "agent_query_failed": {
+      "meaning": "A focused read-only agent query did not return a canonical result; no input was requested.",
+      "family": "operation"
+    },
     "agent_request_rejected": {
       "meaning": "The bounded agent session rejected an invalid, unsafe or stale request before dispatch.",
+      "family": "request_rejected"
+    },
+    "agent_session_busy": {
+      "meaning": "The named app already has an exclusive agent connection; no second hand was opened.",
+      "family": "request_rejected"
+    },
+    "agent_session_required": {
+      "meaning": "The standalone interaction or legacy transport was removed; use the persistent agent session.",
       "family": "request_rejected"
     },
     "ambiguous_recording": {

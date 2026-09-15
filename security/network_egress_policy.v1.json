@@ -26,26 +26,6 @@
       ]
     },
     {
-      "path": "packages/flutter_scout/lib/src/cli_serve.dart",
-      "primitive": "HttpServer.bind(",
-      "occurrences": 1,
-      "destination": "loopback_listener",
-      "purpose": "Expose the authenticated persistent Scout transport locally.",
-      "requiredEvidence": [
-        "InternetAddress.loopbackIPv4"
-      ]
-    },
-    {
-      "path": "packages/flutter_scout/lib/src/cli_serve.dart",
-      "primitive": "HttpClient(",
-      "occurrences": 1,
-      "destination": "loopback_client",
-      "purpose": "Proxy a short-lived CLI invocation to its authenticated local Scout transport.",
-      "requiredEvidence": [
-        "http://127.0.0.1:$port/v1/call"
-      ]
-    },
-    {
       "path": "evaluation/lib/src/tool_simulator/vm_supplier_oracle_client.dart",
       "primitive": "WebSocket.connect(",
       "occurrences": 1,

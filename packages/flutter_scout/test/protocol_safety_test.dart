@@ -8,7 +8,177 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 void main() {
+  final packageRoot = Directory.current.absolute.path;
+
   group('v15 mutation protocol', () {
+    test(
+      'public agent JSONL dispatches once and requires its receipt acknowledgement',
+      () async {
+        const secret = 'AGENT_JSONL_SECRET_601500001';
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        fake.preflightExtra = <String, Object?>{
+          'capabilities': <String, bool>{
+            ...fake._capabilities(),
+            'liveRenderingGuardV1': true,
+          },
+          'screen': 'home',
+          'safetyEvidenceStatus': 'complete',
+          'rendering': const <String, Object?>{
+            'status': 'active',
+            'framesEnabled': true,
+          },
+          'visibleText': const <String>['Home'],
+          'interactables': const <Object?>[
+            <String, Object?>{'id': 'btn.save'},
+          ],
+        };
+
+        await _withProtocolSession(fake.uri, () async {
+          final process = await Process.start(Platform.resolvedExecutable, <
+            String
+          >[
+            '--packages=${p.join(packageRoot, '.dart_tool', 'package_config.json')}',
+            p.join(packageRoot, 'bin', 'flutter_scout.dart'),
+            'agent',
+            '--interval-ms',
+            '10000',
+          ], workingDirectory: Directory.current.path);
+          final stderr = process.stderr.transform(utf8.decoder).join();
+          final lines = StreamIterator<String>(
+            process.stdout
+                .transform(utf8.decoder)
+                .transform(const LineSplitter()),
+          );
+          addTearDown(() async {
+            process.kill();
+            await process.exitCode.timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => -1,
+            );
+          });
+
+          final ready = await _nextAgentMessage(lines);
+          expect(ready['type'], 'ready');
+          expect(ready['agentProtocol'], 2);
+          expect(ready['ok'], isTrue, reason: jsonEncode(ready));
+          final revision = ready['viewRevision'] as int;
+
+          process.stdin.writeln(
+            jsonEncode(<String, Object?>{
+              'id': 'nested-query',
+              'method': 'query',
+              'query': <String, Object?>{
+                'method': 'tap',
+                'args': <String>['btn.save'],
+              },
+            }),
+          );
+          final nested = await _nextAgentMessage(lines);
+          expect(nested['ok'], isFalse);
+          expect((nested['error'] as Map)['code'], 'agent_request_rejected');
+          expect(fake.dispatchCount, 0);
+
+          process.stdin.writeln(
+            jsonEncode(<String, Object?>{
+              'id': 'override-action',
+              'method': 'start',
+              'viewRevision': revision,
+              'action': <String, Object?>{
+                'method': 'tap',
+                'args': <String>['btn.save'],
+                'params': <String, Object?>{'allowErrors': true},
+              },
+            }),
+          );
+          final override = await _nextAgentMessage(lines);
+          expect(override['ok'], isFalse);
+          expect((override['error'] as Map)['code'], 'agent_request_rejected');
+          expect(fake.dispatchCount, 0);
+
+          process.stdin.writeln(
+            jsonEncode(<String, Object?>{
+              'id': 'start-input',
+              'method': 'start',
+              'viewRevision': revision,
+              'action': <String, Object?>{
+                'method': 'input',
+                'args': <String>[secret],
+                'params': <String, Object?>{'target': 'field.password'},
+              },
+            }),
+          );
+          final ticket = await _nextAgentMessage(lines);
+          expect(ticket['ok'], isTrue, reason: jsonEncode(ticket));
+          expect(ticket['phase'], 'accepted');
+          expect(ticket['dispatch'], 'not_yet_established');
+
+          Map<String, dynamic>? receipt;
+          var nextRequest = 0;
+          while (receipt == null) {
+            process.stdin.writeln(
+              jsonEncode(<String, Object?>{
+                'id': 'next-receipt-${nextRequest++}',
+                'method': 'next',
+                'timeoutMs': 5000,
+              }),
+            );
+            final response = await _nextAgentMessage(lines);
+            final event = response['event'];
+            if (event is Map &&
+                event['type'] == 'action' &&
+                event['actionId'] == ticket['actionId']) {
+              receipt = Map<String, dynamic>.from(event);
+            }
+          }
+          expect((receipt['result'] as Map)['ok'], isTrue);
+          expect((receipt['result'] as Map)['dispatch'], 'dispatched');
+          expect(jsonEncode(receipt), isNot(contains(secret)));
+
+          process.stdin.writeln(
+            jsonEncode(<String, Object?>{
+              'id': 'ack-save',
+              'method': 'acknowledge',
+              'actionId': ticket['actionId'],
+            }),
+          );
+          final acknowledged = await _nextAgentMessage(lines);
+          expect(acknowledged['ok'], isTrue);
+          expect((acknowledged['hand'] as Map)['unacknowledgedAction'], isNull);
+
+          process.stdin.writeln(
+            jsonEncode(const <String, Object?>{
+              'id': 'close-agent',
+              'method': 'close',
+            }),
+          );
+          final closed = await _nextAgentMessage(lines);
+          expect(closed['type'], 'closed');
+          await process.stdin.close();
+          expect(await process.exitCode, 0, reason: await stderr);
+          final leakedFiles = <String>[];
+          for (final entity in Directory.current.listSync(
+            recursive: true,
+            followLinks: false,
+          )) {
+            if (entity is! File) continue;
+            final contents = utf8.decode(
+              entity.readAsBytesSync(),
+              allowMalformed: true,
+            );
+            if (contents.contains(secret)) {
+              leakedFiles.add(p.relative(entity.path));
+            }
+          }
+          expect(leakedFiles, isEmpty);
+        });
+
+        expect(fake.dispatchCount, 1);
+        expect(fake.mutationParams, hasLength(1));
+      },
+      timeout: const Timeout(Duration(minutes: 1)),
+    );
+
     for (final mode in ['active', 'suspended', 'old-helper']) {
       test('agent rendering preflight: $mode', () async {
         final fake = await _FakeVmService.start();
@@ -29,7 +199,10 @@ void main() {
               'runtimeInstanceId': 'runtime-a',
               'snapshotId': 'g7:${List.filled(64, 'a').join()}',
             }, requireLiveRendering: true);
-          expect(await cli.run(['tap', 'btn.save']), mode == 'active' ? 0 : 1);
+          expect(
+            await cli.debugRunHandler(['tap', 'btn.save']),
+            mode == 'active' ? 0 : 1,
+          );
         });
         expect(fake.dispatchCount, mode == 'active' ? 1 : 0);
         if (mode == 'active') {
@@ -38,7 +211,7 @@ void main() {
       });
     }
     test(
-      'live stale decision is rejected at fresh mutation preflight',
+      'agent stale decision is rejected at fresh mutation preflight',
       () async {
         final fake = await _FakeVmService.start();
         addTearDown(fake.close);
@@ -49,7 +222,7 @@ void main() {
               'runtimeInstanceId': 'runtime-a',
               'snapshotId': 'old-screen',
             });
-          expect(await cli.run(['tap', 'btn.save']), 1);
+          expect(await cli.debugRunHandler(['tap', 'btn.save']), 1);
         });
         expect(fake.dispatchCount, 0);
         expect(fake.extensionMethods, ['ext.flutter_scout.inspect']);
@@ -57,7 +230,7 @@ void main() {
     );
 
     test(
-      'live matching observation preserves normal guarded dispatch',
+      'agent matching observation preserves normal guarded dispatch',
       () async {
         final fake = await _FakeVmService.start();
         addTearDown(fake.close);
@@ -68,7 +241,7 @@ void main() {
               'runtimeInstanceId': 'runtime-a',
               'snapshotId': 'g7:${List.filled(64, 'a').join()}',
             });
-          expect(await cli.run(['tap', 'btn.save']), 0);
+          expect(await cli.debugRunHandler(['tap', 'btn.save']), 0);
         });
         expect(fake.dispatchCount, 1);
       },
@@ -79,7 +252,7 @@ void main() {
       addTearDown(fake.close);
 
       await _withProtocolSession(fake.uri, () async {
-        expect(await FlutterScoutCli().run(['tap', 'btn.save']), 0);
+        expect(await FlutterScoutCli().debugRunHandler(['tap', 'btn.save']), 0);
       });
 
       expect(fake.extensionMethods, <String>[
@@ -196,7 +369,11 @@ void main() {
 
       await _withProtocolSession(fake.uri, () async {
         expect(
-          await FlutterScoutCli().run(['tap', 'btn.save', '--wait-ms=-14980']),
+          await FlutterScoutCli().debugRunHandler([
+            'tap',
+            'btn.save',
+            '--wait-ms=-14980',
+          ]),
           0,
         );
       });
@@ -214,7 +391,7 @@ void main() {
         await _withProtocolSession(fake.uri, () async {
           const key = 'save-order-42';
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               '--idempotency-key',
               key,
               'tap',
@@ -225,7 +402,7 @@ void main() {
           );
           File(p.join('.flutter_scout', 'vm_uri.txt')).deleteSync();
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               'tap',
               'btn.save',
               '--idempotency-key=$key',
@@ -234,7 +411,7 @@ void main() {
             0,
           );
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               '--idempotency-key',
               key,
               'tap',
@@ -440,7 +617,7 @@ void main() {
         await _withProtocolSession(fake.uri, () async {
           const key = 'timeout-process-retry';
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               '--idempotency-key',
               key,
               'tap',
@@ -451,7 +628,7 @@ void main() {
           );
           fake.dropAllMutationResponses = false;
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               '--idempotency-key',
               key,
               'tap',
@@ -485,7 +662,7 @@ void main() {
           await _withProtocolSession(fake.uri, () async {
             const key = 'reserved-before-reconnect';
             expect(
-              await FlutterScoutCli().run([
+              await FlutterScoutCli().debugRunHandler([
                 '--idempotency-key',
                 key,
                 'tap',
@@ -519,7 +696,7 @@ void main() {
               vmUriFile.writeAsStringSync('ws://127.0.0.1:1/ws');
             }
             expect(
-              await FlutterScoutCli().run([
+              await FlutterScoutCli().debugRunHandler([
                 '--idempotency-key',
                 key,
                 'tap',
@@ -562,7 +739,7 @@ void main() {
             Process.runSync('chmod', <String>['600', registry.path]);
           }
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               '--idempotency-key',
               'possibly-prior-key',
               'tap',
@@ -595,7 +772,7 @@ void main() {
       await _withProtocolSession(fake.uri, () async {
         const key = 'runtime-replacement';
         expect(
-          await FlutterScoutCli().run([
+          await FlutterScoutCli().debugRunHandler([
             '--idempotency-key',
             key,
             'tap',
@@ -608,7 +785,7 @@ void main() {
           ..dropAllMutationResponses = false
           ..replaceRuntime('runtime-b');
         expect(
-          await FlutterScoutCli().run([
+          await FlutterScoutCli().debugRunHandler([
             '--idempotency-key',
             key,
             'tap',
@@ -647,7 +824,7 @@ void main() {
           const target = 'field.private_password';
           const secret = 'S3cret-value-never-persist';
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               'input',
               '--idempotency-key',
               key,
@@ -696,70 +873,6 @@ void main() {
     );
 
     test(
-      'authenticated daemon reconnect replays the original outcome',
-      () async {
-        final fake = await _FakeVmService.start();
-        addTearDown(fake.close);
-
-        await _withProtocolSession(fake.uri, () async {
-          Future<void> daemonCycle(int cycle) async {
-            final portFile = p.join(
-              Directory.current.path,
-              'serve-$cycle.port',
-            );
-            final credentialFile = '$portFile.credential';
-            final serve = FlutterScoutCli().run([
-              'serve',
-              '--port-file',
-              portFile,
-              '--credential-file',
-              credentialFile,
-              '--request-timeout=5',
-            ]);
-            await _waitForProtocolFile(portFile);
-            await _waitForProtocolFile(credentialFile);
-            final port = int.parse(File(portFile).readAsStringSync());
-            final authorization = File(
-              credentialFile,
-            ).readAsStringSync().trim().substring('Authorization: '.length);
-            final client = HttpClient();
-            try {
-              final response = await _postProtocolJson(
-                client,
-                port,
-                '/v1/call',
-                authorization,
-                <String, Object?>{
-                  'method': 'tap',
-                  'idempotencyKey': 'daemon-reconnect-save',
-                  'args': <String>['btn.save', '--wait-ms=0'],
-                },
-              );
-              expect(response['exitCode'], 0, reason: 'cycle=$cycle');
-              await _postProtocolJson(
-                client,
-                port,
-                '/stop',
-                authorization,
-                const <String, Object?>{},
-                emptyBody: true,
-              );
-            } finally {
-              client.close(force: true);
-            }
-            expect(await serve, 0);
-          }
-
-          await daemonCycle(1);
-          await daemonCycle(2);
-        });
-
-        expect(fake.dispatchCount, 1);
-        expect(fake.mutationParams, hasLength(1));
-      },
-    );
-
-    test(
       'scroll-to caller scope derives replayable keys for both attempts',
       () async {
         final fake = await _FakeVmService.start(scrollToFallback: true);
@@ -768,7 +881,7 @@ void main() {
         await _withProtocolSession(fake.uri, () async {
           for (var attempt = 0; attempt < 2; attempt++) {
             expect(
-              await FlutterScoutCli().run([
+              await FlutterScoutCli().debugRunHandler([
                 '--idempotency-key',
                 'scroll-to-fallback-scope',
                 'scroll-to',
@@ -792,65 +905,6 @@ void main() {
         );
       },
     );
-
-    test('batch and replay derive stable, distinct per-step keys', () async {
-      final fake = await _FakeVmService.start();
-      addTearDown(fake.close);
-
-      await _withProtocolSession(fake.uri, () async {
-        const batchScript =
-            'tap btn.first --wait-ms=0; '
-            'tap btn.second --wait-ms=0';
-        for (var attempt = 0; attempt < 2; attempt++) {
-          expect(
-            await FlutterScoutCli().run([
-              '--idempotency-key',
-              'batch-flow-scope',
-              'batch',
-              batchScript,
-            ]),
-            0,
-          );
-        }
-        expect(fake.dispatchCount, 2);
-        final batchKeys = fake.mutationParams
-            .map((params) => params['idempotencyKey'])
-            .toSet();
-        expect(batchKeys, hasLength(2));
-
-        final replayFile = File(p.join(Directory.current.path, 'replay.json'))
-          ..writeAsStringSync(
-            jsonEncode(<Object?>[
-              <String, Object?>{
-                'cmd': 'tap',
-                'target': 'btn.replay_first',
-                'waitMs': '0',
-              },
-              <String, Object?>{
-                'cmd': 'tap',
-                'target': 'btn.replay_second',
-                'waitMs': '0',
-              },
-            ]),
-          );
-        for (var attempt = 0; attempt < 2; attempt++) {
-          expect(
-            await FlutterScoutCli().run([
-              '--idempotency-key',
-              'replay-flow-scope',
-              'replay',
-              replayFile.path,
-            ]),
-            0,
-          );
-        }
-        expect(fake.dispatchCount, 4);
-        final allKeys = fake.mutationParams
-            .map((params) => params['idempotencyKey'])
-            .toSet();
-        expect(allKeys, hasLength(4));
-      });
-    });
 
     test(
       'bounded CLI registry compacts closed receipts into tombstone filter',
@@ -887,7 +941,7 @@ void main() {
           }
 
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               '--idempotency-key',
               'new-key-after-capacity',
               'tap',
@@ -916,7 +970,7 @@ void main() {
           );
 
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               '--idempotency-key',
               prunedKey,
               'tap',
@@ -940,7 +994,7 @@ void main() {
           final key = 'prune-receipt-$index';
           keys.add(key);
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               '--idempotency-key',
               key,
               'tap',
@@ -974,7 +1028,7 @@ void main() {
               tombstoneEntry.key,
         );
         expect(
-          await FlutterScoutCli().run([
+          await FlutterScoutCli().debugRunHandler([
             '--idempotency-key',
             tombstonedKey,
             'tap',
@@ -995,7 +1049,7 @@ void main() {
 
         await _withProtocolSession(fake.uri, () async {
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               'tap',
               'btn.save',
               '--wait-ms=-14980',
@@ -1049,7 +1103,7 @@ void main() {
       addTearDown(fake.close);
 
       await _withProtocolSession(fake.uri, () async {
-        expect(await FlutterScoutCli().run(['tap', 'btn.save']), 1);
+        expect(await FlutterScoutCli().debugRunHandler(['tap', 'btn.save']), 1);
       });
 
       expect(fake.extensionMethods, <String>['ext.flutter_scout.inspect']);
@@ -1062,7 +1116,10 @@ void main() {
         addTearDown(fake.close);
 
         await _withProtocolSession(fake.uri, () async {
-          expect(await FlutterScoutCli().run(['tap', 'btn.save']), 1);
+          expect(
+            await FlutterScoutCli().debugRunHandler(['tap', 'btn.save']),
+            1,
+          );
         });
 
         expect(fake.extensionMethods, <String>['ext.flutter_scout.inspect']);
@@ -1077,7 +1134,7 @@ void main() {
       addTearDown(fake.close);
 
       await _withProtocolSession(fake.uri, () async {
-        expect(await FlutterScoutCli().run(['tap', 'btn.save']), 1);
+        expect(await FlutterScoutCli().debugRunHandler(['tap', 'btn.save']), 1);
       });
 
       expect(fake.extensionMethods, <String>['ext.flutter_scout.inspect']);
@@ -1086,35 +1143,20 @@ void main() {
   });
 }
 
-Future<void> _waitForProtocolFile(String path) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 5));
-  while (DateTime.now().isBefore(deadline)) {
-    if (File(path).existsSync() && File(path).lengthSync() > 0) return;
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-  }
-  throw StateError('Timed out waiting for $path');
-}
-
-Future<Map<String, dynamic>> _postProtocolJson(
-  HttpClient client,
-  int port,
-  String path,
-  String authorization,
-  Map<String, Object?> body, {
-  bool emptyBody = false,
-}) async {
-  final request = await client.postUrl(
-    Uri.parse('http://127.0.0.1:$port$path'),
-  );
-  request.headers.set(HttpHeaders.authorizationHeader, authorization);
-  if (!emptyBody) {
-    request.headers.contentType = ContentType.json;
-    request.write(jsonEncode(body));
-  }
-  final response = await request.close();
-  final text = await utf8.decoder.bind(response).join();
-  final decoded = jsonDecode(text);
-  return Map<String, dynamic>.from(decoded as Map);
+Future<Map<String, dynamic>> _nextAgentMessage(
+  StreamIterator<String> lines,
+) async {
+  final hasLine = await lines.moveNext().timeout(const Duration(seconds: 10));
+  if (!hasLine) throw StateError('Agent JSONL stream ended unexpectedly.');
+  final envelope = jsonDecode(lines.current) as Map<String, dynamic>;
+  final result = envelope['result'];
+  if (result is! Map) return envelope;
+  return <String, dynamic>{
+    for (final entry in result.entries) entry.key.toString(): entry.value,
+    if (envelope['ok'] is bool) 'ok': envelope['ok'],
+    if (envelope['structuredError'] != null)
+      'error': envelope['structuredError'],
+  };
 }
 
 Future<void> _withProtocolSession(

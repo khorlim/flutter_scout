@@ -4,7 +4,7 @@ import 'package:test/test.dart';
 void main() {
   final cli = FlutterScoutCli();
 
-  group('persistent CLI argument parity', () {
+  group('agent typed argument parity', () {
     test('normalizes coordinate shorthand while preserving explicit gates', () {
       for (final args in <List<String>>[
         ['tap', '110', '127'],
@@ -87,19 +87,16 @@ void main() {
       );
     });
 
-    test(
-      'leaves malformed options to typed validation, not transport retry',
-      () {
-        for (final args in <List<String>>[
-          ['tap', '110', '127', '--unsupported'],
-          ['tap', '110', '127', '--expect-text'],
-        ]) {
-          final result = cli.debugValidatePersistentCliArguments(args);
-          expect(result['valid'], isFalse);
-          expect(result['handlerEntered'], isFalse);
-        }
-      },
-    );
+    test('leaves malformed options to typed validation without dispatch', () {
+      for (final args in <List<String>>[
+        ['tap', '110', '127', '--unsupported'],
+        ['tap', '110', '127', '--expect-text'],
+      ]) {
+        final result = cli.debugValidatePersistentCliArguments(args);
+        expect(result['valid'], isFalse);
+        expect(result['handlerEntered'], isFalse);
+      }
+    });
 
     test('parses integer options and explains their existing bounds', () {
       for (final count in [1, 12, 20, 100]) {

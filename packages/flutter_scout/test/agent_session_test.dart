@@ -39,6 +39,170 @@ Future<AgentView> event(AgentSession session, String type) async {
 
 void main() {
   test(
+    'known failed input can restore visibility without clearing its halt',
+    () async {
+      var current = view(1);
+      final s = AgentSession(
+        read: () async => current,
+        validate: (_) {},
+        act: (_, _) async {
+          current = view(2, status: 'suspended');
+          return {'ok': false, 'dispatch': 'not_dispatched'};
+        },
+      );
+      addTearDown(s.close);
+      await s.open();
+      final id = s.start(1, tap)['actionId'];
+      await event(s, 'action');
+      final restored = await s.foreground(() async {
+        current = view(3);
+      });
+      expect(restored['ok'], isTrue);
+      expect(restored['actionable'], isFalse);
+      expect(s.scene['hand']['halted'], 'agent_action_failed');
+      expect(s.reconcile(id, restored['viewRevision'])['ok'], isTrue);
+      expect(s.actions, 1);
+    },
+  );
+
+  test(
+    'explicit foreground shares the hand and requires real resumed eyes',
+    () async {
+      var current = view(1, status: 'suspended');
+      final activate = Completer<void>();
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+      );
+      addTearDown(s.close);
+      await s.open();
+      expect(() => s.start(1, tap), throwsStateError);
+      final pending = s.foreground(() => activate.future);
+      current = view(2);
+      await s.observe();
+      expect(() => s.start(s.scene['viewRevision'], tap), throwsStateError);
+      activate.complete();
+      final resumed = await pending;
+      expect(resumed['ok'], isTrue);
+      expect(resumed['actionable'], isTrue);
+      expect(s.actions, 0);
+      s.start(resumed['viewRevision'], tap);
+      await event(s, 'action');
+      await expectLater(s.foreground(() async {}), throwsStateError);
+    },
+  );
+
+  test(
+    'foreground cannot clear runtime replacement or native failure',
+    () async {
+      var current = view(1, status: 'suspended');
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+      );
+      addTearDown(s.close);
+      await s.open();
+      await expectLater(
+        s.foreground(() async {
+          throw StateError('denied');
+        }),
+        throwsStateError,
+      );
+      expect(s.scene['actionable'], isFalse);
+      final result = await s.foreground(() async {
+        current = view(2, runtime: 'replacement');
+      });
+      expect(result['ok'], isFalse);
+      expect(s.scene['hand']['halted'], 'agent_runtime_changed');
+      expect(s.actions, 0);
+    },
+  );
+
+  test(
+    'another input requires delivery and acknowledgement of its receipt',
+    () async {
+      var count = 0;
+      final s = AgentSession(
+        read: () async => view(1),
+        act: (_, _) async {
+          count++;
+          return receipt;
+        },
+        validate: (_) {},
+      );
+      addTearDown(s.close);
+      await s.open();
+      final ticket = s.start(1, tap);
+      await Future<void>.delayed(Duration.zero);
+      expect(() => s.acknowledge(ticket['actionId']), throwsStateError);
+      expect(() => s.start(1, tap), throwsStateError);
+      await event(s, 'action');
+      expect(() => s.start(1, tap), throwsStateError);
+      s.acknowledge(ticket['actionId']);
+      s.start(1, tap);
+      await event(s, 'action');
+      expect(count, 2);
+    },
+  );
+
+  test(
+    'known failure can be reconciled but never automatically retried',
+    () async {
+      var count = 0;
+      final s = AgentSession(
+        read: () async => view(1),
+        act: (_, _) async {
+          count++;
+          return {
+            'ok': false,
+            'dispatch': 'not_dispatched',
+            'error': {'code': 'target_ambiguous'},
+          };
+        },
+        validate: (_) {},
+      );
+      addTearDown(s.close);
+      await s.open();
+      final id = s.start(1, tap)['actionId'];
+      await event(s, 'action');
+      expect(() => s.acknowledge(id), throwsStateError);
+      await s.observe();
+      expect(
+        s.reconcile(id, s.scene['viewRevision'])['previousActionRetried'],
+        false,
+      );
+      expect(count, 1);
+      s.start(s.scene['viewRevision'], tap);
+      await event(s, 'action');
+      expect(count, 2);
+    },
+  );
+
+  test(
+    'unknown dispatch cannot be cleared by receipt acknowledgement or reconciliation',
+    () async {
+      final s = AgentSession(
+        read: () async => view(1),
+        act: (_, _) async => {
+          'ok': false,
+          'dispatch': 'dispatch_outcome_unknown',
+        },
+        validate: (_) {},
+      );
+      addTearDown(s.close);
+      await s.open();
+      final id = s.start(1, tap)['actionId'];
+      await event(s, 'action');
+      await s.observe();
+      expect(() => s.acknowledge(id), throwsStateError);
+      expect(() => s.reconcile(id, s.scene['viewRevision']), throwsStateError);
+      expect(() => s.start(s.scene['viewRevision'], tap), throwsStateError);
+    },
+  );
+
+  test(
     'malformed observations resolve and halt instead of hanging the lane',
     () async {
       for (final bad in [

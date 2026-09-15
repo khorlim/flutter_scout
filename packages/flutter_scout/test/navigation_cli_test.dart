@@ -16,7 +16,7 @@ void main() {
 
         await _withNavigationSession(fake.uri, () async {
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               'where',
               '--max-response-bytes',
               '8192',
@@ -24,7 +24,7 @@ void main() {
             0,
           );
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               'locate',
               '--text',
               'Hair Recovery',
@@ -36,7 +36,7 @@ void main() {
             0,
           );
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               'inspect',
               '--since',
               'g7:${List<String>.filled(64, 'a').join()}',
@@ -68,7 +68,7 @@ void main() {
 
         await _withNavigationSession(fake.uri, () async {
           expect(
-            await FlutterScoutCli().run([
+            await FlutterScoutCli().debugRunHandler([
               'reveal',
               '--text',
               'Hair Recovery',
@@ -115,7 +115,7 @@ void main() {
       addTearDown(fake.close);
       await _withNavigationSession(fake.uri, () async {
         expect(
-          await FlutterScoutCli().run([
+          await FlutterScoutCli().debugRunHandler([
             'reveal',
             '--target',
             'btn.save',
@@ -125,7 +125,7 @@ void main() {
           1,
         );
         expect(
-          await FlutterScoutCli().run([
+          await FlutterScoutCli().debugRunHandler([
             'locate',
             '--text',
             'one',
@@ -146,7 +146,7 @@ void main() {
 
         await _withNavigationSession(fake.uri, () async {
           expect(
-            await FlutterScoutCli().run(<String>[
+            await FlutterScoutCli().debugRunHandler(<String>[
               'bounds',
               '--target',
               'ambiguous.bounds',
@@ -168,7 +168,7 @@ void main() {
 
       await _withNavigationSession(fake.uri, () async {
         expect(
-          await FlutterScoutCli().run(<String>[
+          await FlutterScoutCli().debugRunHandler(<String>[
             'bounds',
             '--target',
             'btn.unique',

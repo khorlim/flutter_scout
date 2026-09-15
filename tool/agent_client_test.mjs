@@ -13,7 +13,7 @@ function fixture() {
   child.kill = () => {};
   const client = new ScoutAgent(child);
   const send = ({ok = true, ...value}) => child.stdout.write(JSON.stringify({ok, result: value}) + '\n');
-  send({ type: 'ready', ok: true, agentProtocol: 1, viewRevision: 1, view: {} });
+  send({ type: 'ready', ok: true, agentProtocol: 2, viewRevision: 1, view: {} });
   return { child, client, requests, send };
 }
 
@@ -40,6 +40,49 @@ test('old retained events do not regress the latest decision view', async () => 
   send({ id: requests[1].id, ok: true, event: { type: 'view', viewRevision: 2, view: { screen: 'Before' } } });
   await historical;
   assert.equal(client.latest.view.screen, 'Now');
+  client.abort();
+});
+
+test('out-of-order observe responses cannot regress the latest view', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const first = client.observe();
+  const second = client.observe();
+  send({ id: requests[1].id, viewRevision: 5, view: { screen: 'Now' } });
+  await second;
+  send({ id: requests[0].id, viewRevision: 2, view: { screen: 'Before' } });
+  await first;
+  assert.equal(client.latest.view.screen, 'Now');
+  client.abort();
+});
+
+test('act surfaces a failed receipt without acknowledgement or another tap', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const result = client.act(1, { method: 'tap', args: ['btn.save'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await new Promise(resolve => setImmediate(resolve));
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: false, dispatch: 'not_dispatched', error: { code: 'target_ambiguous' } } } });
+  await new Promise(resolve => setImmediate(resolve));
+  send({ id: requests[2].id, ok: false, viewRevision: 2, view: { screen: 'Same' } });
+  assert.equal((await result).ok, false);
+  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'observe']);
+  client.abort();
+});
+
+test('act acknowledges a successful receipt before refreshing the scene', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const result = client.act(1, { method: 'tap', args: ['btn.save'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await new Promise(resolve => setImmediate(resolve));
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched' } } });
+  await new Promise(resolve => setImmediate(resolve));
+  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
+  await new Promise(resolve => setImmediate(resolve));
+  send({ id: requests[3].id, ok: true, viewRevision: 2, view: { screen: 'Saved' } });
+  assert.equal((await result).ok, true);
+  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'acknowledge', 'observe']);
   client.abort();
 });
 

@@ -173,7 +173,7 @@ void main() {
   );
 
   test(
-    'protected attach/deeplink ingress and journals never expose credentials',
+    'protected attach ingress and journals never expose credentials',
     () async {
       final packageRoot = Directory.current.absolute.path;
       final temp = await Directory.systemTemp.createTemp(
@@ -216,39 +216,6 @@ void main() {
         expect(legacyAttach.stderrText, contains('insecure_secret_source'));
         _expectNoVariants(legacyAttach.combined, legacyVmUri, legacyVmToken);
 
-        const deepToken = 'DEEPLINK_STDIN_SECRET_88';
-        const deepUrl =
-            'scout-test://account/DEEPLINK_STDIN_SECRET_88?session=DEEPLINK_STDIN_SECRET_88';
-        final deeplink = await _runCli(packageRoot, temp.path, const <String>[
-          'deeplink',
-          '--url-stdin',
-        ], stdinBytes: utf8.encode(deepUrl));
-        expect(deeplink.exitCode, isNot(0));
-        _expectNoVariants(deeplink.combined, deepUrl, deepToken);
-
-        const fileDeepToken = 'DEEPLINK_FILE_SECRET_89';
-        const fileDeepUrl =
-            'scout-test://account/DEEPLINK_FILE_SECRET_89?session=DEEPLINK_FILE_SECRET_89';
-        final deepFile = _privateFile(
-          p.join(temp.path, 'deeplink.secret'),
-          fileDeepUrl,
-        );
-        final fileDeeplink = await _runCli(packageRoot, temp.path, <String>[
-          'deeplink',
-          '--url-file',
-          deepFile.path,
-        ]);
-        expect(fileDeeplink.exitCode, isNot(0));
-        _expectNoVariants(fileDeeplink.combined, fileDeepUrl, fileDeepToken);
-        deepFile.deleteSync();
-
-        final legacy = await _runCli(packageRoot, temp.path, <String>[
-          'deeplink',
-          deepUrl,
-        ]);
-        expect(legacy.stderrText, contains('insecure_secret_source'));
-        _expectNoVariants(legacy.combined, deepUrl, deepToken);
-
         _expectTreeHasNoVariants(temp, const <String>[
           vmUri,
           vmToken,
@@ -256,10 +223,6 @@ void main() {
           stdinVmToken,
           legacyVmUri,
           legacyVmToken,
-          deepUrl,
-          deepToken,
-          fileDeepUrl,
-          fileDeepToken,
         ]);
       } finally {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
@@ -426,7 +389,7 @@ void main() {
     timeout: const Timeout(Duration(minutes: 1)),
   );
 
-  test('deeplink business URL is absent from durable receipt bytes', () async {
+  test('protected native action URL is absent from receipt bytes', () async {
     final temp = await Directory.systemTemp.createTemp(
       'scout_deeplink_receipt_secret_',
     );

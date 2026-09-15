@@ -1,90 +1,59 @@
 # Command reference
 
-Core lifecycle: `devices`, `doctor`, `ensure`, `launch`, `attach`, `status`,
-`apps`, `stop`, `version`.
+UI interaction is exclusively the agent protocol, independent of model or
+service tier. Standalone inspect, where, locate, bounds, gestures/input,
+wait/wait-for, deeplink, live, serve, explore, batch, record and replay are
+removed. No legacy flag restores them.
 
-Supply VM-service capability URLs with owner-only
-`attach --debug-url-file <0600-path>` or `attach --debug-url-stdin`. Scout
-accepts only explicit loopback hosts with an explicit port and never permits
-remote VM-service egress. The legacy `--debug-url` form warns because argv can
-be observed before Scout starts.
+## Agent protocol 2
 
-Eyes: `where`, `locate`, `inspect` (including `--since <snapshot-id>`),
-`health`, `screenshot`, `crop`, `logs`, `evidence`, `annotations`.
+Use the shipped scripts/agent_client.mjs over one persistent JSONL pipe.
 
-Focused visual delta: `crop --changed-since <snapshot-id>` captures only a
-complete bounded semantic/render changed-region union. It returns all snapshot,
-logical/physical geometry, DPR, backend, capture-identity, and limit provenance,
-and abstains instead of guessing when history, geometry, scope, coordinate
-frame, output bounds, or atomic in-app capture cannot be proven.
+- observe(): current revision, view age, screen, exact targets and safety.
+- foreground(): explicit macOS activation of this session's connected app only,
+  followed by fresh observation. Shares the hand; never sends UI input, fakes
+  rendering, acknowledges receipts, or clears a failure halt.
+- query(method, params, args): focused read-only inspect, where, locate, bounds,
+  or drag-status. Parameters use camelCase; maxItems is 1..100. inspect accepts
+  brief, surface, sections and since. It does not accept depth, maxNodes,
+  waitForIdle or compact. Observe again after focused queries before deciding.
+- act(viewRevision, {method,args,params}): one guarded input with independent
+  observations, canonical receipt checking, success acknowledgement and a fresh
+  returned scene. No retry or business-completion wait. Returns ok:false on
+  failure; inspect result and events. Default whole-operation budget 45 s.
+- start(viewRevision, action): low-level acceptance ticket, not success.
+- next(timeoutMs): consume retained events; one consumer only.
+- acknowledge(actionId): requires delivery of the successful canonical receipt.
+- reconcile(actionId, viewRevision): explicit recovery from a known failed
+  dispatch after fresh safe observation. Never retries; unknown stays halted.
+- watch(condition, timeoutMs): asynchronous bounded condition ticket, not input.
+- react(viewRevision, condition, reaction, timeoutMs): one explicitly authorized
+  exact-target tap or stop-future-input rule; at most 30 s.
+- cancel(scope, conditionId): cancel a wait/reaction or stop future actions.
+- status(), close(): connection status and graceful drain/close, not app stop.
 
-Hands: `tap`, `tap-text`, `input`, `fill`, `long-press`, `scroll`, `scroll-to`,
-`swipe`, `drag-start`, `drag-move`, `drag-status`, `drag-end`, `drag-cancel`,
-`back`, `dismiss`, `deeplink`, and bounded `reveal`.
+Actions: tap, tap-text, long-press, input, fill, scroll, swipe, scroll-to,
+reveal, back, dismiss, drag-start, drag-move, drag-end, drag-cancel, deeplink.
+Action parameters remain typed; no expect*, waitMs, allowErrors, file/stdin
+source flags, verbose or automatic image capture. Text/input values travel in
+the JSON pipe, not shell argv. Native deep links remain capability-gated.
 
-Synchronization: `wait`, `wait-for`, action `--expect-*`, `--expect-log`,
-`--reject-log`, `--allow-errors`.
+Conditions accept exactly one of text, gone, screen or surfaceChanged:true.
+A timeout does not cancel app work. Missing text in an omitted section does
+not establish absence. Already-visible text does not prove a new operation.
 
-## Wait budgets
+## Finite lifecycle and manual diagnostics
 
-Action `--expect-timeout <ms>` controls how long Scout polls a same-call
-postcondition (default 5000 ms). It is supported by `tap`, `tap-text`, `input`,
-and `fill`. For a known local transition, choose a short bounded check:
+Lifecycle: devices, doctor, ensure, launch, attach, status, apps, reload,
+restart, stop, version. Annotation management: annotations. Manual evidence:
+screenshot, crop, logs, health, evidence.
 
-```bash
-flutter-scout --app template-save tap btn.details \
-  --expect-text "Details" --expect-timeout 1000
-flutter-scout --app template-save input --target field.name --stdin \
-  --expect-field field.name=Ava --expect-timeout 1000
-```
+Supply VM capability URLs using attach --debug-url-file <0600-file> or
+--debug-url-stdin. Only explicit loopback hosts with a port are supported.
+Use --single-json first for one final envelope; stderr carries progress.
+The prefix is not accepted by agent. Help does not contact a running app.
 
-Use an observed text, target, or field value; do not guess a screen class for
-`--expect-screen`. Preserve the default or allow longer for network requests
-and other delayed work. A short timeout means the condition was not observed
-within that window, not that the dispatched action failed or is safe to repeat.
-Reconcile with `inspect --brief` or `inspect --since` first.
-
-`--wait-ms`, on commands that support it, is a separate initial stability
-allowance. It does not replace `--expect-timeout`, and `input` does not accept
-it. Total command time can also include connection, dispatch, initial settling,
-late-change observation, capture, and evidence persistence; neither option is
-a whole-command deadline. Read `timings` and `expectation.waitedMs` to separate
-these costs. Already-selected controls and temporarily quiet trees can still
-trigger delayed work, so do not bypass a requested postcondition based on
-either observation.
-
-For state not caused by the current command, use `wait-for --timeout <ms>`.
-
-## Other command contracts
-
-Update: `reload`, `restart`.
-
-Automation: `batch`, `serve`, `explore`, `record`, `export-batch`, `replay`.
-
-Output framing: put `--single-json` before all other arguments for one compact
-final JSON response on stdout, including command failures. Live heartbeats,
-warnings, and intermediate responses go to stderr; do not merge the streams
-before decoding. The final response follows command evidence completion and
-retains the normal envelope, redaction, and payload bounds. Help stays prose;
-`serve`, `explore`, and internal workers reject this prefix. Default streams
-and persistent HTTP contracts are unchanged.
-
-Global exactly-once option: `--idempotency-key <1-128-safe-ASCII-chars>`.
-Use one stable key when an orchestrator may retry a mutation. The same key and
-business request replays/reconciles the original outcome across CLI processes;
-the same key with different business parameters abstains. `/v1/call` exposes
-the equivalent top-level `idempotencyKey` field. Batch, replay, and composite
-commands such as direction-fallback `scroll-to` derive stable per-step keys
-from the supplied scope key. Reload, restart, and deeplink use the same durable
-receipt boundary; an unknown local receipt is never automatically dispatched
-again.
-
-Use `flutter-scout help <command>` or `flutter-scout <command> --help` for the
-installed build's exact options. Command-scoped help never requires or contacts
-an app session.
-JSON is the source of truth. Nonzero exits mean the requested assertion or
-operation failed; record replay uses exit code 2 when it could not start.
-All machine responses carry a typed/versioned envelope. Preserve `commandId`,
-run/runtime/state identity, `dispatch`, `observation`, `postcondition`,
-`stability`, fresh signal cursors, and evidence status when compacting or
-handing off. `dispatch_outcome_unknown` means reconcile state, not blind retry.
+Retain commandId, run/runtime/state identity, dispatch, observation,
+postcondition, runtimeHealth, stability, evidence and omission status when
+summarizing. A final successful screenshot cannot make a preceding failed
+input successful. Do not chain fallible operations without checking outcomes.

@@ -99,7 +99,7 @@ Map<String, Object?> deterministicContractInput({
 Map<String, dynamic> buildPublicContractGoldens(String packageRoot) {
   final commandContract = readContractJson(
     packageRoot,
-    '../../protocol/schemas/v1/public-cli-commands.json',
+    '../../protocol/schemas/v2/public-cli-commands.json',
   );
   final errorContract = readContractJson(
     packageRoot,
@@ -110,7 +110,7 @@ Map<String, dynamic> buildPublicContractGoldens(String packageRoot) {
   final cli = FlutterScoutCli();
 
   return <String, dynamic>{
-    'schemaVersion': 1,
+    'schemaVersion': 2,
     'protocolVersion': 15,
     'artifactKind': 'flutter_scout_public_cli_envelope_goldens',
     'evidenceScope': const <String, Object?>{

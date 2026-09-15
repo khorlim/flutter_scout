@@ -1,420 +1,149 @@
 ---
 name: flutter-scout
-description: "Use Flutter Scout to give AI agents factual eyes and hands for Flutter apps on simulators: launch or attach, inspect, act, reload, verify, record, and collect evidence."
+description: Use Flutter Scout's persistent agent session to observe and operate real Flutter apps, verify changes, and collect manual visual evidence.
 ---
 
 # Flutter Scout
 
-Use Scout when validating a Flutter feature on a simulator. Keep the core loop
-short and evidence-based:
+All UI observation and input use one persistent agent connection. Standalone
+inspect, tap/input/scroll, waits, live, serve, explore, batch, record and replay
+commands have been removed. Do not recreate them in shell sequences or fall
+back after a failure. Scout is model-independent: do not enable or require
+ChatGPT/Codex Fast mode or change the user's model/service tier.
 
-```text
-named ensure -> where/inspect --brief -> locate/reveal if needed
-             -> act once with a gate -> inspect --since + errors
-             -> reload after edits -> replay/evidence -> exact stop
-```
+## Start or reuse the app
 
-## Before acting
+An app needs only FlutterScoutBinding.ensureInitialized() before runApp, or
+FlutterScoutHelper.ensureRegistered() after an existing debug binding. Use a
+debug build; profile/release registration is inert. No per-screen wrappers.
 
-Scout requires one app initializer:
-
-```dart
-void main() {
-  FlutterScoutBinding.ensureInitialized();
-  runApp(const MyApp());
-}
-```
-
-If another debug binding already owns initialization, keep it and call
-`FlutterScoutHelper.ensureRegistered()` after it. Never add per-screen wrappers
-or test-only UI. Scout is intentionally inert in normal profile and release
-builds; use a debug build for every Scout session.
-
-Run `flutter-scout doctor --project <app>` when setup or protocol state is
-unclear. For an app that is not integrated, prefer a zero-diff launch:
+Name every owned run:
 
 ```bash
-flutter-scout ensure --temporary-helper \
-  --device <simulator-id> --project <app> --name <task-slug>
+flutter-scout --single-json ensure --device macos --project <app> --name <task>
 ```
 
-## Start or reuse a session
+Keep the launch process attached until its final envelope. Progress belongs
+on stderr; do not merge it into JSON stdout. While heartbeats continue, do
+not start parallel status polling or another launch. Use attach only to
+preserve a human-started app; VM capability URLs must enter through a 0600
+file or stdin, never process arguments. Read the setup skill when needed.
 
-Always name agent-owned sessions with a short task slug:
+## One eyes-and-hands connection
+
+Read [agent-session.md](references/agent-session.md) before first use. Import
+this skill's scripts/agent_client.mjs into a persistent Node tool session.
+Keep the same object between decisions. If no persistent Node tool is
+available, keep a Node process alive with Scout connected by ordinary pipes;
+do not launch Scout per request or use PTY echo for its JSONL transport.
+For an interactive Node terminal fallback, request a short output yield
+(250–1000 ms) on each write, then read again only if the awaited result is
+still pending. A 30-second terminal yield waits even after Scout has replied;
+it is not an app-settling requirement. Prefer direct awaited Node tool calls
+when available.
+
+```js
+const { ScoutAgent } = await import('/absolute/path/to/skill/scripts/agent_client.mjs');
+const scout = await ScoutAgent.connect({ app: 'task' });
+const scene = await scout.observe();
+// Pick an exact target from scene.view; never guess a handle.
+const outcome = await scout.act(scene.viewRevision, {
+  method: 'tap', args: [observedTarget],
+});
+// Read outcome.ok, result, scene, and intervening events before deciding again.
+```
+
+act performs one input, consumes its canonical receipt, acknowledges success,
+and returns the latest scene. Eyes continue independently while the hand runs.
+It never retries or waits for business completion. A start acceptance ticket
+is not dispatch or success. Use start/next/acknowledge directly when you need
+fine-grained concurrent control. Only one event consumer is allowed.
+
+Return compact decision evidence to the model: ok, actionId, dispatch,
+runtimeHealth, error, scene revision/screen, relevant targets/text, and any
+intervening alerts. Do not print repetitive full envelopes or silently remove
+failure, omission, or safety fields. Full canonical receipts remain in the
+private journal. Close the connection before unrelated long coding work.
+
+## Locate and act deliberately
+
+Use scout.query('where') for layout; scout.query('locate', {text: 'Name'})
+for a target; scout.query('inspect', {sections: 'interactables,scrollables',
+maxItems: 100}) for selected detail. Query is read-only, not permission to act
+on stale geometry: observe again and decide from the current scene.
+
+Prefer exact observed handles, then unique visible text. Ambiguity requires
+focused discovery, not another guess. For forms, `fill` takes an observed
+field-to-value map: `{method:'fill', params:{json:{[fieldHandle]:value}}}`.
+For one field, use `{method:'input', args:[value], params:{target:fieldHandle}}`.
+The input target belongs in `params.target`, not in `args`. Omitting it types
+only into an already focused field; opening a form does not imply focus.
+
+Choose from reported candidates or narrow context. A stale state requires
+fresh observation and a new decision, not replacement of the revision on an
+old action. Coordinates are logical Flutter points, not screenshot pixels;
+use them only when observed handle/text targeting cannot express the action.
+For lazy lists, use region-scoped bounded reveal/scroll-to through act.
+
+Sensitive input belongs in agent JSON stdin through the client, never shell
+arguments or printed results. Do not use allowErrors, waitMs, expect flags,
+file input or capture flags in actions; these are rejected.
+
+## Completion and recovery
+
+Input completion and business completion are separate. watch({text: 'Saved'},
+8000) returns a ticket; consume next events until that condition's event.
+Do not wait for a success screen after a rejected input. Already-visible text
+proves observed state, not that a new save succeeded. A timeout is not evidence
+that an app operation was cancelled or safe to repeat.
+
+After a failed action, examine its receipt and the fresh scene. For a known
+dispatch outcome only, explicitly reconcile(actionId, scene.viewRevision)
+after checking app state. Reconciliation does not repeat input. Unknown
+dispatch, runtime replacement, or lost evidence stays halted; investigate
+before opening another connection. Never suppress errors to keep navigating.
+
+Rendering suspended means restore app visibility. Never pump frames or treat
+an old semantic tree as current pixels. An active framework frame does not
+prove the native window is visible. Manual images are required for visual QA.
+For a named macOS session, explicitly call `await scout.foreground()` to
+activate only its observed app process, then check the returned fresh scene.
+It uses normal OS activation, not a rendering override, and sends no UI input.
+It refuses during input or an unread/unknown receipt. A received known failure
+can restore visibility, but still needs explicit reconciliation; activation
+never clears its halt or acknowledges its receipt.
+Do not repeatedly steal focus from the user or treat activation as save success.
+
+For an authorized time-sensitive response, react can issue one exact observed
+tap or stop future input, bounded to 30 seconds. It cannot invent targets,
+retry, cross surfaces, or cancel an already-started app operation.
+
+## Changes, images, and handoff
+
+Close the agent connection before reload/restart, then reconnect. Use reload
+for Dart changes; sourceVerification:mismatch is a failure. A rejected reload
+does not imply the app died: check status and preserve a reachable session.
+Native/plugin/pubspec changes need a full launch. Lifecycle and ownership
+recovery details: [lifecycle-and-diagnostics.md](references/lifecycle-and-diagnostics.md).
+
+Screenshots and crops stay manual. Capture only when appearance matters or
+semantic evidence is insufficient, and inspect the image before claiming
+visual verification. Details: [gestures-and-visuals.md](references/gestures-and-visuals.md).
 
 ```bash
-flutter-scout ensure \
-  --device <simulator-id> --project <app> --name template-save
+flutter-scout --app <task> screenshot -o /private/path/screen.png --retention session
+flutter-scout --app <task> crop --changed-since '<snapshot-id>' -o /private/path/change.png
 ```
 
-`ensure` reuses a healthy named run. Use `launch --replace` only when a fresh
-run is intentional. Use `attach` only to preserve a human-started app:
+Annotation pins: [annotations.md](references/annotations.md). Remaining API:
+[command-reference.md](references/command-reference.md).
+
+Finish with scout.close(), then stop the exact owned run unless the user wants
+it left open for immediate testing:
 
 ```bash
-flutter-scout attach --device <simulator-id>
-# Put the VM-service capability URL in an owner-only 0600 file first.
-flutter-scout attach --debug-url-file /private/path/vm-service-url
+flutter-scout --app <task> stop --clear-session
 ```
 
-For scripts that decode stdout once, put `--single-json` first:
-
-```bash
-flutter-scout --single-json ensure \
-  --device <simulator-id> --project <app> --name template-save \
-  > result.json 2> progress.jsonl
-```
-
-This emits one compact final JSON envelope on stdout, including failures,
-after evidence completion. Keep stderr separate: it carries live heartbeats,
-warnings, and intermediate responses. Check the exit code and final `ok`;
-all identity, outcome, and safety fields remain present. Default output is
-unchanged. The prefix is for finite commands; `serve`/`explore` reject it,
-and explicit help still emits prose.
-
-Keep that one `ensure --single-json` process attached until it finishes. While
-its structured heartbeats continue, consume them as progress and do not start
-parallel `status` polling or a second launch. Poll only after the command has
-ended without a usable final envelope or heartbeats have stopped long enough
-to require diagnosis.
-
-Address named sessions from any directory with `--app <name>`. Use
-`flutter-scout apps` for live entries, `apps --all` for missing entries, and
-`apps --prune` to remove stale registry entries.
-Named session storage and its launch lease are bound to the resolved
-`--project`, not the command working directory. If Scout reports competing
-roots for one label, inspect the listed run IDs and explicitly stop or clear
-the obsolete session; Scout will not guess or start another build.
-
-Inside an app project, commands reuse its sole current named session when there
-is no default session. If several named sessions exist, Scout refuses to guess;
-use `--app <name>` consistently.
-
-Check `status` when ownership is unclear. Stop every Scout-owned run when done:
-
-```bash
-flutter-scout --app template-save stop --clear-session
-```
-
-For one-off verification, stop immediately after saving the requested
-evidence. Keep a run alive only when an immediate follow-up is expected, and
-say so explicitly. On clear, require final `ok: true`, `sessionCleared: true`,
-and an empty `recordedRuns.unresolved` list. Scout scans exact per-run ownership
-records before deletion; if a recorded live process cannot be revalidated, it
-fails closed and preserves those records instead of hiding a possible orphan.
-
-Read the response's `operability` object when diagnosis matters. It separates
-CLI-supported protocol from the helper range actually observed, live app
-reachability from daemon readiness, and recorded ownership metadata from a
-revalidated process proof. `actionState` reports an active held drag,
-`recordingState` reports recorder state and storage, and
-`prioritizedRecoveryAction` contains at most one next action. Treat every
-`unavailable` fact as unknown; never infer a version, runtime, device, or source
-match from absence.
-
-A VM-service URL can appear before Flutter finishes attaching and syncing
-files. Scout keeps waiting for Flutter's signal-handler PID acknowledgement
-under the same launch idle/hard limits; VM discovery alone is not readiness.
-
-A launch ends on silence, not on elapsed time: it fails once the runner prints
-nothing for `--launch-idle-timeout` seconds (default 180), bounded by
-`--launch-timeout` (default 1200). A cold first build that spends minutes in
-`pod install` is therefore not killed while it is still progressing. On failure
-read `failureMode` — `idle_timeout` or `hard_timeout` means Scout stopped a
-runner that may still have been building, so raise the limit rather than
-assuming the build broke.
-
-On macOS, Scout-owned `launch`/`ensure` runs use a per-run `launchd`
-supervisor. They normally survive the launching terminal or agent being
-cleaned up, while explicit Ctrl-C during launch and `stop` still cancel the
-exact session. `status` includes supervisor state and the last recorded Flutter
-exit. A normal Flutter exit is diagnostic, not an automatic app relaunch.
-
-If an outer command temporarily unlocks a signing Keychain, launch with
-`--inherit-launch-context` inside that command. This keeps the detached Scout
-runner in the caller's macOS security context until the build is signed and
-Scout reports ready. Do not use the flag for ordinary launches: it trades away
-launchd crash recovery and does not survive logout.
-
-## Inspect
-
-Start with bounded output:
-
-```bash
-flutter-scout --app template-save inspect --brief
-flutter-scout --app template-save inspect --surface
-```
-
-Request full or opt-in sections only when needed:
-
-```bash
-flutter-scout --app template-save inspect \
-  --sections textTargets,scrollables,rows
-```
-
-Keep the returned `snapshotId`, then request a bounded relative observation
-instead of repeatedly retransmitting the whole tree:
-
-```bash
-flutter-scout --app template-save inspect --since '<snapshot-id>'
-```
-
-When a localized visual fact changed, reuse that same retained baseline rather
-than taking another broad screenshot:
-
-```bash
-flutter-scout --app template-save crop \
-  --changed-since '<snapshot-id>' -o /private/path/changed.png
-```
-
-Trust the crop only when `changedRegionCoverage.status` is `complete` and the
-baseline, current, and capture-verification scopes are present. Scout binds one
-helper-side current observation to retained history, captures the bounded union,
-then discards the raster if the snapshot changes during capture. It abstains on
-stale/foreign history, ambiguous or unavailable geometry, screen/route/frame
-changes, more than 16 regions, a padded union above 50% of the viewport,
-padding above 256 logical pixels, or output above 4096×4096 / 4,194,304 pixels.
-The regions are semantic/render geometry, not a pixel diff. Native/platform-view
-fallback is intentionally unavailable because it cannot preserve the same
-atomic helper snapshot; take a full native screenshot instead.
-
-Prefer semantic handles (`btn.save`, `field.template_name`,
-`row.customer.more_actions`) over coordinates. Fields can inherit nearby
-labels; row actions expose stable intent aliases such as `.open` and
-`.more_actions`. Read `selected`, `enabled`, `hitTestable`, `visibleFraction`,
-`enclosingTarget`, `altIds`, and `didYouMean` before guessing.
-
-Typed handles (`btn.*`, `tap.*`, `field.*`, `text.*`, `scroll.*`, `row.*`)
-require an exact published identity, alias, or same-kind widget key. Missing
-handles do not fall back to similar labels or a different kind. Use an untyped
-query for fuzzy matching, or `--text`/`tap-text` for literal text.
-
-Use the observed `screen` for `--expect-screen`, not a guessed class name.
-`screenEvidence.screenCandidates` preserves a bounded nearest-first ancestry
-for widget-inferred screens; parent candidates are orientation hints, not
-aliases accepted by the exact screen guard. A visible-text guard can be more
-useful when nested pages or modal surfaces change the reported screen.
-
-## Orient and navigate with bounds
-
-Use read-only orientation and location before exploratory scrolling:
-
-```bash
-flutter-scout --app template-save where
-flutter-scout --app template-save locate --target row.customer_acme
-flutter-scout --app template-save locate --text "Acme" --contains
-```
-
-`where` is compact by default. Use `where --verbose` only when its bounded
-scroll-region, pane, surface, and navigator facts do not contain the geometry
-or provenance needed for the next decision. Compact `where` and
-`inspect --brief` output is one machine-JSON line; parse it as JSON rather than
-requesting verbose output for formatting.
-
-If a unique target is not built or visible, use bounded `reveal`. When more
-than one scroll region exists, pass the exact region returned by `where` or
-`inspect --sections scrollables`; Scout refuses to guess.
-
-```bash
-flutter-scout --app template-save reveal row.customer_acme \
-  --within scroll.suppliers --max-actions 8 --timeout 8000
-```
-
-Read `stoppingReason`, bounds, regions, progress, restoration, ambiguity, and
-state identity before choosing the next step. `reveal` restores the starting
-position after any post-dispatch failure. Do not turn it into an unbounded
-autonomous explorer.
-
-## Act and verify atomically
-
-Put the success condition on the action:
-
-```bash
-flutter-scout tap btn.save --expect-text "Saved"
-flutter-scout tap btn.create \
-  --expect-log "Created template" \
-  --reject-log "validation_failed"
-flutter-scout input --target field.name --stdin --expect-field field.name=Ava
-flutter-scout fill --file /private/path/owner-only-values.json \
-  --expect-text "Ready"
-```
-
-Choose a gate from observed UI facts, not a guessed screen class. For a known
-local transition, a short explicit `--expect-timeout 1000` can bound an
-exploratory check; keep or increase the default 5000 ms for asynchronous work
-such as network-backed saves. This bounds the expectation wait, not total
-command time. `--wait-ms`, where supported, controls separate action settling;
-it is not an expectation timeout. See the
-[wait-budget guidance](references/command-reference.md#wait-budgets).
-If a gate fails after dispatch, inspect the resulting state before any retry.
-A stable tree or `already_selected` result does not prove delayed work cannot
-still complete.
-
-For a custom PIN control whose underlying field already owns keyboard focus,
-use `input --stdin` without `--target`. Focused input checks the active surface,
-visibility, editability, and focus again before typing; it does not require a
-pointer hit on the hidden editor. Explicit field targets still require hit testing.
-
-Use `--stdin` or an owner-only regular `0600` file for any secret. Use direct
-value/`--json` arguments only for deliberately non-sensitive data; process
-arguments can be observed by other local tooling. Replay variables follow the
-same rule through `--var-stdin` or `--var-file`.
-
-Treat VM-service and deep-link URLs as credentials too. Use
-`attach --debug-url-file`/`--debug-url-stdin` and
-`deeplink --url-file`/`--url-stdin`; never paste token-bearing URLs into argv.
-Scout deliberately rejects non-loopback VM-service endpoints.
-
-Actions fail by default when fresh blocking runtime or log errors appear. Use
-`--allow-errors` only when the error is deliberately part of the scenario.
-Action JSON uses a typed/versioned envelope and independently reports dispatch,
-observation, postcondition, stability, runtime health, evidence persistence,
-and phase timings. If dispatch is `dispatch_outcome_unknown` or evidence
-persistence fails after a possible mutation, inspect/reconcile current state;
-never retry under a fresh identity merely because transport timed out.
-
-Default action output summarizes snapshot details inside failures too. Read
-`*Omitted` counts as presentation limits, not proof that a delta is complete;
-use a fresh `inspect --brief` or selected sections to reconcile current state.
-Choose `--verbose` before an action only when full diagnostics are needed;
-never repeat a mutation just to obtain a larger response.
-
-Use `wait-for` for a state not caused by the current command:
-
-```bash
-flutter-scout wait-for --text "Loaded" --timeout 8000
-flutter-scout wait-for --gone "Loading"
-```
-
-Use `scroll-to <handle>` for offscreen/lazy controls, `dismiss` for the top
-route or close control, and `tap-text --contains` for truncated labels. Use
-coordinates only after handle/text targeting cannot express the action.
-
-Coordinates are logical points, not screenshot pixels. A gesture starting
-outside the view fails with `gesture_start_outside_viewport` and reports the
-viewport size; scale by the device pixel ratio or use a handle instead. Text
-that is not on screen fails with `text_not_found` — scroll it into view with
-`scroll-to` first rather than assuming the list has ended.
-
-## After code edits
-
-```bash
-flutter-scout --app <task-slug> reload
-flutter-scout --app <task-slug> restart
-```
-
-Read `sourceVerification`: `verified` compares changed Dart files on disk with
-the VM's loaded source; `mismatch` is a hard failure; `partially_verified`
-lists scripts the VM did not expose. Test sources are reported under `skipped`
-rather than `notLoaded`, because a running app never loads them. Native/plugin/pubspec changes require a
-fresh launch.
-
-Scout-owned reloads wait up to 60 seconds for the Flutter tool's terminal
-acknowledgement. A large app may spend tens of seconds compiling and
-reassembling without producing another log line; leave the command running
-while it remains inside that bound.
-
-If reload is rejected, do not clear the session or relaunch immediately. Use
-this recovery ladder:
-
-1. Run `flutter-scout --app <task-slug> status`.
-2. If `appReachable:true` or `running:true`, keep the existing app and inspect
-   the reload error; it is still running the previous code. For a Dart compile
-   failure, fix the bounded lines in
-   `acknowledgement.compilerDiagnostics`, then reload the same session again.
-   If `sessionOwnershipLost:true` or
-   `ownershipLossReason:owner_process_exited`, the app is inspectable but the
-   original Flutter compiler process is gone, so Dart edits cannot be reloaded.
-   On macOS, also inspect `supervisorState` and `lastRunnerExit`; the supervisor
-   may have adopted a surviving Flutter tool after its worker was replaced.
-3. Run the same named `ensure` to repair/reuse the session when ownership or the
-   saved VM URI is unclear.
-4. If the VM URI is known, reattach that same named session explicitly. Scout
-   preserves ownership only when the URI matches its verified owned run.
-5. Use restart when Scout still owns the Flutter tool and Dart state must reset.
-6. Use a fresh launch only when the app is dead, ownership was lost, or
-   native/plugin/pubspec changes require rebuilding.
-
-Never use `stop --clear-session` solely because a Dart reload was rejected.
-
-## Fast exploratory loops
-
-Prefer one persistent `flutter-scout --app <name> agent` connection for
-interactive navigation. Read [the agent session contract](references/agent-session.md)
-before using it; import the shipped `scripts/agent_client.mjs` in a persistent
-Node tool session. Independent passive eyes run while one guarded action is
-in flight. `start` returns an acceptance ticket, `next` delivers view changes
-and input receipts, and `watch` verifies a later condition without blocking
-the hand. Consume events while waiting; never treat acceptance as success.
-
-Use the latest observed revision and exact target. On changed state, reconsider
-instead of automatically retrying. `rendering.status:suspended` requires
-restoring app visibility, not trusting an old tree or asking Scout to pump
-frames. Images remain manual. For an explicitly authorized time-sensitive
-response, `react` can perform one observed exact tap or stop future actions,
-bounded to 30 seconds. Cancelling a wait never cancels the app's operation.
-Use finite commands with same-call gates for straightforward sequential checks.
-
-The earlier experimental `live` mode remains a serialized comparison path,
-not the concurrent hand/eye interface. Both streaming modes reject
-`--single-json`; prefer a persistent pipe over PTY echo/polling.
-
-After three successful plain CLI actions, Scout automatically starts a
-persistent transport for the named session and reuses it for follow-up
-commands. It expires after ten idle minutes. `batch` remains best for a known
-sequence:
-
-```bash
-flutter-scout batch \
-  'tap btn.save --expect-text Saved; inspect --brief'
-```
-
-## Record and preserve evidence
-
-Every command appends a redacted `.flutter_scout/events.jsonl` event with
-timestamps, duration, session/run/transport, outcome, and snapshot/runtime
-facts. Successful replay inputs remain in `session.json`.
-
-Turn the last successful actions into a reusable flow:
-
-```bash
-flutter-scout record save-last template-create --last 6 --feature forms
-flutter-scout record run template-create --feature forms
-```
-
-Collect a bundle when handing off:
-
-```bash
-flutter-scout evidence -o /private/path/template-create-evidence \
-  --retention session
-```
-
-The bundle includes status, inspect, logs, screenshot, session replay data, and
-the JSONL event journal when available. Artifacts are private application data;
-the safe default retention is the session. Select `24h`, `7d`, or `manual` only
-when the task explicitly needs longer retention.
-
-## Safety and completion
-
-- Inspect before the first action and after meaningful transitions.
-- Treat structured `ok:false`, fresh blocking errors, rejected logs, protocol
-  mismatch, source mismatch, and failed expectations as failures.
-- Treat ambiguity, stale identity, unavailable observation, unknown dispatch,
-  and uncommitted evidence as abstention/reconciliation states, never success.
-- Do not infer visual quality from geometry or semantics alone; capture and
-  inspect images when appearance matters.
-- Never claim a simulator check that was not run.
-- Stop Scout-owned Flutter and listener processes before finishing.
-
-## Routed references
-
-Read only what the task needs:
-
-- [Lifecycle and diagnostics](references/lifecycle-and-diagnostics.md) for
-  setup, named sessions, attach/launch ownership, registry, logs, and cleanup.
-- [Gestures and visual evidence](references/gestures-and-visuals.md) for
-  screenshots, crops, scrolling, held drags, swipes, and coordinate fallback.
-- [Recording and replay](references/recording-and-replay.md) for flow capture,
-  retroactive extraction, batch, replay variables, and evidence bundles.
-- [Annotations](references/annotations.md) when the user left annotation pins.
-- [Command reference](references/command-reference.md) when an option or
-  return contract is not covered above.
+Require ok:true, sessionCleared:true, and recordedRuns.unresolved:[] before
+claiming cleanup. Never stop a human-owned or another task's run.

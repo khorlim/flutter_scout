@@ -103,7 +103,6 @@ void main() {
           for (final arguments in const <List<String>>[
             <String>['version'],
             <String>['status'],
-            <String>['record', 'list'],
             <String>['doctor'],
           ]) {
             final captured = await _captureRun(FlutterScoutCli(), arguments);
@@ -112,7 +111,9 @@ void main() {
               0,
               reason: '$arguments: ${captured.stderr}',
             );
-            final response = _decodeSingleJson(captured.stdout);
+            final response = _decodeSingleJson(
+              captured.stdout.isNotEmpty ? captured.stdout : captured.stderr,
+            );
             _expectCompleteEnvelope(response);
             _expectMeasuredOutputSerialization(response);
             expect(response['ok'], isTrue, reason: '$arguments');
@@ -123,9 +124,8 @@ void main() {
           }
 
           final failure = await _captureRun(FlutterScoutCli(), const <String>[
-            'record',
-            'show',
-            'does-not-exist',
+            'tap',
+            'btn.save',
           ]);
           expect(failure.exitCode, 1);
           final response = _decodeSingleJson(failure.stderr);
@@ -135,7 +135,7 @@ void main() {
           expect(response['result'], isNull);
           expect(
             response['structuredError'],
-            allOf(isA<Map>(), containsPair('code', 'record_not_found')),
+            allOf(isA<Map>(), containsPair('code', 'agent_session_required')),
           );
           expect(response['commandId'], isNotNull);
 
@@ -170,15 +170,26 @@ void main() {
           expect(
             details['availableCommands'],
             containsAll(<String>[
-              'devices',
-              'drag-cancel',
-              'drag-status',
-              'dismiss',
-              'export-batch',
-              'explore',
-              'deeplink',
+              'agent',
+              'annotations',
+              'crop',
+              'evidence',
               'help',
             ]),
+          );
+          expect(
+            details['availableCommands'],
+            isNot(
+              containsAll(<String>[
+                'batch',
+                'explore',
+                'export-batch',
+                'live',
+                'record',
+                'replay',
+                'serve',
+              ]),
+            ),
           );
 
           // Help is the one explicitly human-rendered stdout surface. It is
@@ -216,37 +227,30 @@ void main() {
       },
     );
 
-    test(
-      'manual direct-call mutations fail typed before VM dispatch',
-      () async {
-        await _withTemporaryWorkspace((_) async {
-          for (final arguments in const <List<String>>[
-            <String>['tap-text', 'Save'],
-            <String>['drag-move', '--to', '10,20'],
-            <String>['scroll-to', 'btn.save'],
-          ]) {
-            final captured = await _captureRun(FlutterScoutCli(), arguments);
-            expect(captured.exitCode, 1, reason: '$arguments');
-            final response = _decodeSingleJson(captured.stdout);
-            _expectCompleteEnvelope(response);
-            _expectMeasuredOutputSerialization(response);
-            expect(
-              response['structuredError'],
-              containsPair('code', 'not_attached'),
-            );
-            expect(response['dispatch'], 'not_dispatched');
-            expect(response['transport'], 'failed');
-            expect(response['result'], isNull);
-            expect(
-              response['stability'],
-              containsPair('state', 'runtime_lost'),
-            );
-            expect(response['runtimeInstanceId'], isNull);
-            expect(response['stateGeneration'], isNull);
-          }
-        });
-      },
-    );
+    test('standalone interaction calls fail at the public boundary', () async {
+      await _withTemporaryWorkspace((_) async {
+        for (final arguments in const <List<String>>[
+          <String>['tap-text', 'Save'],
+          <String>['drag-move', '--to', '10,20'],
+          <String>['scroll-to', 'btn.save'],
+        ]) {
+          final captured = await _captureRun(FlutterScoutCli(), arguments);
+          expect(captured.exitCode, 1, reason: '$arguments');
+          final response = _decodeSingleJson(
+            captured.stdout.isNotEmpty ? captured.stdout : captured.stderr,
+          );
+          _expectCompleteEnvelope(response);
+          _expectMeasuredOutputSerialization(response);
+          expect(
+            response['structuredError'],
+            containsPair('code', 'agent_session_required'),
+          );
+          expect(response['result'], isNull);
+          expect(response['runtimeInstanceId'], isNull);
+          expect(response['stateGeneration'], isNull);
+        }
+      });
+    });
 
     test('screenshot help and shipped guidance agree on annotations', () async {
       final help = await _captureRun(FlutterScoutCli(), const <String>[
@@ -280,8 +284,6 @@ void main() {
         for (final arguments in const <List<String>>[
           <String>['annotations', 'enable'],
           <String>['annotations', 'list'],
-          <String>['record', 'start', 'contract-flow'],
-          <String>['record', 'status'],
         ]) {
           await _captureRun(FlutterScoutCli(), arguments);
         }
@@ -294,13 +296,10 @@ void main() {
         final actions = events
             .where((event) => event['type'] == 'action_result')
             .toList(growable: false);
-        expect(actions, hasLength(2));
+        expect(actions, hasLength(1));
         expect(
           actions.map((event) => event['method']),
-          unorderedEquals(<String>[
-            'ext.flutter_scout.annotations',
-            'ext.flutter_scout.record',
-          ]),
+          unorderedEquals(<String>['ext.flutter_scout.annotations']),
         );
         for (final action in actions) {
           _expectCorrelatedEvent(action);

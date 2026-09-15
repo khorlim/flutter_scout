@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 2,
+  "protocolVersion": 15,
+  "agentProtocol": 2,
+  "artifactKind": "flutter_scout_public_cli_command_contract",
+  "evidenceScope": {
+    "kind": "current_source_contract",
+    "commandsExecutedAgainstApp": false,
+    "simulatorOrDeviceExercised": false,
+    "releaseBinariesExercised": false
+  },
+  "humanOnlyInvocations": [
+    "--help",
+    "-h",
+    "no-command"
+  ],
+  "commands": {
+    "agent": {
+      "surface": "machine",
+      "operation": "orchestration",
+      "persistentMethod": false
+    },
+    "annotations": {
+      "surface": "machine",
+      "operation": "mixed",
+      "persistentMethod": false
+    },
+    "apps": {
+      "surface": "machine",
+      "operation": "lifecycle",
+      "persistentMethod": false
+    },
+    "attach": {
+      "surface": "machine",
+      "operation": "lifecycle",
+      "persistentMethod": false
+    },
+    "crop": {
+      "surface": "machine",
+      "operation": "read",
+      "persistentMethod": false
+    },
+    "devices": {
+      "surface": "machine",
+      "operation": "lifecycle",
+      "persistentMethod": false
+    },
+    "doctor": {
+      "surface": "machine",
+      "operation": "read",
+      "persistentMethod": false
+    },
+    "ensure": {
+      "surface": "machine",
+      "operation": "lifecycle",
+      "persistentMethod": false
+    },
+    "evidence": {
+      "surface": "machine",
+      "operation": "artifact",
+      "persistentMethod": false
+    },
+    "health": {
+      "surface": "machine",
+      "operation": "read",
+      "persistentMethod": false
+    },
+    "help": {
+      "surface": "human_prose",
+      "operation": "documentation",
+      "persistentMethod": false
+    },
+    "launch": {
+      "surface": "machine",
+      "operation": "lifecycle",
+      "persistentMethod": false
+    },
+    "logs": {
+      "surface": "machine",
+      "operation": "read",
+      "persistentMethod": false
+    },
+    "reload": {
+      "surface": "machine",
+      "operation": "mutation",
+      "persistentMethod": false
+    },
+    "restart": {
+      "surface": "machine",
+      "operation": "mutation",
+      "persistentMethod": false
+    },
+    "screenshot": {
+      "surface": "machine",
+      "operation": "read",
+      "persistentMethod": false
+    },
+    "status": {
+      "surface": "machine",
+      "operation": "read",
+      "persistentMethod": false
+    },
+    "stop": {
+      "surface": "machine",
+      "operation": "lifecycle",
+      "persistentMethod": false
+    },
+    "version": {
+      "surface": "machine",
+      "operation": "metadata",
+      "persistentMethod": false
+    }
+  }
+}
