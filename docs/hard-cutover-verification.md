@@ -117,3 +117,9 @@ fixture suites were not redundantly rerun after CLI-only fixes.
 
 Clean-agent raw evidence: `/tmp/scout-main-sol.jsonl`.
 Evaluation suite: `/tmp/scout-main-evaluation-tests.log`.
+
+The installed CLI's subsequent stop check exposed `agent.lock` as unexpected
+residue after all owned processes stopped. Cleanup now recognizes and preserves
+that serialization inode, like the retention lock; it must not unlink a lock
+that another controller can still hold. The existing cleanup behavior test also
+verifies writes through the original lease still reach the same file.

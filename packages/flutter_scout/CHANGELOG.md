@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Preserve the agent lease inode during session cleanup, recognizing it as a
+  serialization control rather than unknown residue. Never unlink a live lock.
 - Add explicit macOS `foreground()` on the persistent agent connection. Activate
   only the connected VM's app process, then observe actual rendering; preserve
   exclusive-hand, receipt and failure guards without automatic focus stealing.

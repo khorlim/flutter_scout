@@ -2691,7 +2691,7 @@ Interaction: flutter-scout --app <name> agent [--interval-ms 250] [--max-items 6
 
 Use the shipped scripts/agent_client.mjs in one persistent Node session.
 Agent protocol 2: observe, query, start, next, acknowledge, reconcile,
-watch, react, cancel, status, close. Images are manual.
+foreground (macOS), watch, react, cancel, status, close. Images are manual.
 A ticket is not success. Consume the canonical receipt before another input.
 Failed input requires fresh reconciliation; unknown dispatch stays halted.
 

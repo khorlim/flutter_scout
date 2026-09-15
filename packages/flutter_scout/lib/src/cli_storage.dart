@@ -1908,6 +1908,13 @@ Map<String, Object?> _cleanupManagedSessionInternals({
   }
 
   bool allowedResidual(String path) {
+    // Keep the lease inode stable across stop/clear and later connections.
+    // Unlinking a lock file could let two processes lock different inodes.
+    if (path == p.join(sessionRoot, 'agent.lock') &&
+        FileSystemEntity.typeSync(path, followLinks: false) ==
+            FileSystemEntityType.file) {
+      return true;
+    }
     final retention = _canonicalStorageTargetPath(_retentionDirectory);
     final recordings = _canonicalStorageTargetPath(
       p.join(sessionRoot, 'recordings'),
@@ -1965,6 +1972,7 @@ Map<String, Object?> _cleanupManagedSessionInternals({
     'preservedRetentionEntries': preservedEntries.length,
     'emptyRetentionRegistryRemoved': emptyRetentionRegistryRemoved,
     'retentionLockPreservedForSerialization': true,
+    'agentLockPreservedForSerialization': true,
     'recordingsPreserved':
         FileSystemEntity.typeSync(
           p.join(sessionRoot, 'recordings'),

@@ -310,6 +310,12 @@ void main() {
             2,
           ], retention: 'session');
           final registry = cli.debugRetentionRegistryPath;
+          final agentLock = File(
+            p.join(temp.path, '.flutter_scout', 'agent.lock'),
+          );
+          final lease = agentLock.openSync(mode: FileMode.append);
+          addTearDown(lease.closeSync);
+          lease.lockSync(FileLock.exclusive);
 
           final stopped = await _captureRun(cli, const <String>[
             'stop',
@@ -320,6 +326,12 @@ void main() {
           final cleanup = response['managedSessionCleanup'] as Map;
           expect(cleanup['emptyRetentionRegistryRemoved'], isTrue);
           expect(cleanup['retentionLockPreservedForSerialization'], isTrue);
+          expect(cleanup['agentLockPreservedForSerialization'], isTrue);
+          // Writing through the original lease must still address the same
+          // file: cleanup must never unlink and recreate the hand's lock.
+          lease.writeStringSync('same-lease-inode');
+          lease.flushSync();
+          expect(agentLock.readAsStringSync(), 'same-lease-inode');
           expect(File(artifact).existsSync(), isFalse);
           expect(File(registry).existsSync(), isFalse);
           expect(File('$registry.lock').existsSync(), isTrue);
