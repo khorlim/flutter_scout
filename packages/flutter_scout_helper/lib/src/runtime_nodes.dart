@@ -563,7 +563,15 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       if (icon != null && icon.isNotEmpty) return icon;
     }
     if (widget is TextField) {
-      return widget.decoration?.labelText ?? widget.decoration?.hintText;
+      for (final label in [
+        widget.decoration?.labelText,
+        widget.decoration?.hintText,
+      ]) {
+        if (label != null && label.trim().isNotEmpty) return label.trim();
+      }
+      // A prefixIcon can be an app-owned text label, not necessarily an icon.
+      // Prefer that exact decoration subtree over a neighbouring row's text.
+      return _fieldPrefixLabel(element, widget.decoration?.prefixIcon);
     }
     final widgetType = widget.runtimeType.toString();
     if (widget is Switch ||
@@ -611,6 +619,52 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (widget is Text) return widget.style?.fontFamily;
     if (widget is RichText) return widget.text.style?.fontFamily;
     return null;
+  }
+
+  String? _fieldPrefixLabel(Element field, Widget? prefix) {
+    if (prefix == null) return null;
+    Element? prefixElement;
+    var budget = 200;
+    void find(Element element) {
+      if (budget-- <= 0 || prefixElement != null) return;
+      if (identical(element.widget, prefix)) {
+        prefixElement = element;
+        return;
+      }
+      if (element.widget is EditableText) return;
+      element.visitChildElements(find);
+    }
+
+    field.visitChildElements(find);
+    final root = prefixElement;
+    if (root == null) return null;
+    final labels = <String>{};
+    var exhausted = false;
+    budget = 80;
+    void collect(Element element) {
+      if (budget-- <= 0) {
+        exhausted = true;
+        return;
+      }
+      if (_isHiddenByAncestor(element) || _isInsideSensitiveEditable(element)) {
+        return;
+      }
+      final kind = _kindFor(element.widget, element);
+      if (kind == 'btn' || kind == 'tap' || kind == 'field') return;
+      final text = _ownText(element.widget)?.trim();
+      final rect = _rectFor(element);
+      if (text != null &&
+          _hasWord(text) &&
+          rect != null &&
+          rect.width > 0 &&
+          rect.height > 0) {
+        labels.add(text);
+      }
+      element.visitChildElements(collect);
+    }
+
+    collect(root);
+    return !exhausted && labels.length == 1 ? labels.single : null;
   }
 
   String? _semanticsLabelBelow(Element element) {

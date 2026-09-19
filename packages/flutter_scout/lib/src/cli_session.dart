@@ -21,6 +21,43 @@ const Duration _postBuildVmServiceGrace = Duration(seconds: 45);
 // and removes this file along with the signal handlers.
 const String _flutterToolSignalPidFileName = 'flutter_tool_signal.pid';
 
+void _addRendererOption(ArgParser parser) => parser.addFlag(
+  'enable-impeller',
+  help:
+      'Explicit Flutter renderer request; omission preserves platform defaults.',
+);
+
+bool? _requestedImpeller(ArgResults parsed) =>
+    parsed.wasParsed('enable-impeller') ? parsed.flag('enable-impeller') : null;
+
+List<String> _rendererFlutterArgs(bool? requested) => [
+  if (requested != null)
+    requested ? '--enable-impeller' : '--no-enable-impeller',
+];
+
+Map<String, Object?> _rendererRequest(bool? requested) => {
+  'enableImpeller': requested,
+  'source': requested == null ? 'flutter_platform_default' : 'flutter_run_flag',
+  'actualRenderer': 'not_observed',
+};
+
+void _validateRendererReuse(
+  bool? requested,
+  Map<String, Object?>? meta, {
+  required bool owned,
+}) {
+  if (requested == null) return;
+  final recorded = meta?['rendererRequest'];
+  if (!owned || recorded is! Map || recorded['enableImpeller'] != requested) {
+    throw const ScoutCliException(
+      'renderer_request_conflict',
+      'The existing app cannot prove the requested renderer launch option. '
+          'Its state was preserved. Stop only your exact owned run, then launch '
+          'with the requested renderer; never replace a human-owned app.',
+    );
+  }
+}
+
 List<String> _enableFlutterToolSignalHotUpdates(
   List<String> flutterArgs, {
   required String pidFile,
@@ -156,7 +193,9 @@ extension _CliSession on FlutterScoutCli {
             '(default 180). This, not elapsed time, is what ends a stuck build.',
       )
       ..addFlag('verbose', defaultsTo: false);
+    _addRendererOption(parser);
     final parsed = parser.parse(args);
+    final requestedImpeller = _requestedImpeller(parsed);
     final launchTimeout = Duration(
       seconds: int.tryParse(parsed.option('launch-timeout') ?? '') ?? 1200,
     );
@@ -253,6 +292,7 @@ extension _CliSession on FlutterScoutCli {
         project: project,
         flutterExecutable: flutterExecutable,
       );
+      launchProvenance['rendererRequest'] = _rendererRequest(requestedImpeller);
 
       _ensureSessionDir();
       final runDirectory = p.join(_sessionDir.path, 'runs', launchLease.runId);
@@ -295,6 +335,7 @@ extension _CliSession on FlutterScoutCli {
         'run',
         '-d',
         resolvedDevice.id,
+        ..._rendererFlutterArgs(requestedImpeller),
         if (temporarySetup != null) '--no-pub',
         if (temporarySetup != null) ...[
           '--target',
@@ -620,6 +661,7 @@ extension _CliSession on FlutterScoutCli {
         'project': project,
         'sourceIdentity': launchProvenance['sourceIdentity'],
         'flutterToolchain': launchProvenance['flutterToolchain'],
+        'rendererRequest': launchProvenance['rendererRequest'],
         'runId': launchLease.runId,
         'pid': flutterToolPid,
         'hotUpdateSignalHandlers': 'registered',
@@ -1447,7 +1489,9 @@ extension _CliSession on FlutterScoutCli {
             '(default 180). This, not elapsed time, is what ends a stuck build.',
       )
       ..addFlag('verbose', defaultsTo: false);
+    _addRendererOption(parser);
     final parsed = parser.parse(args);
+    final requestedImpeller = _requestedImpeller(parsed);
     final device = parsed.option('device');
     void progress(String stage, [Map<String, Object?> extra = const {}]) {
       _writeHeartbeat(stage, extra, false);
@@ -1497,6 +1541,13 @@ extension _CliSession on FlutterScoutCli {
         final previousMeta = _readSessionMeta();
         final scoutOwned =
             pid != null && await _matchesOwnedFlutterRun(pid, previousMeta);
+        // Also applies after joining an in-progress launch: joining never
+        // authorizes reuse of a differently configured renderer.
+        _validateRendererReuse(
+          requestedImpeller,
+          previousMeta,
+          owned: scoutOwned,
+        );
         final now = DateTime.now().toIso8601String();
         if (!scoutOwned) {
           // Reusing a reachable human-owned app must drop stale ownership
@@ -1557,6 +1608,7 @@ extension _CliSession on FlutterScoutCli {
           'runId': ?_currentRunIdFromSession(),
           'device': ?device,
           'attachOnly': !scoutOwned,
+          if (scoutOwned) 'rendererRequest': previousMeta?['rendererRequest'],
           if (ownershipLost) 'sessionOwnershipLost': true,
           'hotUpdate': await _hotUpdateCapability(discovered.uri!),
         });
@@ -1568,6 +1620,7 @@ extension _CliSession on FlutterScoutCli {
 
     progress('fallback_launch', {'device': ?device});
     final launchArgs = <String>[
+      ..._rendererFlutterArgs(requestedImpeller),
       if (device != null && device.isNotEmpty) ...['--device', device],
       '--project',
       parsed.option('project')!,
@@ -2811,6 +2864,22 @@ bool _sameProcessOwnershipIdentity(
 /// Narrow process-level test seam for proving launch-lease contention and
 /// crash recovery without starting Flutter or touching the user's sessions.
 extension FlutterScoutCliLaunchLeaseTesting on FlutterScoutCli {
+  Map<String, Object?> debugRendererLaunchRequest(List<String> args) {
+    final parser = ArgParser();
+    _addRendererOption(parser);
+    final requested = _requestedImpeller(parser.parse(args));
+    return {
+      'flutterArgs': _rendererFlutterArgs(requested),
+      'rendererRequest': _rendererRequest(requested),
+    };
+  }
+
+  void debugValidateRendererReuse(
+    bool? requested,
+    Map<String, Object?>? meta, {
+    required bool owned,
+  }) => _validateRendererReuse(requested, meta, owned: owned);
+
   /// Test-only view of the Flutter-tool signal-registration launch contract.
   List<String> debugEnableFlutterToolSignalHotUpdates(
     List<String> flutterArgs, {

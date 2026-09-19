@@ -2615,6 +2615,14 @@ Usage:
   flutter-scout $command --device <simulator-id> [--project <path>]
       [--dart-define-from-file <owner-only-0600-file>]
       [--inherit-launch-context]
+      [--enable-impeller | --no-enable-impeller]
+
+Renderer selection:
+  An explicit renderer option is forwarded to Flutter for this run only.
+  Omit it to preserve Flutter's platform default. rendererRequest records the
+  requested flag, not proof of the actual backend. ensure refuses incompatible
+  or unknown renderer reuse without stopping the app; stop only your owned run
+  before relaunching with a different renderer.
 
 macOS signing context:
   Scout normally uses launchd so owned runs survive terminal cleanup. When an

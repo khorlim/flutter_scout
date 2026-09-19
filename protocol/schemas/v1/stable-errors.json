@@ -988,6 +988,10 @@
       "meaning": "The bounded reload operation did not complete before its deadline.",
       "family": "execution_or_reconciliation"
     },
+    "renderer_request_conflict": {
+      "meaning": "The existing app cannot prove the explicitly requested renderer launch option, so Scout preserves it and refuses reuse.",
+      "family": "compatibility_or_identity"
+    },
     "replay_element_invalid": {
       "meaning": "Scout reports the stable replay element invalid failure condition.",
       "family": "operation"

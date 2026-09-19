@@ -883,6 +883,11 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
       ..remove('stateDigest')
       ..remove('snapshotId')
       ..remove('visibleTextHash')
+      // Scheduling is diagnostic, not a semantic state change. Cursor blink
+      // and other paint-only frames must not invalidate an unchanged target
+      // between preflight and dispatch. Actual node/geometry/value changes
+      // remain hashed; the independent live-rendering guard stays mandatory.
+      ..remove('idle')
       ..['recentErrors'] = [
         for (final error in _errors)
           {

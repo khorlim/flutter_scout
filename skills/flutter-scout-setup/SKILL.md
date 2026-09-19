@@ -137,6 +137,16 @@ Named sessions use isolated runtime directories and per-run logs. Concurrent
 does not replace a ready run unless you pass `--replace`. Long launches emit a
 sanitized heartbeat every 15 seconds so build progress never goes silent.
 
+When a task explicitly needs a renderer, `ensure` and `launch` accept
+`--enable-impeller` or `--no-enable-impeller`. Omission leaves Flutter's platform
+default unchanged. This is a per-run request, not an app configuration edit or
+proof that the backend supports every shader. `rendererRequest` records the
+requested setting. An explicit request cannot reuse a run with a different or
+unknown setting: `renderer_request_conflict` preserves that app. Close the
+connection and stop only the exact owned run before relaunching; never replace
+a human-owned app to satisfy a renderer request. Renderer availability remains
+the responsibility of the selected Flutter SDK/platform.
+
 Launch through Flutter Scout when you intentionally need a new Scout-owned run:
 
 ```bash
