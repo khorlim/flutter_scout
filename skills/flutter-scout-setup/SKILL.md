@@ -173,7 +173,11 @@ and `doctor` resume an interrupted transaction only when every current digest
 matches Scout's exact restore plan. A different user-authored digest is
 preserved and returned as a prioritized `temporary_helper_repair` action; do
 not delete the repair record or retry setup until that conflict is resolved.
-Use `--helper-path <path>` if automatic helper discovery fails.
+The transaction temporarily replaces even an existing stale helper declaration,
+then verifies `.dart_tool/package_config.json` resolves the helper bundled beside
+the exact CLI before `flutter run` starts. An explicit `--helper-path` is accepted
+only when it resolves to that same bundled source; a different source fails
+closed with `temporary_helper_revision_mismatch` before project mutation.
 
 Always pass `--name <feature>` when running the app — a short kebab-case slug of the feature/task in focus (`add-member`, `supplier-search`), or the current git branch when no single feature is. It registers the session so any later command can target it with `--app <feature>` from any directory, and labels the debug badge so concurrent runs stay distinguishable.
 

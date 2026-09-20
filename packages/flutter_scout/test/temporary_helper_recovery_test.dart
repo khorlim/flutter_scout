@@ -69,6 +69,135 @@ void main() {
     },
   );
 
+  test(
+    'stale existing helper is replaced by the exact bundled helper without product drift',
+    () async {
+      final fixture = await _TemporaryProject.create(
+        lockExists: true,
+        existingHelperPath: '/tmp/stale-flutter-scout-helper',
+      );
+      addTearDown(fixture.dispose);
+      final cli = FlutterScoutCli();
+      final bundledHelper = await cli.debugDiscoverBundledHelperPath();
+      expect(bundledHelper, isNotNull);
+      String? resolvedDuringPubGet;
+      FlutterScoutCli.debugTemporaryHelperPubGetOverride = (project) async {
+        final pubspec = File(
+          p.join(project, 'pubspec.yaml'),
+        ).readAsStringSync();
+        final candidateActive = pubspec.contains(
+          "path: '${bundledHelper!.replaceAll("'", "''")}'",
+        );
+        if (candidateActive) {
+          expect(pubspec, isNot(contains('/tmp/stale-flutter-scout-helper')));
+          resolvedDuringPubGet = bundledHelper;
+          _writePackageConfig(project, bundledHelper);
+        } else {
+          expect(pubspec, contains('/tmp/stale-flutter-scout-helper'));
+          _writePackageConfig(project, fixture.helper.path);
+        }
+        File(p.join(project, 'pubspec.lock')).writeAsStringSync(
+          candidateActive
+              ? 'packages:\n  flutter_scout_helper: exact-bundled-helper\n'
+              : 'packages:\n  flutter_scout_helper: stale\n',
+          flush: true,
+        );
+        return ProcessResult(42, 0, 'resolved', '');
+      };
+
+      final setup = await cli.debugPrepareTemporaryHelper(
+        project: fixture.project.path,
+        helperPath: bundledHelper!,
+        requireBundledHelper: true,
+      );
+
+      expect(resolvedDuringPubGet, bundledHelper);
+      expect(fixture.pubspec.readAsBytesSync(), fixture.originalPubspec);
+      expect(fixture.lock.readAsBytesSync(), fixture.originalLock);
+      expect(
+        _resolvedHelperFromPackageConfig(fixture.project.path),
+        Directory(bundledHelper).resolveSymbolicLinksSync(),
+      );
+      await cli.debugCleanupTemporaryHelper(setup);
+      expect(fixture.pubspec.readAsBytesSync(), fixture.originalPubspec);
+      expect(fixture.lock.readAsBytesSync(), fixture.originalLock);
+    },
+  );
+
+  test('resolved stale helper fails closed before launch', () async {
+    final fixture = await _TemporaryProject.create(
+      lockExists: true,
+      existingHelperPath: '/tmp/stale-flutter-scout-helper',
+    );
+    addTearDown(fixture.dispose);
+    final cli = FlutterScoutCli();
+    final bundledHelper = await cli.debugDiscoverBundledHelperPath();
+    expect(bundledHelper, isNotNull);
+    FlutterScoutCli.debugTemporaryHelperPubGetOverride = (project) async {
+      _writePackageConfig(project, fixture.helper.path);
+      File(p.join(project, 'pubspec.lock')).writeAsStringSync(
+        'packages:\n  flutter_scout_helper: stale\n',
+        flush: true,
+      );
+      return ProcessResult(42, 0, 'resolved', '');
+    };
+
+    await expectLater(
+      cli.debugPrepareTemporaryHelper(
+        project: fixture.project.path,
+        helperPath: bundledHelper!,
+        requireBundledHelper: true,
+      ),
+      throwsA(
+        isA<ScoutCliException>().having(
+          (error) => error.code,
+          'code',
+          'temporary_helper_resolution_mismatch',
+        ),
+      ),
+    );
+    _expectTrackedInputsExact(fixture);
+    expect(
+      File(
+        p.join(fixture.project.path, '.flutter_scout', 'bootstrap_test.dart'),
+      ).existsSync(),
+      isFalse,
+    );
+  });
+
+  test(
+    'explicit helper from another revision is rejected before mutation',
+    () async {
+      final fixture = await _TemporaryProject.create(lockExists: true);
+      addTearDown(fixture.dispose);
+      final originalPackageConfig = fixture.packageConfig.existsSync()
+          ? fixture.packageConfig.readAsBytesSync()
+          : null;
+
+      await expectLater(
+        FlutterScoutCli().debugPrepareTemporaryHelper(
+          project: fixture.project.path,
+          helperPath: fixture.helper.path,
+          requireBundledHelper: true,
+        ),
+        throwsA(
+          isA<ScoutCliException>().having(
+            (error) => error.code,
+            'code',
+            'temporary_helper_revision_mismatch',
+          ),
+        ),
+      );
+      _expectTrackedInputsExact(fixture);
+      expect(
+        fixture.packageConfig.existsSync()
+            ? fixture.packageConfig.readAsBytesSync()
+            : null,
+        originalPackageConfig,
+      );
+    },
+  );
+
   for (final phase in const <String>[
     'record_prepared',
     'pubspec_write_started',
@@ -450,16 +579,24 @@ Future<bool> _processIsAlive(int pid) async {
 
 Future<ProcessResult> _successfulFakePubGet(String project) async {
   final pubspec = File(p.join(project, 'pubspec.yaml')).readAsStringSync();
-  final helperActive = pubspec.contains('flutter_scout_helper:');
+  final helperMatch = RegExp(
+    r"flutter_scout_helper:\s*\n\s+path:\s*'([^']+)'",
+  ).firstMatch(pubspec);
+  final helperActive = helperMatch != null;
   final config = File(p.join(project, '.dart_tool', 'package_config.json'));
   config.parent.createSync(recursive: true);
-  config.writeAsStringSync(
-    jsonEncode(<String, Object?>{
-      'configVersion': 2,
-      'mode': helperActive ? 'helper' : 'original',
-    }),
-    flush: true,
-  );
+  if (helperMatch != null) {
+    _writePackageConfig(project, helperMatch.group(1)!);
+  } else {
+    config.writeAsStringSync(
+      jsonEncode(<String, Object?>{
+        'configVersion': 2,
+        'mode': 'original',
+        'packages': const <Object?>[],
+      }),
+      flush: true,
+    );
+  }
   File(p.join(project, 'pubspec.lock')).writeAsStringSync(
     helperActive
         ? 'packages:\n  flutter_scout_helper: tool\n'
@@ -467,6 +604,37 @@ Future<ProcessResult> _successfulFakePubGet(String project) async {
     flush: true,
   );
   return ProcessResult(42, 0, 'resolved', '');
+}
+
+void _writePackageConfig(String project, String helperPath) {
+  final config = File(p.join(project, '.dart_tool', 'package_config.json'));
+  config.parent.createSync(recursive: true);
+  config.writeAsStringSync(
+    jsonEncode(<String, Object?>{
+      'configVersion': 2,
+      'packages': <Object?>[
+        <String, Object?>{
+          'name': 'flutter_scout_helper',
+          'rootUri': Uri.directory(helperPath).toString(),
+          'packageUri': 'lib/',
+          'languageVersion': '3.12',
+        },
+      ],
+    }),
+    flush: true,
+  );
+}
+
+String? _resolvedHelperFromPackageConfig(String project) {
+  final config = File(p.join(project, '.dart_tool', 'package_config.json'));
+  final decoded = jsonDecode(config.readAsStringSync()) as Map<String, Object?>;
+  final packages = decoded['packages']! as List<Object?>;
+  final helper = packages.cast<Map<String, Object?>>().singleWhere(
+    (entry) => entry['name'] == 'flutter_scout_helper',
+  );
+  return Directory.fromUri(
+    config.uri.resolve(helper['rootUri']! as String),
+  ).resolveSymbolicLinksSync();
 }
 
 void _expectTrackedInputsExact(_TemporaryProject fixture) {
@@ -499,7 +667,10 @@ final class _TemporaryProject {
   final List<int> originalPubspec;
   final List<int>? originalLock;
 
-  static Future<_TemporaryProject> create({required bool lockExists}) async {
+  static Future<_TemporaryProject> create({
+    required bool lockExists,
+    String? existingHelperPath,
+  }) async {
     final root = await Directory.systemTemp.createTemp('scout_wal_test_');
     final project = Directory(p.join(root.path, 'app'))..createSync();
     final helper = Directory(p.join(root.path, 'helper'))..createSync();
@@ -516,6 +687,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+${existingHelperPath == null ? '' : "  flutter_scout_helper:\n    path: '$existingHelperPath'\n"}
 ''');
     final main = File(p.join(project.path, 'lib', 'main.dart'));
     main.parent.createSync(recursive: true);

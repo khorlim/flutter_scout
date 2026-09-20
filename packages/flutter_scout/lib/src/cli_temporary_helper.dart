@@ -32,12 +32,14 @@ extension _CliTemporaryHelper on FlutterScoutCli {
     required String originalTarget,
     required String? helperPath,
     required String runId,
+    bool requireBundledHelper = true,
   }) async {
     final paths = await _temporaryHelperValidatedPaths(
       project: project,
       originalTarget: originalTarget,
       helperPath: helperPath,
       runId: runId,
+      requireBundledHelper: requireBundledHelper,
     );
     final pubspec = File(paths.pubspecPath);
     final originalPubspec = _temporaryHelperReadBoundedFile(
@@ -45,28 +47,12 @@ extension _CliTemporaryHelper on FlutterScoutCli {
       label: 'pubspec.yaml',
     );
     final pubspecText = utf8.decode(originalPubspec, allowMalformed: false);
-    final dependencyAlreadyPresent = RegExp(
-      r'^\s*flutter_scout_helper\s*:',
-      multiLine: true,
-    ).hasMatch(pubspecText);
-    var injectedPubspec = originalPubspec;
-    if (!dependencyAlreadyPresent) {
-      final dependencies = RegExp(
-        r'^dependencies:\s*$',
-        multiLine: true,
-      ).firstMatch(pubspecText);
-      if (dependencies == null) {
-        throw const ScoutCliException(
-          'temporary_helper_dependencies_missing',
-          'pubspec.yaml has no top-level dependencies section.',
-        );
-      }
-      final quotedPath = paths.helperPath.replaceAll("'", "''");
-      final insertion = "\n  flutter_scout_helper:\n    path: '$quotedPath'";
-      injectedPubspec = utf8.encode(
-        pubspecText.replaceRange(dependencies.end, dependencies.end, insertion),
-      );
-    }
+    final dependencyAlreadyPresent = _temporaryHelperDependencyPresent(
+      pubspecText,
+    );
+    final injectedPubspec = utf8.encode(
+      _temporaryHelperPubspecWithExactDependency(pubspecText, paths.helperPath),
+    );
 
     final lockFile = File(paths.lockPath);
     final lockType = FileSystemEntity.typeSync(
@@ -204,17 +190,15 @@ Future<void> main() async {
     _temporaryHelperCheckpoint('record_prepared');
 
     try {
-      if (!dependencyAlreadyPresent) {
-        _temporaryHelperSetPhase(record, 'pubspec_write_started');
-        _temporaryHelperWriteRecord(paths.recordPath, record);
-        _temporaryHelperCheckpoint('pubspec_write_started');
-        _temporaryHelperAtomicReplaceTrackedFile(
-          path: paths.pubspecPath,
-          bytes: injectedPubspec,
-          expectedCurrentSha256: record['pubspecOriginalSha256']! as String,
-          projectRoot: paths.projectPath,
-        );
-      }
+      _temporaryHelperSetPhase(record, 'pubspec_write_started');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('pubspec_write_started');
+      _temporaryHelperAtomicReplaceTrackedFile(
+        path: paths.pubspecPath,
+        bytes: injectedPubspec,
+        expectedCurrentSha256: record['pubspecOriginalSha256']! as String,
+        projectRoot: paths.projectPath,
+      );
       _temporaryHelperSetPhase(record, 'pubspec_injected');
       _temporaryHelperWriteRecord(paths.recordPath, record);
       _temporaryHelperCheckpoint('pubspec_injected');
@@ -246,6 +230,7 @@ Future<void> main() async {
               '${pubGet.stderr}',
         );
       }
+      _temporaryHelperVerifyResolvedHelper(paths);
 
       _temporaryHelperSetPhase(record, 'target_write_started');
       _temporaryHelperWriteRecord(paths.recordPath, record);

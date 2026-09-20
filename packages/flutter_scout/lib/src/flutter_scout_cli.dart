@@ -236,12 +236,14 @@ class FlutterScoutCli {
   Future<Map<String, Object?>> debugPrepareTemporaryHelper({
     required String project,
     required String helperPath,
+    bool requireBundledHelper = false,
   }) async {
     final setup = await _prepareTemporaryHelper(
       project: project,
       originalTarget: 'lib/main.dart',
       helperPath: helperPath,
       runId: 'test',
+      requireBundledHelper: requireBundledHelper,
     );
     return setup.toJson();
   }

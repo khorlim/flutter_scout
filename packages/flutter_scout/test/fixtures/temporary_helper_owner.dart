@@ -13,13 +13,25 @@ Future<void> main(List<String> args) async {
   Directory.current = args[0];
   FlutterScoutCli.debugTemporaryHelperPubGetOverride = (project) async {
     final pubspec = File(p.join(project, 'pubspec.yaml')).readAsStringSync();
-    final helperActive = pubspec.contains('flutter_scout_helper:');
+    final helperMatch = RegExp(
+      r"flutter_scout_helper:\s*\n\s+path:\s*'([^']+)'",
+    ).firstMatch(pubspec);
+    final helperActive = helperMatch != null;
     final config = File(p.join(project, '.dart_tool', 'package_config.json'));
     config.parent.createSync(recursive: true);
     config.writeAsStringSync(
       jsonEncode(<String, Object?>{
         'configVersion': 2,
-        'mode': helperActive ? 'helper' : 'original',
+        'packages': helperMatch == null
+            ? const <Object?>[]
+            : <Object?>[
+                <String, Object?>{
+                  'name': 'flutter_scout_helper',
+                  'rootUri': Uri.directory(helperMatch.group(1)!).toString(),
+                  'packageUri': 'lib/',
+                  'languageVersion': '3.12',
+                },
+              ],
       }),
       flush: true,
     );

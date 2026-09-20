@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Define stable fail-closed errors for unavailable bundled helper identity,
+  explicit helper revision mismatch, and resolved package-config mismatch during
+  zero-diff temporary-helper launch.
 - Add optional `activationTarget` to `input`. It names an explicit observed
   activation handle; helper protocol 15 remains additive and existing input
   requests retain their behavior when the parameter is absent.

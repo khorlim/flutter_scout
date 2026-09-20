@@ -1,11 +1,163 @@
 part of 'flutter_scout_cli.dart';
 
+bool _temporaryHelperDependencyPresent(String pubspec) =>
+    _temporaryHelperDependencyMatch(pubspec) != null;
+
+String _temporaryHelperPubspecWithExactDependency(
+  String pubspec,
+  String helperPath,
+) {
+  final dependencies = RegExp(
+    r'^dependencies\s*:\s*(?:#.*)?$',
+    multiLine: true,
+  ).firstMatch(pubspec);
+  if (dependencies == null) {
+    throw const ScoutCliException(
+      'temporary_helper_dependencies_missing',
+      'pubspec.yaml has no top-level dependencies section.',
+    );
+  }
+  final newline = pubspec.contains('\r\n') ? '\r\n' : '\n';
+  final quotedPath = helperPath.replaceAll("'", "''");
+  final existing = _temporaryHelperDependencyMatch(pubspec);
+  if (existing == null) {
+    final insertion =
+        '$newline  flutter_scout_helper:$newline    path: \'$quotedPath\'';
+    return pubspec.replaceRange(dependencies.end, dependencies.end, insertion);
+  }
+  final indent = existing.group(1)!.length;
+  var blockEnd = pubspec.length;
+  for (final line in RegExp(
+    r'^([ ]*)(\S.*)$',
+    multiLine: true,
+  ).allMatches(pubspec, existing.end)) {
+    final content = line.group(2)!;
+    if (content.startsWith('#')) continue;
+    if (line.group(1)!.length <= indent) {
+      blockEnd = line.start;
+      break;
+    }
+  }
+  final padding = ' ' * indent;
+  final replacement =
+      '${padding}flutter_scout_helper:$newline$padding  path: \'$quotedPath\'$newline';
+  return pubspec.replaceRange(existing.start, blockEnd, replacement);
+}
+
+RegExpMatch? _temporaryHelperDependencyMatch(String pubspec) {
+  final dependencies = RegExp(
+    r'^dependencies\s*:\s*(?:#.*)?$',
+    multiLine: true,
+  ).firstMatch(pubspec);
+  if (dependencies == null) return null;
+  final topLevelMatches = RegExp(
+    r'^(?!\s|#|\r?$)[^:\r\n]+\s*:',
+    multiLine: true,
+  ).allMatches(pubspec, dependencies.end);
+  final nextTopLevel = topLevelMatches.isEmpty ? null : topLevelMatches.first;
+  final sectionEnd = nextTopLevel?.start ?? pubspec.length;
+  final entries = RegExp(r'^([ ]+)([A-Za-z0-9_]+)\s*:', multiLine: true)
+      .allMatches(pubspec, dependencies.end)
+      .where((match) => match.start < sectionEnd);
+  final entryList = entries.toList(growable: false);
+  if (entryList.isEmpty) return null;
+  final directIndent = entryList
+      .map((match) => match.group(1)!.length)
+      .reduce(min);
+  for (final entry in entryList) {
+    if (entry.group(1)!.length == directIndent &&
+        entry.group(2) == 'flutter_scout_helper') {
+      return entry;
+    }
+  }
+  return null;
+}
+
+void _temporaryHelperVerifyResolvedHelper(_TemporaryHelperPaths paths) {
+  final configPath = p.join(
+    paths.projectPath,
+    '.dart_tool',
+    'package_config.json',
+  );
+  final config = File(configPath);
+  if (FileSystemEntity.typeSync(configPath, followLinks: false) !=
+      FileSystemEntityType.file) {
+    throw const ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'Package resolution did not produce a regular package_config.json; '
+          'Scout refused to launch.',
+    );
+  }
+  Object? decoded;
+  try {
+    decoded = jsonDecode(
+      utf8.decode(
+        _temporaryHelperReadBoundedFile(config, label: 'package_config.json'),
+      ),
+    );
+  } catch (_) {
+    throw const ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'Package resolution produced an unreadable package_config.json; Scout '
+          'refused to launch.',
+    );
+  }
+  final packages = decoded is Map ? decoded['packages'] : null;
+  Map<Object?, Object?>? helper;
+  if (packages is List) {
+    for (final entry in packages) {
+      if (entry is Map && entry['name'] == 'flutter_scout_helper') {
+        if (helper != null) {
+          throw const ScoutCliException(
+            'temporary_helper_resolution_mismatch',
+            'Package resolution returned duplicate helper identities; Scout '
+                'refused to launch.',
+          );
+        }
+        helper = Map<Object?, Object?>.from(entry);
+      }
+    }
+  }
+  final rootUri = helper?['rootUri']?.toString();
+  if (rootUri == null || rootUri.isEmpty) {
+    throw const ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'Package resolution did not select flutter_scout_helper; Scout refused '
+          'to launch.',
+    );
+  }
+  String resolved;
+  try {
+    final uri = config.uri.resolve(rootUri);
+    if (!uri.isScheme('file')) throw const FormatException();
+    resolved = Directory.fromUri(uri).resolveSymbolicLinksSync();
+  } catch (_) {
+    throw const ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'The resolved flutter_scout_helper source is unavailable; Scout refused '
+          'to launch.',
+    );
+  }
+  if (resolved != paths.helperPath) {
+    throw ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'Package resolution selected a helper different from this exact CLI '
+          'revision; Scout refused to launch.',
+      details: <String, Object?>{
+        'expectedHelper': paths.helperPath,
+        'resolvedHelper': resolved,
+      },
+    );
+  }
+}
+
 extension _CliTemporaryHelperPaths on FlutterScoutCli {
   Future<_TemporaryHelperPaths> _temporaryHelperValidatedPaths({
     required String project,
     required String originalTarget,
     required String? helperPath,
     required String runId,
+    required bool requireBundledHelper,
   }) async {
     if (!RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$').hasMatch(runId)) {
       throw const ScoutCliException(
@@ -35,7 +187,8 @@ extension _CliTemporaryHelperPaths on FlutterScoutCli {
         'The original Flutter target must resolve inside the exact project.',
       );
     }
-    final discoveredHelper = helperPath ?? await _discoverBundledHelperPath();
+    final bundledHelper = await _discoverBundledHelperPath();
+    final discoveredHelper = helperPath ?? bundledHelper;
     if (discoveredHelper == null || discoveredHelper.isEmpty) {
       throw const ScoutCliException(
         'temporary_helper_path_missing',
@@ -56,6 +209,29 @@ extension _CliTemporaryHelperPaths on FlutterScoutCli {
       code: 'temporary_helper_path_missing',
       message: 'The helper path has no regular pubspec.yaml.',
     );
+    if (requireBundledHelper) {
+      if (bundledHelper == null || bundledHelper.isEmpty) {
+        throw const ScoutCliException(
+          'temporary_helper_bundled_revision_unavailable',
+          'Scout could not prove the helper source bundled with this exact CLI. '
+              'The launch was refused before project mutation.',
+        );
+      }
+      final resolvedBundled = Directory(
+        _absoluteNormalized(bundledHelper),
+      ).resolveSymbolicLinksSync();
+      if (resolvedHelper != resolvedBundled) {
+        throw ScoutCliException(
+          'temporary_helper_revision_mismatch',
+          'The requested helper is not the helper bundled with this exact CLI '
+              'revision. The launch was refused before project mutation.',
+          details: <String, Object?>{
+            'requestedHelper': resolvedHelper,
+            'requiredBundledHelper': resolvedBundled,
+          },
+        );
+      }
+    }
     final scoutRoot = p.join(projectPath, '.flutter_scout');
     final scoutType = FileSystemEntity.typeSync(scoutRoot, followLinks: false);
     if (scoutType != FileSystemEntityType.notFound &&

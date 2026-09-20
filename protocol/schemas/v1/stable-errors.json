@@ -1256,6 +1256,10 @@
       "meaning": "Scout reports the stable temporary helper atomic temp collision failure condition.",
       "family": "persistence_or_security"
     },
+    "temporary_helper_bundled_revision_unavailable": {
+      "meaning": "Scout cannot prove the helper source bundled with the exact running CLI revision, so temporary-helper launch is refused before project mutation.",
+      "family": "compatibility_or_identity"
+    },
     "temporary_helper_dependencies_missing": {
       "meaning": "Scout reports the stable temporary helper dependencies missing failure condition.",
       "family": "persistence_or_security"
@@ -1343,6 +1347,14 @@
     "temporary_helper_repair_required": {
       "meaning": "The temporary helper repair is required before this operation can proceed.",
       "family": "persistence_or_security"
+    },
+    "temporary_helper_resolution_mismatch": {
+      "meaning": "Package resolution did not select the exact helper source required by the running CLI, so launch is refused before the generated bootstrap can run.",
+      "family": "compatibility_or_identity"
+    },
+    "temporary_helper_revision_mismatch": {
+      "meaning": "An explicitly requested helper source is not the helper bundled with the exact running CLI revision, so launch is refused before project mutation.",
+      "family": "compatibility_or_identity"
     },
     "temporary_helper_run_id_invalid": {
       "meaning": "Scout reports the stable temporary helper run id invalid failure condition.",
