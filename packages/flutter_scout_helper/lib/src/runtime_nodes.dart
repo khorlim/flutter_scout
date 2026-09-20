@@ -182,6 +182,42 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return _stableId(kind, label, widget.key, widget.runtimeType.toString());
   }
 
+  Object? _activationConfigurationIdentity(Element element) {
+    Object? fallback;
+    Object? preferred;
+    var remaining = 24;
+
+    void inspect(Element candidate) {
+      if (preferred != null || remaining-- <= 0) return;
+      final widget = candidate.widget;
+      Object? callback;
+      try {
+        callback = (widget as dynamic).onTap as Object?;
+      } catch (_) {
+        return;
+      }
+      if (callback is! Function) return;
+      final identity = (widget.runtimeType, callback);
+      fallback ??= identity;
+      final frameworkTapWidget =
+          widget is GestureDetector ||
+          widget is InkResponse ||
+          widget is ListTile ||
+          widget is IconButton ||
+          widget is TextButton ||
+          widget is ElevatedButton ||
+          widget is OutlinedButton;
+      if (!frameworkTapWidget) preferred = identity;
+    }
+
+    inspect(element);
+    element.visitAncestorElements((ancestor) {
+      inspect(ancestor);
+      return preferred == null && remaining > 0;
+    });
+    return preferred ?? fallback;
+  }
+
   ScoutNode? _nodeFromElement(
     Element element, {
     double? coordinateDevicePixelRatio,
@@ -282,6 +318,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       valueToken: kind == 'field' ? _fieldValueToken(rawValue ?? '') : null,
       renderObject: element.renderObject,
       editableState: editable,
+      widgetConfigurationIdentity: kind == 'btn' || kind == 'tap'
+          ? _activationConfigurationIdentity(element)
+          : null,
       textColor: kind == 'btn' || kind == 'tap'
           ? _effectiveTextColor(element)
           : null,

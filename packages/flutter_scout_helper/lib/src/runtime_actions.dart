@@ -445,6 +445,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
       );
     }
     final originalActivationIdentity = _logicalNodeIdentity(activation.node!);
+    final originalActivationConfigurationIdentity =
+        activation.node!._widgetConfigurationIdentity;
 
     final testRevalidation = debugBeforeGuardedInputActivationRevalidation;
     if (testRevalidation != null) await testRevalidation();
@@ -482,40 +484,28 @@ extension _RuntimeActions on FlutterScoutRuntime {
       );
     }
 
-    await _dispatchTap(activation.safePoint!);
-    final afterActivation = _snapshot();
-    var postField = _resolveTarget(
-      afterActivation,
-      target,
-      fieldOnly: true,
-      safety: _TargetSafety.exactEditable,
+    final frameBaseline = await _dispatchGuardedActivationTap(
+      activation.safePoint!,
     );
-    final focused = _resolveFocusedField(afterActivation);
-    final exactFocus =
-        postField.isUnique &&
-        focused.isUnique &&
-        identical(originalEditable, postField.node?._editableState) &&
-        identical(originalEditable, focused.node?._editableState) &&
-        _logicalNodeIdentity(postField.node!) == originalFieldIdentity;
-    if (!exactFocus) {
+    final postActivationFrame = await _observeNaturalPostActivationFrame(
+      frameBaseline,
+    );
+    if (postActivationFrame['observed'] != true) {
       return _guardedInputFailure(
-        'target_not_found',
-        'The explicit activation did not uniquely focus the exact field.',
-        'activation_focused_different_field',
+        'stale_target',
+        'No natural post-activation frame was observed before the deadline.',
+        'post_activation_frame_unavailable',
         fieldHandle: target,
         activationHandle: activationTarget,
-        field: postField,
+        field: field,
         activation: activation,
-        focused: focused,
         activationDispatched: true,
-        postFieldIdentity: postField.node == null
-            ? null
-            : _logicalNodeIdentity(postField.node!),
+        postActivationFrame: postActivationFrame,
       );
     }
 
     final finalSnapshot = _snapshot();
-    postField = _resolveTarget(
+    var postField = _resolveTarget(
       finalSnapshot,
       target,
       fieldOnly: true,
@@ -530,32 +520,49 @@ extension _RuntimeActions on FlutterScoutRuntime {
     );
     finalActivation = _revalidateTarget(finalActivation);
     finalFocus = _revalidateFocusedField(finalFocus);
-    final finalSafe =
+    final exactFieldFocus =
         postField.isUnique &&
-        finalActivation.isUnique &&
         finalFocus.isUnique &&
         identical(originalEditable, postField.node?._editableState) &&
         identical(originalEditable, finalFocus.node?._editableState) &&
-        _logicalNodeIdentity(postField.node!) == originalFieldIdentity &&
+        _logicalNodeIdentity(postField.node!) == originalFieldIdentity;
+    final activationSafe =
+        finalActivation.isUnique &&
         _logicalNodeIdentity(finalActivation.node!) ==
-            originalActivationIdentity;
+            originalActivationIdentity &&
+        originalActivationConfigurationIdentity != null &&
+        finalActivation.node!._widgetConfigurationIdentity ==
+            originalActivationConfigurationIdentity;
+    final activationConfigurationUnchanged =
+        originalActivationConfigurationIdentity != null &&
+        finalActivation.node?._widgetConfigurationIdentity ==
+            originalActivationConfigurationIdentity;
+    final finalSafe = exactFieldFocus && activationSafe;
     if (!finalSafe) {
       return _guardedInputFailure(
-        'stale_target',
-        'Field, focus, or activation safety changed before text dispatch.',
-        'final_revalidation_failed',
+        exactFieldFocus ? 'stale_target' : 'target_not_found',
+        exactFieldFocus
+            ? 'Activation safety changed before text dispatch.'
+            : 'The explicit activation did not uniquely focus the exact field.',
+        exactFieldFocus
+            ? 'final_revalidation_failed'
+            : 'activation_focused_different_field',
         fieldHandle: target,
         activationHandle: activationTarget,
         field: postField,
         activation: finalActivation,
         focused: finalFocus,
         activationDispatched: true,
+        postActivationFrame: postActivationFrame,
+        activationConfigurationUnchanged: activationConfigurationUnchanged,
         postFieldIdentity: postField.node == null
             ? null
             : _logicalNodeIdentity(postField.node!),
       );
     }
 
+    // No await is permitted between this final rebuilt-state authorization and
+    // the keyboard-semantic text update.
     _setEditableText(originalEditable, value);
     final stability = await _waitStableForAction(
       params,
@@ -575,6 +582,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
         preFieldIdentity: originalFieldIdentity,
         preActivationIdentity: originalActivationIdentity,
         postFieldIdentity: _logicalNodeIdentity(postField.node!),
+        postActivationFrame: postActivationFrame,
+        activationConfigurationUnchanged: true,
       ),
       ..._stabilityResponseFields(stability),
       'result': _changed(before, after) ? 'changed' : 'unchanged',
@@ -596,6 +605,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
     _TargetResolution? focused,
     bool activationDispatched = false,
     String? postFieldIdentity,
+    Map<String, Object?>? postActivationFrame,
+    bool? activationConfigurationUnchanged,
   }) => _fail(
     code,
     message,
@@ -609,6 +620,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
         focused: focused,
         activationDispatched: activationDispatched,
         postFieldIdentity: postFieldIdentity,
+        postActivationFrame: postActivationFrame,
+        activationConfigurationUnchanged: activationConfigurationUnchanged,
       ),
     },
   );
@@ -624,6 +637,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
     String? preFieldIdentity,
     String? preActivationIdentity,
     String? postFieldIdentity,
+    Map<String, Object?>? postActivationFrame,
+    bool? activationConfigurationUnchanged,
   }) => {
     'fieldHandle': fieldHandle,
     'activationHandle': activationHandle,
@@ -647,9 +662,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
         'activation': ?preActivationIdentity,
       },
     if (postFieldIdentity != null) 'postIdentity': {'field': postFieldIdentity},
+    'postActivationFrame': ?postActivationFrame,
     'revalidation': {
       'fieldSafe': field?.isUnique == true,
       'activationSafe': activation?.isUnique == true,
+      'activationConfigurationUnchanged': ?activationConfigurationUnchanged,
     },
     'dispatch': {
       'activation': activationDispatched ? 'dispatched' : 'not_dispatched',

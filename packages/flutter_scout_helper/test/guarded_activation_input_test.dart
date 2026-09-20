@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
@@ -15,18 +17,45 @@ void main() {
     await _pumpFixture(tester, fixture);
     final targets = _pinTargets();
 
+    final result = await _guardedInputWithEngineFrame(
+      tester,
+      field: targets.field,
+      value: '246810',
+      activation: targets.activation,
+    );
+
+    expect(
+      result['ok'],
+      isTrue,
+      reason:
+          '${result['reason']} ${(result['guardedActivation'] as Map?)?['postActivationFrame']}',
+    );
+    expect(fixture.pinController.text, '246810');
+    expect(result['guardedActivation'], isA<Map<String, Object?>>());
+    expect(result.toString(), isNot(contains('246810')));
+  });
+
+  testWidgets('missing post-activation frame fails closed at the deadline', (
+    tester,
+  ) async {
+    final fixture = _Fixture();
+    addTearDown(fixture.dispose);
+    await _pumpFixture(tester, fixture);
+    final targets = _pinTargets();
+
+    // Do not pump the widget-test engine while the request is pending.
     final result = (await tester.runAsync(
       () => FlutterScoutHelper.debugRuntime.debugInputTarget(
         targets.field,
-        '246810',
+        '654321',
         activationTarget: targets.activation,
       ),
     ))!;
 
-    expect(result['ok'], isTrue);
-    expect(fixture.pinController.text, '246810');
-    expect(result['guardedActivation'], isA<Map<String, Object?>>());
-    expect(result.toString(), isNot(contains('246810')));
+    expect(result['ok'], isFalse, reason: '$result');
+    expect(result['reason'], 'post_activation_frame_unavailable');
+    expect(_textDispatch(result), 'not_dispatched');
+    expect(fixture.pinController.text, isEmpty);
   });
 
   testWidgets('blocking overlay rejects activation before pointer dispatch', (
@@ -70,13 +99,12 @@ void main() {
       (node) => node.widgetType == 'TextField',
     );
 
-    final result = (await tester.runAsync(
-      () => FlutterScoutHelper.debugRuntime.debugInputTarget(
-        pin.id,
-        '112233',
-        activationTarget: other.id,
-      ),
-    ))!;
+    final result = await _guardedInputWithEngineFrame(
+      tester,
+      field: pin.id,
+      value: '112233',
+      activation: other.id,
+    );
 
     expect(result['ok'], isFalse);
     expect(result['reason'], 'activation_focused_different_field');
@@ -84,6 +112,80 @@ void main() {
     expect(fixture.pinController.text, isEmpty);
     expect(fixture.otherController.text, isEmpty);
   });
+
+  testWidgets('focus theft queued by activation rejects text dispatch', (
+    tester,
+  ) async {
+    final fixture = _Fixture(includeOtherField: true, stealFocusAfterTap: true);
+    addTearDown(fixture.dispose);
+    await _pumpFixture(tester, fixture);
+    final targets = _pinTargets();
+
+    final result = await _guardedInputWithEngineFrame(
+      tester,
+      field: targets.field,
+      value: '123456',
+      activation: targets.activation,
+    );
+
+    expect(result['ok'], isFalse, reason: '$result');
+    expect(_textDispatch(result), 'not_dispatched');
+    expect(fixture.pinController.text, isEmpty);
+    expect(fixture.otherController.text, isEmpty);
+  });
+
+  testWidgets('post-tap blocking overlay rejects text dispatch', (
+    tester,
+  ) async {
+    final fixture = _Fixture(insertOverlayAfterTap: true);
+    addTearDown(fixture.dispose);
+    await _pumpFixture(tester, fixture);
+    final targets = _pinTargets();
+
+    final result = await _guardedInputWithEngineFrame(
+      tester,
+      field: targets.field,
+      value: '234567',
+      activation: targets.activation,
+    );
+    await tester.pump();
+
+    expect(fixture.overlayRequested, isTrue);
+    expect(find.byKey(const ValueKey('post-tap-overlay')), findsOneWidget);
+    expect(result['ok'], isFalse, reason: '$result');
+    expect(_activationStatus(result), 'occluded');
+    expect(_textDispatch(result), 'not_dispatched');
+    expect(fixture.pinController.text, isEmpty);
+  });
+
+  testWidgets(
+    'post-tap activation callback replacement rejects text dispatch',
+    (tester) async {
+      final fixture = _Fixture(replaceCallbackAfterTap: true);
+      addTearDown(fixture.dispose);
+      await _pumpFixture(tester, fixture);
+      final targets = _pinTargets();
+
+      final result = await _guardedInputWithEngineFrame(
+        tester,
+        field: targets.field,
+        value: '456789',
+        activation: targets.activation,
+      );
+      await tester.pump();
+
+      expect(fixture.callbackReplaced, isTrue);
+      expect(result['ok'], isFalse, reason: '$result');
+      expect(result['reason'], 'final_revalidation_failed');
+      expect(
+        ((result['guardedActivation'] as Map)['revalidation']
+            as Map)['activationConfigurationUnchanged'],
+        isFalse,
+      );
+      expect(_textDispatch(result), 'not_dispatched');
+      expect(fixture.pinController.text, isEmpty);
+    },
+  );
 
   testWidgets('stale replacement rejects before pointer and text dispatch', (
     tester,
@@ -185,7 +287,12 @@ void main() {
       '123456',
     );
 
-    expect(result['ok'], isTrue);
+    expect(
+      result['ok'],
+      isTrue,
+      reason:
+          '${result['reason']} ${(result['guardedActivation'] as Map?)?['postActivationFrame']}',
+    );
     expect(fixture.pinController.text, '123456');
     expect(fixture.overlayTapCount, 0);
   });
@@ -198,15 +305,19 @@ void main() {
     await _pumpFixture(tester, fixture);
     final targets = _pinTargets();
 
-    final result = (await tester.runAsync(
-      () => FlutterScoutHelper.debugRuntime.debugInputTarget(
-        targets.field,
-        'abc9876543',
-        activationTarget: targets.activation,
-      ),
-    ))!;
+    final result = await _guardedInputWithEngineFrame(
+      tester,
+      field: targets.field,
+      value: 'abc9876543',
+      activation: targets.activation,
+    );
 
-    expect(result['ok'], isTrue);
+    expect(
+      result['ok'],
+      isTrue,
+      reason:
+          '${result['reason']} ${(result['guardedActivation'] as Map?)?['postActivationFrame']}',
+    );
     expect(fixture.pinController.text, '987654');
   });
 }
@@ -217,11 +328,40 @@ Future<void> _pumpFixture(WidgetTester tester, _Fixture fixture) async {
   await tester.pump();
 }
 
+Future<Map<String, Object?>> _guardedInputWithEngineFrame(
+  WidgetTester tester, {
+  required String field,
+  required String value,
+  required String activation,
+}) async {
+  final runtime = FlutterScoutHelper.debugRuntime;
+  final manualAdvancesBefore = runtime.debugManualMutationFrameAdvanceCount;
+  late Future<Map<String, Object?>> pending;
+  await tester.runAsync(() async {
+    pending = runtime.debugInputTarget(
+      field,
+      value,
+      activationTarget: activation,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+  });
+  // Widget tests have no engine vsync. This pump represents the naturally
+  // scheduled engine frame; production Scout never pumps or schedules it.
+  await tester.pump();
+  final result = (await tester.runAsync(() => pending))!;
+  expect(runtime.debugManualMutationFrameAdvanceCount, manualAdvancesBefore);
+  return result;
+}
+
 ({String field, String activation}) _pinTargets() {
   final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
   return (
-    field: snapshot.fields.single.id,
-    activation: snapshot.interactables.single.id,
+    field: snapshot.fields
+        .firstWhere((node) => node.widgetType == 'TextFormField')
+        .id,
+    activation: snapshot.interactables
+        .firstWhere((node) => node.widgetType == 'GestureDetector')
+        .id,
   );
 }
 
@@ -249,6 +389,9 @@ class _Fixture {
     this.visible = true,
     this.keySeed = 0,
     this.digitsOnly = false,
+    this.stealFocusAfterTap = false,
+    this.insertOverlayAfterTap = false,
+    this.replaceCallbackAfterTap = false,
   });
 
   final bool overlay;
@@ -257,61 +400,95 @@ class _Fixture {
   final bool visible;
   final int keySeed;
   final bool digitsOnly;
+  final bool stealFocusAfterTap;
+  final bool insertOverlayAfterTap;
+  final bool replaceCallbackAfterTap;
   final pinController = TextEditingController();
   final pinFocus = FocusNode();
   final otherController = TextEditingController();
+  final otherFocus = FocusNode();
   int overlayTapCount = 0;
+  bool overlayRequested = false;
+  bool callbackReplaced = false;
+  StateSetter? _setState;
 
   Widget app() => MaterialApp(
-    home: Scaffold(
-      body: Stack(
-        children: [
-          Column(
+    home: StatefulBuilder(
+      builder: (context, setState) {
+        _setState = setState;
+        return Scaffold(
+          body: Stack(
             children: [
-              if (includeOtherField)
-                TextField(
-                  key: const ValueKey('other-field'),
-                  controller: otherController,
-                ),
-              Visibility(
-                visible: visible,
-                maintainState: true,
-                maintainAnimation: true,
-                maintainSize: true,
-                child: Builder(
-                  builder: (context) => PinCodeTextField(
-                    key: ValueKey('pin-$keySeed'),
-                    appContext: context,
-                    length: 6,
-                    controller: pinController,
-                    focusNode: pinFocus,
-                    autoDisposeControllers: false,
-                    enabled: enabled,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: digitsOnly
-                        ? [FilteringTextInputFormatter.digitsOnly]
-                        : const [],
-                    onChanged: (_) {},
+              Column(
+                children: [
+                  if (includeOtherField)
+                    TextField(
+                      key: const ValueKey('other-field'),
+                      controller: otherController,
+                      focusNode: otherFocus,
+                    ),
+                  Visibility(
+                    visible: visible,
+                    maintainState: true,
+                    maintainAnimation: true,
+                    maintainSize: true,
+                    child: Builder(
+                      builder: (context) => PinCodeTextField(
+                        key: ValueKey('pin-$keySeed'),
+                        appContext: context,
+                        length: 6,
+                        controller: pinController,
+                        focusNode: pinFocus,
+                        autoDisposeControllers: false,
+                        enabled: enabled,
+                        keyboardType: TextInputType.number,
+                        inputFormatters: digitsOnly
+                            ? [FilteringTextInputFormatter.digitsOnly]
+                            : const [],
+                        onTap: callbackReplaced ? _replacementTap : _initialTap,
+                        onChanged: (_) {},
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (overlay)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => overlayTapCount += 1,
                   ),
                 ),
-              ),
+              if (overlayRequested)
+                const Positioned.fill(
+                  child: ColoredBox(
+                    key: ValueKey('post-tap-overlay'),
+                    color: Colors.black,
+                  ),
+                ),
             ],
           ),
-          if (overlay)
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: () => overlayTapCount += 1,
-              ),
-            ),
-        ],
-      ),
+        );
+      },
     ),
   );
+
+  void _initialTap() {
+    if (stealFocusAfterTap) scheduleMicrotask(otherFocus.requestFocus);
+    if (insertOverlayAfterTap) {
+      _setState!(() => overlayRequested = true);
+    }
+    if (replaceCallbackAfterTap) {
+      _setState!(() => callbackReplaced = true);
+    }
+  }
+
+  void _replacementTap() => otherFocus.requestFocus();
 
   void dispose() {
     pinController.dispose();
     pinFocus.dispose();
     otherController.dispose();
+    otherFocus.dispose();
   }
 }

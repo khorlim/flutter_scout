@@ -52,6 +52,59 @@ extension _RuntimeInternals on FlutterScoutRuntime {
   Future<void> _dispatchTapWithoutPhaseTiming(Offset point) async =>
       _dispatchPress(point, hold: const Duration(milliseconds: 30));
 
+  Future<int> _dispatchGuardedActivationTap(Offset point) =>
+      _inRequestPhaseAsync('dispatch', () async {
+        final pointer = _nextSyntheticPointer++;
+        final viewId = _primaryViewId;
+        _syntheticGestureDepth += 1;
+        try {
+          await _dispatchPointerEvent(
+            PointerAddedEvent(
+              pointer: pointer,
+              device: pointer,
+              position: point,
+              kind: PointerDeviceKind.touch,
+              viewId: viewId,
+            ),
+          );
+          await _dispatchPointerEvent(
+            PointerDownEvent(
+              pointer: pointer,
+              device: pointer,
+              position: point,
+              kind: PointerDeviceKind.touch,
+              buttons: kPrimaryButton,
+              viewId: viewId,
+            ),
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+          // Read immediately before pointer-up. Its handler runs synchronously,
+          // so every later completed frame is necessarily post-activation.
+          final frameBaseline = _completedFrameworkFrames;
+          await _dispatchPointerEvent(
+            PointerUpEvent(
+              pointer: pointer,
+              device: pointer,
+              position: point,
+              kind: PointerDeviceKind.touch,
+              viewId: viewId,
+            ),
+          );
+          await _dispatchPointerEvent(
+            PointerRemovedEvent(
+              pointer: pointer,
+              device: pointer,
+              position: point,
+              kind: PointerDeviceKind.touch,
+              viewId: viewId,
+            ),
+          );
+          return frameBaseline;
+        } finally {
+          _syntheticGestureDepth -= 1;
+        }
+      });
+
   Future<void> _dispatchPress(Offset point, {required Duration hold}) =>
       _inRequestPhaseAsync(
         'dispatch',

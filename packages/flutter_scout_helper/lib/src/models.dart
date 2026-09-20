@@ -450,6 +450,7 @@ class ScoutNode {
     RenderObject? renderObject,
     EditableTextState? editableState,
     int? treeOrdinal,
+    Object? widgetConfigurationIdentity,
   }) : value = redacted ? null : value,
        // Public parameter names avoid exposing private implementation details.
        // ignore: prefer_initializing_formals
@@ -459,7 +460,9 @@ class ScoutNode {
        // ignore: prefer_initializing_formals
        _editableState = editableState,
        // ignore: prefer_initializing_formals
-       _treeOrdinal = treeOrdinal;
+       _treeOrdinal = treeOrdinal,
+       // ignore: prefer_initializing_formals
+       _widgetConfigurationIdentity = widgetConfigurationIdentity;
 
   final String id;
   final String baseId;
@@ -528,6 +531,10 @@ class ScoutNode {
   /// Original widget-walk position. Unlike [ordinal], which disambiguates equal
   /// handles, this is global and can prove modal-surface ownership.
   final int? _treeOrdinal;
+
+  /// Process-local identity of the nearest explicit activation callback
+  /// configuration observed for this node. It never serializes.
+  final Object? _widgetConfigurationIdentity;
 
   Object? get serializedValue => redacted
       ? <String, Object?>{
@@ -600,6 +607,7 @@ class ScoutNode {
       renderObject: _renderObject,
       editableState: _editableState,
       treeOrdinal: treeOrdinal ?? _treeOrdinal,
+      widgetConfigurationIdentity: _widgetConfigurationIdentity,
     );
   }
 
@@ -636,6 +644,7 @@ class ScoutNode {
       renderObject: _renderObject,
       editableState: _editableState,
       treeOrdinal: _treeOrdinal,
+      widgetConfigurationIdentity: _widgetConfigurationIdentity,
     );
   }
 
@@ -671,6 +680,7 @@ class ScoutNode {
       renderObject: _renderObject,
       editableState: _editableState,
       treeOrdinal: _treeOrdinal,
+      widgetConfigurationIdentity: _widgetConfigurationIdentity,
     );
   }
 
@@ -706,6 +716,7 @@ class ScoutNode {
       renderObject: _renderObject,
       editableState: _editableState,
       treeOrdinal: _treeOrdinal,
+      widgetConfigurationIdentity: _widgetConfigurationIdentity,
     );
   }
 
@@ -746,6 +757,7 @@ class ScoutNode {
       renderObject: _renderObject,
       editableState: _editableState,
       treeOrdinal: _treeOrdinal,
+      widgetConfigurationIdentity: _widgetConfigurationIdentity,
     );
   }
 
