@@ -15,7 +15,31 @@ void main() {
     final fixture = _Fixture();
     addTearDown(fixture.dispose);
     await _pumpFixture(tester, fixture);
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final representedInnerIgnorePointer = tester.renderObject(
+      find
+          .descendant(
+            of: find.byType(PinCodeTextField),
+            matching: find.byType(IgnorePointer),
+          )
+          .first,
+    );
+    runtime.debugRepresentedRenderObjectOverride = (element) =>
+        element.widget is GestureDetector
+        ? representedInnerIgnorePointer
+        : null;
+    addTearDown(() => runtime.debugRepresentedRenderObjectOverride = null);
     final targets = _pinTargets();
+
+    final observedActivation = runtime
+        .debugSnapshot()
+        .interactables
+        .firstWhere((node) => node.id == targets.activation)
+        .toJson();
+    expect(
+      observedActivation['pointerReceiver'],
+      containsPair('relationship', 'gesture_owner_pointer_listener_v1'),
+    );
 
     final result = await _guardedInputWithEngineFrame(
       tester,
@@ -32,6 +56,12 @@ void main() {
     );
     expect(fixture.pinController.text, '246810');
     expect(result['guardedActivation'], isA<Map<String, Object?>>());
+    final activationResolution =
+        (result['guardedActivation'] as Map)['activation'] as Map;
+    final immediateHitTest = activationResolution['immediateHitTest'] as Map;
+    expect(immediateHitTest['containsTarget'], isFalse);
+    expect(immediateHitTest['containsReceiver'], isTrue);
+    expect(immediateHitTest['relationshipMatched'], isTrue);
     expect(result.toString(), isNot(contains('246810')));
   });
 
@@ -222,6 +252,91 @@ void main() {
     expect(replacement.pinController.text, isEmpty);
   });
 
+  testWidgets('same-identity receiver substitution fails closed', (
+    tester,
+  ) async {
+    final first = _Fixture();
+    final replacement = _Fixture(appKeySeed: 1);
+    addTearDown(first.dispose);
+    addTearDown(replacement.dispose);
+    await _pumpFixture(tester, first);
+    final targets = _pinTargets();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    runtime.debugBeforeGuardedInputActivationRevalidation = () async {
+      await tester.pumpWidget(replacement.app());
+      await tester.pump();
+    };
+    addTearDown(() {
+      runtime.debugBeforeGuardedInputActivationRevalidation = null;
+    });
+
+    final result = await runtime.debugInputTarget(
+      targets.field,
+      '111333',
+      activationTarget: targets.activation,
+    );
+
+    expect(result['ok'], isFalse, reason: '$result');
+    expect(_activationDispatch(result), 'not_dispatched');
+    expect(_textDispatch(result), 'not_dispatched');
+    expect(first.pinController.text, isEmpty);
+    expect(replacement.pinController.text, isEmpty);
+  });
+
+  testWidgets('geometry change before dispatch fails closed', (tester) async {
+    final first = _Fixture();
+    final moved = _Fixture(horizontalInset: 24, appKeySeed: 1);
+    addTearDown(first.dispose);
+    addTearDown(moved.dispose);
+    await _pumpFixture(tester, first);
+    final targets = _pinTargets();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    runtime.debugBeforeGuardedInputActivationRevalidation = () async {
+      await tester.pumpWidget(moved.app());
+      await tester.pump();
+    };
+    addTearDown(() {
+      runtime.debugBeforeGuardedInputActivationRevalidation = null;
+    });
+
+    final result = await runtime.debugInputTarget(
+      targets.field,
+      '222444',
+      activationTarget: targets.activation,
+    );
+
+    expect(result['ok'], isFalse, reason: '$result');
+    expect(_activationDispatch(result), 'not_dispatched');
+    expect(_textDispatch(result), 'not_dispatched');
+    expect(first.pinController.text, isEmpty);
+    expect(moved.pinController.text, isEmpty);
+  });
+
+  testWidgets('same-geometry sibling overlay is not a receiver', (
+    tester,
+  ) async {
+    final fixture = _Fixture(sameGeometrySiblingOverlay: true);
+    addTearDown(fixture.dispose);
+    await _pumpFixture(tester, fixture);
+    final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
+    final field = snapshot.fields.single.id;
+    final activation = snapshot.interactables
+        .firstWhere((node) => node.widgetType == 'GestureDetector')
+        .id;
+
+    final result = await FlutterScoutHelper.debugRuntime.debugInputTarget(
+      field,
+      '333555',
+      activationTarget: activation,
+    );
+
+    expect(result['ok'], isFalse, reason: '$result');
+    expect(_activationDispatch(result), 'not_dispatched');
+    expect(_textDispatch(result), 'not_dispatched');
+    expect(fixture.overlayTapCount, 0);
+    expect(fixture.pinController.text, isEmpty);
+  });
+
   testWidgets('disabled and hidden targets reject without dispatch', (
     tester,
   ) async {
@@ -392,6 +507,9 @@ class _Fixture {
     this.stealFocusAfterTap = false,
     this.insertOverlayAfterTap = false,
     this.replaceCallbackAfterTap = false,
+    this.sameGeometrySiblingOverlay = false,
+    this.horizontalInset = 0,
+    this.appKeySeed = 0,
   });
 
   final bool overlay;
@@ -403,6 +521,9 @@ class _Fixture {
   final bool stealFocusAfterTap;
   final bool insertOverlayAfterTap;
   final bool replaceCallbackAfterTap;
+  final bool sameGeometrySiblingOverlay;
+  final double horizontalInset;
+  final int appKeySeed;
   final pinController = TextEditingController();
   final pinFocus = FocusNode();
   final otherController = TextEditingController();
@@ -413,60 +534,90 @@ class _Fixture {
   StateSetter? _setState;
 
   Widget app() => MaterialApp(
+    key: ValueKey('app-$appKeySeed'),
     home: StatefulBuilder(
       builder: (context, setState) {
         _setState = setState;
         return Scaffold(
-          body: Stack(
-            children: [
-              Column(
-                children: [
-                  if (includeOtherField)
-                    TextField(
-                      key: const ValueKey('other-field'),
-                      controller: otherController,
-                      focusNode: otherFocus,
+          body: IgnorePointer(
+            ignoring: false,
+            child: AnimatedOpacity(
+              opacity: 1,
+              duration: Duration.zero,
+              child: AnimatedOpacity(
+                opacity: 1,
+                duration: Duration.zero,
+                child: Stack(
+                  children: [
+                    Column(
+                      children: [
+                        if (includeOtherField)
+                          TextField(
+                            key: const ValueKey('other-field'),
+                            controller: otherController,
+                            focusNode: otherFocus,
+                          ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: horizontalInset,
+                          ),
+                          child: Visibility(
+                            visible: visible,
+                            maintainState: true,
+                            maintainAnimation: true,
+                            maintainSize: true,
+                            child: Builder(
+                              builder: (context) => PinCodeTextField(
+                                key: ValueKey('pin-$keySeed'),
+                                appContext: context,
+                                length: 6,
+                                controller: pinController,
+                                focusNode: pinFocus,
+                                autoDisposeControllers: false,
+                                enabled: enabled,
+                                keyboardType: TextInputType.number,
+                                inputFormatters: digitsOnly
+                                    ? [FilteringTextInputFormatter.digitsOnly]
+                                    : const [],
+                                onTap: callbackReplaced
+                                    ? _replacementTap
+                                    : _initialTap,
+                                onChanged: (_) {},
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  Visibility(
-                    visible: visible,
-                    maintainState: true,
-                    maintainAnimation: true,
-                    maintainSize: true,
-                    child: Builder(
-                      builder: (context) => PinCodeTextField(
-                        key: ValueKey('pin-$keySeed'),
-                        appContext: context,
-                        length: 6,
-                        controller: pinController,
-                        focusNode: pinFocus,
-                        autoDisposeControllers: false,
-                        enabled: enabled,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: digitsOnly
-                            ? [FilteringTextInputFormatter.digitsOnly]
-                            : const [],
-                        onTap: callbackReplaced ? _replacementTap : _initialTap,
-                        onChanged: (_) {},
+                    if (overlay)
+                      Positioned.fill(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => overlayTapCount += 1,
+                        ),
                       ),
-                    ),
-                  ),
-                ],
+                    if (overlayRequested)
+                      const Positioned.fill(
+                        child: ColoredBox(
+                          key: ValueKey('post-tap-overlay'),
+                          color: Colors.black,
+                        ),
+                      ),
+                    if (sameGeometrySiblingOverlay)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                        height: 50,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => overlayTapCount += 1,
+                        ),
+                      ),
+                  ],
+                ),
               ),
-              if (overlay)
-                Positioned.fill(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => overlayTapCount += 1,
-                  ),
-                ),
-              if (overlayRequested)
-                const Positioned.fill(
-                  child: ColoredBox(
-                    key: ValueKey('post-tap-overlay'),
-                    color: Colors.black,
-                  ),
-                ),
-            ],
+            ),
           ),
         );
       },

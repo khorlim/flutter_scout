@@ -218,6 +218,129 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return preferred ?? fallback;
   }
 
+  _PointerReceiverBinding? _pointerReceiverBindingFor(
+    Element logicalElement,
+    Rect logicalRect,
+    Rect? visibleRect,
+  ) {
+    final logicalWidget = logicalElement.widget;
+    if (logicalWidget is! GestureDetector ||
+        (logicalWidget.onTap == null &&
+            logicalWidget.onTapDown == null &&
+            logicalWidget.onTapUp == null)) {
+      return null;
+    }
+
+    final logicalChildren = <Element>[];
+    logicalElement.visitChildren(logicalChildren.add);
+    if (logicalChildren.length != 1) return null;
+    final ownerElement = logicalChildren.single;
+    if (ownerElement is! StatefulElement ||
+        ownerElement.widget is! RawGestureDetector ||
+        ownerElement.state is! RawGestureDetectorState) {
+      return null;
+    }
+    final ownerWidget = ownerElement.widget as RawGestureDetector;
+    if (!ownerWidget.gestures.containsKey(TapGestureRecognizer)) return null;
+
+    // RawGestureDetector.build emits an optional semantics render object and
+    // then exactly one Listener carrying its private pointer-down dispatcher.
+    // Follow only that single-child framework shell. Never search arbitrary
+    // descendants, infer by geometry, or accept an application-owned Listener.
+    Element current = ownerElement;
+    RenderObjectElement? receiverElement;
+    Listener? receiverWidget;
+    for (var depth = 0; depth < 3; depth++) {
+      final children = <Element>[];
+      current.visitChildren(children.add);
+      if (children.length != 1) return null;
+      current = children.single;
+      if (current.widget case final Listener listener) {
+        if (listener.onPointerDown == null ||
+            current is! RenderObjectElement ||
+            current.renderObject is! RenderPointerListener) {
+          return null;
+        }
+        receiverElement = current;
+        receiverWidget = listener;
+        break;
+      }
+    }
+    if (receiverElement == null || receiverWidget == null) return null;
+    final receiver = receiverElement.renderObject as RenderPointerListener;
+    final receiverRect = _rectFor(receiverElement);
+    if (receiverRect == null || receiverRect != logicalRect) return null;
+    final candidateRect = (visibleRect ?? logicalRect).intersect(receiverRect);
+    if (candidateRect.width <= 0 || candidateRect.height <= 0) return null;
+
+    final insetX = math.min(12.0, math.max(0.5, candidateRect.width * 0.18));
+    final insetY = math.min(12.0, math.max(0.5, candidateRect.height * 0.18));
+    final left = math.min(candidateRect.right, candidateRect.left + insetX);
+    final right = math.max(candidateRect.left, candidateRect.right - insetX);
+    final top = math.min(candidateRect.bottom, candidateRect.top + insetY);
+    final bottom = math.max(candidateRect.top, candidateRect.bottom - insetY);
+    final points = <Offset>{
+      candidateRect.center,
+      Offset(left, top),
+      Offset(right, top),
+      Offset(left, bottom),
+      Offset(right, bottom),
+      Offset(candidateRect.center.dx, top),
+      Offset(candidateRect.center.dx, bottom),
+      Offset(left, candidateRect.center.dy),
+      Offset(right, candidateRect.center.dy),
+    };
+    for (final point in points) {
+      _PointerReceiverBinding? binding;
+      _hitTest(point, (result) {
+        final path = result.path.toList(growable: false);
+        final receiverIndex = path.indexWhere(
+          (entry) => identical(entry.target, receiver),
+        );
+        if (receiverIndex < 0) return false;
+        for (var index = 0; index < receiverIndex; index++) {
+          final target = path[index].target;
+          if (target is! RenderObject ||
+              target is RenderPointerListener ||
+              !_isRenderDescendantOf(target, receiver)) {
+            return false;
+          }
+        }
+        binding = _PointerReceiverBinding(
+          logicalElement: logicalElement,
+          logicalWidgetType: logicalWidget.runtimeType.toString(),
+          gestureOwnerElement: ownerElement,
+          gestureOwnerType: ownerWidget.runtimeType.toString(),
+          gestureOwnerState: ownerElement.state as RawGestureDetectorState,
+          receiverElement: receiverElement!,
+          receiver: receiver,
+          receiverCallbackIdentity: receiverWidget!.onPointerDown!,
+          receiverRect: receiverRect,
+          provenPoint: point,
+          pathIndex: receiverIndex,
+          pathTypes: <String>[
+            for (final entry in path.take(24))
+              entry.target.runtimeType.toString(),
+          ],
+          pathLength: path.length,
+        );
+        return true;
+      });
+      if (binding != null) return binding;
+    }
+    return null;
+  }
+
+  bool _isRenderDescendantOf(RenderObject candidate, RenderObject ancestor) {
+    RenderObject? current = candidate;
+    while (current != null) {
+      if (identical(current, ancestor)) return true;
+      final parent = current.parent;
+      current = parent is RenderObject ? parent : null;
+    }
+    return false;
+  }
+
   ScoutNode? _nodeFromElement(
     Element element, {
     double? coordinateDevicePixelRatio,
@@ -287,7 +410,14 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       }
     }
     final visibleRect = _visiblePerceptionRectFor(element, rect);
-    final suggestedTapPoint = visibleRect?.center;
+    final representedRenderObject =
+        debugRepresentedRenderObjectOverride?.call(element) ??
+        element.renderObject;
+    final pointerReceiverBinding = kind == 'btn' || kind == 'tap'
+        ? _pointerReceiverBindingFor(element, rect, visibleRect)
+        : null;
+    final suggestedTapPoint =
+        pointerReceiverBinding?.provenPoint ?? visibleRect?.center;
     return ScoutNode(
       id: baseId,
       baseId: baseId,
@@ -304,9 +434,10 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       visibleRect: visibleRect,
       visibleFraction: _visibleFraction(rect, visibleRect),
       suggestedTapPoint: suggestedTapPoint,
-      hitTestable: suggestedTapPoint == null
-          ? false
-          : _hitTestable(suggestedTapPoint, target: element.renderObject),
+      hitTestable:
+          pointerReceiverBinding != null ||
+          (suggestedTapPoint != null &&
+              _hitTestable(suggestedTapPoint, target: representedRenderObject)),
       enabled: _enabledFor(widget) && !(editable?.widget.readOnly ?? false),
       confidence: label == null ? 0.65 : (rowLabel == null ? 0.94 : 0.84),
       coordinateDevicePixelRatio: coordinateDevicePixelRatio,
@@ -316,11 +447,12 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       redacted: redacted,
       isEmpty: kind == 'field' ? (rawValue ?? '').isEmpty : null,
       valueToken: kind == 'field' ? _fieldValueToken(rawValue ?? '') : null,
-      renderObject: element.renderObject,
+      renderObject: representedRenderObject,
       editableState: editable,
       widgetConfigurationIdentity: kind == 'btn' || kind == 'tap'
           ? _activationConfigurationIdentity(element)
           : null,
+      pointerReceiverBinding: pointerReceiverBinding,
       textColor: kind == 'btn' || kind == 'tap'
           ? _effectiveTextColor(element)
           : null,

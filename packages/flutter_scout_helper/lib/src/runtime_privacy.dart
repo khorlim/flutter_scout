@@ -287,6 +287,7 @@ extension _RuntimePrivacy on FlutterScoutRuntime {
       editableState: node._editableState,
       treeOrdinal: node._treeOrdinal,
       widgetConfigurationIdentity: node._widgetConfigurationIdentity,
+      pointerReceiverBinding: node._pointerReceiverBinding,
     );
   }
 

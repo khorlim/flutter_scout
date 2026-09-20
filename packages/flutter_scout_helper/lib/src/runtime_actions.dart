@@ -447,6 +447,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
     final originalActivationIdentity = _logicalNodeIdentity(activation.node!);
     final originalActivationConfigurationIdentity =
         activation.node!._widgetConfigurationIdentity;
+    final originalActivationReceiverBinding =
+        activation.node!._pointerReceiverBinding;
 
     final testRevalidation = debugBeforeGuardedInputActivationRevalidation;
     if (testRevalidation != null) await testRevalidation();
@@ -530,6 +532,12 @@ extension _RuntimeActions on FlutterScoutRuntime {
         finalActivation.isUnique &&
         _logicalNodeIdentity(finalActivation.node!) ==
             originalActivationIdentity &&
+        (originalActivationReceiverBinding == null ||
+            (finalActivation.node!._pointerReceiverBinding != null &&
+                _samePointerReceiverBinding(
+                  originalActivationReceiverBinding,
+                  finalActivation.node!._pointerReceiverBinding!,
+                ))) &&
         originalActivationConfigurationIdentity != null &&
         finalActivation.node!._widgetConfigurationIdentity ==
             originalActivationConfigurationIdentity;

@@ -419,6 +419,64 @@ class ScoutSnapshot {
   }
 }
 
+class _PointerReceiverBinding {
+  const _PointerReceiverBinding({
+    required this.logicalElement,
+    required this.logicalWidgetType,
+    required this.gestureOwnerElement,
+    required this.gestureOwnerType,
+    required this.gestureOwnerState,
+    required this.receiverElement,
+    required this.receiver,
+    required this.receiverCallbackIdentity,
+    required this.receiverRect,
+    required this.provenPoint,
+    required this.pathIndex,
+    required this.pathTypes,
+    required this.pathLength,
+  });
+
+  final Element logicalElement;
+  final String logicalWidgetType;
+  final StatefulElement gestureOwnerElement;
+  final String gestureOwnerType;
+  final RawGestureDetectorState gestureOwnerState;
+  final RenderObjectElement receiverElement;
+  final RenderPointerListener receiver;
+  final Object receiverCallbackIdentity;
+  final Rect receiverRect;
+  final Offset provenPoint;
+  final int pathIndex;
+  final List<String> pathTypes;
+  final int pathLength;
+
+  String get receiverIdentity =>
+      'receiver.${identityHashCode(receiver).toRadixString(16)}';
+  String get ownerIdentity =>
+      'owner.${identityHashCode(gestureOwnerState).toRadixString(16)}';
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'status': 'bound',
+    'relationship': 'gesture_owner_pointer_listener_v1',
+    'logicalWidgetType': logicalWidgetType,
+    'gestureOwnerType': gestureOwnerType,
+    'gestureOwnerIdentity': ownerIdentity,
+    'receiverType': receiver.runtimeType.toString(),
+    'receiverIdentity': receiverIdentity,
+    'receiverRect': <double>[
+      receiverRect.left,
+      receiverRect.top,
+      receiverRect.width,
+      receiverRect.height,
+    ],
+    'provenPoint': <double>[provenPoint.dx, provenPoint.dy],
+    'pathIndex': pathIndex,
+    'pathLength': pathLength,
+    'path': pathTypes,
+    'pathTruncated': pathTypes.length < pathLength,
+  };
+}
+
 class ScoutNode {
   const ScoutNode({
     required this.id,
@@ -451,6 +509,7 @@ class ScoutNode {
     EditableTextState? editableState,
     int? treeOrdinal,
     Object? widgetConfigurationIdentity,
+    Object? pointerReceiverBinding,
   }) : value = redacted ? null : value,
        // Public parameter names avoid exposing private implementation details.
        // ignore: prefer_initializing_formals
@@ -462,7 +521,11 @@ class ScoutNode {
        // ignore: prefer_initializing_formals
        _treeOrdinal = treeOrdinal,
        // ignore: prefer_initializing_formals
-       _widgetConfigurationIdentity = widgetConfigurationIdentity;
+       _widgetConfigurationIdentity = widgetConfigurationIdentity,
+       // Public constructor accepts Object to keep this runtime proof private.
+       // ignore: prefer_initializing_formals
+       _pointerReceiverBinding =
+           pointerReceiverBinding as _PointerReceiverBinding?;
 
   final String id;
   final String baseId;
@@ -536,6 +599,10 @@ class ScoutNode {
   /// configuration observed for this node. It never serializes.
   final Object? _widgetConfigurationIdentity;
 
+  /// Explicit process-local proof connecting this logical action element to
+  /// the gesture owner and render object that receives pointer-down events.
+  final _PointerReceiverBinding? _pointerReceiverBinding;
+
   Object? get serializedValue => redacted
       ? <String, Object?>{
           'redacted': true,
@@ -608,6 +675,7 @@ class ScoutNode {
       editableState: _editableState,
       treeOrdinal: treeOrdinal ?? _treeOrdinal,
       widgetConfigurationIdentity: _widgetConfigurationIdentity,
+      pointerReceiverBinding: _pointerReceiverBinding,
     );
   }
 
@@ -645,6 +713,7 @@ class ScoutNode {
       editableState: _editableState,
       treeOrdinal: _treeOrdinal,
       widgetConfigurationIdentity: _widgetConfigurationIdentity,
+      pointerReceiverBinding: _pointerReceiverBinding,
     );
   }
 
@@ -681,6 +750,7 @@ class ScoutNode {
       editableState: _editableState,
       treeOrdinal: _treeOrdinal,
       widgetConfigurationIdentity: _widgetConfigurationIdentity,
+      pointerReceiverBinding: _pointerReceiverBinding,
     );
   }
 
@@ -717,6 +787,7 @@ class ScoutNode {
       editableState: _editableState,
       treeOrdinal: _treeOrdinal,
       widgetConfigurationIdentity: _widgetConfigurationIdentity,
+      pointerReceiverBinding: _pointerReceiverBinding,
     );
   }
 
@@ -758,6 +829,7 @@ class ScoutNode {
       editableState: _editableState,
       treeOrdinal: _treeOrdinal,
       widgetConfigurationIdentity: _widgetConfigurationIdentity,
+      pointerReceiverBinding: _pointerReceiverBinding,
     );
   }
 
@@ -849,6 +921,8 @@ class ScoutNode {
       if (selected != null) 'selected': selected,
       if (altIds.isNotEmpty) 'altIds': altIds,
       if (enclosingTarget != null) 'enclosingTarget': enclosingTarget,
+      if (_pointerReceiverBinding != null)
+        'pointerReceiver': _pointerReceiverBinding.toJson(),
     };
   }
 }

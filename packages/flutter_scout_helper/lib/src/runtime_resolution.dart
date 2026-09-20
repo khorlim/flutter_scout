@@ -616,6 +616,40 @@ extension _RuntimeResolution on FlutterScoutRuntime {
 
     Map<String, Object?>? lastHit;
     var sawOtherHit = false;
+    final receiverBinding = node._pointerReceiverBinding;
+    if (receiverBinding != null) {
+      final hit = _immediatePointerReceiverEvidence(receiverBinding);
+      if (hit['containsReceiver'] == true &&
+          hit['relationshipMatched'] == true) {
+        return _TargetResolution(
+          status: _TargetResolutionStatus.unique,
+          requested: requested,
+          snapshot: snapshot,
+          scope: scope,
+          candidates: [candidate],
+          node: node,
+          textNode: textNode,
+          safePoint: receiverBinding.provenPoint,
+          match: candidate.match,
+          immediateHitTest: hit,
+        );
+      }
+      return _TargetResolution(
+        status: hit['hit'] == true
+            ? _TargetResolutionStatus.occluded
+            : _TargetResolutionStatus.notHitTestable,
+        requested: requested,
+        snapshot: snapshot,
+        scope: scope,
+        candidates: [candidate],
+        node: node,
+        textNode: textNode,
+        match: candidate.match,
+        immediateHitTest: hit,
+        reason:
+            'The explicitly bound pointer receiver relationship is no longer on the proven hit path.',
+      );
+    }
     for (final point in _candidateSafePoints(snapshot, node)) {
       final hit = _immediateHitTestEvidence(point, node._renderObject);
       lastHit = hit;
@@ -713,6 +747,23 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         candidates: resolved.candidates,
         node: resolved.node,
         reason: 'The selector now resolves to a different logical node.',
+      );
+    }
+    final originalReceiver = original.node!._pointerReceiverBinding;
+    final resolvedReceiver = resolved.node!._pointerReceiverBinding;
+    if ((originalReceiver != null || resolvedReceiver != null) &&
+        (originalReceiver == null ||
+            resolvedReceiver == null ||
+            !_samePointerReceiverBinding(originalReceiver, resolvedReceiver))) {
+      return _TargetResolution(
+        status: _TargetResolutionStatus.stale,
+        requested: original.requested,
+        snapshot: fresh,
+        scope: _targetScope(fresh),
+        candidates: resolved.candidates,
+        node: resolved.node,
+        reason:
+            'The concrete pointer receiver binding changed before dispatch.',
       );
     }
     return resolved;
@@ -949,6 +1000,83 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       'hit': hit,
       'containsTarget': containsTarget,
       'path': path,
+    };
+  }
+
+  bool _samePointerReceiverBinding(
+    _PointerReceiverBinding before,
+    _PointerReceiverBinding after,
+  ) =>
+      identical(before.logicalElement, after.logicalElement) &&
+      identical(before.gestureOwnerElement, after.gestureOwnerElement) &&
+      identical(before.gestureOwnerState, after.gestureOwnerState) &&
+      identical(before.receiverElement, after.receiverElement) &&
+      identical(before.receiver, after.receiver) &&
+      before.receiverCallbackIdentity == after.receiverCallbackIdentity &&
+      before.receiverRect == after.receiverRect &&
+      before.provenPoint == after.provenPoint;
+
+  Map<String, Object?> _immediatePointerReceiverEvidence(
+    _PointerReceiverBinding binding,
+  ) {
+    final currentRect = _rectFor(binding.receiverElement);
+    final geometryMatched = currentRect == binding.receiverRect;
+    var path = <String>[];
+    var pathLength = 0;
+    var receiverIndex = -1;
+    var relatedPrefix = false;
+    final hit = _hitTest(binding.provenPoint, (result) {
+      final entries = result.path.toList(growable: false);
+      pathLength = entries.length;
+      path = <String>[
+        for (final entry in entries.take(24))
+          entry.target.runtimeType.toString(),
+      ];
+      receiverIndex = entries.indexWhere(
+        (entry) => identical(entry.target, binding.receiver),
+      );
+      if (receiverIndex >= 0) {
+        relatedPrefix = true;
+        for (var index = 0; index < receiverIndex; index++) {
+          final target = entries[index].target;
+          if (target is! RenderObject ||
+              target is RenderPointerListener ||
+              !_isRenderDescendantOf(target, binding.receiver)) {
+            relatedPrefix = false;
+            break;
+          }
+        }
+      }
+      return entries.isNotEmpty;
+    });
+    final receiverWidget = binding.receiverElement.widget;
+    final relationshipMatched =
+        binding.logicalElement.widget is GestureDetector &&
+        binding.gestureOwnerElement.widget is RawGestureDetector &&
+        identical(
+          binding.gestureOwnerElement.state,
+          binding.gestureOwnerState,
+        ) &&
+        identical(binding.receiverElement.renderObject, binding.receiver) &&
+        receiverWidget is Listener &&
+        receiverWidget.onPointerDown == binding.receiverCallbackIdentity &&
+        geometryMatched &&
+        relatedPrefix;
+    return <String, Object?>{
+      'logicalPoint': <double>[binding.provenPoint.dx, binding.provenPoint.dy],
+      'hit': hit,
+      'containsTarget': false,
+      'containsReceiver': receiverIndex >= 0,
+      'relationshipMatched': relationshipMatched,
+      'geometryMatched': geometryMatched,
+      'relatedPrefix': relatedPrefix,
+      'receiverIdentity': binding.receiverIdentity,
+      'gestureOwnerIdentity': binding.ownerIdentity,
+      'receiverType': binding.receiver.runtimeType.toString(),
+      'receiverPathIndex': receiverIndex,
+      'pathLength': pathLength,
+      'path': path,
+      'pathTruncated': path.length < pathLength,
     };
   }
 

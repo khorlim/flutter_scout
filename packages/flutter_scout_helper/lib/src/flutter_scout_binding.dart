@@ -227,6 +227,11 @@ class FlutterScoutRuntime {
   @visibleForTesting
   Future<void> Function()? debugBeforeGuardedInputActivationRevalidation;
 
+  /// Test-only reproduction seam for a logical widget whose generic
+  /// Element.renderObject representation is not on its pointer hit path.
+  @visibleForTesting
+  RenderObject? Function(Element element)? debugRepresentedRenderObjectOverride;
+
   void install() {
     _installRenderingProbe();
     _installErrorHooks();

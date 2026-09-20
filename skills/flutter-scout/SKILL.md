@@ -83,7 +83,11 @@ hittable, supply its separately observed user-like activation handle in the
 same action: `{method:'input', args:[value], params:{target:fieldHandle,
 activationTarget:tapHandle}}`. Scout guards and taps only that explicit handle,
 then types only if the exact field is the unique focused editable. Never infer
-an activation handle from ancestry or reuse one after a changed revision.
+an activation handle from ancestry or reuse one after a changed revision. When
+the logical tap widget is not itself on the hit path, Scout acts only through
+the explicitly observed concrete pointer receiver bound to that same gesture
+owner; receiver replacement, geometry drift, or an unrelated pointer route
+fails closed.
 
 Choose from reported candidates or narrow context. A stale state requires
 fresh observation and a new decision, not replacement of the revision on an
