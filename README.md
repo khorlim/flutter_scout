@@ -26,6 +26,12 @@ If a custom debug binding already exists, keep it and call
 FlutterScoutHelper.ensureRegistered() after its initialization. No per-screen
 wrappers. Scout remains inert in normal profile/release builds.
 
+Custom editors whose real `EditableText` is intentionally hidden behind their
+own visual surface fail closed unless the integrator opts into the generic,
+versioned [`ScoutExplicitEditableSurface`](docs/custom-editable-surfaces.md)
+contract. The debug-only wrapper binds one exact render boundary to the exact
+controller and focus node; unrelated overlays must remain outside it.
+
 ```bash
 dart pub global activate --source git https://github.com/khorlim/flutter_scout.git --git-path packages/flutter_scout
 flutter-scout --single-json ensure --device macos --project <app> --name <task>

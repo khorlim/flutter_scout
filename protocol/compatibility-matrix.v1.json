@@ -56,6 +56,7 @@
       "observationNonInterferenceV1",
       "overlayExplicitOptInV1",
       "phaseTimingsV1",
+      "registeredCustomEditableSurfaceV1",
       "renderingStateV1",
       "runtimeErrorCursor",
       "runtimeSignalProvenanceV1",

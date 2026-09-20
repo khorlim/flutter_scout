@@ -14,7 +14,13 @@ enum _TargetResolutionStatus {
   occluded,
 }
 
-enum _TargetSafety { mutate, focusedEditable, observeVisible, identify }
+enum _TargetSafety {
+  mutate,
+  explicitEditable,
+  focusedEditable,
+  observeVisible,
+  identify,
+}
 
 class _TargetCandidate {
   const _TargetCandidate({
@@ -52,6 +58,12 @@ class _TargetCandidate {
   };
 }
 
+class _RegisteredExplicitEditable {
+  const _RegisteredExplicitEditable(this.marker);
+
+  final _RenderScoutExplicitEditableSurface marker;
+}
+
 class _TargetResolution {
   const _TargetResolution({
     required this.status,
@@ -64,6 +76,9 @@ class _TargetResolution {
     this.safePoint,
     this.match,
     this.immediateHitTest,
+    this.explicitEditableAuthorization,
+    this.registeredEditableMarker,
+    this.registrationGeneration,
     this.reason,
   });
 
@@ -77,6 +92,9 @@ class _TargetResolution {
   final Offset? safePoint;
   final String? match;
   final Map<String, Object?>? immediateHitTest;
+  final Map<String, Object?>? explicitEditableAuthorization;
+  final _RenderScoutExplicitEditableSurface? registeredEditableMarker;
+  final int? registrationGeneration;
   final String? reason;
 
   bool get isUnique => status == _TargetResolutionStatus.unique;
@@ -90,6 +108,8 @@ class _TargetResolution {
     if (textNode != null) 'textTarget': textNode!.toJson(),
     if (safePoint != null) 'safePoint': [safePoint!.dx, safePoint!.dy],
     if (immediateHitTest != null) 'immediateHitTest': immediateHitTest,
+    if (explicitEditableAuthorization != null)
+      'explicitEditableAuthorization': explicitEditableAuthorization,
     if (reason != null) 'reason': reason,
     if (candidates.isNotEmpty)
       'candidates': [
@@ -553,6 +573,74 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       );
     }
 
+    if (safety == _TargetSafety.explicitEditable) {
+      final marker = _explicitEditableMarkerAncestor(node);
+      final authorization = _registeredExplicitEditableAuthorization(node);
+      if (marker != null && authorization == null) {
+        return _unsafeResolution(
+          _TargetResolutionStatus.notHitTestable,
+          requested,
+          snapshot,
+          scope,
+          candidate,
+          'The custom editor registration is invalid or no longer matches its editable.',
+          textNode: textNode,
+        );
+      }
+      if (authorization != null) {
+        final marker = authorization.marker;
+        Map<String, Object?>? lastHit;
+        var sawOtherHit = false;
+        for (final point in _candidateSafePoints(snapshot, node)) {
+          final hit = _immediateHitTestEvidence(point, node._renderObject);
+          lastHit = hit;
+          if (_hitTestPathContainsRenderObject(point, marker)) {
+            return _TargetResolution(
+              status: _TargetResolutionStatus.unique,
+              requested: requested,
+              snapshot: snapshot,
+              scope: scope,
+              candidates: [candidate],
+              node: node,
+              textNode: textNode,
+              safePoint: point,
+              match: candidate.match,
+              immediateHitTest: hit,
+              explicitEditableAuthorization: <String, Object?>{
+                'authorizationKind': 'registered_custom_editable_surface',
+                'policyVersion': marker.policyVersion,
+                'focusIdentityMatched': true,
+                'controllerIdentityMatched': true,
+                'uniqueEditableDescendant': true,
+                'hitWithinRegisteredSurface': true,
+                'registrationGeneration': marker.registrationGeneration,
+                'revalidated': false,
+              },
+              registeredEditableMarker: marker,
+              registrationGeneration: marker.registrationGeneration,
+            );
+          }
+          sawOtherHit = sawOtherHit || hit['hit'] == true;
+        }
+        return _TargetResolution(
+          status: sawOtherHit
+              ? _TargetResolutionStatus.occluded
+              : _TargetResolutionStatus.notHitTestable,
+          requested: requested,
+          snapshot: snapshot,
+          scope: scope,
+          candidates: [candidate],
+          node: node,
+          textNode: textNode,
+          match: candidate.match,
+          immediateHitTest: lastHit,
+          reason: sawOtherHit
+              ? 'The registered editor is intercepted outside its declared render boundary.'
+              : 'No visible sample point hits within the registered editor boundary.',
+        );
+      }
+    }
+
     // Text entry is dispatched directly to the currently focused EditableText;
     // unlike a tap, it does not send a pointer event. Some legitimate custom
     // PIN inputs retain keyboard focus behind an IgnorePointer/animated shell,
@@ -649,6 +737,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
   _TargetResolution _revalidateTarget(
     _TargetResolution original, {
     bool fieldOnly = false,
+    _TargetSafety safety = _TargetSafety.mutate,
   }) {
     if (!original.isUnique) return original;
     final fresh = _snapshot();
@@ -669,6 +758,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       fresh,
       original.requested,
       fieldOnly: fieldOnly,
+      safety: safety,
     );
     if (!resolved.isUnique) return resolved;
     if (_logicalNodeIdentity(resolved.node!) !=
@@ -683,7 +773,99 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         reason: 'The selector now resolves to a different logical node.',
       );
     }
+    if (safety == _TargetSafety.explicitEditable &&
+        original.registeredEditableMarker != null) {
+      if (!identical(
+            resolved.registeredEditableMarker,
+            original.registeredEditableMarker,
+          ) ||
+          resolved.registrationGeneration != original.registrationGeneration) {
+        return _TargetResolution(
+          status: _TargetResolutionStatus.stale,
+          requested: original.requested,
+          snapshot: fresh,
+          scope: _targetScope(fresh),
+          candidates: resolved.candidates,
+          node: resolved.node,
+          reason: 'The custom editor registration changed before dispatch.',
+        );
+      }
+      return _TargetResolution(
+        status: resolved.status,
+        requested: resolved.requested,
+        snapshot: resolved.snapshot,
+        scope: resolved.scope,
+        candidates: resolved.candidates,
+        node: resolved.node,
+        textNode: resolved.textNode,
+        safePoint: resolved.safePoint,
+        match: resolved.match,
+        immediateHitTest: resolved.immediateHitTest,
+        explicitEditableAuthorization: <String, Object?>{
+          ...?resolved.explicitEditableAuthorization,
+          'revalidated': true,
+        },
+        registeredEditableMarker: resolved.registeredEditableMarker,
+        registrationGeneration: resolved.registrationGeneration,
+      );
+    }
     return resolved;
+  }
+
+  _RenderScoutExplicitEditableSurface? _explicitEditableMarkerAncestor(
+    ScoutNode node,
+  ) {
+    final editable = node._editableState;
+    if (editable == null || !editable.mounted) return null;
+    RenderObject? current = editable.context.findRenderObject();
+    while (current != null) {
+      if (current is _RenderScoutExplicitEditableSurface) return current;
+      final parent = current.parent;
+      current = parent is RenderObject ? parent : null;
+    }
+    return null;
+  }
+
+  _RegisteredExplicitEditable? _registeredExplicitEditableAuthorization(
+    ScoutNode node,
+  ) {
+    final editable = node._editableState;
+    if (editable == null || !editable.mounted) return null;
+    final editableRender = editable.context.findRenderObject();
+    if (editableRender == null || !editableRender.attached) return null;
+    final marker = _explicitEditableMarkerAncestor(node);
+    if (marker == null ||
+        !marker.attached ||
+        marker.policyVersion !=
+            ScoutExplicitEditableSurface.currentPolicyVersion ||
+        !identical(editable.widget.controller, marker.controller) ||
+        !identical(editable.widget.focusNode, marker.focusNode) ||
+        !editable.widget.focusNode.hasFocus) {
+      return null;
+    }
+
+    final root = WidgetsBinding.instance.rootElement;
+    if (root == null) return null;
+    var descendants = 0;
+    _walk(root, (element) {
+      if (descendants > 1 ||
+          element is! StatefulElement ||
+          element.state is! EditableTextState) {
+        return;
+      }
+      final state = element.state as EditableTextState;
+      RenderObject? render = state.context.findRenderObject();
+      while (render != null) {
+        if (identical(render, marker)) {
+          descendants += 1;
+          break;
+        }
+        final parent = render.parent;
+        render = parent is RenderObject ? parent : null;
+      }
+    });
+    if (descendants != 1) return null;
+    return _RegisteredExplicitEditable(marker);
   }
 
   _TargetResolution _resolveTextTarget(

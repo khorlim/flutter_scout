@@ -17,6 +17,12 @@ An app needs only FlutterScoutBinding.ensureInitialized() before runApp, or
 FlutterScoutHelper.ensureRegistered() after an existing debug binding. Use a
 debug build; profile/release registration is inert. No per-screen wrappers.
 
+An explicit input target whose custom editor hides its `EditableText` fails
+closed unless the app deliberately wraps that one control in the versioned
+`ScoutExplicitEditableSurface` contract with the exact controller and focus
+node. Keep loading shields, modal barriers, and unrelated siblings outside the
+boundary. See `docs/custom-editable-surfaces.md` in the Scout repository.
+
 Name every owned run:
 
 ```bash

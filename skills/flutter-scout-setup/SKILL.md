@@ -61,6 +61,14 @@ void main() {
 
 Do not add screen wrappers, action wrappers, or test-only widgets.
 
+The sole optional widget-level integration is
+`ScoutExplicitEditableSurface` for a custom editor that intentionally hides its
+real `EditableText`. It is a versioned, debug-only safety declaration binding
+one exact render boundary to an identical controller and focus node. Wrap only
+the custom control and keep external overlays outside it; otherwise leave the
+editor unregistered so explicit input fails closed. See
+`docs/custom-editable-surfaces.md` in the Scout repository.
+
 ## Install Or Run The CLI
 
 For repo-local development:

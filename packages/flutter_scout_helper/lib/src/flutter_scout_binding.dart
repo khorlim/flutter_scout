@@ -33,6 +33,7 @@ part 'runtime_nodes.dart';
 part 'runtime_switch_labels.dart';
 part 'runtime_internals.dart';
 part 'runtime_recorder.dart';
+part 'custom_editable_surface.dart';
 
 /// Protocol version reported in every helper response, so the CLI can tell
 /// when the RUNNING helper is older than the one it expects — the classic
