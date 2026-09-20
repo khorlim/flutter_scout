@@ -24,6 +24,7 @@ const Map<String, bool> _scoutProtocolCapabilities = <String, bool>{
   'observationNonInterferenceV1': true,
   'renderingStateV1': true,
   'liveRenderingGuardV1': true,
+  'registeredCustomEditableSurfaceV1': true,
   'overlayExplicitOptInV1': true,
   'strictTypedParametersV1': true,
   'boundedHelperRequestsV1': true,

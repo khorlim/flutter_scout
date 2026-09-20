@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add the optional helper capability
+  `registeredCustomEditableSurfaceV1` and the debug-only policy-v1 render
+  boundary for explicitly registered custom editors. Protocol 15/schema 1 is
+  unchanged; unregistered non-hit-testable explicit targets fail closed.
+
 - Hard-cutover public CLI contract v2 lives under schemas/v2/. Agent JSONL
   protocol 2 adds query, acknowledge and reconcile, with exclusive ownership,
   receipt delivery gating and no legacy interaction entrypoints. Helper wire

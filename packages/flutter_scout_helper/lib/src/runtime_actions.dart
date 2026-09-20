@@ -357,11 +357,20 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final value = params['value'] ?? '';
       var resolution = target == null || target.isEmpty || target == 'focused'
           ? _resolveFocusedField(before)
-          : _resolveTarget(before, target, fieldOnly: true);
+          : _resolveTarget(
+              before,
+              target,
+              fieldOnly: true,
+              safety: _TargetSafety.explicitEditable,
+            );
       if (!resolution.isUnique) return _targetResolutionFailure(resolution);
       resolution = target == null || target.isEmpty || target == 'focused'
           ? _revalidateFocusedField(resolution)
-          : _revalidateTarget(resolution, fieldOnly: true);
+          : _revalidateTarget(
+              resolution,
+              fieldOnly: true,
+              safety: _TargetSafety.explicitEditable,
+            );
       if (!resolution.isUnique) return _targetResolutionFailure(resolution);
       final editable = resolution.node?._editableState;
       if (editable == null) {
