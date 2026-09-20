@@ -843,6 +843,7 @@
     "ext.flutter_scout.input": {
       "operation": "mutation",
       "parameters": [
+        "activationTarget",
         "capture",
         "expectField",
         "expectGone",
@@ -858,6 +859,15 @@
         "waitMs"
       ],
       "parameterDescriptors": {
+        "activationTarget": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": null,
+          "minimumLength": 1,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public"
+        },
         "expectText": {
           "encoding": "string",
           "semanticType": "string",

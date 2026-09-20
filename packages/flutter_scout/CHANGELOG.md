@@ -1,5 +1,7 @@
 ## Unreleased
 
+- Let `input` carry an optional explicit `activationTarget` handle through the
+  CLI and persistent agent contract for atomic guarded custom-field activation.
 - Preserve the agent lease inode during session cleanup, recognizing it as a
   serialization control rather than unknown residue. Never unlink a live lock.
 - Add explicit macOS `foreground()` on the persistent agent connection. Activate

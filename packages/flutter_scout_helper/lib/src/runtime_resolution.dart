@@ -14,7 +14,13 @@ enum _TargetResolutionStatus {
   occluded,
 }
 
-enum _TargetSafety { mutate, focusedEditable, observeVisible, identify }
+enum _TargetSafety {
+  mutate,
+  focusedEditable,
+  exactEditable,
+  observeVisible,
+  identify,
+}
 
 class _TargetCandidate {
   const _TargetCandidate({
@@ -553,6 +559,30 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       );
     }
 
+    if (safety == _TargetSafety.exactEditable) {
+      if (node._editableState == null) {
+        return _unsafeResolution(
+          _TargetResolutionStatus.stale,
+          requested,
+          snapshot,
+          scope,
+          candidate,
+          'The matched field no longer has a live editable state.',
+          textNode: textNode,
+        );
+      }
+      return _TargetResolution(
+        status: _TargetResolutionStatus.unique,
+        requested: requested,
+        snapshot: snapshot,
+        scope: scope,
+        candidates: [candidate],
+        node: node,
+        textNode: textNode,
+        match: candidate.match,
+      );
+    }
+
     // Text entry is dispatched directly to the currently focused EditableText;
     // unlike a tap, it does not send a pointer event. Some legitimate custom
     // PIN inputs retain keyboard focus behind an IgnorePointer/animated shell,
@@ -649,6 +679,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
   _TargetResolution _revalidateTarget(
     _TargetResolution original, {
     bool fieldOnly = false,
+    _TargetSafety safety = _TargetSafety.mutate,
   }) {
     if (!original.isUnique) return original;
     final fresh = _snapshot();
@@ -669,6 +700,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       fresh,
       original.requested,
       fieldOnly: fieldOnly,
+      safety: safety,
     );
     if (!resolved.isUnique) return resolved;
     if (_logicalNodeIdentity(resolved.node!) !=

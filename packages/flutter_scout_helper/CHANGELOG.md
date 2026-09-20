@@ -1,5 +1,8 @@
 ## Unreleased
 
+* Add guarded activation input for unwrapped custom fields: resolve and tap one
+  explicit activation handle, require exact unique field focus, revalidate both,
+  then use the existing keyboard-semantic text update. Existing input is unchanged.
 * Report passive scheduler/lifecycle and completed framework-frame facts on
   inspect, distinguishing quiet active screens from suspended rendering without
   scheduling frames. Add optional `requireLiveRendering` mutation guard and

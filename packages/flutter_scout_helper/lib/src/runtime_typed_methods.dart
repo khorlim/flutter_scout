@@ -511,6 +511,7 @@ final Map<String, _HelperMethodContract> _helperMethodContracts =
         operation: 'mutation',
         parameters: <String, _HelperParameterContract>{
           ..._helperExpectationParameters(),
+          'activationTarget': _helperText,
           'target': const _HelperParameterContract(
             kind: _HelperValueKind.string,
             minLength: 1,

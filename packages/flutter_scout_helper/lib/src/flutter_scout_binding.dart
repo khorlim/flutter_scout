@@ -222,6 +222,11 @@ class FlutterScoutRuntime {
   @visibleForTesting
   bool Function()? debugRuntimeAvailabilityProbe;
 
+  /// Test-only seam for replacing a guarded-input target immediately before
+  /// ordinary tap revalidation.
+  @visibleForTesting
+  Future<void> Function()? debugBeforeGuardedInputActivationRevalidation;
+
   void install() {
     _installRenderingProbe();
     _installErrorHooks();
@@ -674,11 +679,13 @@ class FlutterScoutRuntime {
   @visibleForTesting
   Future<Map<String, Object?>> debugInputTarget(
     String target,
-    String value,
-  ) async {
+    String value, {
+    String? activationTarget,
+  }) async {
     final response = await _handleInput('debugInputTarget', {
       'target': target,
       'value': value,
+      'activationTarget': ?activationTarget,
       'waitMs': '0',
       'lateWaitMs': '0',
     });
