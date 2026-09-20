@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Define fail-closed workspace-root, member, generated-artifact, and committed
+  cleanup verification errors for workspace-aware temporary-helper setup.
 - Define stable fail-closed errors for unavailable bundled helper identity,
   explicit helper revision mismatch, and resolved package-config mismatch during
   zero-diff temporary-helper launch.

@@ -168,7 +168,10 @@ flutter-scout ensure --temporary-helper --device <simulator-id> --project <flutt
 
 Scout durably records private original-file backups and their SHA-256 digests
 before dependency resolution, restores `pubspec.yaml` and `pubspec.lock`
-immediately, and removes the generated bootstrap on stop. Startup, `status`,
+immediately, and removes the generated bootstrap on stop. For a Dart workspace,
+Scout discovers and validates every declared member, applies one root-scoped
+helper override, and snapshots/restores the root lock/package config plus each
+member's Flutter plugin resolution artifacts. Startup, `status`,
 and `doctor` resume an interrupted transaction only when every current digest
 matches Scout's exact restore plan. A different user-authored digest is
 preserved and returned as a prioritized `temporary_helper_repair` action; do

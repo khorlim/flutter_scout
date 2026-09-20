@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Make `--temporary-helper` workspace-aware. A selected Dart workspace member
+  now receives one root-scoped helper override for every member, while root
+  lock/package config and member Flutter plugin artifacts are digest-bound and
+  restored byte-for-byte on success, failure, cleanup, and interruption.
 - Make `--temporary-helper` resolve the helper bundled with the exact running
   CLI even when an unchanged app already pins an older helper. Verify the
   resolved package-config source before launch and fail closed on an explicit

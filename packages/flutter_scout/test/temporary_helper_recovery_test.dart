@@ -551,6 +551,219 @@ Future<void> main(List<String> args) async {
       expect(File(targetPath).existsSync(), isFalse);
     },
   );
+
+  test(
+    'workspace override resolves one helper and cleanup restores every artifact',
+    () async {
+      final fixture = await _WorkspaceTemporaryProject.create();
+      addTearDown(fixture.dispose);
+      final cli = FlutterScoutCli();
+      FlutterScoutCli.debugTemporaryHelperPubGetOverride =
+          (workingDirectory) async {
+            expect(workingDirectory, fixture.root.resolveSymbolicLinksSync());
+            fixture.expectCandidateOverride();
+            fixture.writeCandidateArtifacts();
+            return ProcessResult(42, 0, 'resolved workspace', '');
+          };
+
+      final setup = await cli.debugPrepareTemporaryHelper(
+        project: fixture.selected.path,
+        helperPath: fixture.helper.path,
+      );
+
+      fixture.expectTrackedInputsExact();
+      fixture.expectCandidateResolution();
+      final record =
+          jsonDecode(
+                File(
+                  setup['transactionRecordPath']! as String,
+                ).readAsStringSync(),
+              )
+              as Map<String, Object?>;
+      expect(
+        record['resolutionRootPath'],
+        fixture.root.resolveSymbolicLinksSync(),
+      );
+      expect(record['workspaceMemberPaths'], hasLength(2));
+      expect(record['generatedArtifacts'], hasLength(11));
+
+      final cleanup = await cli.debugCleanupTemporaryHelper(setup);
+      expect(cleanup['status'], 'repaired');
+      fixture.expectAllArtifactsExact();
+    },
+  );
+
+  test(
+    'workspace setup failure restores generated and tracked artifacts',
+    () async {
+      final fixture = await _WorkspaceTemporaryProject.create();
+      addTearDown(fixture.dispose);
+      FlutterScoutCli.debugTemporaryHelperPubGetOverride =
+          (workingDirectory) async {
+            expect(workingDirectory, fixture.root.resolveSymbolicLinksSync());
+            fixture.expectCandidateOverride();
+            fixture.writeCandidateArtifacts();
+            return ProcessResult(42, 1, '', 'workspace resolution failed');
+          };
+
+      await expectLater(
+        FlutterScoutCli().debugPrepareTemporaryHelper(
+          project: fixture.selected.path,
+          helperPath: fixture.helper.path,
+        ),
+        throwsA(isA<ScoutCliException>()),
+      );
+
+      fixture.expectAllArtifactsExact();
+    },
+  );
+
+  for (final phase in const <String>[
+    'record_prepared',
+    'workspace_override_write_started',
+    'workspace_override_injected',
+    'helper_pub_get_started',
+    'helper_pub_get_completed',
+    'target_write_started',
+    'target_written',
+    'workspace_override_restored',
+    'lock_restored',
+    'active',
+  ]) {
+    test(
+      'workspace interruption after $phase restores every artifact',
+      () async {
+        final fixture = await _WorkspaceTemporaryProject.create();
+        addTearDown(fixture.dispose);
+        final cli = FlutterScoutCli();
+        FlutterScoutCli.debugTemporaryHelperPubGetOverride =
+            (workingDirectory) async {
+              fixture.expectCandidateOverride();
+              fixture.writeCandidateArtifacts();
+              return ProcessResult(42, 0, 'resolved workspace', '');
+            };
+        FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase = phase;
+
+        await expectLater(
+          cli.debugPrepareTemporaryHelper(
+            project: fixture.selected.path,
+            helperPath: fixture.helper.path,
+          ),
+          throwsA(anything),
+        );
+        FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase = null;
+        final recovery = await cli.debugRecoverTemporaryHelperProject(
+          fixture.selected.path,
+        );
+
+        expect(recovery['status'], 'repaired', reason: '$phase: $recovery');
+        fixture.expectAllArtifactsExact();
+      },
+    );
+  }
+
+  test(
+    'workspace recovery resumes after interrupted candidate resolution',
+    () async {
+      final fixture = await _WorkspaceTemporaryProject.create();
+      addTearDown(fixture.dispose);
+      final cli = FlutterScoutCli();
+      FlutterScoutCli.debugTemporaryHelperPubGetOverride =
+          (workingDirectory) async {
+            fixture.expectCandidateOverride();
+            fixture.writeCandidateArtifacts();
+            return ProcessResult(42, 0, 'resolved workspace', '');
+          };
+      FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase =
+          'helper_pub_get_started';
+      await expectLater(
+        cli.debugPrepareTemporaryHelper(
+          project: fixture.selected.path,
+          helperPath: fixture.helper.path,
+        ),
+        throwsA(anything),
+      );
+      FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase =
+          'repair_candidate_resolution_completed';
+      await expectLater(
+        cli.debugRecoverTemporaryHelperProject(fixture.selected.path),
+        throwsA(anything),
+      );
+      FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase = null;
+
+      final recovery = await cli.debugRecoverTemporaryHelperProject(
+        fixture.selected.path,
+      );
+      expect(recovery['status'], 'repaired', reason: '$recovery');
+      fixture.expectAllArtifactsExact();
+    },
+  );
+
+  for (final phase in const <String>[
+    'repair_workspace_artifacts_restored',
+    'repair_target_removed',
+    'cleanup_committing',
+    'cleanup_renamed',
+    'cleanup_deleted',
+  ]) {
+    test('workspace cleanup resumes after $phase', () async {
+      final fixture = await _WorkspaceTemporaryProject.create();
+      addTearDown(fixture.dispose);
+      final cli = FlutterScoutCli();
+      FlutterScoutCli.debugTemporaryHelperPubGetOverride =
+          (workingDirectory) async {
+            fixture.expectCandidateOverride();
+            fixture.writeCandidateArtifacts();
+            return ProcessResult(42, 0, 'resolved workspace', '');
+          };
+      final setup = await cli.debugPrepareTemporaryHelper(
+        project: fixture.selected.path,
+        helperPath: fixture.helper.path,
+      );
+      FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase = phase;
+      await expectLater(
+        cli.debugCleanupTemporaryHelper(setup),
+        throwsA(anything),
+      );
+      FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase = null;
+
+      final recovery = await cli.debugRecoverTemporaryHelperProject(
+        fixture.selected.path,
+      );
+      expect(
+        <Object?>['repaired', 'clean'],
+        contains(recovery['status']),
+        reason: '$phase: $recovery',
+      );
+      fixture.expectAllArtifactsExact();
+    });
+  }
+
+  test(
+    'workspace member escaping the root is refused before mutation',
+    () async {
+      if (Platform.isWindows) return;
+      final fixture = await _WorkspaceTemporaryProject.create(
+        escapingMember: true,
+      );
+      addTearDown(fixture.dispose);
+
+      await expectLater(
+        FlutterScoutCli().debugPrepareTemporaryHelper(
+          project: fixture.selected.path,
+          helperPath: fixture.helper.path,
+        ),
+        throwsA(
+          isA<ScoutCliException>().having(
+            (error) => error.code,
+            'code',
+            'temporary_helper_workspace_member_unsafe',
+          ),
+        ),
+      );
+      fixture.expectAllArtifactsExact();
+    },
+  );
 }
 
 Future<Map<String, Object?>> _processIdentity(
@@ -712,5 +925,176 @@ ${existingHelperPath == null ? '' : "  flutter_scout_helper:\n    path: '$existi
 
   Future<void> dispose() async {
     if (root.existsSync()) await root.delete(recursive: true);
+  }
+}
+
+final class _WorkspaceTemporaryProject {
+  const _WorkspaceTemporaryProject({
+    required this.container,
+    required this.root,
+    required this.selected,
+    required this.sibling,
+    required this.helper,
+    required this.originalArtifacts,
+  });
+
+  final Directory container;
+  final Directory root;
+  final Directory selected;
+  final Directory sibling;
+  final Directory helper;
+  final Map<String, List<int>?> originalArtifacts;
+
+  static const artifactNames = <String>[
+    'pubspec_overrides.yaml',
+    'pubspec.lock',
+    '.dart_tool/package_config.json',
+    '.dart_tool/package_graph.json',
+    'apps/selected/.dart_tool/package_config_subset',
+    'apps/selected/.flutter-plugins',
+    'apps/selected/.flutter-plugins-dependencies',
+    'apps/sibling/.flutter-plugins-dependencies',
+  ];
+
+  static Future<_WorkspaceTemporaryProject> create({
+    bool escapingMember = false,
+  }) async {
+    final container = await Directory.systemTemp.createTemp(
+      'scout_workspace_wal_test_',
+    );
+    final root = Directory(p.join(container.path, 'workspace'))..createSync();
+    final selected = Directory(p.join(root.path, 'apps', 'selected'))
+      ..createSync(recursive: true);
+    final sibling = Directory(p.join(root.path, 'apps', 'sibling'))
+      ..createSync(recursive: true);
+    final helper = Directory(p.join(container.path, 'helper'))..createSync();
+    File(p.join(helper.path, 'pubspec.yaml')).writeAsStringSync('''
+name: flutter_scout_helper
+environment:
+  sdk: ^3.12.0
+''');
+    final workspaceEntry = escapingMember ? '../outside' : 'apps/sibling';
+    File(p.join(root.path, 'pubspec.yaml')).writeAsStringSync('''
+name: fixture_workspace
+environment:
+  sdk: ^3.12.0
+workspace:
+  - apps/selected
+  - $workspaceEntry
+''');
+    for (final entry in <MapEntry<Directory, String>>[
+      MapEntry(selected, '/tmp/selected-stale-helper'),
+      MapEntry(sibling, '/tmp/sibling-stale-helper'),
+    ]) {
+      File(p.join(entry.key.path, 'pubspec.yaml')).writeAsStringSync('''
+name: ${p.basename(entry.key.path)}
+resolution: workspace
+environment:
+  sdk: ^3.12.0
+dependencies:
+  flutter_scout_helper:
+    path: '${entry.value}'
+''');
+      final main = File(p.join(entry.key.path, 'lib', 'main.dart'));
+      main.parent.createSync(recursive: true);
+      main.writeAsStringSync('void main() {}\n');
+    }
+    if (escapingMember) {
+      final outside = Directory(p.join(container.path, 'outside'))
+        ..createSync();
+      File(p.join(outside.path, 'pubspec.yaml')).writeAsStringSync('''
+name: outside
+resolution: workspace
+environment:
+  sdk: ^3.12.0
+''');
+    }
+    final fixture = _WorkspaceTemporaryProject(
+      container: container,
+      root: root,
+      selected: selected,
+      sibling: sibling,
+      helper: helper,
+      originalArtifacts: <String, List<int>?>{},
+    );
+    for (final name in artifactNames) {
+      final file = File(p.join(root.path, name));
+      if (name == 'pubspec_overrides.yaml') {
+        file.writeAsStringSync('''
+dependency_overrides:
+  existing_override:
+    path: ../existing
+''');
+      } else if (name != 'apps/selected/.flutter-plugins') {
+        file.parent.createSync(recursive: true);
+        file.writeAsStringSync('original:$name\n');
+      }
+      fixture.originalArtifacts[name] = file.existsSync()
+          ? file.readAsBytesSync()
+          : null;
+    }
+    return fixture;
+  }
+
+  void expectCandidateOverride() {
+    final override = File(
+      p.join(root.path, 'pubspec_overrides.yaml'),
+    ).readAsStringSync();
+    expect(override, contains('existing_override:'));
+    expect(override, contains('flutter_scout_helper:'));
+    expect(override, contains(helper.resolveSymbolicLinksSync()));
+  }
+
+  void writeCandidateArtifacts() {
+    for (final name in artifactNames.skip(1)) {
+      final file = File(p.join(root.path, name));
+      file.parent.createSync(recursive: true);
+      if (name == '.dart_tool/package_config.json') {
+        _writePackageConfig(root.path, helper.path);
+      } else {
+        file.writeAsStringSync('candidate:$name\n', flush: true);
+      }
+    }
+  }
+
+  void expectTrackedInputsExact() {
+    for (final name in artifactNames.take(2)) {
+      _expectArtifactExact(name);
+    }
+    expect(
+      File(p.join(selected.path, 'pubspec.yaml')).readAsStringSync(),
+      contains('/tmp/selected-stale-helper'),
+    );
+    expect(
+      File(p.join(sibling.path, 'pubspec.yaml')).readAsStringSync(),
+      contains('/tmp/sibling-stale-helper'),
+    );
+  }
+
+  void expectCandidateResolution() {
+    expect(
+      _resolvedHelperFromPackageConfig(root.path),
+      helper.resolveSymbolicLinksSync(),
+    );
+  }
+
+  void expectAllArtifactsExact() {
+    for (final name in artifactNames) {
+      _expectArtifactExact(name);
+    }
+  }
+
+  void _expectArtifactExact(String name) {
+    final file = File(p.join(root.path, name));
+    final original = originalArtifacts[name];
+    if (original == null) {
+      expect(file.existsSync(), isFalse, reason: name);
+    } else {
+      expect(file.readAsBytesSync(), original, reason: name);
+    }
+  }
+
+  Future<void> dispose() async {
+    if (container.existsSync()) await container.delete(recursive: true);
   }
 }
