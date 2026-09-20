@@ -446,7 +446,10 @@ Future<void> main() async {
       _temporaryHelperCheckpoint('helper_pub_get_started');
       final pubGet = await _runTemporaryHelperPubGet(paths.resolutionRootPath);
       for (final artifact in artifacts) {
-        _temporaryHelperCaptureWorkspaceCandidate(artifact);
+        _temporaryHelperCaptureWorkspaceCandidate(
+          artifact,
+          resolutionRoot: paths.resolutionRootPath,
+        );
       }
       _temporaryHelperSetPhase(
         record,
@@ -1131,7 +1134,10 @@ Future<void> main() async {
         );
       }
       for (final artifact in artifacts) {
-        _temporaryHelperCaptureWorkspaceCandidate(artifact);
+        _temporaryHelperCaptureWorkspaceCandidate(
+          artifact,
+          resolutionRoot: record['resolutionRootPath']! as String,
+        );
       }
       record['generatedArtifacts'] = artifacts;
       _temporaryHelperSetPhase(record, 'repair_candidate_resolution_completed');
@@ -1161,6 +1167,13 @@ Future<void> main() async {
     _temporaryHelperCheckpoint('repair_target_removed');
 
     for (final artifact in artifacts) {
+      _temporaryHelperGuardWorkspaceArtifactPath(
+        resolutionRoot: record['resolutionRootPath']! as String,
+        path: artifact['path']! as String,
+        operation: 'verify',
+        expectedIntermediateIdentities:
+            (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+      );
       final current = _temporaryHelperReadOptionalRegularFile(
         artifact['path']! as String,
         label: 'restored workspace artifact',

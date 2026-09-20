@@ -80,6 +80,11 @@ void _temporaryHelperVerifyResolvedHelper(_TemporaryHelperPaths paths) {
     'package_config.json',
   );
   final config = File(configPath);
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: paths.resolutionRootPath,
+    path: configPath,
+    operation: 'verify',
+  );
   if (FileSystemEntity.typeSync(configPath, followLinks: false) !=
       FileSystemEntityType.file) {
     throw const ScoutCliException(
@@ -230,12 +235,11 @@ Map<String, Object?> _temporaryHelperWorkspaceArtifactSnapshot({
   required String resolutionRoot,
   required String scoutRoot,
 }) {
-  if (path != resolutionRoot && !p.isWithin(resolutionRoot, path)) {
-    throw const ScoutCliException(
-      'temporary_helper_workspace_artifact_unsafe',
-      'A workspace artifact escapes the canonical resolution root.',
-    );
-  }
+  final intermediateIdentities = _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'capture',
+  );
   final type = FileSystemEntity.typeSync(path, followLinks: false);
   if (type != FileSystemEntityType.notFound &&
       type != FileSystemEntityType.file) {
@@ -247,6 +251,12 @@ Map<String, Object?> _temporaryHelperWorkspaceArtifactSnapshot({
   final original = type == FileSystemEntityType.file
       ? _temporaryHelperReadBoundedFile(File(path), label: p.basename(path))
       : null;
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'capture',
+    expectedIntermediateIdentities: intermediateIdentities,
+  );
   if (original != null) {
     _atomicWritePrivateBytes(backupPath, original, boundary: scoutRoot);
   }
@@ -257,17 +267,39 @@ Map<String, Object?> _temporaryHelperWorkspaceArtifactSnapshot({
     'originalSha256': original == null
         ? null
         : crypto.sha256.convert(original).toString(),
+    'intermediatePathIdentities': intermediateIdentities,
     'candidateExisted': null,
     'candidateSha256': null,
   };
 }
 
-void _temporaryHelperCaptureWorkspaceCandidate(Map<String, Object?> artifact) {
+void _temporaryHelperCaptureWorkspaceCandidate(
+  Map<String, Object?> artifact, {
+  required String resolutionRoot,
+}) {
   final path = artifact['path']! as String;
+  FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation?.call(
+    'capture',
+    path,
+  );
+  final intermediateIdentities = _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'capture',
+    expectedIntermediateIdentities:
+        (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+  );
   final bytes = _temporaryHelperReadOptionalRegularFile(
     path,
     label: 'workspace candidate artifact',
   );
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'capture',
+    expectedIntermediateIdentities: intermediateIdentities,
+  );
+  artifact['intermediatePathIdentities'] = intermediateIdentities;
   artifact['candidateExisted'] = bytes != null;
   artifact['candidateSha256'] = bytes == null
       ? null
@@ -279,20 +311,22 @@ void _temporaryHelperCreateWorkspaceFile({
   required List<int> bytes,
   required String resolutionRoot,
 }) {
-  if (!p.isWithin(resolutionRoot, path) ||
-      FileSystemEntity.typeSync(path, followLinks: false) !=
-          FileSystemEntityType.notFound) {
+  FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation?.call(
+    'write',
+    path,
+  );
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'write',
+  );
+  if (FileSystemEntity.typeSync(path, followLinks: false) !=
+      FileSystemEntityType.notFound) {
     throw const ScoutCliException(
       'temporary_helper_workspace_artifact_unsafe',
       'Scout refused to create a workspace artifact outside the root or over an existing path.',
     );
   }
-  _assertNoManagedLinks(
-    resolutionRoot,
-    path,
-    finalMayBeFile: true,
-    allowMissing: true,
-  );
   final file = File(path)..createSync(exclusive: true);
   final handle = file.openSync(mode: FileMode.write);
   try {
@@ -301,6 +335,133 @@ void _temporaryHelperCreateWorkspaceFile({
   } finally {
     handle.closeSync();
   }
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'write',
+  );
+}
+
+String _temporaryHelperWorkspaceComponentIdentity(String path) {
+  if (Platform.isWindows) {
+    final result = Process.runSync('fsutil', <String>[
+      'file',
+      'queryFileID',
+      path,
+    ]);
+    final match = RegExp(
+      r'0x[0-9a-f]+',
+      caseSensitive: false,
+    ).firstMatch('${result.stdout}');
+    if (result.exitCode == 0 && match != null) {
+      return 'windows:${match.group(0)!.toLowerCase()}';
+    }
+    throw const ScoutCliException(
+      'temporary_helper_workspace_artifact_unsafe',
+      'Scout could not establish a stable Windows file identity for a workspace path component.',
+    );
+  }
+  final attempts = Platform.isMacOS || Platform.isIOS
+      ? <List<String>>[
+          <String>['-f', '%d:%i', path],
+          <String>['-c', '%d:%i', path],
+        ]
+      : <List<String>>[
+          <String>['-c', '%d:%i', path],
+          <String>['-f', '%d:%i', path],
+        ];
+  for (final arguments in attempts) {
+    final result = Process.runSync('stat', arguments);
+    final value = '${result.stdout}'.trim();
+    if (result.exitCode == 0 && RegExp(r'^\d+:\d+$').hasMatch(value)) {
+      return value;
+    }
+  }
+  throw const ScoutCliException(
+    'temporary_helper_workspace_artifact_unsafe',
+    'Scout could not establish a stable identity for a workspace path component.',
+  );
+}
+
+List<Map<String, Object?>> _temporaryHelperGuardWorkspaceArtifactPath({
+  required String resolutionRoot,
+  required String path,
+  required String operation,
+  List<Object?>? expectedIntermediateIdentities,
+}) {
+  final root = _absoluteNormalized(resolutionRoot);
+  final target = _absoluteNormalized(path);
+  if (!_temporaryHelperValidAbsolutePath(root) ||
+      !_temporaryHelperValidAbsolutePath(target) ||
+      (target != root && !p.isWithin(root, target))) {
+    throw const ScoutCliException(
+      'temporary_helper_workspace_artifact_unsafe',
+      'A workspace artifact path escapes its canonical resolution root.',
+    );
+  }
+  final expected = <String, String>{};
+  if (expectedIntermediateIdentities != null) {
+    for (final value in expectedIntermediateIdentities) {
+      if (value is! Map ||
+          value['path'] is! String ||
+          value['identity'] is! String) {
+        throw const ScoutCliException(
+          'temporary_helper_workspace_artifact_unsafe',
+          'A workspace artifact path identity is malformed.',
+        );
+      }
+      expected[value['path']! as String] = value['identity']! as String;
+    }
+  }
+  final captured = <Map<String, Object?>>[];
+  final segments = _managedPathSegments(root, target);
+  for (var index = 0; index < segments.length; index += 1) {
+    final component = segments[index];
+    final isFinal = index == segments.length - 1;
+    final type = FileSystemEntity.typeSync(component, followLinks: false);
+    if (type == FileSystemEntityType.notFound) continue;
+    final expectedType = isFinal
+        ? FileSystemEntityType.file
+        : FileSystemEntityType.directory;
+    if (type != expectedType) {
+      throw const ScoutCliException(
+        'temporary_helper_workspace_artifact_unsafe',
+        'A workspace artifact path contains a symbolic link, reparse point, or unexpected filesystem object.',
+      );
+    }
+    final before = FileStat.statSync(component);
+    final resolved = isFinal
+        ? File(component).resolveSymbolicLinksSync()
+        : Directory(component).resolveSymbolicLinksSync();
+    final identity = isFinal
+        ? null
+        : _temporaryHelperWorkspaceComponentIdentity(component);
+    final afterType = FileSystemEntity.typeSync(component, followLinks: false);
+    final after = FileStat.statSync(component);
+    if (afterType != expectedType ||
+        !_sameFileStat(before, after) ||
+        _absoluteNormalized(resolved) != component ||
+        (!isFinal &&
+            expected[component] != null &&
+            expected[component] != identity)) {
+      throw const ScoutCliException(
+        'temporary_helper_workspace_artifact_unsafe',
+        'A workspace artifact path component changed identity; Scout refused the operation.',
+      );
+    }
+    if (!isFinal) {
+      captured.add(<String, Object?>{'path': component, 'identity': identity});
+    }
+  }
+  for (final component in expected.keys) {
+    if (!captured.any((value) => value['path'] == component)) {
+      throw const ScoutCliException(
+        'temporary_helper_workspace_artifact_unsafe',
+        'A planned workspace artifact path component is missing or changed.',
+      );
+    }
+  }
+  return captured;
 }
 
 Map<String, Object?> _temporaryHelperRestoreWorkspaceArtifact(
@@ -308,6 +469,14 @@ Map<String, Object?> _temporaryHelperRestoreWorkspaceArtifact(
   Map<String, Object?> artifact,
 ) {
   final path = artifact['path']! as String;
+  final resolutionRoot = record['resolutionRootPath']! as String;
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'restore',
+    expectedIntermediateIdentities:
+        (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+  );
   final current = _temporaryHelperReadOptionalRegularFile(
     path,
     label: 'workspace artifact during repair',
@@ -359,16 +528,58 @@ Map<String, Object?> _temporaryHelperRestoreWorkspaceArtifact(
         <Map<String, Object?>>[],
       );
     }
+    FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation?.call(
+      'restore',
+      path,
+    );
+    _temporaryHelperGuardWorkspaceArtifactPath(
+      resolutionRoot: resolutionRoot,
+      path: path,
+      operation: 'restore',
+      expectedIntermediateIdentities:
+          (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+    );
     _temporaryHelperAtomicReplaceTrackedFile(
       path: path,
       bytes: backup,
       expectedCurrentSha256: currentSha!,
-      projectRoot: record['resolutionRootPath']! as String,
+      projectRoot: resolutionRoot,
     );
     return <String, Object?>{'path': path, 'status': 'restored'};
   }
   if (current == null) {
     return <String, Object?>{'path': path, 'status': 'already_absent'};
+  }
+  FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation?.call(
+    'delete',
+    path,
+  );
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'delete',
+    expectedIntermediateIdentities:
+        (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+  );
+  final immediatelyBefore = _temporaryHelperReadOptionalRegularFile(
+    path,
+    label: 'workspace artifact immediately before deletion',
+  );
+  final immediatelyBeforeSha = immediatelyBefore == null
+      ? null
+      : crypto.sha256.convert(immediatelyBefore).toString();
+  if (immediatelyBeforeSha != currentSha) {
+    throw _TemporaryHelperRepairConflict(
+      'workspace_artifact_changed_during_delete',
+      <Map<String, Object?>>[
+        <String, Object?>{
+          'path': path,
+          'expectedSha256': currentSha,
+          'actualSha256': immediatelyBeforeSha,
+          'action': 'preserved_without_delete',
+        },
+      ],
+    );
   }
   File(path).deleteSync();
   return <String, Object?>{'path': path, 'status': 'removed'};
@@ -1103,6 +1314,21 @@ void _temporaryHelperValidateWorkspaceRecord(
       throw const ScoutCliException(
         'temporary_helper_record_path_mismatch',
         'A workspace artifact path or backup path is not canonical.',
+      );
+    }
+    final identities = artifact['intermediatePathIdentities'];
+    if (identities is! List ||
+        identities.any(
+          (value) =>
+              value is! Map ||
+              value['path'] is! String ||
+              value['identity'] is! String ||
+              (value['path'] != resolutionRoot &&
+                  !p.isWithin(resolutionRoot, value['path']! as String)),
+        )) {
+      throw const ScoutCliException(
+        'temporary_helper_record_path_mismatch',
+        'A workspace artifact component identity is invalid.',
       );
     }
     for (final key in <String>[

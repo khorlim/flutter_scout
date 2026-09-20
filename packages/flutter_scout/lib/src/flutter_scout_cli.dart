@@ -89,6 +89,11 @@ class FlutterScoutCli {
   /// deliberately stops immediately after durably recording this phase.
   static String? debugTemporaryHelperInterruptAfterPhase;
 
+  /// Test-only race seam invoked immediately before a workspace artifact
+  /// capture, write, restore, or deletion is revalidated and attempted.
+  static void Function(String operation, String path)?
+  debugTemporaryHelperBeforeWorkspaceArtifactOperation;
+
   /// Helper protocol version this CLI is built against. Keep in sync with
   /// `scoutHelperProtocolVersion` in flutter_scout_helper — the helper echoes
   /// its version in every response, and a lower value means the running app

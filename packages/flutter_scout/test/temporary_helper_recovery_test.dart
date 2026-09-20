@@ -8,11 +8,13 @@ import 'package:test/test.dart';
 void main() {
   setUp(() {
     FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase = null;
+    FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation = null;
     FlutterScoutCli.debugTemporaryHelperPubGetOverride = _successfulFakePubGet;
   });
 
   tearDown(() {
     FlutterScoutCli.debugTemporaryHelperInterruptAfterPhase = null;
+    FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation = null;
     FlutterScoutCli.debugTemporaryHelperPubGetOverride = null;
   });
 
@@ -764,6 +766,105 @@ Future<void> main(List<String> args) async {
       fixture.expectAllArtifactsExact();
     },
   );
+
+  test(
+    'workspace cleanup refuses an intermediate symlink and preserves outside data',
+    () async {
+      if (Platform.isWindows) return;
+      final fixture = await _WorkspaceTemporaryProject.create();
+      addTearDown(fixture.dispose);
+      final outside = Directory(
+        p.join(fixture.container.path, 'outside-delete'),
+      )..createSync();
+      final sentinel = File(p.join(outside.path, 'package_config_subset'));
+      FlutterScoutCli.debugTemporaryHelperPubGetOverride =
+          (workingDirectory) async {
+            final memberTool = Directory(
+              p.join(fixture.selected.path, '.dart_tool'),
+            );
+            if (memberTool.existsSync()) memberTool.deleteSync(recursive: true);
+            Link(memberTool.path).createSync(outside.path);
+            sentinel.writeAsStringSync('transaction-candidate\n', flush: true);
+            _writePackageConfig(fixture.root.path, fixture.helper.path);
+            return ProcessResult(42, 0, 'resolved workspace', '');
+          };
+
+      ScoutCliException? failure;
+      try {
+        await FlutterScoutCli().debugPrepareTemporaryHelper(
+          project: fixture.selected.path,
+          helperPath: fixture.helper.path,
+        );
+      } on ScoutCliException catch (error) {
+        failure = error;
+      }
+
+      expect(failure?.code, 'temporary_helper_repair_required');
+      expect(sentinel.readAsStringSync(), 'transaction-candidate\n');
+      final retry = await FlutterScoutCli().debugRecoverTemporaryHelperProject(
+        fixture.selected.path,
+      );
+      expect(retry['status'], 'repair_required', reason: '$retry');
+      expect(sentinel.readAsStringSync(), 'transaction-candidate\n');
+    },
+  );
+
+  for (final operation in const <String>['restore', 'delete']) {
+    test(
+      'workspace $operation revalidates after a planned intermediate is swapped',
+      () async {
+        if (Platform.isWindows) return;
+        final fixture = await _WorkspaceTemporaryProject.create();
+        addTearDown(fixture.dispose);
+        FlutterScoutCli.debugTemporaryHelperPubGetOverride =
+            (workingDirectory) async {
+              fixture.writeCandidateArtifacts();
+              return ProcessResult(42, 0, 'resolved workspace', '');
+            };
+        final cli = FlutterScoutCli();
+        final setup = await cli.debugPrepareTemporaryHelper(
+          project: fixture.selected.path,
+          helperPath: fixture.helper.path,
+        );
+        final relative = operation == 'restore'
+            ? 'apps/selected/.dart_tool/package_config_subset'
+            : 'apps/selected/.flutter-plugins';
+        final target = p.join(
+          fixture.root.resolveSymbolicLinksSync(),
+          relative,
+        );
+        final outside = Directory(
+          p.join(fixture.container.path, 'outside-$operation'),
+        )..createSync();
+        final sentinel = File(p.join(outside.path, p.basename(target)))
+          ..writeAsBytesSync(File(target).readAsBytesSync(), flush: true);
+        var swapped = false;
+        FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation =
+            (observedOperation, observedPath) {
+              if (swapped ||
+                  observedOperation != operation ||
+                  observedPath != target) {
+                return;
+              }
+              swapped = true;
+              final parent = Directory(p.dirname(target));
+              parent.deleteSync(recursive: true);
+              Link(parent.path).createSync(outside.path);
+            };
+
+        final cleanup = await cli.debugCleanupTemporaryHelper(setup);
+
+        expect(swapped, isTrue);
+        expect(cleanup['status'], 'repair_required', reason: '$cleanup');
+        expect(sentinel.existsSync(), isTrue);
+        expect(
+          sentinel.readAsStringSync(),
+          startsWith('candidate:'),
+          reason: 'outside data must not be restored, renamed, or deleted',
+        );
+      },
+    );
+  }
 }
 
 Future<Map<String, Object?>> _processIdentity(
