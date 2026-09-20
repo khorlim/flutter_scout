@@ -18,6 +18,32 @@ void main() {
     FlutterScoutCli.debugTemporaryHelperPubGetOverride = null;
   });
 
+  test('an explicit helper path always requests temporary-helper setup', () {
+    final cli = FlutterScoutCli();
+
+    expect(
+      cli.debugTemporaryHelperRequested(
+        explicitTemporaryHelper: false,
+        helperPath: '/immutable/flutter_scout_helper',
+      ),
+      isTrue,
+    );
+    expect(
+      cli.debugTemporaryHelperRequested(
+        explicitTemporaryHelper: false,
+        helperPath: null,
+      ),
+      isFalse,
+    );
+    expect(
+      cli.debugTemporaryHelperRequested(
+        explicitTemporaryHelper: true,
+        helperPath: null,
+      ),
+      isTrue,
+    );
+  });
+
   test(
     'WAL precedes mutation and normal cleanup is exact and idempotent',
     () async {
@@ -586,8 +612,14 @@ Future<void> main(List<String> args) async {
         record['resolutionRootPath'],
         fixture.root.resolveSymbolicLinksSync(),
       );
-      expect(record['workspaceMemberPaths'], hasLength(2));
-      expect(record['generatedArtifacts'], hasLength(11));
+      expect(record['workspaceMemberPaths'], hasLength(5));
+      expect(record['generatedArtifacts'], hasLength(20));
+      expect(
+        File(setup['targetPath']! as String).readAsStringSync(),
+        contains(
+          "import 'package:flutter_scout_helper/flutter_scout_helper.dart';",
+        ),
+      );
 
       final cleanup = await cli.debugCleanupTemporaryHelper(setup);
       expect(cleanup['status'], 'repaired');
@@ -827,8 +859,8 @@ Future<void> main(List<String> args) async {
           helperPath: fixture.helper.path,
         );
         final relative = operation == 'restore'
-            ? 'apps/selected/.dart_tool/package_config_subset'
-            : 'apps/selected/.flutter-plugins';
+            ? 'apps/tunaipro/.dart_tool/package_config_subset'
+            : 'apps/tunaipro/.flutter-plugins';
         final target = p.join(
           fixture.root.resolveSymbolicLinksSync(),
           relative,
@@ -1037,6 +1069,7 @@ final class _WorkspaceTemporaryProject {
     required this.sibling,
     required this.helper,
     required this.originalArtifacts,
+    required this.originalSources,
   });
 
   final Directory container;
@@ -1045,16 +1078,37 @@ final class _WorkspaceTemporaryProject {
   final Directory sibling;
   final Directory helper;
   final Map<String, List<int>?> originalArtifacts;
+  final Map<String, List<int>> originalSources;
+
+  static const sourceNames = <String>[
+    'pubspec.yaml',
+    'apps/tunai_biz/pubspec.yaml',
+    'apps/tunaipro/pubspec.yaml',
+    'packages/tunai_shared/pubspec.yaml',
+    'packages/tunai_widget/pubspec.yaml',
+    'packages/tunai_widget/example/pubspec.yaml',
+  ];
 
   static const artifactNames = <String>[
     'pubspec_overrides.yaml',
     'pubspec.lock',
     '.dart_tool/package_config.json',
     '.dart_tool/package_graph.json',
-    'apps/selected/.dart_tool/package_config_subset',
-    'apps/selected/.flutter-plugins',
-    'apps/selected/.flutter-plugins-dependencies',
-    'apps/sibling/.flutter-plugins-dependencies',
+    'apps/tunai_biz/.dart_tool/package_config_subset',
+    'apps/tunai_biz/.flutter-plugins',
+    'apps/tunai_biz/.flutter-plugins-dependencies',
+    'apps/tunaipro/.dart_tool/package_config_subset',
+    'apps/tunaipro/.flutter-plugins',
+    'apps/tunaipro/.flutter-plugins-dependencies',
+    'packages/tunai_shared/.dart_tool/package_config_subset',
+    'packages/tunai_shared/.flutter-plugins',
+    'packages/tunai_shared/.flutter-plugins-dependencies',
+    'packages/tunai_widget/.dart_tool/package_config_subset',
+    'packages/tunai_widget/.flutter-plugins',
+    'packages/tunai_widget/.flutter-plugins-dependencies',
+    'packages/tunai_widget/example/.dart_tool/package_config_subset',
+    'packages/tunai_widget/example/.flutter-plugins',
+    'packages/tunai_widget/example/.flutter-plugins-dependencies',
   ];
 
   static Future<_WorkspaceTemporaryProject> create({
@@ -1064,41 +1118,70 @@ final class _WorkspaceTemporaryProject {
       'scout_workspace_wal_test_',
     );
     final root = Directory(p.join(container.path, 'workspace'))..createSync();
-    final selected = Directory(p.join(root.path, 'apps', 'selected'))
+    final selected = Directory(p.join(root.path, 'apps', 'tunaipro'))
       ..createSync(recursive: true);
-    final sibling = Directory(p.join(root.path, 'apps', 'sibling'))
+    final sibling = Directory(p.join(root.path, 'apps', 'tunai_biz'))
       ..createSync(recursive: true);
-    final helper = Directory(p.join(container.path, 'helper'))..createSync();
+    final helper = Directory(
+      p.join(
+        container.path,
+        'toolchains',
+        'flutter-scout',
+        '1643d999866a7c311a4026823c1e39428a2c918a',
+        'packages',
+        'flutter_scout_helper',
+      ),
+    )..createSync(recursive: true);
     File(p.join(helper.path, 'pubspec.yaml')).writeAsStringSync('''
 name: flutter_scout_helper
 environment:
   sdk: ^3.12.0
 ''');
-    final workspaceEntry = escapingMember ? '../outside' : 'apps/sibling';
+    final workspaceEntry = escapingMember ? '../outside' : 'apps/tunai_biz';
     File(p.join(root.path, 'pubspec.yaml')).writeAsStringSync('''
 name: fixture_workspace
 environment:
   sdk: ^3.12.0
 workspace:
-  - apps/selected
+  - packages/tunai_shared
+  - packages/tunai_widget
+  - packages/tunai_widget/example
+  - apps/tunaipro
   - $workspaceEntry
+dependency_overrides:
+  tunai_db:
+    path: ../existing-tunai-db
 ''');
-    for (final entry in <MapEntry<Directory, String>>[
-      MapEntry(selected, '/tmp/selected-stale-helper'),
-      MapEntry(sibling, '/tmp/sibling-stale-helper'),
-    ]) {
-      File(p.join(entry.key.path, 'pubspec.yaml')).writeAsStringSync('''
-name: ${p.basename(entry.key.path)}
+    for (final entry in <Directory>[selected, sibling]) {
+      File(p.join(entry.path, 'pubspec.yaml')).writeAsStringSync('''
+name: ${p.basename(entry.path)}
 resolution: workspace
 environment:
   sdk: ^3.12.0
 dependencies:
   flutter_scout_helper:
-    path: '${entry.value}'
+    git:
+      url: https://github.com/khorlim/flutter_scout.git
+      path: packages/flutter_scout_helper
+      ref: d4dde80e6b381667b2be42cd89e9e1cfea4ec6a3
 ''');
-      final main = File(p.join(entry.key.path, 'lib', 'main.dart'));
+      final main = File(p.join(entry.path, 'lib', 'main.dart'));
       main.parent.createSync(recursive: true);
       main.writeAsStringSync('void main() {}\n');
+    }
+    for (final relative in <String>[
+      'packages/tunai_shared',
+      'packages/tunai_widget',
+      'packages/tunai_widget/example',
+    ]) {
+      final member = Directory(p.join(root.path, relative))
+        ..createSync(recursive: true);
+      File(p.join(member.path, 'pubspec.yaml')).writeAsStringSync('''
+name: ${relative.replaceAll('/', '_')}
+resolution: workspace
+environment:
+  sdk: ^3.12.0
+''');
     }
     if (escapingMember) {
       final outside = Directory(p.join(container.path, 'outside'))
@@ -1117,16 +1200,17 @@ environment:
       sibling: sibling,
       helper: helper,
       originalArtifacts: <String, List<int>?>{},
+      originalSources: <String, List<int>>{},
     );
+    for (final name in sourceNames) {
+      fixture.originalSources[name] = File(
+        p.join(root.path, name),
+      ).readAsBytesSync();
+    }
     for (final name in artifactNames) {
       final file = File(p.join(root.path, name));
-      if (name == 'pubspec_overrides.yaml') {
-        file.writeAsStringSync('''
-dependency_overrides:
-  existing_override:
-    path: ../existing
-''');
-      } else if (name != 'apps/selected/.flutter-plugins') {
+      if (name != 'pubspec_overrides.yaml' &&
+          name != 'apps/tunaipro/.flutter-plugins') {
         file.parent.createSync(recursive: true);
         file.writeAsStringSync('original:$name\n');
       }
@@ -1138,10 +1222,8 @@ dependency_overrides:
   }
 
   void expectCandidateOverride() {
-    final override = File(
-      p.join(root.path, 'pubspec_overrides.yaml'),
-    ).readAsStringSync();
-    expect(override, contains('existing_override:'));
+    final override = File(p.join(root.path, 'pubspec.yaml')).readAsStringSync();
+    expect(override, contains('tunai_db:'));
     expect(override, contains('flutter_scout_helper:'));
     expect(override, contains(helper.resolveSymbolicLinksSync()));
   }
@@ -1159,17 +1241,16 @@ dependency_overrides:
   }
 
   void expectTrackedInputsExact() {
+    for (final entry in originalSources.entries) {
+      expect(
+        File(p.join(root.path, entry.key)).readAsBytesSync(),
+        entry.value,
+        reason: entry.key,
+      );
+    }
     for (final name in artifactNames.take(2)) {
       _expectArtifactExact(name);
     }
-    expect(
-      File(p.join(selected.path, 'pubspec.yaml')).readAsStringSync(),
-      contains('/tmp/selected-stale-helper'),
-    );
-    expect(
-      File(p.join(sibling.path, 'pubspec.yaml')).readAsStringSync(),
-      contains('/tmp/sibling-stale-helper'),
-    );
   }
 
   void expectCandidateResolution() {
@@ -1177,9 +1258,20 @@ dependency_overrides:
       _resolvedHelperFromPackageConfig(root.path),
       helper.resolveSymbolicLinksSync(),
     );
+    expect(
+      _resolvedHelperFromPackageConfig(root.path),
+      contains('1643d999866a7c311a4026823c1e39428a2c918a'),
+    );
   }
 
   void expectAllArtifactsExact() {
+    for (final entry in originalSources.entries) {
+      expect(
+        File(p.join(root.path, entry.key)).readAsBytesSync(),
+        entry.value,
+        reason: entry.key,
+      );
+    }
     for (final name in artifactNames) {
       _expectArtifactExact(name);
     }

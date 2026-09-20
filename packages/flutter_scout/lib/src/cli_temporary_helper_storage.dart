@@ -1,5 +1,10 @@
 part of 'flutter_scout_cli.dart';
 
+bool _temporaryHelperRequested({
+  required bool explicitTemporaryHelper,
+  required String? helperPath,
+}) => explicitTemporaryHelper || (helperPath != null && helperPath.isNotEmpty);
+
 bool _temporaryHelperDependencyPresent(String pubspec) =>
     _temporaryHelperDependencyMatch(pubspec) != null;
 

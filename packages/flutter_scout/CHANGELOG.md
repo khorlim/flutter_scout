@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Treat an explicit `--helper-path` as an unambiguous temporary-helper request
+  instead of silently launching the app's pre-existing helper. This keeps the
+  generated bootstrap and exact immutable helper transaction coupled even when
+  a caller omits the redundant `--temporary-helper` switch.
 - Make `--temporary-helper` workspace-aware. A selected Dart workspace member
   now receives one root-scoped helper override for every member, while root
   lock/package config and member Flutter plugin artifacts are digest-bound and

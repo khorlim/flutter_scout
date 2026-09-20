@@ -314,7 +314,11 @@ extension _CliSession on FlutterScoutCli {
         'createdAt': launchLease.startedAt.toIso8601String(),
         'updatedAt': DateTime.now().toIso8601String(),
       });
-      temporarySetup = parsed.flag('temporary-helper')
+      temporarySetup =
+          _temporaryHelperRequested(
+            explicitTemporaryHelper: parsed.flag('temporary-helper'),
+            helperPath: parsed.option('helper-path'),
+          )
           ? await _prepareTemporaryHelper(
               project: project,
               originalTarget: parsed.option('target') ?? 'lib/main.dart',

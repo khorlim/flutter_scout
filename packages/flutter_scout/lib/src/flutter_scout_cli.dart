@@ -253,6 +253,14 @@ class FlutterScoutCli {
     return setup.toJson();
   }
 
+  bool debugTemporaryHelperRequested({
+    required bool explicitTemporaryHelper,
+    required String? helperPath,
+  }) => _temporaryHelperRequested(
+    explicitTemporaryHelper: explicitTemporaryHelper,
+    helperPath: helperPath,
+  );
+
   /// Test-only view of bundled helper discovery. This deliberately exercises
   /// the same package-resolution fallback used by a globally activated CLI.
   Future<String?> debugDiscoverBundledHelperPath() =>
