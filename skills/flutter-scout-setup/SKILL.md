@@ -168,12 +168,19 @@ flutter-scout ensure --temporary-helper --device <simulator-id> --project <flutt
 
 Scout durably records private original-file backups and their SHA-256 digests
 before dependency resolution, restores `pubspec.yaml` and `pubspec.lock`
-immediately, and removes the generated bootstrap on stop. Startup, `status`,
+immediately, and removes the generated bootstrap on stop. For a Dart workspace,
+Scout discovers and validates every declared member, applies one root-scoped
+helper override, and snapshots/restores the root lock/package config plus each
+member's Flutter plugin resolution artifacts. Startup, `status`,
 and `doctor` resume an interrupted transaction only when every current digest
 matches Scout's exact restore plan. A different user-authored digest is
 preserved and returned as a prioritized `temporary_helper_repair` action; do
 not delete the repair record or retry setup until that conflict is resolved.
-Use `--helper-path <path>` if automatic helper discovery fails.
+The transaction temporarily replaces even an existing stale helper declaration,
+then verifies `.dart_tool/package_config.json` resolves the helper bundled beside
+the exact CLI before `flutter run` starts. An explicit `--helper-path` is accepted
+only when it resolves to that same bundled source; a different source fails
+closed with `temporary_helper_revision_mismatch` before project mutation.
 
 Always pass `--name <feature>` when running the app — a short kebab-case slug of the feature/task in focus (`add-member`, `supplier-search`), or the current git branch when no single feature is. It registers the session so any later command can target it with `--app <feature>` from any directory, and labels the debug badge so concurrent runs stay distinguishable.
 

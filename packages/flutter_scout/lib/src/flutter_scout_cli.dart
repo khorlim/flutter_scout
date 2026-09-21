@@ -89,6 +89,11 @@ class FlutterScoutCli {
   /// deliberately stops immediately after durably recording this phase.
   static String? debugTemporaryHelperInterruptAfterPhase;
 
+  /// Test-only race seam invoked immediately before a workspace artifact
+  /// capture, write, restore, or deletion is revalidated and attempted.
+  static void Function(String operation, String path)?
+  debugTemporaryHelperBeforeWorkspaceArtifactOperation;
+
   /// Helper protocol version this CLI is built against. Keep in sync with
   /// `scoutHelperProtocolVersion` in flutter_scout_helper — the helper echoes
   /// its version in every response, and a lower value means the running app
@@ -236,15 +241,25 @@ class FlutterScoutCli {
   Future<Map<String, Object?>> debugPrepareTemporaryHelper({
     required String project,
     required String helperPath,
+    bool requireBundledHelper = false,
   }) async {
     final setup = await _prepareTemporaryHelper(
       project: project,
       originalTarget: 'lib/main.dart',
       helperPath: helperPath,
       runId: 'test',
+      requireBundledHelper: requireBundledHelper,
     );
     return setup.toJson();
   }
+
+  bool debugTemporaryHelperRequested({
+    required bool explicitTemporaryHelper,
+    required String? helperPath,
+  }) => _temporaryHelperRequested(
+    explicitTemporaryHelper: explicitTemporaryHelper,
+    helperPath: helperPath,
+  );
 
   /// Test-only view of bundled helper discovery. This deliberately exercises
   /// the same package-resolution fallback used by a globally activated CLI.

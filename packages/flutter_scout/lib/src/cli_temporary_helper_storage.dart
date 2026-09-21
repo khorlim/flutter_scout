@@ -1,11 +1,602 @@
 part of 'flutter_scout_cli.dart';
 
+bool _temporaryHelperRequested({
+  required bool explicitTemporaryHelper,
+  required String? helperPath,
+}) => explicitTemporaryHelper || (helperPath != null && helperPath.isNotEmpty);
+
+bool _temporaryHelperDependencyPresent(String pubspec) =>
+    _temporaryHelperDependencyMatch(pubspec) != null;
+
+String _temporaryHelperPubspecWithExactDependency(
+  String pubspec,
+  String helperPath,
+) {
+  final dependencies = RegExp(
+    r'^dependencies\s*:\s*(?:#.*)?$',
+    multiLine: true,
+  ).firstMatch(pubspec);
+  if (dependencies == null) {
+    throw const ScoutCliException(
+      'temporary_helper_dependencies_missing',
+      'pubspec.yaml has no top-level dependencies section.',
+    );
+  }
+  final newline = pubspec.contains('\r\n') ? '\r\n' : '\n';
+  final quotedPath = helperPath.replaceAll("'", "''");
+  final existing = _temporaryHelperDependencyMatch(pubspec);
+  if (existing == null) {
+    final insertion =
+        '$newline  flutter_scout_helper:$newline    path: \'$quotedPath\'';
+    return pubspec.replaceRange(dependencies.end, dependencies.end, insertion);
+  }
+  final indent = existing.group(1)!.length;
+  var blockEnd = pubspec.length;
+  for (final line in RegExp(
+    r'^([ ]*)(\S.*)$',
+    multiLine: true,
+  ).allMatches(pubspec, existing.end)) {
+    final content = line.group(2)!;
+    if (content.startsWith('#')) continue;
+    if (line.group(1)!.length <= indent) {
+      blockEnd = line.start;
+      break;
+    }
+  }
+  final padding = ' ' * indent;
+  final replacement =
+      '${padding}flutter_scout_helper:$newline$padding  path: \'$quotedPath\'$newline';
+  return pubspec.replaceRange(existing.start, blockEnd, replacement);
+}
+
+RegExpMatch? _temporaryHelperDependencyMatch(String pubspec) {
+  final dependencies = RegExp(
+    r'^dependencies\s*:\s*(?:#.*)?$',
+    multiLine: true,
+  ).firstMatch(pubspec);
+  if (dependencies == null) return null;
+  final topLevelMatches = RegExp(
+    r'^(?!\s|#|\r?$)[^:\r\n]+\s*:',
+    multiLine: true,
+  ).allMatches(pubspec, dependencies.end);
+  final nextTopLevel = topLevelMatches.isEmpty ? null : topLevelMatches.first;
+  final sectionEnd = nextTopLevel?.start ?? pubspec.length;
+  final entries = RegExp(r'^([ ]+)([A-Za-z0-9_]+)\s*:', multiLine: true)
+      .allMatches(pubspec, dependencies.end)
+      .where((match) => match.start < sectionEnd);
+  final entryList = entries.toList(growable: false);
+  if (entryList.isEmpty) return null;
+  final directIndent = entryList
+      .map((match) => match.group(1)!.length)
+      .reduce(min);
+  for (final entry in entryList) {
+    if (entry.group(1)!.length == directIndent &&
+        entry.group(2) == 'flutter_scout_helper') {
+      return entry;
+    }
+  }
+  return null;
+}
+
+void _temporaryHelperVerifyResolvedHelper(_TemporaryHelperPaths paths) {
+  final configPath = p.join(
+    paths.resolutionRootPath,
+    '.dart_tool',
+    'package_config.json',
+  );
+  final config = File(configPath);
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: paths.resolutionRootPath,
+    path: configPath,
+    operation: 'verify',
+  );
+  if (FileSystemEntity.typeSync(configPath, followLinks: false) !=
+      FileSystemEntityType.file) {
+    throw const ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'Package resolution did not produce a regular package_config.json; '
+          'Scout refused to launch.',
+    );
+  }
+  Object? decoded;
+  try {
+    decoded = jsonDecode(
+      utf8.decode(
+        _temporaryHelperReadBoundedFile(config, label: 'package_config.json'),
+      ),
+    );
+  } catch (_) {
+    throw const ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'Package resolution produced an unreadable package_config.json; Scout '
+          'refused to launch.',
+    );
+  }
+  final packages = decoded is Map ? decoded['packages'] : null;
+  Map<Object?, Object?>? helper;
+  if (packages is List) {
+    for (final entry in packages) {
+      if (entry is Map && entry['name'] == 'flutter_scout_helper') {
+        if (helper != null) {
+          throw const ScoutCliException(
+            'temporary_helper_resolution_mismatch',
+            'Package resolution returned duplicate helper identities; Scout '
+                'refused to launch.',
+          );
+        }
+        helper = Map<Object?, Object?>.from(entry);
+      }
+    }
+  }
+  final rootUri = helper?['rootUri']?.toString();
+  if (rootUri == null || rootUri.isEmpty) {
+    throw const ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'Package resolution did not select flutter_scout_helper; Scout refused '
+          'to launch.',
+    );
+  }
+  String resolved;
+  try {
+    final uri = config.uri.resolve(rootUri);
+    if (!uri.isScheme('file')) throw const FormatException();
+    resolved = Directory.fromUri(uri).resolveSymbolicLinksSync();
+  } catch (_) {
+    throw const ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'The resolved flutter_scout_helper source is unavailable; Scout refused '
+          'to launch.',
+    );
+  }
+  if (resolved != paths.helperPath) {
+    throw ScoutCliException(
+      'temporary_helper_resolution_mismatch',
+      'Package resolution selected a helper different from this exact CLI '
+          'revision; Scout refused to launch.',
+      details: <String, Object?>{
+        'expectedHelper': paths.helperPath,
+        'resolvedHelper': resolved,
+      },
+    );
+  }
+}
+
+String _temporaryHelperOverrideWithExactDependency(
+  String original,
+  String helperPath,
+) {
+  final newline = original.contains('\r\n') ? '\r\n' : '\n';
+  final quotedPath = helperPath.replaceAll("'", "''");
+  final header = RegExp(
+    r'^dependency_overrides\s*:\s*(?:#.*)?$',
+    multiLine: true,
+  ).firstMatch(original);
+  if (header == null) {
+    final prefix = original.isEmpty || original.endsWith('\n')
+        ? original
+        : '$original$newline';
+    return '${prefix}dependency_overrides:$newline'
+        "  flutter_scout_helper:$newline    path: '$quotedPath'$newline";
+  }
+  final topLevels = RegExp(
+    r'^(?!\s|#|\r?$)[^:\r\n]+\s*:',
+    multiLine: true,
+  ).allMatches(original, header.end).toList();
+  final sectionEnd = topLevels.isEmpty
+      ? original.length
+      : topLevels.first.start;
+  final section = original.substring(header.end, sectionEnd);
+  final helper = RegExp(
+    r'^([ ]+)flutter_scout_helper\s*:',
+    multiLine: true,
+  ).firstMatch(section);
+  if (helper == null) {
+    final insertion =
+        "$newline  flutter_scout_helper:$newline    path: '$quotedPath'";
+    return original.replaceRange(header.end, header.end, insertion);
+  }
+  final absoluteStart = header.end + helper.start;
+  final indent = helper.group(1)!.length;
+  var absoluteEnd = sectionEnd;
+  for (final line in RegExp(
+    r'^([ ]*)(\S.*)$',
+    multiLine: true,
+  ).allMatches(original, header.end + helper.end)) {
+    if (line.group(2)!.startsWith('#')) continue;
+    if (line.group(1)!.length <= indent) {
+      absoluteEnd = line.start;
+      break;
+    }
+  }
+  final padding = ' ' * indent;
+  return original.replaceRange(
+    absoluteStart,
+    absoluteEnd,
+    "${padding}flutter_scout_helper:$newline$padding  path: '$quotedPath'$newline",
+  );
+}
+
+List<String> _temporaryHelperWorkspaceArtifactPaths(
+  _TemporaryHelperPaths paths,
+) {
+  final values = <String>{
+    p.join(paths.resolutionRootPath, 'pubspec.yaml'),
+    p.join(paths.resolutionRootPath, 'pubspec_overrides.yaml'),
+    p.join(paths.resolutionRootPath, 'pubspec.lock'),
+    p.join(paths.resolutionRootPath, '.dart_tool', 'package_config.json'),
+    p.join(paths.resolutionRootPath, '.dart_tool', 'package_graph.json'),
+    for (final member in paths.workspaceMemberPaths) ...<String>{
+      p.join(member, '.dart_tool', 'package_config_subset'),
+      p.join(member, '.flutter-plugins'),
+      p.join(member, '.flutter-plugins-dependencies'),
+    },
+  };
+  return values.toList()..sort();
+}
+
+Map<String, Object?> _temporaryHelperWorkspaceArtifactSnapshot({
+  required String path,
+  required String backupPath,
+  required String resolutionRoot,
+  required String scoutRoot,
+}) {
+  final intermediateIdentities = _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'capture',
+  );
+  final type = FileSystemEntity.typeSync(path, followLinks: false);
+  if (type != FileSystemEntityType.notFound &&
+      type != FileSystemEntityType.file) {
+    throw const ScoutCliException(
+      'temporary_helper_workspace_artifact_unsafe',
+      'Workspace resolution artifacts must be regular files or absent.',
+    );
+  }
+  final original = type == FileSystemEntityType.file
+      ? _temporaryHelperReadBoundedFile(File(path), label: p.basename(path))
+      : null;
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'capture',
+    expectedIntermediateIdentities: intermediateIdentities,
+  );
+  if (original != null) {
+    _atomicWritePrivateBytes(backupPath, original, boundary: scoutRoot);
+  }
+  return <String, Object?>{
+    'path': path,
+    'originalExisted': original != null,
+    'backupPath': original == null ? null : backupPath,
+    'originalSha256': original == null
+        ? null
+        : crypto.sha256.convert(original).toString(),
+    'intermediatePathIdentities': intermediateIdentities,
+    'candidateExisted': null,
+    'candidateSha256': null,
+  };
+}
+
+void _temporaryHelperCaptureWorkspaceCandidate(
+  Map<String, Object?> artifact, {
+  required String resolutionRoot,
+}) {
+  final path = artifact['path']! as String;
+  FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation?.call(
+    'capture',
+    path,
+  );
+  final intermediateIdentities = _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'capture',
+    expectedIntermediateIdentities:
+        (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+  );
+  final bytes = _temporaryHelperReadOptionalRegularFile(
+    path,
+    label: 'workspace candidate artifact',
+  );
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'capture',
+    expectedIntermediateIdentities: intermediateIdentities,
+  );
+  artifact['intermediatePathIdentities'] = intermediateIdentities;
+  artifact['candidateExisted'] = bytes != null;
+  artifact['candidateSha256'] = bytes == null
+      ? null
+      : crypto.sha256.convert(bytes).toString();
+}
+
+void _temporaryHelperCreateWorkspaceFile({
+  required String path,
+  required List<int> bytes,
+  required String resolutionRoot,
+}) {
+  FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation?.call(
+    'write',
+    path,
+  );
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'write',
+  );
+  if (FileSystemEntity.typeSync(path, followLinks: false) !=
+      FileSystemEntityType.notFound) {
+    throw const ScoutCliException(
+      'temporary_helper_workspace_artifact_unsafe',
+      'Scout refused to create a workspace artifact outside the root or over an existing path.',
+    );
+  }
+  final file = File(path)..createSync(exclusive: true);
+  final handle = file.openSync(mode: FileMode.write);
+  try {
+    handle.writeFromSync(bytes);
+    handle.flushSync();
+  } finally {
+    handle.closeSync();
+  }
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'write',
+  );
+}
+
+String _temporaryHelperWorkspaceComponentIdentity(String path) {
+  if (Platform.isWindows) {
+    final result = Process.runSync('fsutil', <String>[
+      'file',
+      'queryFileID',
+      path,
+    ]);
+    final match = RegExp(
+      r'0x[0-9a-f]+',
+      caseSensitive: false,
+    ).firstMatch('${result.stdout}');
+    if (result.exitCode == 0 && match != null) {
+      return 'windows:${match.group(0)!.toLowerCase()}';
+    }
+    throw const ScoutCliException(
+      'temporary_helper_workspace_artifact_unsafe',
+      'Scout could not establish a stable Windows file identity for a workspace path component.',
+    );
+  }
+  final attempts = Platform.isMacOS || Platform.isIOS
+      ? <List<String>>[
+          <String>['-f', '%d:%i', path],
+          <String>['-c', '%d:%i', path],
+        ]
+      : <List<String>>[
+          <String>['-c', '%d:%i', path],
+          <String>['-f', '%d:%i', path],
+        ];
+  for (final arguments in attempts) {
+    final result = Process.runSync('stat', arguments);
+    final value = '${result.stdout}'.trim();
+    if (result.exitCode == 0 && RegExp(r'^\d+:\d+$').hasMatch(value)) {
+      return value;
+    }
+  }
+  throw const ScoutCliException(
+    'temporary_helper_workspace_artifact_unsafe',
+    'Scout could not establish a stable identity for a workspace path component.',
+  );
+}
+
+List<Map<String, Object?>> _temporaryHelperGuardWorkspaceArtifactPath({
+  required String resolutionRoot,
+  required String path,
+  required String operation,
+  List<Object?>? expectedIntermediateIdentities,
+}) {
+  final root = _absoluteNormalized(resolutionRoot);
+  final target = _absoluteNormalized(path);
+  if (!_temporaryHelperValidAbsolutePath(root) ||
+      !_temporaryHelperValidAbsolutePath(target) ||
+      (target != root && !p.isWithin(root, target))) {
+    throw const ScoutCliException(
+      'temporary_helper_workspace_artifact_unsafe',
+      'A workspace artifact path escapes its canonical resolution root.',
+    );
+  }
+  final expected = <String, String>{};
+  if (expectedIntermediateIdentities != null) {
+    for (final value in expectedIntermediateIdentities) {
+      if (value is! Map ||
+          value['path'] is! String ||
+          value['identity'] is! String) {
+        throw const ScoutCliException(
+          'temporary_helper_workspace_artifact_unsafe',
+          'A workspace artifact path identity is malformed.',
+        );
+      }
+      expected[value['path']! as String] = value['identity']! as String;
+    }
+  }
+  final captured = <Map<String, Object?>>[];
+  final segments = _managedPathSegments(root, target);
+  for (var index = 0; index < segments.length; index += 1) {
+    final component = segments[index];
+    final isFinal = index == segments.length - 1;
+    final type = FileSystemEntity.typeSync(component, followLinks: false);
+    if (type == FileSystemEntityType.notFound) continue;
+    final expectedType = isFinal
+        ? FileSystemEntityType.file
+        : FileSystemEntityType.directory;
+    if (type != expectedType) {
+      throw const ScoutCliException(
+        'temporary_helper_workspace_artifact_unsafe',
+        'A workspace artifact path contains a symbolic link, reparse point, or unexpected filesystem object.',
+      );
+    }
+    final before = FileStat.statSync(component);
+    final resolved = isFinal
+        ? File(component).resolveSymbolicLinksSync()
+        : Directory(component).resolveSymbolicLinksSync();
+    final identity = isFinal
+        ? null
+        : _temporaryHelperWorkspaceComponentIdentity(component);
+    final afterType = FileSystemEntity.typeSync(component, followLinks: false);
+    final after = FileStat.statSync(component);
+    if (afterType != expectedType ||
+        !_sameFileStat(before, after) ||
+        _absoluteNormalized(resolved) != component ||
+        (!isFinal &&
+            expected[component] != null &&
+            expected[component] != identity)) {
+      throw const ScoutCliException(
+        'temporary_helper_workspace_artifact_unsafe',
+        'A workspace artifact path component changed identity; Scout refused the operation.',
+      );
+    }
+    if (!isFinal) {
+      captured.add(<String, Object?>{'path': component, 'identity': identity});
+    }
+  }
+  for (final component in expected.keys) {
+    if (!captured.any((value) => value['path'] == component)) {
+      throw const ScoutCliException(
+        'temporary_helper_workspace_artifact_unsafe',
+        'A planned workspace artifact path component is missing or changed.',
+      );
+    }
+  }
+  return captured;
+}
+
+Map<String, Object?> _temporaryHelperRestoreWorkspaceArtifact(
+  Map<String, Object?> record,
+  Map<String, Object?> artifact,
+) {
+  final path = artifact['path']! as String;
+  final resolutionRoot = record['resolutionRootPath']! as String;
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'restore',
+    expectedIntermediateIdentities:
+        (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+  );
+  final current = _temporaryHelperReadOptionalRegularFile(
+    path,
+    label: 'workspace artifact during repair',
+  );
+  final currentSha = current == null
+      ? null
+      : crypto.sha256.convert(current).toString();
+  final originalSha = artifact['originalSha256']?.toString();
+  final candidateSha = artifact['candidateSha256']?.toString();
+  final originalExisted = artifact['originalExisted'] == true;
+  final candidateKnown = artifact['candidateExisted'] is bool;
+  final allowed = <String?>{originalSha, if (candidateKnown) candidateSha};
+  if (!allowed.contains(currentSha)) {
+    throw _TemporaryHelperRepairConflict(
+      'workspace_artifact_changed_since_transaction',
+      <Map<String, Object?>>[
+        <String, Object?>{
+          'path': path,
+          'expectedOwnedSha256': allowed.toList(),
+          'actualSha256': currentSha,
+          'action': 'preserved_without_overwrite',
+        },
+      ],
+    );
+  }
+  if (originalExisted) {
+    if (currentSha == originalSha) {
+      return <String, Object?>{'path': path, 'status': 'already_original'};
+    }
+    if (current == null) {
+      throw _TemporaryHelperRepairConflict(
+        'workspace_artifact_missing_during_restore',
+        <Map<String, Object?>>[
+          <String, Object?>{
+            'path': path,
+            'action': 'preserved_without_overwrite',
+          },
+        ],
+      );
+    }
+    final backupPath = artifact['backupPath']! as String;
+    final backup = _temporaryHelperReadBoundedFile(
+      File(backupPath),
+      label: 'workspace artifact private backup',
+    );
+    if (crypto.sha256.convert(backup).toString() != originalSha) {
+      throw const _TemporaryHelperRepairConflict(
+        'workspace_artifact_backup_digest_mismatch',
+        <Map<String, Object?>>[],
+      );
+    }
+    FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation?.call(
+      'restore',
+      path,
+    );
+    _temporaryHelperGuardWorkspaceArtifactPath(
+      resolutionRoot: resolutionRoot,
+      path: path,
+      operation: 'restore',
+      expectedIntermediateIdentities:
+          (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+    );
+    _temporaryHelperAtomicReplaceTrackedFile(
+      path: path,
+      bytes: backup,
+      expectedCurrentSha256: currentSha!,
+      projectRoot: resolutionRoot,
+    );
+    return <String, Object?>{'path': path, 'status': 'restored'};
+  }
+  if (current == null) {
+    return <String, Object?>{'path': path, 'status': 'already_absent'};
+  }
+  FlutterScoutCli.debugTemporaryHelperBeforeWorkspaceArtifactOperation?.call(
+    'delete',
+    path,
+  );
+  _temporaryHelperGuardWorkspaceArtifactPath(
+    resolutionRoot: resolutionRoot,
+    path: path,
+    operation: 'delete',
+    expectedIntermediateIdentities:
+        (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+  );
+  final immediatelyBefore = _temporaryHelperReadOptionalRegularFile(
+    path,
+    label: 'workspace artifact immediately before deletion',
+  );
+  final immediatelyBeforeSha = immediatelyBefore == null
+      ? null
+      : crypto.sha256.convert(immediatelyBefore).toString();
+  if (immediatelyBeforeSha != currentSha) {
+    throw _TemporaryHelperRepairConflict(
+      'workspace_artifact_changed_during_delete',
+      <Map<String, Object?>>[
+        <String, Object?>{
+          'path': path,
+          'expectedSha256': currentSha,
+          'actualSha256': immediatelyBeforeSha,
+          'action': 'preserved_without_delete',
+        },
+      ],
+    );
+  }
+  File(path).deleteSync();
+  return <String, Object?>{'path': path, 'status': 'removed'};
+}
+
 extension _CliTemporaryHelperPaths on FlutterScoutCli {
   Future<_TemporaryHelperPaths> _temporaryHelperValidatedPaths({
     required String project,
     required String originalTarget,
     required String? helperPath,
     required String runId,
+    required bool requireBundledHelper,
   }) async {
     if (!RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$').hasMatch(runId)) {
       throw const ScoutCliException(
@@ -14,6 +605,7 @@ extension _CliTemporaryHelperPaths on FlutterScoutCli {
       );
     }
     final projectPath = _temporaryHelperCanonicalProject(project);
+    final workspace = _temporaryHelperDiscoverWorkspace(projectPath);
     final pubspecPath = p.join(projectPath, 'pubspec.yaml');
     _temporaryHelperRequireRegularFile(
       pubspecPath,
@@ -35,7 +627,8 @@ extension _CliTemporaryHelperPaths on FlutterScoutCli {
         'The original Flutter target must resolve inside the exact project.',
       );
     }
-    final discoveredHelper = helperPath ?? await _discoverBundledHelperPath();
+    final bundledHelper = await _discoverBundledHelperPath();
+    final discoveredHelper = helperPath ?? bundledHelper;
     if (discoveredHelper == null || discoveredHelper.isEmpty) {
       throw const ScoutCliException(
         'temporary_helper_path_missing',
@@ -56,6 +649,29 @@ extension _CliTemporaryHelperPaths on FlutterScoutCli {
       code: 'temporary_helper_path_missing',
       message: 'The helper path has no regular pubspec.yaml.',
     );
+    if (requireBundledHelper) {
+      if (bundledHelper == null || bundledHelper.isEmpty) {
+        throw const ScoutCliException(
+          'temporary_helper_bundled_revision_unavailable',
+          'Scout could not prove the helper source bundled with this exact CLI. '
+              'The launch was refused before project mutation.',
+        );
+      }
+      final resolvedBundled = Directory(
+        _absoluteNormalized(bundledHelper),
+      ).resolveSymbolicLinksSync();
+      if (resolvedHelper != resolvedBundled) {
+        throw ScoutCliException(
+          'temporary_helper_revision_mismatch',
+          'The requested helper is not the helper bundled with this exact CLI '
+              'revision. The launch was refused before project mutation.',
+          details: <String, Object?>{
+            'requestedHelper': resolvedHelper,
+            'requiredBundledHelper': resolvedBundled,
+          },
+        );
+      }
+    }
     final scoutRoot = p.join(projectPath, '.flutter_scout');
     final scoutType = FileSystemEntity.typeSync(scoutRoot, followLinks: false);
     if (scoutType != FileSystemEntityType.notFound &&
@@ -87,6 +703,8 @@ extension _CliTemporaryHelperPaths on FlutterScoutCli {
     }
     final paths = _TemporaryHelperPaths(
       projectPath: projectPath,
+      resolutionRootPath: workspace.root,
+      workspaceMemberPaths: workspace.members,
       scoutRoot: scoutRoot,
       transactionId: transactionId,
       transactionDir: transactionDir,
@@ -114,6 +732,8 @@ extension _CliTemporaryHelperPaths on FlutterScoutCli {
 final class _TemporaryHelperPaths {
   const _TemporaryHelperPaths({
     required this.projectPath,
+    required this.resolutionRootPath,
+    required this.workspaceMemberPaths,
     required this.scoutRoot,
     required this.transactionId,
     required this.transactionDir,
@@ -128,6 +748,8 @@ final class _TemporaryHelperPaths {
   });
 
   final String projectPath;
+  final String resolutionRootPath;
+  final List<String> workspaceMemberPaths;
   final String scoutRoot;
   final String transactionId;
   final String transactionDir;
@@ -142,6 +764,8 @@ final class _TemporaryHelperPaths {
 
   List<String> get allPaths => <String>[
     projectPath,
+    resolutionRootPath,
+    ...workspaceMemberPaths,
     scoutRoot,
     transactionDir,
     recordPath,
@@ -153,6 +777,131 @@ final class _TemporaryHelperPaths {
     lockPath,
     lockBackupPath,
   ];
+
+  bool get isWorkspace =>
+      resolutionRootPath != projectPath || workspaceMemberPaths.length > 1;
+}
+
+final class _TemporaryHelperWorkspace {
+  const _TemporaryHelperWorkspace({required this.root, required this.members});
+
+  final String root;
+  final List<String> members;
+}
+
+_TemporaryHelperWorkspace _temporaryHelperDiscoverWorkspace(String project) {
+  final projectPubspec = File(
+    p.join(project, 'pubspec.yaml'),
+  ).readAsStringSync();
+  final usesWorkspace = RegExp(
+    r'''^resolution\s*:\s*["']?workspace["']?\s*(?:#.*)?$''',
+    multiLine: true,
+  ).hasMatch(projectPubspec);
+  if (!usesWorkspace) {
+    return _TemporaryHelperWorkspace(root: project, members: <String>[project]);
+  }
+  var cursor = Directory(project);
+  for (var depth = 0; depth < 32; depth += 1) {
+    final pubspec = File(p.join(cursor.path, 'pubspec.yaml'));
+    if (FileSystemEntity.typeSync(pubspec.path, followLinks: false) ==
+        FileSystemEntityType.file) {
+      final entries = _temporaryHelperWorkspaceEntries(
+        pubspec.readAsStringSync(),
+      );
+      if (entries != null) {
+        final root = cursor.resolveSymbolicLinksSync();
+        final members = <String>[];
+        for (final entry in entries) {
+          if (entry.isEmpty || p.isAbsolute(entry)) {
+            throw const ScoutCliException(
+              'temporary_helper_workspace_member_unsafe',
+              'Every Dart workspace member must be a bounded relative path inside the workspace root.',
+            );
+          }
+          final candidate = _absoluteNormalized(p.join(root, entry));
+          if (candidate == root || !p.isWithin(root, candidate)) {
+            throw const ScoutCliException(
+              'temporary_helper_workspace_member_unsafe',
+              'A Dart workspace member escapes the canonical workspace root.',
+            );
+          }
+          final type = FileSystemEntity.typeSync(candidate, followLinks: false);
+          if (type != FileSystemEntityType.directory &&
+              type != FileSystemEntityType.link) {
+            throw const ScoutCliException(
+              'temporary_helper_workspace_member_unsafe',
+              'A Dart workspace member is missing or is not a directory.',
+            );
+          }
+          final resolved = Directory(candidate).resolveSymbolicLinksSync();
+          if (!p.isWithin(root, resolved) ||
+              FileSystemEntity.typeSync(resolved, followLinks: false) !=
+                  FileSystemEntityType.directory ||
+              FileSystemEntity.typeSync(
+                    p.join(resolved, 'pubspec.yaml'),
+                    followLinks: false,
+                  ) !=
+                  FileSystemEntityType.file) {
+            throw const ScoutCliException(
+              'temporary_helper_workspace_member_unsafe',
+              'A Dart workspace member resolves outside the workspace or lacks a regular pubspec.yaml.',
+            );
+          }
+          members.add(resolved);
+        }
+        final unique = members.toSet().toList()..sort();
+        if (!unique.contains(project) || unique.length != members.length) {
+          throw const ScoutCliException(
+            'temporary_helper_workspace_member_unsafe',
+            'The selected project must be one unique member of the Dart workspace.',
+          );
+        }
+        return _TemporaryHelperWorkspace(root: root, members: unique);
+      }
+    }
+    final parent = cursor.parent;
+    if (parent.path == cursor.path) break;
+    cursor = parent;
+  }
+  throw const ScoutCliException(
+    'temporary_helper_workspace_root_missing',
+    'The selected project declares workspace resolution but no containing Dart workspace root was found.',
+  );
+}
+
+List<String>? _temporaryHelperWorkspaceEntries(String pubspec) {
+  final header = RegExp(
+    r'^workspace\s*:\s*(?:#.*)?$',
+    multiLine: true,
+  ).firstMatch(pubspec);
+  if (header == null) return null;
+  final entries = <String>[];
+  final lines = pubspec.substring(header.end).split(RegExp(r'\r?\n'));
+  for (final line in lines) {
+    if (line.trim().isEmpty || line.trimLeft().startsWith('#')) continue;
+    final match = RegExp(r'^\s+-\s+(.+?)\s*(?:#.*)?$').firstMatch(line);
+    if (match != null) {
+      var value = match.group(1)!.trim();
+      if ((value.startsWith("'") && value.endsWith("'")) ||
+          (value.startsWith('"') && value.endsWith('"'))) {
+        value = value.substring(1, value.length - 1);
+      }
+      entries.add(value);
+      continue;
+    }
+    if (!line.startsWith(' ') && !line.startsWith('\t')) break;
+    throw const ScoutCliException(
+      'temporary_helper_workspace_member_unsafe',
+      'The Dart workspace list contains an unsupported or ambiguous member entry.',
+    );
+  }
+  if (entries.isEmpty) {
+    throw const ScoutCliException(
+      'temporary_helper_workspace_member_unsafe',
+      'The Dart workspace root has no explicit members.',
+    );
+  }
+  return entries;
 }
 
 String _temporaryHelperCanonicalProject(String path) {
@@ -342,6 +1091,14 @@ Map<String, Object?> _temporaryHelperReadAndValidateRecord(
       'The repair record transaction identity is invalid.',
     );
   }
+  if (record['workspaceAware'] == true) {
+    _temporaryHelperValidateWorkspaceRecord(
+      record,
+      actualRecordPath: path,
+      completedTombstone: completedTombstone,
+    );
+    return record;
+  }
   const pathKeys = <String>[
     'sessionDirectory',
     'projectPath',
@@ -438,6 +1195,184 @@ Map<String, Object?> _temporaryHelperReadAndValidateRecord(
     allowMissing: false,
   );
   return record;
+}
+
+void _temporaryHelperValidateWorkspaceRecord(
+  Map<String, Object?> record, {
+  required String actualRecordPath,
+  required bool completedTombstone,
+}) {
+  const pathKeys = <String>[
+    'sessionDirectory',
+    'projectPath',
+    'resolutionRootPath',
+    'scoutRoot',
+    'transactionDirectory',
+    'recordPath',
+    'helperPath',
+    'originalTargetPath',
+    'generatedTargetPath',
+    'overridePath',
+    'lockPath',
+  ];
+  for (final key in pathKeys) {
+    final value = record[key]?.toString();
+    if (value == null || !_temporaryHelperValidAbsolutePath(value)) {
+      throw const ScoutCliException(
+        'temporary_helper_record_path_invalid',
+        'The workspace repair record contains an invalid path.',
+      );
+    }
+  }
+  final project = record['projectPath']! as String;
+  final resolutionRoot = record['resolutionRootPath']! as String;
+  final scoutRoot = record['scoutRoot']! as String;
+  final transactionId = record['transactionId']! as String;
+  final transactionDir = record['transactionDirectory']! as String;
+  final recordedPath = record['recordPath']! as String;
+  final workspace = _temporaryHelperDiscoverWorkspace(project);
+  final membersValue = record['workspaceMemberPaths'];
+  if (membersValue is! List ||
+      membersValue.any((value) => value is! String) ||
+      workspace.root != resolutionRoot ||
+      !_sameStringLists(
+        workspace.members,
+        membersValue.cast<String>().toList(growable: false),
+      ) ||
+      scoutRoot != p.join(project, '.flutter_scout') ||
+      transactionDir !=
+          p.join(
+            scoutRoot,
+            'temporary_helper',
+            'transactions',
+            transactionId,
+          ) ||
+      recordedPath != p.join(transactionDir, 'repair.json') ||
+      record['generatedTargetPath'] !=
+          p.join(scoutRoot, 'bootstrap_$transactionId.dart') ||
+      !<String>{
+        p.join(resolutionRoot, 'pubspec.yaml'),
+        p.join(resolutionRoot, 'pubspec_overrides.yaml'),
+      }.contains(record['overridePath']) ||
+      record['lockPath'] != p.join(resolutionRoot, 'pubspec.lock') ||
+      !p.isWithin(project, record['originalTargetPath']! as String)) {
+    throw const ScoutCliException(
+      'temporary_helper_record_path_mismatch',
+      'The workspace repair paths do not match their canonical derived plan.',
+    );
+  }
+  if (!completedTombstone && actualRecordPath != recordedPath) {
+    throw const ScoutCliException(
+      'temporary_helper_record_path_mismatch',
+      'The workspace repair record moved outside its transaction directory.',
+    );
+  }
+  if (completedTombstone &&
+      (!p
+              .basename(p.dirname(actualRecordPath))
+              .startsWith('.completed_$transactionId') ||
+          p.dirname(p.dirname(actualRecordPath)) !=
+              p.dirname(transactionDir))) {
+    throw const ScoutCliException(
+      'temporary_helper_tombstone_path_invalid',
+      'The completed workspace repair tombstone is outside its collection.',
+    );
+  }
+  final expectedPaths = <String>{
+    p.join(resolutionRoot, 'pubspec.yaml'),
+    p.join(resolutionRoot, 'pubspec_overrides.yaml'),
+    p.join(resolutionRoot, 'pubspec.lock'),
+    p.join(resolutionRoot, '.dart_tool', 'package_config.json'),
+    p.join(resolutionRoot, '.dart_tool', 'package_graph.json'),
+    for (final member in workspace.members) ...<String>{
+      p.join(member, '.dart_tool', 'package_config_subset'),
+      p.join(member, '.flutter-plugins'),
+      p.join(member, '.flutter-plugins-dependencies'),
+    },
+  }.toList()..sort();
+  final artifactsValue = record['generatedArtifacts'];
+  if (artifactsValue is! List ||
+      artifactsValue.length != expectedPaths.length) {
+    throw const ScoutCliException(
+      'temporary_helper_record_path_mismatch',
+      'The workspace artifact plan is incomplete.',
+    );
+  }
+  for (var index = 0; index < expectedPaths.length; index += 1) {
+    final value = artifactsValue[index];
+    if (value is! Map) {
+      throw const ScoutCliException(
+        'temporary_helper_record_schema_invalid',
+        'A workspace artifact record is not an object.',
+      );
+    }
+    final artifact = Map<Object?, Object?>.from(value);
+    final originalExisted = artifact['originalExisted'] == true;
+    final expectedBackup = p.join(
+      transactionDir,
+      'artifact_${index.toString().padLeft(3, '0')}.original',
+    );
+    if (artifact['path'] != expectedPaths[index] ||
+        (originalExisted
+            ? artifact['backupPath'] != expectedBackup
+            : artifact['backupPath'] != null)) {
+      throw const ScoutCliException(
+        'temporary_helper_record_path_mismatch',
+        'A workspace artifact path or backup path is not canonical.',
+      );
+    }
+    final identities = artifact['intermediatePathIdentities'];
+    if (identities is! List ||
+        identities.any(
+          (value) =>
+              value is! Map ||
+              value['path'] is! String ||
+              value['identity'] is! String ||
+              (value['path'] != resolutionRoot &&
+                  !p.isWithin(resolutionRoot, value['path']! as String)),
+        )) {
+      throw const ScoutCliException(
+        'temporary_helper_record_path_mismatch',
+        'A workspace artifact component identity is invalid.',
+      );
+    }
+    for (final key in <String>[
+      if (originalExisted) 'originalSha256',
+      if (artifact['candidateExisted'] == true) 'candidateSha256',
+    ]) {
+      if (!RegExp(r'^[a-f0-9]{64}$').hasMatch('${artifact[key] ?? ''}')) {
+        throw const ScoutCliException(
+          'temporary_helper_record_digest_invalid',
+          'A workspace artifact digest is invalid.',
+        );
+      }
+    }
+  }
+  for (final key in const <String>[
+    'generatedTargetSha256',
+    'overrideInjectedSha256',
+  ]) {
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch('${record[key] ?? ''}')) {
+      throw const ScoutCliException(
+        'temporary_helper_record_digest_invalid',
+        'A workspace repair digest is invalid.',
+      );
+    }
+  }
+  _assertNoManagedLinks(
+    scoutRoot,
+    actualRecordPath,
+    finalMayBeFile: true,
+    allowMissing: false,
+  );
+}
+
+bool _sameStringLists(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index += 1) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
 }
 
 String _temporaryHelperCanonicalJson(Object? value) {
@@ -950,7 +1885,28 @@ Map<String, Object?> _temporaryHelperFinalizeCompletedDirectory(
         'A completed-directory tombstone lacks a committed repair phase.',
       );
     }
-    _temporaryHelperVerifyTrackedInputs(record);
+    if (record['workspaceAware'] == true) {
+      final values = record['generatedArtifacts']! as List<Object?>;
+      for (final value in values) {
+        final artifact = Map<Object?, Object?>.from(value! as Map);
+        final current = _temporaryHelperReadOptionalRegularFile(
+          artifact['path']! as String,
+          label: 'completed workspace artifact',
+        );
+        final currentSha = current == null
+            ? null
+            : crypto.sha256.convert(current).toString();
+        if ((artifact['originalExisted'] == true) != (current != null) ||
+            currentSha != artifact['originalSha256']) {
+          throw const ScoutCliException(
+            'temporary_helper_tombstone_workspace_artifact_mismatch',
+            'A committed workspace cleanup tombstone does not match the original artifact state.',
+          );
+        }
+      }
+    } else {
+      _temporaryHelperVerifyTrackedInputs(record);
+    }
     if (FileSystemEntity.typeSync(
           record['generatedTargetPath']! as String,
           followLinks: false,

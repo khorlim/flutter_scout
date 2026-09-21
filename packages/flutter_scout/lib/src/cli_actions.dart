@@ -379,6 +379,7 @@ extension _CliActions on FlutterScoutCli {
   Future<int> _input(List<String> args) async {
     final parser = ArgParser()
       ..addOption('target')
+      ..addOption('activation-target')
       ..addOption(
         'file',
         help: 'Read the value from a regular owner-only 0600 UTF-8 file.',
@@ -414,9 +415,11 @@ extension _CliActions on FlutterScoutCli {
       value = parsed.rest.join(' ');
     }
     final target = parsed.option('target') ?? 'focused';
+    final activationTarget = parsed.option('activation-target');
     _registerSensitiveValue(value);
     final params = <String, String>{
       'target': target,
+      'activationTarget': ?activationTarget,
       'value': value,
       ..._expectParams(parsed),
     };

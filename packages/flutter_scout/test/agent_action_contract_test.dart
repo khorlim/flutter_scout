@@ -57,7 +57,10 @@ void main() {
       () => cli.debugValidateAgentAction({
         'method': 'input',
         'args': ['Test'],
-        'params': {'target': 'field.name'},
+        'params': {
+          'target': 'field.name',
+          'activationTarget': 'tap.name-field',
+        },
       }),
       returnsNormally,
     );

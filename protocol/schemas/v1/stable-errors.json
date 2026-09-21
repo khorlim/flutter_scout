@@ -1256,6 +1256,10 @@
       "meaning": "Scout reports the stable temporary helper atomic temp collision failure condition.",
       "family": "persistence_or_security"
     },
+    "temporary_helper_bundled_revision_unavailable": {
+      "meaning": "Scout cannot prove the helper source bundled with the exact running CLI revision, so temporary-helper launch is refused before project mutation.",
+      "family": "compatibility_or_identity"
+    },
     "temporary_helper_dependencies_missing": {
       "meaning": "Scout reports the stable temporary helper dependencies missing failure condition.",
       "family": "persistence_or_security"
@@ -1344,6 +1348,14 @@
       "meaning": "The temporary helper repair is required before this operation can proceed.",
       "family": "persistence_or_security"
     },
+    "temporary_helper_resolution_mismatch": {
+      "meaning": "Package resolution did not select the exact helper source required by the running CLI, so launch is refused before the generated bootstrap can run.",
+      "family": "compatibility_or_identity"
+    },
+    "temporary_helper_revision_mismatch": {
+      "meaning": "An explicitly requested helper source is not the helper bundled with the exact running CLI revision, so launch is refused before project mutation.",
+      "family": "compatibility_or_identity"
+    },
     "temporary_helper_run_id_invalid": {
       "meaning": "Scout reports the stable temporary helper run id invalid failure condition.",
       "family": "persistence_or_security"
@@ -1372,6 +1384,10 @@
       "meaning": "Scout reports the stable temporary helper tombstone target present failure condition.",
       "family": "resolution_or_observation"
     },
+    "temporary_helper_tombstone_workspace_artifact_mismatch": {
+      "meaning": "A committed temporary-helper cleanup tombstone does not match the byte-exact original Dart workspace artifact state.",
+      "family": "persistence_or_security"
+    },
     "temporary_helper_tracked_path_outside_project": {
       "meaning": "Scout reports the stable temporary helper tracked path outside project failure condition.",
       "family": "persistence_or_security"
@@ -1379,6 +1395,18 @@
     "temporary_helper_transaction_exists": {
       "meaning": "Scout reports the stable temporary helper transaction exists failure condition.",
       "family": "persistence_or_security"
+    },
+    "temporary_helper_workspace_artifact_unsafe": {
+      "meaning": "A Dart workspace resolution artifact is outside the canonical workspace root, is a link or special object, or cannot be created without replacing an existing path.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_workspace_member_unsafe": {
+      "meaning": "A declared Dart workspace member is ambiguous, duplicated, missing, or resolves outside the canonical workspace root.",
+      "family": "persistence_or_security"
+    },
+    "temporary_helper_workspace_root_missing": {
+      "meaning": "A selected package declares workspace resolution but Scout cannot prove a containing Dart workspace root.",
+      "family": "resolution_or_observation"
     },
     "text_not_actionable": {
       "meaning": "Scout reports the stable text not actionable failure condition.",

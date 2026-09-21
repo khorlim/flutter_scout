@@ -73,6 +73,18 @@ expectation parameters, safety overrides, file input, capture and screenshots.
 Pass sensitive input through JSON stdin, never process arguments. Standalone
 interaction commands and alternate transports are removed, not fallback paths.
 
+`input` optionally accepts `params.activationTarget` alongside an explicit
+`params.target`. Both must be exact handles from the same observation. In one
+serialized mutation Scout revalidates and taps the activation handle, requires
+the exact field to become the unique focused editable, revalidates both again,
+then performs the normal keyboard-semantic text update. A mismatch never sends
+text and must not be retried automatically. A logical gesture handle may expose
+an opaque concrete pointer-receiver binding; Scout requires that exact gesture
+owner/receiver relationship, geometry, point, and hit-path membership again at
+dispatch and after activation. An ancestor, descendant, same-shell, same-owner,
+same-package, or same-geometry control is not a substitute. Targetless/focused
+input retains its existing behavior and cannot use `activationTarget`.
+
 Use query(method, params, args) for focused read-only inspect, where, locate,
 bounds and drag-status. For example query('locate', {text: 'Save'}) or
 query('inspect', {sections: 'interactables,scrollables', maxItems: 100}). It

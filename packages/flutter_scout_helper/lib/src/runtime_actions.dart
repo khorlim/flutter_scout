@@ -352,6 +352,10 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Map<String, String> params,
   ) async {
     try {
+      final activationTarget = params['activationTarget'];
+      if (activationTarget != null && activationTarget.isNotEmpty) {
+        return _handleGuardedActivationInput(params, activationTarget);
+      }
       final before = _snapshot();
       final target = params['target'];
       final value = params['value'] ?? '';
@@ -391,6 +395,292 @@ extension _RuntimeActions on FlutterScoutRuntime {
       return _fail('input_failed', error.toString());
     }
   }
+
+  Future<developer.ServiceExtensionResponse> _handleGuardedActivationInput(
+    Map<String, String> params,
+    String activationTarget,
+  ) async {
+    final target = params['target'];
+    final value = params['value'] ?? '';
+    if (target == null || target.isEmpty || target == 'focused') {
+      return _guardedInputFailure(
+        'target_not_found',
+        'Guarded activation input requires an explicit observed field handle.',
+        'exact_field_required',
+        fieldHandle: target,
+        activationHandle: activationTarget,
+      );
+    }
+
+    final before = _snapshot();
+    var field = _resolveTarget(
+      before,
+      target,
+      fieldOnly: true,
+      safety: _TargetSafety.exactEditable,
+    );
+    if (!field.isUnique) {
+      return _guardedInputFailure(
+        'target_not_found',
+        field.reason ?? 'The exact field failed guarded input preflight.',
+        'field_${field.status.name}',
+        fieldHandle: target,
+        activationHandle: activationTarget,
+        field: field,
+      );
+    }
+    final originalEditable = field.node!._editableState!;
+    final originalFieldIdentity = _logicalNodeIdentity(field.node!);
+
+    var activation = _resolveTarget(before, activationTarget);
+    if (!activation.isUnique) {
+      return _guardedInputFailure(
+        'target_not_found',
+        activation.reason ?? 'The explicit activation target was unsafe.',
+        'activation_${activation.status.name}',
+        fieldHandle: target,
+        activationHandle: activationTarget,
+        field: field,
+        activation: activation,
+      );
+    }
+    final originalActivationIdentity = _logicalNodeIdentity(activation.node!);
+    final originalActivationConfigurationIdentity =
+        activation.node!._widgetConfigurationIdentity;
+    final originalActivationReceiverBinding =
+        activation.node!._pointerReceiverBinding;
+
+    final testRevalidation = debugBeforeGuardedInputActivationRevalidation;
+    if (testRevalidation != null) await testRevalidation();
+
+    field = _revalidateTarget(
+      field,
+      fieldOnly: true,
+      safety: _TargetSafety.exactEditable,
+    );
+    if (!field.isUnique ||
+        !identical(originalEditable, field.node?._editableState) ||
+        _logicalNodeIdentity(field.node!) != originalFieldIdentity) {
+      return _guardedInputFailure(
+        'stale_target',
+        field.reason ?? 'The exact field identity changed before activation.',
+        'stale_field_identity',
+        fieldHandle: target,
+        activationHandle: activationTarget,
+        field: field,
+        activation: activation,
+      );
+    }
+    activation = _revalidateTarget(activation);
+    if (!activation.isUnique ||
+        _logicalNodeIdentity(activation.node!) != originalActivationIdentity) {
+      return _guardedInputFailure(
+        'stale_target',
+        activation.reason ??
+            'The explicit activation identity changed before pointer dispatch.',
+        'stale_activation_identity',
+        fieldHandle: target,
+        activationHandle: activationTarget,
+        field: field,
+        activation: activation,
+      );
+    }
+
+    final frameBaseline = await _dispatchGuardedActivationTap(
+      activation.safePoint!,
+    );
+    final postActivationFrame = await _observeNaturalPostActivationFrame(
+      frameBaseline,
+    );
+    if (postActivationFrame['observed'] != true) {
+      return _guardedInputFailure(
+        'stale_target',
+        'No natural post-activation frame was observed before the deadline.',
+        'post_activation_frame_unavailable',
+        fieldHandle: target,
+        activationHandle: activationTarget,
+        field: field,
+        activation: activation,
+        activationDispatched: true,
+        postActivationFrame: postActivationFrame,
+      );
+    }
+
+    final finalSnapshot = _snapshot();
+    var postField = _resolveTarget(
+      finalSnapshot,
+      target,
+      fieldOnly: true,
+      safety: _TargetSafety.exactEditable,
+    );
+    var finalActivation = _resolveTarget(finalSnapshot, activationTarget);
+    var finalFocus = _resolveFocusedField(finalSnapshot);
+    postField = _revalidateTarget(
+      postField,
+      fieldOnly: true,
+      safety: _TargetSafety.exactEditable,
+    );
+    finalActivation = _revalidateTarget(finalActivation);
+    finalFocus = _revalidateFocusedField(finalFocus);
+    final exactFieldFocus =
+        postField.isUnique &&
+        finalFocus.isUnique &&
+        identical(originalEditable, postField.node?._editableState) &&
+        identical(originalEditable, finalFocus.node?._editableState) &&
+        _logicalNodeIdentity(postField.node!) == originalFieldIdentity;
+    final activationSafe =
+        finalActivation.isUnique &&
+        _logicalNodeIdentity(finalActivation.node!) ==
+            originalActivationIdentity &&
+        (originalActivationReceiverBinding == null ||
+            (finalActivation.node!._pointerReceiverBinding != null &&
+                _samePointerReceiverBinding(
+                  originalActivationReceiverBinding,
+                  finalActivation.node!._pointerReceiverBinding!,
+                ))) &&
+        originalActivationConfigurationIdentity != null &&
+        finalActivation.node!._widgetConfigurationIdentity ==
+            originalActivationConfigurationIdentity;
+    final activationConfigurationUnchanged =
+        originalActivationConfigurationIdentity != null &&
+        finalActivation.node?._widgetConfigurationIdentity ==
+            originalActivationConfigurationIdentity;
+    final finalSafe = exactFieldFocus && activationSafe;
+    if (!finalSafe) {
+      return _guardedInputFailure(
+        exactFieldFocus ? 'stale_target' : 'target_not_found',
+        exactFieldFocus
+            ? 'Activation safety changed before text dispatch.'
+            : 'The explicit activation did not uniquely focus the exact field.',
+        exactFieldFocus
+            ? 'final_revalidation_failed'
+            : 'activation_focused_different_field',
+        fieldHandle: target,
+        activationHandle: activationTarget,
+        field: postField,
+        activation: finalActivation,
+        focused: finalFocus,
+        activationDispatched: true,
+        postActivationFrame: postActivationFrame,
+        activationConfigurationUnchanged: activationConfigurationUnchanged,
+        postFieldIdentity: postField.node == null
+            ? null
+            : _logicalNodeIdentity(postField.node!),
+      );
+    }
+
+    // No await is permitted between this final rebuilt-state authorization and
+    // the keyboard-semantic text update.
+    _setEditableText(originalEditable, value);
+    final stability = await _waitStableForAction(
+      params,
+      initialSnapshot: before,
+    );
+    final after = _snapshot();
+    return await _respondWithExpectation(params, {
+      'action': 'input $target with activation $activationTarget',
+      'guardedActivation': _guardedInputReceipt(
+        fieldHandle: target,
+        activationHandle: activationTarget,
+        field: postField,
+        activation: finalActivation,
+        focused: finalFocus,
+        activationDispatched: true,
+        textDispatched: true,
+        preFieldIdentity: originalFieldIdentity,
+        preActivationIdentity: originalActivationIdentity,
+        postFieldIdentity: _logicalNodeIdentity(postField.node!),
+        postActivationFrame: postActivationFrame,
+        activationConfigurationUnchanged: true,
+      ),
+      ..._stabilityResponseFields(stability),
+      'result': _changed(before, after) ? 'changed' : 'unchanged',
+      'before': before.summaryJson(),
+      'after': after.summaryJson(),
+      'delta': _delta(before, after),
+      'recentErrors': _recentErrors(),
+    });
+  }
+
+  developer.ServiceExtensionResponse _guardedInputFailure(
+    String code,
+    String message,
+    String reason, {
+    required String? fieldHandle,
+    required String activationHandle,
+    _TargetResolution? field,
+    _TargetResolution? activation,
+    _TargetResolution? focused,
+    bool activationDispatched = false,
+    String? postFieldIdentity,
+    Map<String, Object?>? postActivationFrame,
+    bool? activationConfigurationUnchanged,
+  }) => _fail(
+    code,
+    message,
+    extra: {
+      'reason': reason,
+      'guardedActivation': _guardedInputReceipt(
+        fieldHandle: fieldHandle,
+        activationHandle: activationHandle,
+        field: field,
+        activation: activation,
+        focused: focused,
+        activationDispatched: activationDispatched,
+        postFieldIdentity: postFieldIdentity,
+        postActivationFrame: postActivationFrame,
+        activationConfigurationUnchanged: activationConfigurationUnchanged,
+      ),
+    },
+  );
+
+  Map<String, Object?> _guardedInputReceipt({
+    required String? fieldHandle,
+    required String activationHandle,
+    _TargetResolution? field,
+    _TargetResolution? activation,
+    _TargetResolution? focused,
+    bool activationDispatched = false,
+    bool textDispatched = false,
+    String? preFieldIdentity,
+    String? preActivationIdentity,
+    String? postFieldIdentity,
+    Map<String, Object?>? postActivationFrame,
+    bool? activationConfigurationUnchanged,
+  }) => {
+    'fieldHandle': fieldHandle,
+    'activationHandle': activationHandle,
+    if (field != null) 'field': field.toJson(),
+    if (activation != null) 'activation': activation.toJson(),
+    if (focused != null)
+      'focus': {
+        'resolution': focused.toJson(),
+        'unique': focused.isUnique,
+        'matchesField':
+            field?.node != null &&
+            focused.node != null &&
+            identical(
+              field!.node!._editableState,
+              focused.node!._editableState,
+            ),
+      },
+    if (preFieldIdentity != null || preActivationIdentity != null)
+      'preIdentity': {
+        'field': ?preFieldIdentity,
+        'activation': ?preActivationIdentity,
+      },
+    if (postFieldIdentity != null) 'postIdentity': {'field': postFieldIdentity},
+    'postActivationFrame': ?postActivationFrame,
+    'revalidation': {
+      'fieldSafe': field?.isUnique == true,
+      'activationSafe': activation?.isUnique == true,
+      'activationConfigurationUnchanged': ?activationConfigurationUnchanged,
+    },
+    'dispatch': {
+      'activation': activationDispatched ? 'dispatched' : 'not_dispatched',
+      'text': textDispatched ? 'dispatched' : 'not_dispatched',
+    },
+  };
 
   Future<developer.ServiceExtensionResponse> _handleLongPress(
     String method,

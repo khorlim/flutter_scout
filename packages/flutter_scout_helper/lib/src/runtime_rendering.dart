@@ -1,6 +1,10 @@
 part of 'flutter_scout_binding.dart';
 
 extension _RuntimeRendering on FlutterScoutRuntime {
+  static const Duration _guardedActivationFrameDeadline = Duration(
+    milliseconds: 500,
+  );
+
   void _installRenderingProbe() {
     // Observe natural framework frames without requesting one. A persistent
     // callback itself does not schedule frames or keep a background app awake.
@@ -10,6 +14,34 @@ extension _RuntimeRendering on FlutterScoutRuntime {
         _lastFrameworkFrameAt = _renderingClock.elapsedMilliseconds;
       });
     });
+  }
+
+  Future<Map<String, Object?>> _observeNaturalPostActivationFrame(
+    int baseline,
+  ) async {
+    final stopwatch = Stopwatch()..start();
+    final completer = Completer<void>();
+    // This callback observes an application/engine-produced frame; it does not
+    // schedule or pump one. Register before checking the counter to close the
+    // race with a frame completing between those operations.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!completer.isCompleted) completer.complete();
+    });
+    final observed = _completedFrameworkFrames > baseline
+        ? true
+        : await Future.any<bool>([
+            completer.future.then((_) => true),
+            Future<bool>.delayed(_guardedActivationFrameDeadline, () => false),
+          ]);
+    stopwatch.stop();
+    return {
+      'observed': observed,
+      'baseline': baseline,
+      'completed': _completedFrameworkFrames,
+      'waitedMs': stopwatch.elapsedMilliseconds,
+      'deadlineMs': _guardedActivationFrameDeadline.inMilliseconds,
+      'scoutScheduledFrames': false,
+    };
   }
 
   Map<String, Object?> _renderingState() {

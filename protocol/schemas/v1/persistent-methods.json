@@ -16,7 +16,7 @@
     "dismiss": ["allowErrors", "verbose", "waitMs"],
     "fill": ["allowErrors", "assertNoErrors", "capture", "expectField", "expectGone", "expectLog", "expectScreen", "expectSelected", "expectTarget", "expectText", "expectTimeout", "expectView", "file", "json", "rejectLog", "verbose"],
     "health": ["includeStale"],
-    "input": ["allowErrors", "assertNoErrors", "capture", "expectField", "expectGone", "expectLog", "expectScreen", "expectSelected", "expectTarget", "expectText", "expectTimeout", "expectView", "file", "rejectLog", "target", "verbose"],
+    "input": ["activationTarget", "allowErrors", "assertNoErrors", "capture", "expectField", "expectGone", "expectLog", "expectScreen", "expectSelected", "expectTarget", "expectText", "expectTimeout", "expectView", "file", "rejectLog", "target", "verbose"],
     "inspect": ["brief", "includeStale", "maxItems", "maxResponseBytes", "sections", "since", "surface"],
     "locate": ["contains", "maxCandidates", "maxResponseBytes", "target", "text", "within"],
     "logs": ["contains", "last", "summary"],

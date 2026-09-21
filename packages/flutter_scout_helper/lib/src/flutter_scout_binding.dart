@@ -222,6 +222,22 @@ class FlutterScoutRuntime {
   @visibleForTesting
   bool Function()? debugRuntimeAvailabilityProbe;
 
+  /// Test-only seam for replacing a guarded-input target immediately before
+  /// ordinary tap revalidation.
+  @visibleForTesting
+  Future<void> Function()? debugBeforeGuardedInputActivationRevalidation;
+
+  /// Test-only reproduction seam for a logical widget whose generic
+  /// Element.renderObject representation is not on its pointer hit path.
+  @visibleForTesting
+  RenderObject? Function(Element element)? debugRepresentedRenderObjectOverride;
+
+  /// Test-only fail-closed seam for proving that receiver geometry must match
+  /// the logical action geometry before candidate-point discovery can run.
+  @visibleForTesting
+  Rect? Function(Element logicalElement, Rect logicalRect)?
+  debugPointerReceiverRectOverride;
+
   void install() {
     _installRenderingProbe();
     _installErrorHooks();
@@ -674,11 +690,13 @@ class FlutterScoutRuntime {
   @visibleForTesting
   Future<Map<String, Object?>> debugInputTarget(
     String target,
-    String value,
-  ) async {
+    String value, {
+    String? activationTarget,
+  }) async {
     final response = await _handleInput('debugInputTarget', {
       'target': target,
       'value': value,
+      'activationTarget': ?activationTarget,
       'waitMs': '0',
       'lateWaitMs': '0',
     });

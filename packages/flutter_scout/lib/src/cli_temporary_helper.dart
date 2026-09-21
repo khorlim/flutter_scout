@@ -32,41 +32,30 @@ extension _CliTemporaryHelper on FlutterScoutCli {
     required String originalTarget,
     required String? helperPath,
     required String runId,
+    bool requireBundledHelper = true,
   }) async {
     final paths = await _temporaryHelperValidatedPaths(
       project: project,
       originalTarget: originalTarget,
       helperPath: helperPath,
       runId: runId,
+      requireBundledHelper: requireBundledHelper,
     );
+    if (paths.isWorkspace) {
+      return _prepareWorkspaceTemporaryHelper(paths: paths, runId: runId);
+    }
     final pubspec = File(paths.pubspecPath);
     final originalPubspec = _temporaryHelperReadBoundedFile(
       pubspec,
       label: 'pubspec.yaml',
     );
     final pubspecText = utf8.decode(originalPubspec, allowMalformed: false);
-    final dependencyAlreadyPresent = RegExp(
-      r'^\s*flutter_scout_helper\s*:',
-      multiLine: true,
-    ).hasMatch(pubspecText);
-    var injectedPubspec = originalPubspec;
-    if (!dependencyAlreadyPresent) {
-      final dependencies = RegExp(
-        r'^dependencies:\s*$',
-        multiLine: true,
-      ).firstMatch(pubspecText);
-      if (dependencies == null) {
-        throw const ScoutCliException(
-          'temporary_helper_dependencies_missing',
-          'pubspec.yaml has no top-level dependencies section.',
-        );
-      }
-      final quotedPath = paths.helperPath.replaceAll("'", "''");
-      final insertion = "\n  flutter_scout_helper:\n    path: '$quotedPath'";
-      injectedPubspec = utf8.encode(
-        pubspecText.replaceRange(dependencies.end, dependencies.end, insertion),
-      );
-    }
+    final dependencyAlreadyPresent = _temporaryHelperDependencyPresent(
+      pubspecText,
+    );
+    final injectedPubspec = utf8.encode(
+      _temporaryHelperPubspecWithExactDependency(pubspecText, paths.helperPath),
+    );
 
     final lockFile = File(paths.lockPath);
     final lockType = FileSystemEntity.typeSync(
@@ -204,17 +193,15 @@ Future<void> main() async {
     _temporaryHelperCheckpoint('record_prepared');
 
     try {
-      if (!dependencyAlreadyPresent) {
-        _temporaryHelperSetPhase(record, 'pubspec_write_started');
-        _temporaryHelperWriteRecord(paths.recordPath, record);
-        _temporaryHelperCheckpoint('pubspec_write_started');
-        _temporaryHelperAtomicReplaceTrackedFile(
-          path: paths.pubspecPath,
-          bytes: injectedPubspec,
-          expectedCurrentSha256: record['pubspecOriginalSha256']! as String,
-          projectRoot: paths.projectPath,
-        );
-      }
+      _temporaryHelperSetPhase(record, 'pubspec_write_started');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('pubspec_write_started');
+      _temporaryHelperAtomicReplaceTrackedFile(
+        path: paths.pubspecPath,
+        bytes: injectedPubspec,
+        expectedCurrentSha256: record['pubspecOriginalSha256']! as String,
+        projectRoot: paths.projectPath,
+      );
       _temporaryHelperSetPhase(record, 'pubspec_injected');
       _temporaryHelperWriteRecord(paths.recordPath, record);
       _temporaryHelperCheckpoint('pubspec_injected');
@@ -246,6 +233,7 @@ Future<void> main() async {
               '${pubGet.stderr}',
         );
       }
+      _temporaryHelperVerifyResolvedHelper(paths);
 
       _temporaryHelperSetPhase(record, 'target_write_started');
       _temporaryHelperWriteRecord(paths.recordPath, record);
@@ -302,6 +290,233 @@ Future<void> main() async {
           'temporaryHelperRecovery': repair,
           'prioritizedRecoveryAction': repair['prioritizedRecoveryAction'],
         },
+      );
+    }
+  }
+
+  Future<_TemporaryHelperSetup> _prepareWorkspaceTemporaryHelper({
+    required _TemporaryHelperPaths paths,
+    required String runId,
+  }) async {
+    final relativeTarget = p
+        .relative(paths.originalTargetPath, from: paths.scoutRoot)
+        .split(p.separator)
+        .join('/');
+    final generatedTargetBytes = utf8.encode('''
+import 'package:flutter_scout_helper/flutter_scout_helper.dart';
+import '$relativeTarget' as app;
+
+Future<void> main() async {
+  FlutterScoutBinding.ensureInitialized();
+  await Future<void>.sync(app.main);
+}
+
+''');
+    _ensurePrivateDirectory(paths.transactionDir, boundary: paths.scoutRoot);
+    final artifactPaths = _temporaryHelperWorkspaceArtifactPaths(paths);
+    final artifacts = <Map<String, Object?>>[];
+    for (var index = 0; index < artifactPaths.length; index += 1) {
+      artifacts.add(
+        _temporaryHelperWorkspaceArtifactSnapshot(
+          path: artifactPaths[index],
+          backupPath: p.join(
+            paths.transactionDir,
+            'artifact_${index.toString().padLeft(3, '0')}.original',
+          ),
+          resolutionRoot: paths.resolutionRootPath,
+          scoutRoot: paths.scoutRoot,
+        ),
+      );
+    }
+    final pubspecPath = p.join(paths.resolutionRootPath, 'pubspec.yaml');
+    final pubspecOverridesPath = p.join(
+      paths.resolutionRootPath,
+      'pubspec_overrides.yaml',
+    );
+    final pubspecArtifact = artifacts.singleWhere(
+      (artifact) => artifact['path'] == pubspecPath,
+    );
+    final pubspecOverridesArtifact = artifacts.singleWhere(
+      (artifact) => artifact['path'] == pubspecOverridesPath,
+    );
+    final existingOverrides =
+        pubspecOverridesArtifact['originalExisted'] == true
+        ? utf8.decode(
+            _temporaryHelperReadBoundedFile(
+              File(pubspecOverridesArtifact['backupPath']! as String),
+              label: 'pubspec_overrides.yaml backup',
+            ),
+          )
+        : null;
+    final overridePath =
+        existingOverrides != null &&
+            RegExp(
+              r'^dependency_overrides\s*:\s*(?:#.*)?$',
+              multiLine: true,
+            ).hasMatch(existingOverrides)
+        ? pubspecOverridesPath
+        : pubspecPath;
+    final overrideArtifact = overridePath == pubspecOverridesPath
+        ? pubspecOverridesArtifact
+        : pubspecArtifact;
+    final lockPath = p.join(paths.resolutionRootPath, 'pubspec.lock');
+    final lockArtifact = artifacts.singleWhere(
+      (artifact) => artifact['path'] == lockPath,
+    );
+    final originalOverride = utf8.decode(
+      _temporaryHelperReadBoundedFile(
+        File(overrideArtifact['backupPath']! as String),
+        label: p.basename(overridePath),
+      ),
+    );
+    final injectedOverride = utf8.encode(
+      _temporaryHelperOverrideWithExactDependency(
+        originalOverride,
+        paths.helperPath,
+      ),
+    );
+    final now = DateTime.now().toUtc().toIso8601String();
+    final ownerIdentity = await _readProcessOwnershipIdentity(
+      pid,
+      role: _temporaryHelperOwnerRole,
+    );
+    final record = <String, Object?>{
+      'schemaVersion': _temporaryHelperRecordSchemaVersion,
+      'kind': 'flutter_scout_temporary_helper_repair',
+      'workspaceAware': true,
+      'transactionId': paths.transactionId,
+      'runId': runId,
+      'commandId': _activeCommandId,
+      'phase': 'record_prepared',
+      'createdAt': now,
+      'updatedAt': now,
+      'ownerProcessId': pid,
+      'ownerProcessIdentity': ownerIdentity,
+      'sessionDirectory': _absoluteNormalized(_sessionDir.path),
+      'projectPath': paths.projectPath,
+      'resolutionRootPath': paths.resolutionRootPath,
+      'workspaceMemberPaths': paths.workspaceMemberPaths,
+      'scoutRoot': paths.scoutRoot,
+      'transactionDirectory': paths.transactionDir,
+      'recordPath': paths.recordPath,
+      'helperPath': paths.helperPath,
+      'originalTargetPath': paths.originalTargetPath,
+      'generatedTargetPath': paths.generatedTargetPath,
+      'generatedTargetSha256': crypto.sha256
+          .convert(generatedTargetBytes)
+          .toString(),
+      'generatedArtifacts': artifacts,
+      'overridePath': overridePath,
+      'overrideInjectedSha256': crypto.sha256
+          .convert(injectedOverride)
+          .toString(),
+      'lockPath': lockPath,
+      'repair': const <String, Object?>{
+        'status': 'pending',
+        'automatic': true,
+        'priority': 'critical',
+      },
+    };
+    _temporaryHelperWriteRecord(paths.recordPath, record);
+    _temporaryHelperCheckpoint('record_prepared');
+    try {
+      _temporaryHelperSetPhase(record, 'workspace_override_write_started');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('workspace_override_write_started');
+      if (overrideArtifact['originalExisted'] == true) {
+        _temporaryHelperAtomicReplaceTrackedFile(
+          path: overridePath,
+          bytes: injectedOverride,
+          expectedCurrentSha256: overrideArtifact['originalSha256']! as String,
+          projectRoot: paths.resolutionRootPath,
+        );
+      } else {
+        _temporaryHelperCreateWorkspaceFile(
+          path: overridePath,
+          bytes: injectedOverride,
+          resolutionRoot: paths.resolutionRootPath,
+        );
+      }
+      _temporaryHelperSetPhase(record, 'workspace_override_injected');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('workspace_override_injected');
+
+      _temporaryHelperSetPhase(record, 'helper_pub_get_started');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('helper_pub_get_started');
+      final pubGet = await _runTemporaryHelperPubGet(paths.resolutionRootPath);
+      for (final artifact in artifacts) {
+        _temporaryHelperCaptureWorkspaceCandidate(
+          artifact,
+          resolutionRoot: paths.resolutionRootPath,
+        );
+      }
+      _temporaryHelperSetPhase(
+        record,
+        pubGet.exitCode == 0
+            ? 'helper_pub_get_completed'
+            : 'helper_pub_get_failed',
+      );
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint(record['phase']! as String);
+      if (pubGet.exitCode != 0) {
+        throw ScoutCliException(
+          'temporary_helper_pub_get_failed',
+          'flutter pub get failed during workspace temporary helper setup: '
+              '${pubGet.stderr}',
+        );
+      }
+      _temporaryHelperVerifyResolvedHelper(paths);
+
+      _temporaryHelperSetPhase(record, 'target_write_started');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('target_write_started');
+      _atomicWritePrivateBytes(
+        paths.generatedTargetPath,
+        generatedTargetBytes,
+        boundary: paths.scoutRoot,
+      );
+      _temporaryHelperSetPhase(record, 'target_written');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('target_written');
+
+      _temporaryHelperRestoreWorkspaceArtifact(record, overrideArtifact);
+      _temporaryHelperSetPhase(record, 'workspace_override_restored');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('workspace_override_restored');
+      _temporaryHelperRestoreWorkspaceArtifact(record, lockArtifact);
+      _temporaryHelperSetPhase(record, 'lock_restored');
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('lock_restored');
+      _temporaryHelperSetPhase(record, 'active');
+      record['repair'] = const <String, Object?>{
+        'status': 'not_needed_while_owned_session_is_live',
+        'automatic': true,
+        'priority': 'critical',
+      };
+      _temporaryHelperWriteRecord(paths.recordPath, record);
+      _temporaryHelperCheckpoint('active');
+      return _TemporaryHelperSetup(
+        project: paths.projectPath,
+        targetPath: paths.generatedTargetPath,
+        lockExisted: lockArtifact['originalExisted'] == true,
+        lockBackupPath: lockArtifact['backupPath']?.toString(),
+        transactionRecordPath: paths.recordPath,
+        transactionId: paths.transactionId,
+      );
+    } on _TemporaryHelperSimulatedInterruption {
+      rethrow;
+    } catch (error) {
+      final repair = await _repairTemporaryHelperRecord(
+        paths.recordPath,
+        operation: 'setup_failure',
+      );
+      if (repair['status'] == 'repaired') rethrow;
+      throw ScoutCliException(
+        'temporary_helper_repair_required',
+        'Workspace temporary-helper setup failed and automatic repair could not finish.',
+        details: <String, Object?>{'setupFailure': error.toString()},
+        additional: <String, Object?>{'temporaryHelperRecovery': repair},
       );
     }
   }
@@ -676,6 +891,13 @@ Future<void> main() async {
     var record = <String, Object?>{};
     try {
       record = _temporaryHelperReadAndValidateRecord(absoluteRecordPath);
+      if (record['workspaceAware'] == true) {
+        return await _repairWorkspaceTemporaryHelperRecord(
+          record,
+          absoluteRecordPath: absoluteRecordPath,
+          operation: operation,
+        );
+      }
       _temporaryHelperSetPhase(record, 'repair_started');
       record['repair'] = <String, Object?>{
         'status': 'running',
@@ -871,6 +1093,157 @@ Future<void> main() async {
         recordPath: absoluteRecordPath,
       );
     }
+  }
+
+  Future<Map<String, Object?>> _repairWorkspaceTemporaryHelperRecord(
+    Map<String, Object?> record, {
+    required String absoluteRecordPath,
+    required String operation,
+  }) async {
+    final interruptedPhase =
+        record['repairPreviousPhase']?.toString() ??
+        record['phase']?.toString();
+    record['repairPreviousPhase'] = interruptedPhase;
+    _temporaryHelperSetPhase(record, 'repair_started');
+    record['repair'] = <String, Object?>{
+      'status': 'running',
+      'automatic': true,
+      'priority': 'critical',
+      'operation': operation,
+      'startedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    _temporaryHelperWriteRecord(absoluteRecordPath, record);
+    _temporaryHelperCheckpoint('repair_started');
+    final values = record['generatedArtifacts']! as List<Object?>;
+    final artifacts = values
+        .map(
+          (value) => Map<String, Object?>.from(
+            Map<Object?, Object?>.from(value! as Map),
+          ),
+        )
+        .toList(growable: false);
+    if (interruptedPhase == 'helper_pub_get_started' &&
+        artifacts.any((artifact) => artifact['candidateExisted'] is! bool)) {
+      final pubGet = await _runTemporaryHelperPubGet(
+        record['resolutionRootPath']! as String,
+      );
+      if (pubGet.exitCode != 0) {
+        throw ScoutCliException(
+          'temporary_helper_pub_get_failed',
+          'Interrupted workspace dependency resolution could not be completed for exact restoration: ${pubGet.stderr}',
+        );
+      }
+      for (final artifact in artifacts) {
+        _temporaryHelperCaptureWorkspaceCandidate(
+          artifact,
+          resolutionRoot: record['resolutionRootPath']! as String,
+        );
+      }
+      record['generatedArtifacts'] = artifacts;
+      _temporaryHelperSetPhase(record, 'repair_candidate_resolution_completed');
+      _temporaryHelperWriteRecord(absoluteRecordPath, record);
+      _temporaryHelperCheckpoint('repair_candidate_resolution_completed');
+    }
+    final override = artifacts.singleWhere(
+      (artifact) => artifact['path'] == record['overridePath'],
+    );
+    if (override['candidateExisted'] is! bool) {
+      override['candidateExisted'] = true;
+      override['candidateSha256'] = record['overrideInjectedSha256'];
+    }
+    record['generatedArtifacts'] = artifacts;
+    _temporaryHelperWriteRecord(absoluteRecordPath, record);
+
+    final restored = <Map<String, Object?>>[];
+    for (final artifact in artifacts.reversed) {
+      restored.add(_temporaryHelperRestoreWorkspaceArtifact(record, artifact));
+    }
+    _temporaryHelperSetPhase(record, 'repair_workspace_artifacts_restored');
+    _temporaryHelperWriteRecord(absoluteRecordPath, record);
+    _temporaryHelperCheckpoint('repair_workspace_artifacts_restored');
+    final targetResult = _temporaryHelperRemoveGeneratedTarget(record);
+    _temporaryHelperSetPhase(record, 'repair_target_removed');
+    _temporaryHelperWriteRecord(absoluteRecordPath, record);
+    _temporaryHelperCheckpoint('repair_target_removed');
+
+    for (final artifact in artifacts) {
+      _temporaryHelperGuardWorkspaceArtifactPath(
+        resolutionRoot: record['resolutionRootPath']! as String,
+        path: artifact['path']! as String,
+        operation: 'verify',
+        expectedIntermediateIdentities:
+            (artifact['intermediatePathIdentities'] as List?)?.cast<Object?>(),
+      );
+      final current = _temporaryHelperReadOptionalRegularFile(
+        artifact['path']! as String,
+        label: 'restored workspace artifact',
+      );
+      final currentSha = current == null
+          ? null
+          : crypto.sha256.convert(current).toString();
+      if ((artifact['originalExisted'] == true) != (current != null) ||
+          currentSha != artifact['originalSha256']) {
+        throw _TemporaryHelperRepairConflict(
+          'workspace_artifact_verification_failed',
+          <Map<String, Object?>>[
+            <String, Object?>{
+              'path': artifact['path'],
+              'expectedSha256': artifact['originalSha256'],
+              'actualSha256': currentSha,
+            },
+          ],
+        );
+      }
+    }
+    final completedAt = DateTime.now().toUtc().toIso8601String();
+    final audit = <String, Object?>{
+      'schemaVersion': 1,
+      'status': 'repaired',
+      'operation': operation,
+      'transactionId': record['transactionId'],
+      'runId': record['runId'],
+      'project': record['projectPath'],
+      'resolutionRoot': record['resolutionRootPath'],
+      'completedAt': completedAt,
+      'trackedInputsVerified': true,
+      'packageConfigRestored': true,
+      'workspaceArtifacts': restored,
+      'generatedTarget': targetResult,
+    };
+    final scoutRoot = record['scoutRoot']! as String;
+    _temporaryHelperSetPhase(record, 'cleanup_committing');
+    record['repair'] = <String, Object?>{
+      'status': 'repaired',
+      'automatic': true,
+      'priority': 'critical',
+      'completedAt': completedAt,
+      'trackedInputsVerified': true,
+    };
+    _temporaryHelperWriteRecord(absoluteRecordPath, record);
+    _temporaryHelperCheckpoint('cleanup_committing');
+    final transactionDir = record['transactionDirectory']! as String;
+    final completedDir = p.join(
+      p.dirname(transactionDir),
+      '.completed_${record['transactionId']}_${DateTime.now().microsecondsSinceEpoch}',
+    );
+    if (FileSystemEntity.typeSync(completedDir, followLinks: false) !=
+        FileSystemEntityType.notFound) {
+      throw const _TemporaryHelperRepairConflict(
+        'completed_tombstone_collision',
+        <Map<String, Object?>>[],
+      );
+    }
+    Directory(transactionDir).renameSync(completedDir);
+    _temporaryHelperCheckpoint('cleanup_renamed');
+    _deletePrivateDirectoryIfExists(completedDir, boundary: scoutRoot);
+    _temporaryHelperCheckpoint('cleanup_deleted');
+    return <String, Object?>{
+      ...audit,
+      'recordRemoved': true,
+      'transactionDirectoryRemoved': true,
+      'targetRemoved': targetResult['status'] != 'already_absent',
+      'lockRestored': true,
+    };
   }
 
   Future<bool> _temporaryHelperRecordIsLive(Map<String, Object?> record) async {

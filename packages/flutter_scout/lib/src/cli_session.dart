@@ -314,7 +314,11 @@ extension _CliSession on FlutterScoutCli {
         'createdAt': launchLease.startedAt.toIso8601String(),
         'updatedAt': DateTime.now().toIso8601String(),
       });
-      temporarySetup = parsed.flag('temporary-helper')
+      temporarySetup =
+          _temporaryHelperRequested(
+            explicitTemporaryHelper: parsed.flag('temporary-helper'),
+            helperPath: parsed.option('helper-path'),
+          )
           ? await _prepareTemporaryHelper(
               project: project,
               originalTarget: parsed.option('target') ?? 'lib/main.dart',
@@ -1036,17 +1040,10 @@ extension _CliSession on FlutterScoutCli {
   }
 
   Future<String?> _discoverBundledHelperPath() async {
-    final candidates = <String>[
-      p.normalize(p.join(Directory.current.path, '..', 'flutter_scout_helper')),
-      p.normalize(
-        p.join(Directory.current.path, 'packages', 'flutter_scout_helper'),
-      ),
-    ];
-    // A globally activated Dart executable is launched from the pub cache's
-    // bin directory, so neither its CWD nor Platform.script necessarily
-    // identifies the checkout that supplied this package. Resolve this CLI's
-    // own package URI instead: its sibling helper is shipped in the same
-    // Flutter Scout repository (including git-cache checkouts).
+    final candidates = <String>[];
+    // Resolve this CLI's own package first. A globally activated executable and
+    // its sibling helper then come from one exact git-cache checkout, regardless
+    // of the caller's current directory or stale app dependencies.
     try {
       final packageUri = await isolate.Isolate.resolvePackageUri(
         Uri.parse('package:flutter_scout/flutter_scout.dart'),
@@ -1059,28 +1056,24 @@ extension _CliSession on FlutterScoutCli {
         );
       }
     } on UnsupportedError {
-      // Source locations are unavailable in some compiled embeddings; the
-      // existing CWD/script fallbacks below remain valid in those contexts.
-    }
-    for (final candidate in candidates) {
-      if (File(p.join(candidate, 'pubspec.yaml')).existsSync()) {
-        return candidate;
-      }
+      // Source locations are unavailable in some compiled embeddings; inspect
+      // only exact executable ancestry and otherwise fail closed.
     }
     if (Platform.script.isScheme('file')) {
       var cursor = Directory(p.dirname(Platform.script.toFilePath()));
       for (var depth = 0; depth < 8; depth++) {
-        for (final candidate in [
+        candidates.addAll(<String>[
           p.join(cursor.path, 'packages', 'flutter_scout_helper'),
           p.join(cursor.path, 'flutter_scout_helper'),
-        ]) {
-          if (File(p.join(candidate, 'pubspec.yaml')).existsSync()) {
-            return p.normalize(candidate);
-          }
-        }
+        ]);
         final parent = cursor.parent;
         if (parent.path == cursor.path) break;
         cursor = parent;
+      }
+    }
+    for (final candidate in candidates) {
+      if (File(p.join(candidate, 'pubspec.yaml')).existsSync()) {
+        return Directory(candidate).resolveSymbolicLinksSync();
       }
     }
     return null;

@@ -78,6 +78,16 @@ field-to-value map: `{method:'fill', params:{json:{[fieldHandle]:value}}}`.
 For one field, use `{method:'input', args:[value], params:{target:fieldHandle}}`.
 The input target belongs in `params.target`, not in `args`. Omitting it types
 only into an already focused field; opening a form does not imply focus.
+For an observed unwrapped custom field whose own render object is not safely
+hittable, supply its separately observed user-like activation handle in the
+same action: `{method:'input', args:[value], params:{target:fieldHandle,
+activationTarget:tapHandle}}`. Scout guards and taps only that explicit handle,
+then types only if the exact field is the unique focused editable. Never infer
+an activation handle from ancestry or reuse one after a changed revision. When
+the logical tap widget is not itself on the hit path, Scout acts only through
+the explicitly observed concrete pointer receiver bound to that same gesture
+owner; receiver replacement, geometry drift, or an unrelated pointer route
+fails closed.
 
 Choose from reported candidates or narrow context. A stale state requires
 fresh observation and a new decision, not replacement of the revision on an

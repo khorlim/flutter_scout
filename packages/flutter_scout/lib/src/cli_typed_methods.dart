@@ -585,6 +585,11 @@ final Map<String, _TypedMethodContract> _typedMethodContracts =
         ],
         parameters: <String, _TypedValueContract>{
           ..._persistentExpectParameters(),
+          'activationTarget': const _TypedValueContract(
+            kind: _TypedJsonKind.string,
+            minLength: 1,
+            maxLength: 16384,
+          ),
           'file': const _TypedValueContract(
             kind: _TypedJsonKind.string,
             minLength: 1,

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Define fail-closed workspace-root, member, generated-artifact, and committed
+  cleanup verification errors for workspace-aware temporary-helper setup.
+- Define stable fail-closed errors for unavailable bundled helper identity,
+  explicit helper revision mismatch, and resolved package-config mismatch during
+  zero-diff temporary-helper launch.
+- Add optional `activationTarget` to `input`. It names an explicit observed
+  activation handle; helper protocol 15 remains additive and existing input
+  requests retain their behavior when the parameter is absent.
 - Hard-cutover public CLI contract v2 lives under schemas/v2/. Agent JSONL
   protocol 2 adds query, acknowledge and reconcile, with exclusive ownership,
   receipt delivery gating and no legacy interaction entrypoints. Helper wire

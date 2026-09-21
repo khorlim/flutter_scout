@@ -1494,9 +1494,13 @@ void main() {
         p.join(Directory.current.path, '..', 'flutter_scout_helper'),
       );
       FlutterScoutCli.debugTemporaryHelperPubGetOverride = (project) async {
-        final hasHelper = File(
+        final pubspecText = File(
           p.join(project, 'pubspec.yaml'),
-        ).readAsStringSync().contains('flutter_scout_helper:');
+        ).readAsStringSync();
+        final helperMatch = RegExp(
+          r"flutter_scout_helper:\s*\n\s+path:\s*'([^']+)'",
+        ).firstMatch(pubspecText);
+        final hasHelper = helperMatch != null;
         final packageConfig = File(
           p.join(project, '.dart_tool', 'package_config.json'),
         );
@@ -1504,11 +1508,18 @@ void main() {
         packageConfig.writeAsStringSync(
           jsonEncode({
             'configVersion': 2,
-            'packages': hasHelper
-                ? [
-                    {'name': 'flutter_scout_helper'},
-                  ]
-                : const <Object?>[],
+            'packages': helperMatch == null
+                ? const <Object?>[]
+                : <Object?>[
+                    <String, Object?>{
+                      'name': 'flutter_scout_helper',
+                      'rootUri': Uri.directory(
+                        helperMatch.group(1)!,
+                      ).toString(),
+                      'packageUri': 'lib/',
+                      'languageVersion': '3.12',
+                    },
+                  ],
           }),
           flush: true,
         );

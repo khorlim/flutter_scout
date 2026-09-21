@@ -1,5 +1,19 @@
 ## Unreleased
 
+- Treat an explicit `--helper-path` as an unambiguous temporary-helper request
+  instead of silently launching the app's pre-existing helper. This keeps the
+  generated bootstrap and exact immutable helper transaction coupled even when
+  a caller omits the redundant `--temporary-helper` switch.
+- Make `--temporary-helper` workspace-aware. A selected Dart workspace member
+  now receives one root-scoped helper override for every member, while root
+  lock/package config and member Flutter plugin artifacts are digest-bound and
+  restored byte-for-byte on success, failure, cleanup, and interruption.
+- Make `--temporary-helper` resolve the helper bundled with the exact running
+  CLI even when an unchanged app already pins an older helper. Verify the
+  resolved package-config source before launch and fail closed on an explicit
+  or resolved revision mismatch while restoring tracked app inputs exactly.
+- Let `input` carry an optional explicit `activationTarget` handle through the
+  CLI and persistent agent contract for atomic guarded custom-field activation.
 - Preserve the agent lease inode during session cleanup, recognizing it as a
   serialization control rather than unknown residue. Never unlink a live lock.
 - Add explicit macOS `foreground()` on the persistent agent connection. Activate
