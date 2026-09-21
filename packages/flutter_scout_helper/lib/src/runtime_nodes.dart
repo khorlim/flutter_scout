@@ -268,7 +268,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     }
     if (receiverElement == null || receiverWidget == null) return null;
     final receiver = receiverElement.renderObject as RenderPointerListener;
-    final receiverRect = _rectFor(receiverElement);
+    final receiverRect =
+        debugPointerReceiverRectOverride?.call(logicalElement, logicalRect) ??
+        _rectFor(receiverElement);
     if (receiverRect == null || receiverRect != logicalRect) return null;
     final candidateRect = (visibleRect ?? logicalRect).intersect(receiverRect);
     if (candidateRect.width <= 0 || candidateRect.height <= 0) return null;
@@ -279,7 +281,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final right = math.max(candidateRect.left, candidateRect.right - insetX);
     final top = math.min(candidateRect.bottom, candidateRect.top + insetY);
     final bottom = math.max(candidateRect.top, candidateRect.bottom - insetY);
-    final points = <Offset>{
+    final legacyPoints = <Offset>{
       candidateRect.center,
       Offset(left, top),
       Offset(right, top),
@@ -290,9 +292,24 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       Offset(left, candidateRect.center.dy),
       Offset(right, candidateRect.center.dy),
     };
-    for (final point in points) {
+    final candidates = <_PointerReceiverPointCandidate>[
+      for (final point in legacyPoints)
+        _PointerReceiverPointCandidate(
+          point: point,
+          geometryOwner: receiver,
+          geometryRect: receiverRect,
+          geometryKind: 'logical_receiver_intersection',
+        ),
+      ..._receiverOwnedGeometryCandidates(
+        receiver,
+        receiverRect,
+        candidateRect,
+        excludedPoints: legacyPoints,
+      ),
+    ];
+    for (final candidate in candidates) {
       _PointerReceiverBinding? binding;
-      _hitTest(point, (result) {
+      _hitTest(candidate.point, (result) {
         final path = result.path.toList(growable: false);
         final receiverIndex = path.indexWhere(
           (entry) => identical(entry.target, receiver),
@@ -316,7 +333,10 @@ extension _RuntimeNodes on FlutterScoutRuntime {
           receiver: receiver,
           receiverCallbackIdentity: receiverWidget!.onPointerDown!,
           receiverRect: receiverRect,
-          provenPoint: point,
+          provenPoint: candidate.point,
+          provenGeometryOwner: candidate.geometryOwner,
+          provenGeometryRect: candidate.geometryRect,
+          provenGeometryKind: candidate.geometryKind,
           pathIndex: receiverIndex,
           pathTypes: <String>[
             for (final entry in path.take(24))
@@ -329,6 +349,74 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       if (binding != null) return binding;
     }
     return null;
+  }
+
+  List<_PointerReceiverPointCandidate> _receiverOwnedGeometryCandidates(
+    RenderPointerListener receiver,
+    Rect receiverRect,
+    Rect candidateRect, {
+    required Set<Offset> excludedPoints,
+  }) {
+    const maxRenderNodes = 64;
+    const maxGeometryCandidates = 128;
+    final pending = Queue<RenderObject>()..add(receiver);
+    final points = <Offset>{...excludedPoints};
+    final candidates = <_PointerReceiverPointCandidate>[];
+    var visited = 0;
+    while (pending.isNotEmpty &&
+        visited < maxRenderNodes &&
+        candidates.length < maxGeometryCandidates) {
+      final renderObject = pending.removeFirst();
+      visited += 1;
+      for (final geometryKind in const <String>['paint', 'semantic']) {
+        final globalBounds = _globalRenderBounds(renderObject, geometryKind);
+        if (globalBounds == null) continue;
+        final logicalIntersection = globalBounds.intersect(receiverRect);
+        final visibleIntersection = logicalIntersection.intersect(candidateRect);
+        if (!visibleIntersection.isFinite ||
+            visibleIntersection.width <= 0 ||
+            visibleIntersection.height <= 0) {
+          continue;
+        }
+        final point = visibleIntersection.center;
+        if (!points.add(point)) continue;
+        candidates.add(
+          _PointerReceiverPointCandidate(
+            point: point,
+            geometryOwner: renderObject,
+            geometryRect: logicalIntersection,
+            geometryKind: geometryKind,
+          ),
+        );
+        if (candidates.length >= maxGeometryCandidates) break;
+      }
+      if (visited < maxRenderNodes) {
+        renderObject.visitChildren(pending.add);
+      }
+    }
+    return candidates;
+  }
+
+  Rect? _globalRenderBounds(RenderObject renderObject, String geometryKind) {
+    if (!renderObject.attached) return null;
+    try {
+      final localBounds = geometryKind == 'paint'
+          ? renderObject.paintBounds
+          : renderObject.semanticBounds;
+      if (!localBounds.isFinite ||
+          localBounds.width <= 0 ||
+          localBounds.height <= 0) {
+        return null;
+      }
+      final globalBounds = MatrixUtils.transformRect(
+        renderObject.getTransformTo(null),
+        localBounds,
+      );
+      if (!globalBounds.isFinite) return null;
+      return globalBounds;
+    } catch (_) {
+      return null;
+    }
   }
 
   bool _isRenderDescendantOf(RenderObject candidate, RenderObject ancestor) {

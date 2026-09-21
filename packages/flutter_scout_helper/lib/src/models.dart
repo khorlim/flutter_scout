@@ -431,6 +431,9 @@ class _PointerReceiverBinding {
     required this.receiverCallbackIdentity,
     required this.receiverRect,
     required this.provenPoint,
+    required this.provenGeometryOwner,
+    required this.provenGeometryRect,
+    required this.provenGeometryKind,
     required this.pathIndex,
     required this.pathTypes,
     required this.pathLength,
@@ -446,6 +449,9 @@ class _PointerReceiverBinding {
   final Object receiverCallbackIdentity;
   final Rect receiverRect;
   final Offset provenPoint;
+  final RenderObject provenGeometryOwner;
+  final Rect provenGeometryRect;
+  final String provenGeometryKind;
   final int pathIndex;
   final List<String> pathTypes;
   final int pathLength;
@@ -470,11 +476,35 @@ class _PointerReceiverBinding {
       receiverRect.height,
     ],
     'provenPoint': <double>[provenPoint.dx, provenPoint.dy],
+    'provenGeometry': <String, Object?>{
+      'kind': provenGeometryKind,
+      'ownerType': provenGeometryOwner.runtimeType.toString(),
+      'rect': <double>[
+        provenGeometryRect.left,
+        provenGeometryRect.top,
+        provenGeometryRect.width,
+        provenGeometryRect.height,
+      ],
+    },
     'pathIndex': pathIndex,
     'pathLength': pathLength,
     'path': pathTypes,
     'pathTruncated': pathTypes.length < pathLength,
   };
+}
+
+class _PointerReceiverPointCandidate {
+  const _PointerReceiverPointCandidate({
+    required this.point,
+    required this.geometryOwner,
+    required this.geometryRect,
+    required this.geometryKind,
+  });
+
+  final Offset point;
+  final RenderObject geometryOwner;
+  final Rect geometryRect;
+  final String geometryKind;
 }
 
 class ScoutNode {

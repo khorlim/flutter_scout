@@ -232,6 +232,12 @@ class FlutterScoutRuntime {
   @visibleForTesting
   RenderObject? Function(Element element)? debugRepresentedRenderObjectOverride;
 
+  /// Test-only fail-closed seam for proving that receiver geometry must match
+  /// the logical action geometry before candidate-point discovery can run.
+  @visibleForTesting
+  Rect? Function(Element logicalElement, Rect logicalRect)?
+  debugPointerReceiverRectOverride;
+
   void install() {
     _installRenderingProbe();
     _installErrorHooks();

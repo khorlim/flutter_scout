@@ -1014,13 +1014,26 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       identical(before.receiver, after.receiver) &&
       before.receiverCallbackIdentity == after.receiverCallbackIdentity &&
       before.receiverRect == after.receiverRect &&
-      before.provenPoint == after.provenPoint;
+      before.provenPoint == after.provenPoint &&
+      identical(before.provenGeometryOwner, after.provenGeometryOwner) &&
+      before.provenGeometryRect == after.provenGeometryRect &&
+      before.provenGeometryKind == after.provenGeometryKind;
 
   Map<String, Object?> _immediatePointerReceiverEvidence(
     _PointerReceiverBinding binding,
   ) {
     final currentRect = _rectFor(binding.receiverElement);
     final geometryMatched = currentRect == binding.receiverRect;
+    final currentProvenGeometry = binding.provenGeometryKind ==
+            'logical_receiver_intersection'
+        ? currentRect?.intersect(binding.receiverRect)
+        : _globalRenderBounds(
+            binding.provenGeometryOwner,
+            binding.provenGeometryKind,
+          )?.intersect(binding.receiverRect);
+    final provenGeometryMatched =
+        currentProvenGeometry == binding.provenGeometryRect &&
+        currentProvenGeometry?.contains(binding.provenPoint) == true;
     var path = <String>[];
     var pathLength = 0;
     var receiverIndex = -1;
@@ -1061,6 +1074,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         receiverWidget is Listener &&
         receiverWidget.onPointerDown == binding.receiverCallbackIdentity &&
         geometryMatched &&
+        provenGeometryMatched &&
         relatedPrefix;
     return <String, Object?>{
       'logicalPoint': <double>[binding.provenPoint.dx, binding.provenPoint.dy],
@@ -1069,6 +1083,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       'containsReceiver': receiverIndex >= 0,
       'relationshipMatched': relationshipMatched,
       'geometryMatched': geometryMatched,
+      'provenGeometryMatched': provenGeometryMatched,
       'relatedPrefix': relatedPrefix,
       'receiverIdentity': binding.receiverIdentity,
       'gestureOwnerIdentity': binding.ownerIdentity,

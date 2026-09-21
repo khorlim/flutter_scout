@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -40,6 +41,29 @@ void main() {
       observedActivation['pointerReceiver'],
       containsPair('relationship', 'gesture_owner_pointer_listener_v1'),
     );
+    final receiver = observedActivation['pointerReceiver'] as Map;
+    final receiverRect = (receiver['receiverRect'] as List).cast<double>();
+    expect(receiverRect, <double>[0, 0, 402, 58]);
+    final receiverIdentity = receiver['receiverIdentity'] as String;
+    final legacyPoints = _legacyReceiverPoints(receiverRect);
+    for (final point in legacyPoints) {
+      expect(
+        _hitPathContainsIdentity(tester, point, receiverIdentity),
+        isFalse,
+        reason: 'legacy point $point unexpectedly reached $receiverIdentity',
+      );
+    }
+    final provenPoint = (receiver['provenPoint'] as List).cast<double>();
+    final provenGeometry = receiver['provenGeometry'] as Map;
+    expect(provenGeometry['kind'], anyOf('paint', 'semantic'));
+    expect(
+      _hitPathContainsIdentity(
+        tester,
+        Offset(provenPoint[0], provenPoint[1]),
+        receiverIdentity,
+      ),
+      isTrue,
+    );
 
     final result = await _guardedInputWithEngineFrame(
       tester,
@@ -62,7 +86,27 @@ void main() {
     expect(immediateHitTest['containsTarget'], isFalse);
     expect(immediateHitTest['containsReceiver'], isTrue);
     expect(immediateHitTest['relationshipMatched'], isTrue);
+    expect(immediateHitTest['provenGeometryMatched'], isTrue);
     expect(result.toString(), isNot(contains('246810')));
+  });
+
+  testWidgets('non-overlapping receiver and logical geometry is rejected', (
+    tester,
+  ) async {
+    final fixture = _Fixture();
+    addTearDown(fixture.dispose);
+    await _pumpFixture(tester, fixture);
+    final runtime = FlutterScoutHelper.debugRuntime;
+    runtime.debugPointerReceiverRectOverride = (_, logicalRect) =>
+        logicalRect.shift(const Offset(500, 0));
+    addTearDown(() => runtime.debugPointerReceiverRectOverride = null);
+
+    final activation = runtime.debugSnapshot().interactables.firstWhere(
+      (node) => node.widgetType == 'GestureDetector',
+    );
+
+    expect(activation.toJson(), isNot(contains('pointerReceiver')));
+    expect(activation.hitTestable, isFalse);
   });
 
   testWidgets('missing post-activation frame fails closed at the deadline', (
@@ -312,6 +356,64 @@ void main() {
     expect(moved.pinController.text, isEmpty);
   });
 
+  testWidgets('receiver-owned point drift after tap fails closed', (
+    tester,
+  ) async {
+    final fixture = _Fixture(shiftPointAfterTap: true);
+    addTearDown(fixture.dispose);
+    await _pumpFixture(tester, fixture);
+    final targets = _pinTargets();
+
+    final result = await _guardedInputWithEngineFrame(
+      tester,
+      field: targets.field,
+      value: '765432',
+      activation: targets.activation,
+    );
+
+    expect(fixture.pinAlignedEnd, isTrue);
+    expect(result['ok'], isFalse, reason: '$result');
+    expect(result['reason'], 'final_revalidation_failed');
+    expect(_textDispatch(result), 'not_dispatched');
+    expect(fixture.pinController.text, isEmpty);
+  });
+
+  testWidgets('unrelated overlay over the proven inner point fails closed', (
+    tester,
+  ) async {
+    final fixture = _Fixture();
+    addTearDown(fixture.dispose);
+    await _pumpFixture(tester, fixture);
+    final runtime = FlutterScoutHelper.debugRuntime;
+    final targets = _pinTargets();
+    final activation = runtime
+        .debugSnapshot()
+        .interactables
+        .firstWhere((node) => node.id == targets.activation)
+        .toJson();
+    final receiver = activation['pointerReceiver'] as Map;
+    final point = (receiver['provenPoint'] as List).cast<double>();
+    runtime.debugBeforeGuardedInputActivationRevalidation = () async {
+      fixture.coverPoint(Offset(point[0], point[1]));
+      await tester.pump();
+    };
+    addTearDown(() {
+      runtime.debugBeforeGuardedInputActivationRevalidation = null;
+    });
+
+    final result = await runtime.debugInputTarget(
+      targets.field,
+      '654987',
+      activationTarget: targets.activation,
+    );
+
+    expect(result['ok'], isFalse, reason: '$result');
+    expect(_activationDispatch(result), 'not_dispatched');
+    expect(_textDispatch(result), 'not_dispatched');
+    expect(fixture.overlayTapCount, 0);
+    expect(fixture.pinController.text, isEmpty);
+  });
+
   testWidgets('same-geometry sibling overlay is not a receiver', (
     tester,
   ) async {
@@ -438,9 +540,45 @@ void main() {
 }
 
 Future<void> _pumpFixture(WidgetTester tester, _Fixture fixture) async {
+  tester.view.physicalSize = const Size(402, 874);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
   FlutterScoutHelper.ensureRegistered();
   await tester.pumpWidget(fixture.app());
   await tester.pump();
+}
+
+Set<Offset> _legacyReceiverPoints(List<double> rect) {
+  final bounds = Rect.fromLTWH(rect[0], rect[1], rect[2], rect[3]);
+  final insetX = math.min(12.0, math.max(0.5, bounds.width * 0.18));
+  final insetY = math.min(12.0, math.max(0.5, bounds.height * 0.18));
+  final left = math.min(bounds.right, bounds.left + insetX);
+  final right = math.max(bounds.left, bounds.right - insetX);
+  final top = math.min(bounds.bottom, bounds.top + insetY);
+  final bottom = math.max(bounds.top, bounds.bottom - insetY);
+  return <Offset>{
+    bounds.center,
+    Offset(left, top),
+    Offset(right, top),
+    Offset(left, bottom),
+    Offset(right, bottom),
+    Offset(bounds.center.dx, top),
+    Offset(bounds.center.dx, bottom),
+    Offset(left, bounds.center.dy),
+    Offset(right, bounds.center.dy),
+  };
+}
+
+bool _hitPathContainsIdentity(
+  WidgetTester tester,
+  Offset point,
+  String receiverIdentity,
+) {
+  final expected = int.parse(receiverIdentity.split('.').last, radix: 16);
+  return tester.hitTestOnBinding(point).path.any(
+    (entry) => identityHashCode(entry.target) == expected,
+  );
 }
 
 Future<Map<String, Object?>> _guardedInputWithEngineFrame(
@@ -508,6 +646,7 @@ class _Fixture {
     this.insertOverlayAfterTap = false,
     this.replaceCallbackAfterTap = false,
     this.sameGeometrySiblingOverlay = false,
+    this.shiftPointAfterTap = false,
     this.horizontalInset = 0,
     this.appKeySeed = 0,
   });
@@ -522,6 +661,7 @@ class _Fixture {
   final bool insertOverlayAfterTap;
   final bool replaceCallbackAfterTap;
   final bool sameGeometrySiblingOverlay;
+  final bool shiftPointAfterTap;
   final double horizontalInset;
   final int appKeySeed;
   final pinController = TextEditingController();
@@ -531,6 +671,8 @@ class _Fixture {
   int overlayTapCount = 0;
   bool overlayRequested = false;
   bool callbackReplaced = false;
+  bool pinAlignedEnd = false;
+  Offset? targetedOverlayPoint;
   StateSetter? _setState;
 
   Widget app() => MaterialApp(
@@ -571,6 +713,14 @@ class _Fixture {
                                 key: ValueKey('pin-$keySeed'),
                                 appContext: context,
                                 length: 6,
+                                mainAxisAlignment: pinAlignedEnd
+                                    ? MainAxisAlignment.end
+                                    : MainAxisAlignment.center,
+                                pinTheme: PinTheme(
+                                  fieldWidth: 40,
+                                  fieldHeight: 50,
+                                  fieldOuterPadding: const EdgeInsets.all(4),
+                                ),
                                 controller: pinController,
                                 focusNode: pinFocus,
                                 autoDisposeControllers: false,
@@ -614,6 +764,17 @@ class _Fixture {
                           onTap: () => overlayTapCount += 1,
                         ),
                       ),
+                    if (targetedOverlayPoint case final point?)
+                      Positioned(
+                        left: point.dx - 3,
+                        top: point.dy - 3,
+                        width: 6,
+                        height: 6,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => overlayTapCount += 1,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -632,6 +793,13 @@ class _Fixture {
     if (replaceCallbackAfterTap) {
       _setState!(() => callbackReplaced = true);
     }
+    if (shiftPointAfterTap) {
+      _setState!(() => pinAlignedEnd = true);
+    }
+  }
+
+  void coverPoint(Offset point) {
+    _setState!(() => targetedOverlayPoint = point);
   }
 
   void _replacementTap() => otherFocus.requestFocus();

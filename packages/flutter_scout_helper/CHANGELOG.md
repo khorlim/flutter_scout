@@ -5,8 +5,11 @@
   require the same process-local owner/receiver relationship, geometry, proven
   point, and hit-path membership at dispatch and post-activation revalidation;
   replacement, overlays, unrelated pointer receivers, and geometry drift fail
-  closed. Inspect and receipts expose opaque receiver identity and bounded path
-  diagnostics, never callbacks.
+  closed. When fixed logical-row probes miss, bounded candidate points come only
+  from current paint/semantic geometry owned by that exact receiver and are
+  accepted only after the same exact-receiver hit-path proof. Inspect and
+  receipts expose opaque receiver identity and bounded path diagnostics, never
+  callbacks.
 * Add guarded activation input for unwrapped custom fields: resolve and tap one
   explicit activation handle, require exact unique field focus, revalidate both,
   then use the existing keyboard-semantic text update. Existing input is unchanged.
