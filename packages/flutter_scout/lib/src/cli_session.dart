@@ -577,7 +577,13 @@ extension _CliSession on FlutterScoutCli {
           _writeProgress('launch_heartbeat', {
             'elapsedMs': now.difference(launchTiming.startedAt).inMilliseconds,
             'logLines': readLineCount,
-            if (lines.isNotEmpty) 'lastLine': _compactProgressLine(lines.last),
+            if (lines.isNotEmpty)
+              'lastLine': _compactProgressLine(
+                lines.lastWhere(
+                  (line) => !FlutterScoutCli.isToolchainNoiseLine(line),
+                  orElse: () => lines.last,
+                ),
+              ),
           });
         }
         final runnerAlive = await _runnerSupervisorAlive(supervisor);
@@ -651,7 +657,12 @@ extension _CliSession on FlutterScoutCli {
               lastOutputAt: lastOutputAt,
               lastOutputLine: lines.isEmpty
                   ? null
-                  : _compactProgressLine(lines.last),
+                  : _compactProgressLine(
+                      lines.lastWhere(
+                        (line) => !FlutterScoutCli.isToolchainNoiseLine(line),
+                        orElse: () => lines.last,
+                      ),
+                    ),
             ),
             'cause': ?failureCause?.cause,
           },
