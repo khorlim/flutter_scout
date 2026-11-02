@@ -438,7 +438,84 @@ void main() {
         () => runtime.debugTapTarget('btn.covered'),
       ))!;
       expect(resolutionOf(covered)['status'], 'occluded');
+      // The covered-editor recipe is only for editable fields.
+      expect(covered.containsKey('suggestedActions'), isFalse);
       expect(dispatched, 0);
+    },
+  );
+
+  testWidgets(
+    'targeted input into a covered PIN editor names the focused-input recipe',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      final focus = FocusNode();
+      final controller = TextEditingController();
+      addTearDown(focus.dispose);
+      addTearDown(controller.dispose);
+      // Like pin_code_fields: a transparent editor under painted boxes that
+      // own every pointer and focus the editor when tapped.
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 240,
+                height: 48,
+                child: Stack(
+                  children: [
+                    Opacity(
+                      opacity: 0,
+                      child: TextField(
+                        key: const ValueKey('otp-field'),
+                        focusNode: focus,
+                        controller: controller,
+                      ),
+                    ),
+                    Positioned.fill(
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: focus.requestFocus,
+                        child: const Row(
+                          children: [
+                            Expanded(child: Text('_')),
+                            Expanded(child: Text('_')),
+                            Expanded(child: Text('_')),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      final runtime = FlutterScoutHelper.debugRuntime;
+      final targeted = (await tester.runAsync(
+        () => runtime.debugInputTarget('otp-field', '123456'),
+      ))!;
+      expect(targeted['ok'], isFalse);
+      expect(targeted['reason'], 'target_not_hit_testable');
+      expect(resolutionOf(targeted)['status'], 'occluded');
+      final suggestion =
+          (targeted['suggestedActions']! as List).single
+              as Map<String, Object?>;
+      expect(suggestion['method'], 'tapCoveringControlThenFocusedInput');
+      expect(suggestion['reason'], contains('input without a target'));
+      expect(controller.text, isEmpty);
+
+      // The recipe: the visible control takes focus, then focused input.
+      await tester.tap(find.text('_').first);
+      await tester.pump();
+      expect(focus.hasFocus, isTrue);
+      final focused = (await tester.runAsync(
+        () => runtime.debugInputTarget('focused', '123456'),
+      ))!;
+      expect(focused['ok'], isTrue, reason: '$focused');
+      expect(controller.text, '123456');
     },
   );
 

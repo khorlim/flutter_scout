@@ -979,6 +979,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       _TargetResolutionStatus.occluded => 'target_not_hit_testable',
       _ => status.name,
     };
+    final coveredEditor = _coveredEditorSuggestion(resolution);
     return _fail(
       code,
       resolution.reason ?? 'Target resolution failed: ${status.name}.',
@@ -989,7 +990,38 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         if (resolution.snapshot.activeSurface != null)
           'activeSurface': resolution.snapshot.activeSurface,
         'activation': const {'dispatched': false},
+        'suggestedActions': ?coveredEditor,
       },
     );
+  }
+
+  /// Custom PIN/OTP widgets often paint boxes over a transparent text field,
+  /// so a pointer can never reach the editor itself. Name the recipe that
+  /// keeps every safety check: tap the visible control, confirm focus, then
+  /// type into the focused field. Never a fallback Scout performs itself.
+  List<Map<String, Object?>>? _coveredEditorSuggestion(
+    _TargetResolution resolution,
+  ) {
+    final node = resolution.node;
+    if (node == null ||
+        node._editableState == null ||
+        (resolution.status != _TargetResolutionStatus.occluded &&
+            resolution.status != _TargetResolutionStatus.notHitTestable)) {
+      return null;
+    }
+    return [
+      {
+        'intent': 'enterValue',
+        'target': node.id,
+        'method': 'tapCoveringControlThenFocusedInput',
+        'reason':
+            'This editable field is covered by other render objects, as in '
+            'custom PIN/OTP widgets that paint boxes over a transparent text '
+            'field. Tap the visible control that covers it, observe until '
+            'the keyboard is visible or the field reports focus, then send '
+            'input without a target; focused input rechecks surface, '
+            'visibility, editability and focus before typing.',
+      },
+    ];
   }
 }

@@ -44,7 +44,17 @@ if (!outcome.ok) {
   // Decide from fresh.view whether the failed input changed anything.
   await scout.reconcile(outcome.actionId, fresh.viewRevision);
 }
-``` For a held drag, query
+```
+
+Custom PIN/OTP widgets (such as pin_code_fields) paint boxes over a
+transparent text field, so targeted input fails with
+`reason:'target_not_hit_testable'` and a `suggestedActions` entry
+`tapCoveringControlThenFocusedInput`. Follow it: tap the visible box, observe
+until the keyboard is visible or the field reports focus, then send
+`{ method: 'input', args: [value] }` with no target. Focused input still
+checks surface, visibility, editability and focus before typing.
+
+For a held drag, query
 'drag-status' for its current state; end/cancel it explicitly. A held gesture
 is not cancelled by cancelling a condition wait or closing the transport.
 An offscreen target is not permission to tap its old geometry. Bounded reveal
