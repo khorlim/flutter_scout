@@ -56,6 +56,9 @@ exit 1
               environment: {
                 'HOME': temp.path,
                 'PATH': '${temp.path}:${Platform.environment['PATH']}',
+                // This fixture asserts the direct `flutter run` contract; the
+                // LaunchServices plan is covered in macos_launch_test.dart.
+                'FLUTTER_SCOUT_MACOS_DIRECT_RUN': '1',
               },
             );
             expect(

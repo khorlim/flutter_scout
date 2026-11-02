@@ -23,6 +23,19 @@ When a macOS build must inherit a temporarily unlocked signing Keychain, pass
 Scout then uses the detached-worker fallback for that run. It preserves the
 caller security context through signing, but has no launchd crash recovery and
 does not survive logout.
+
+On macOS, Scout builds with `flutter build macos --debug`, opens the app through
+LaunchServices (`open -n`) and then runs `flutter attach` for reload and
+restart. The app is therefore its own privacy (TCC) responsible process in the
+user's GUI session: microphone, camera and Bluetooth prompts name the app, its
+System Settings toggles apply, and Keychain access works without
+`--inherit-launch-context`. Reload, restart, `stop` and app prints in `logs`
+behave as with `flutter run`; `stop` also ends the exact app it opened. Flutter
+accepts the app's VM-service URL for `attach` only as a process argument, so it
+is visible to local process inspection while the run lives. Set
+`FLUTTER_SCOUT_MACOS_DIRECT_RUN=1` to launch with `flutter run` instead; the app
+is then a child of Scout's worker, which macOS treats as the responsible
+process, so privacy-gated requests are denied without a prompt.
 If the app remains reachable after its Scout-owned Flutter runner exits,
 `status` reclassifies the session as attach-only and reports
 `ownershipLossReason: owner_process_exited`. The app remains available for

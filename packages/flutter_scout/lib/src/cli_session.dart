@@ -164,7 +164,9 @@ extension _CliSession on FlutterScoutCli {
         help:
             'On macOS, start the detached runner in the caller security '
             'context instead of launchd. Use this while an outer command '
-            'keeps a temporary signing keychain available.',
+            'keeps a temporary signing keychain available. The app itself is '
+            'still opened through LaunchServices, so it remains its own '
+            'privacy (TCC) responsible process.',
       )
       ..addMultiOption(
         'dart-define',
@@ -417,6 +419,11 @@ extension _CliSession on FlutterScoutCli {
         'stateFile': supervisorStateFile,
         'persistentConfig': Platform.isMacOS,
         'supervised': Platform.isMacOS,
+        'macosLaunchServices': _shouldLaunchMacosAppThroughLaunchServices(
+          isMacOS: Platform.isMacOS,
+          deviceId: resolvedDevice.id,
+          environment: Platform.environment,
+        ),
       });
       // launchd opens this path itself; pre-creating it under the private
       // session boundary preserves 0600 even before the first log line.
@@ -857,6 +864,12 @@ extension _CliSession on FlutterScoutCli {
         'flutterPid': previousFlutterPid,
         'recoveredExistingFlutter': true,
         'recoveredAt': workerStartedAt,
+        for (final key in const [
+          'macosAppPid',
+          'macosAppExecutable',
+          'macosAppProcessIdentity',
+        ])
+          if (previousState[key] != null) key: previousState[key],
       };
       writeState(supervisorState);
       String? requestedSignal;
@@ -892,12 +905,16 @@ extension _CliSession on FlutterScoutCli {
         while (await stillOwnsRecoveredFlutter()) {
           await Future<void>.delayed(const Duration(milliseconds: 500));
         }
+        final macosAppStop = supervisorState['macosAppPid'] == null
+            ? null
+            : await _terminateMacosApp(supervisorState);
         final exitedAt = DateTime.now().toUtc().toIso8601String();
         final exitInfo = <String, Object?>{
           'runId': ?config['runId']?.toString(),
           'workerPid': pid,
           'flutterPid': previousFlutterPid,
           'requestedSignal': ?requestedSignal,
+          'macosAppStop': ?macosAppStop,
           'reason': 'recovered_flutter_process_exited',
           'exitedAt': exitedAt,
         };
@@ -924,9 +941,141 @@ extension _CliSession on FlutterScoutCli {
       }
     }
 
+    var childArgv = flutterArgv;
+    _MacosLaunchedApp? macosApp;
+    var macosOutputStopped = false;
+    if (config['macosLaunchServices'] == true) {
+      final plan = _MacosLaunchPlan.fromRunArgs(flutterArgv);
+      String? preLaunchSignal;
+      Process? build;
+      final preLaunchSubscriptions = <StreamSubscription<ProcessSignal>>[
+        for (final signal in [ProcessSignal.sigterm, ProcessSignal.sigint])
+          signal.watch().listen((_) {
+            preLaunchSignal = signal.toString();
+            final running = build;
+            if (running != null) Process.killPid(running.pid, signal);
+          }),
+      ];
+      int? buildExitCode;
+      String? appPath;
+      ScoutCliException? launchFailure;
+      try {
+        final started = await Process.start(
+          flutterExecutable,
+          plan.buildArgs,
+          workingDirectory: project,
+          environment: _flutterToolEnvironment(),
+        );
+        build = started;
+        final buildIdentity = await _readProcessOwnershipIdentity(
+          started.pid,
+          role: _flutterRunProcessRole,
+        );
+        supervisorState = {
+          ...supervisorState,
+          'flutterPid': started.pid,
+          'flutterProcessIdentity': ?buildIdentity,
+          'flutterProcessIdentityUnavailable': buildIdentity == null,
+          'macosLaunchPhase': 'build',
+        };
+        writeState(supervisorState);
+        Future<void> drain(Stream<List<int>> stream, String name) => stream
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())
+            .asyncMap((line) {
+              appPath = _builtMacosAppPath(line, project: project) ?? appPath;
+              return writeLine(name, line);
+            })
+            .drain<void>();
+        final buildDrains = [
+          drain(started.stdout, 'STDOUT'),
+          drain(started.stderr, 'STDERR'),
+        ];
+        buildExitCode = await started.exitCode;
+        await Future.wait(buildDrains);
+        build = null;
+        final builtApp = appPath;
+        if (buildExitCode == 0 && builtApp == null) {
+          throw const ScoutCliException(
+            'macos_app_bundle_not_found',
+            'flutter build macos succeeded but did not report the built app.',
+          );
+        }
+        if (buildExitCode == 0 && builtApp != null && preLaunchSignal == null) {
+          await writeLine(
+            'STDOUT',
+            'Launching ${p.basename(builtApp)} through LaunchServices so it is '
+                'its own macOS privacy (TCC) responsible process.',
+          );
+          final launched = await _openMacosAppForAttach(
+            appPath: builtApp,
+            plan: plan,
+            outputFile: p.join(p.dirname(logFile), 'macos_app_output.txt'),
+            writeAppLine: (line) => writeLine('STDOUT', line),
+            isCancelled: () => preLaunchSignal != null,
+            isStopped: () => macosOutputStopped,
+          );
+          macosApp = launched;
+          supervisorState = {
+            ...supervisorState,
+            ...launched.toState(),
+            'macosLaunchPhase': 'attach',
+          };
+          writeState(supervisorState);
+          childArgv = plan.attachArgs(launched.vmServiceUri);
+        }
+      } on ScoutCliException catch (error) {
+        launchFailure = error;
+        await writeLine(
+          'STDERR',
+          '[flutter_scout] ${error.code}: '
+              '${_redactActiveSensitiveText(error.message)}',
+        );
+      } finally {
+        for (final subscription in preLaunchSubscriptions) {
+          await subscription.cancel();
+        }
+      }
+      if (macosApp != null && preLaunchSignal != null) {
+        await _terminateMacosApp(supervisorState);
+      }
+      if (macosApp == null || preLaunchSignal != null) {
+        final exitCode = buildExitCode == null || buildExitCode == 0
+            ? 1
+            : buildExitCode;
+        final exitInfo = <String, Object?>{
+          'runId': ?config['runId']?.toString(),
+          'workerPid': pid,
+          'flutterPid': ?supervisorState['flutterPid'],
+          'exitCode': exitCode,
+          'requestedSignal': ?preLaunchSignal,
+          'reason': launchFailure?.code ?? 'macos_build_failed',
+          'exitedAt': DateTime.now().toUtc().toIso8601String(),
+        };
+        if (exitFile != null && exitFile.isNotEmpty) {
+          final file = File(exitFile);
+          _atomicWritePrivateJson(
+            file.path,
+            exitInfo,
+            boundary: file.parent.path,
+          );
+        }
+        supervisorState = {
+          ...supervisorState,
+          ...exitInfo,
+          'workerExitingNormally': true,
+        };
+        writeState(supervisorState);
+        macosOutputStopped = true;
+        await macosApp?.outputTail;
+        await writer.close();
+        return config['supervised'] == true ? 0 : exitCode;
+      }
+    }
+
     final child = await Process.start(
       flutterExecutable,
-      flutterArgv,
+      childArgv,
       workingDirectory: project,
       environment: _flutterToolEnvironment(),
     );
@@ -988,6 +1137,13 @@ extension _CliSession on FlutterScoutCli {
     try {
       final exitCode = await child.exitCode;
       await Future.wait(outputDrains);
+      // `flutter attach` only detaches; stop the exact app it attached to so
+      // a Flutter-tool exit ends the desktop app as `flutter run` does.
+      final macosAppStop = macosApp == null
+          ? null
+          : await _terminateMacosApp(supervisorState);
+      macosOutputStopped = true;
+      await macosApp?.outputTail;
       final exitedAt = DateTime.now().toUtc().toIso8601String();
       final exitInfo = <String, Object?>{
         'runId': ?config['runId']?.toString(),
@@ -995,6 +1151,7 @@ extension _CliSession on FlutterScoutCli {
         'flutterPid': child.pid,
         'exitCode': exitCode,
         'requestedSignal': ?requestedSignal,
+        'macosAppStop': ?macosAppStop,
         'exitedAt': exitedAt,
       };
       if (exitFile != null && exitFile.isNotEmpty) {
@@ -2493,10 +2650,22 @@ extension _CliSession on FlutterScoutCli {
         workerStatus = 'already_stopped';
       }
 
+      // A LaunchServices macOS app is not a child of the Flutter tool. The
+      // worker normally stops it after `flutter attach` exits; this covers a
+      // worker that was lost first. Only the exact recorded process is used.
+      final macosAppStatus = state['macosAppPid'] == null
+          ? null
+          : await _terminateMacosApp(state);
+      if (macosAppStatus == 'terminated' || macosAppStatus == 'killed') {
+        stoppedAny = true;
+      }
+      if (macosAppStatus == 'still_running') runQuiesced = false;
+
       allQuiesced = allQuiesced && runQuiesced;
       reports.add(<String, Object?>{
         'runId': runId,
         'status': runQuiesced ? 'quiesced' : 'unresolved',
+        'macosAppStatus': ?macosAppStatus,
         'workerPid': ?workerPid,
         'workerStatus': workerStatus,
         'flutterPid': ?flutterPid,
@@ -2552,7 +2721,11 @@ extension _CliSession on FlutterScoutCli {
     final hasFlutterTool =
         lower.contains('flutter_tools') ||
         RegExp(r'(^|[/\s])flutter(\s|$)').hasMatch(lower);
-    final hasRunCommand = RegExp(r'(^|\s)run(\s|$)').hasMatch(lower);
+    // macOS LaunchServices runs record `flutter build macos` and then
+    // `flutter attach -d macos` as the owned Flutter tool (cli_macos_launch).
+    final isMacosBuild = RegExp(r'(^|\s)build\s+macos(\s|$)').hasMatch(lower);
+    final hasRunCommand =
+        RegExp(r'(^|\s)(run|attach)(\s|$)').hasMatch(lower) || isMacosBuild;
     final ownsRun = command.contains('$kScoutRunIdDefine=$runId');
     final ownsProject = command.contains(
       '$kScoutProjectDefine=${Directory(project).absolute.path}',
@@ -2561,6 +2734,7 @@ extension _CliSession on FlutterScoutCli {
     final ownsDevice =
         device == null ||
         device.isEmpty ||
+        (isMacosBuild && device == 'macos') ||
         RegExp(
           '(?:^|\\s)(?:-d|--device)\\s+${RegExp.escape(device)}(?:\\s|\$)',
         ).hasMatch(command);

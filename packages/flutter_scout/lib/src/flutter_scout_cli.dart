@@ -44,6 +44,7 @@ part 'cli_secret_ingress.dart';
 part 'cli_storage.dart';
 part 'cli_event_journal.dart';
 part 'cli_log_storage.dart';
+part 'cli_macos_launch.dart';
 
 Map<String, String> _flutterToolEnvironment([
   Map<String, String>? inherited,
@@ -1419,7 +1420,15 @@ class FlutterScoutCli {
         ? null
         : await _pidForListeningVmPort(vmUri);
     final launchPid = _readPid();
+    // A LaunchServices macOS app is not a Flutter-tool descendant; its exact
+    // PID is recorded by the worker (cli_macos_launch.dart).
+    final supervisorState = _readSessionConfiguredJson('supervisorStateFile');
+    final macosAppPid =
+        supervisorState?['runId'] == _readSessionMeta()?['runId']
+        ? int.tryParse('${supervisorState?['macosAppPid'] ?? ''}')
+        : null;
     final pids = <int>[
+      ?macosAppPid,
       ?listenerPid,
       ...await _descendantPids(listenerPid),
       ?launchPid,

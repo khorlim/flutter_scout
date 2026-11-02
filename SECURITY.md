@@ -176,7 +176,12 @@ state or child-process creation; use `--dart-define-from-file` instead. The
 native Android dispatch tool necessarily receives a deep link in its short-lived ADB
 argument vector and remote-shell command after preflight; protected ingress
 removes it from the caller's shell argv and from Scout persistence, not from the
-platform API used to deliver it. Never include real production credentials in
+platform API used to deliver it. Likewise, a Scout-owned macOS app is opened
+through LaunchServices so it is its own privacy responsible process, and
+`flutter attach` accepts that app's VM-service URL only as a process argument.
+The URL is therefore visible to local process inspection for the life of the
+run; set `FLUTTER_SCOUT_MACOS_DIRECT_RUN=1` to use `flutter run` without that
+exposure, at the cost of privacy-gated requests being denied. Never include real production credentials in
 fixtures. Generated adversarial redaction tests and a zero plaintext-leak
 result are release requirements, not optional quality improvements.
 

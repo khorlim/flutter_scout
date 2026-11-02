@@ -157,7 +157,10 @@ On macOS, when an outer command temporarily unlocks a signing Keychain, add
 `--inherit-launch-context` to `launch` or `ensure` and keep the outer command
 alive until Scout reports ready. This bypasses Scout's normal launchd security
 context for that run, so it has no launchd crash recovery and will not survive
-logout. Do not use it for ordinary builds.
+logout. Do not use it for ordinary builds. Scout opens macOS apps through
+LaunchServices, so the app stays its own privacy (TCC) responsible process with
+or without this flag; microphone, camera and Bluetooth prompts and Keychain
+access use the app's own entitlements and usage descriptions.
 
 If permanent integration is not appropriate yet, verify with a generated,
 zero-diff bootstrap:
