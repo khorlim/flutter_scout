@@ -1,4 +1,10 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { chmodSync, lstatSync, mkdirSync, openSync, realpathSync, unlinkSync } from 'node:fs';
+import { createConnection, createServer } from 'node:net';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const notReachable = new Set(['not_attached', 'vm_service_connection_failed', 'vm_service_uri_unavailable']);
 const lossCodes = {
@@ -276,7 +282,11 @@ export class ScoutAgent {
         const event = response.event;
         if (event?.type === 'timeout') continue;
         if (event?.type !== 'action' || event.actionId !== ticket.actionId) events.push(event);
-        if (event?.type === 'closed') throw new Error('Scout closed before delivering the input receipt; reconcile before further input');
+        if (event?.type === 'closed') {
+          throw agentError('scout_agent_closed_before_receipt',
+            'Scout closed before delivering the input receipt; reconcile before further input',
+            { dispatch: 'dispatch_outcome_unknown' });
+        }
         if (event?.type !== 'action' || event.actionId !== ticket.actionId) continue;
         if (event.result?.ok === true) {
           const acknowledged = await this.acknowledge(ticket.actionId);
@@ -304,4 +314,381 @@ export class ScoutAgent {
   }
   /** Emergency transport shutdown, NOT app-operation cancellation. */
   abort() { this.fail('abort'); }
+}
+
+// ---------------------------------------------------------------------------
+// Shell bridge for agents without a persistent Node tool (e.g. Claude Code's
+// Bash tool). `serve` keeps ONE ScoutAgent connection in a background process
+// behind a private Unix socket; each `call` sends one request to it. It adds
+// no retries, queues or app logic: one hand, receipts and acknowledgement are
+// the ScoutAgent semantics above.
+//
+//   node agent_client.mjs serve --app <name>           # returns when connected
+//   node agent_client.mjs call --app <name> observe
+//   node agent_client.mjs call --app <name> act '{"viewRevision":3,"action":{...}}'
+//   node agent_client.mjs call --app <name> act - <<'JSON'   # input/fill: stdin only
+//   node agent_client.mjs call --app <name> disconnect   # before reload/restart
+//   node agent_client.mjs stop --app <name>              # close Scout and the bridge
+// ---------------------------------------------------------------------------
+
+const bridgeParams = {
+  observe: [], status: [], foreground: [], bridge: [], disconnect: [], close: [],
+  act: ['viewRevision', 'action', 'timeoutMs'],
+  start: ['viewRevision', 'action'],
+  acknowledge: ['actionId'],
+  reconcile: ['actionId', 'viewRevision'],
+  next: ['timeoutMs'],
+  watch: ['condition', 'timeoutMs'],
+  react: ['viewRevision', 'condition', 'reaction', 'timeoutMs'],
+  cancel: ['scope', 'conditionId'],
+  query: ['method', 'params', 'args'],
+};
+// Allowed on a reconnected connection before the caller has observed it.
+// Revisions, action ids and condition ids restart with every connection.
+const freshSafe = new Set(['observe', 'status', 'query', 'bridge', 'disconnect', 'close']);
+const idleShutdownMs = 30 * 60 * 1000;
+
+function bridgePaths(app, socket) {
+  if (socket) return { socket, log: `${socket}.log` };
+  // Unix socket paths are limited to ~104 bytes; long names are hashed.
+  const name = /^[A-Za-z0-9._-]{1,24}$/.test(app) ? app
+    : `app-${createHash('sha256').update(app).digest('hex').slice(0, 16)}`;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'user';
+  const dir = join(tmpdir(), `flutter-scout-${uid}`);
+  return { socket: join(dir, `${name}.sock`), log: join(dir, `${name}.log`) };
+}
+
+function ensurePrivateDir(dir) {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(dir);
+  if (!stat.isDirectory() || stat.isSymbolicLink() ||
+      (typeof process.getuid === 'function' && stat.uid !== process.getuid()) || (stat.mode & 0o077)) {
+    throw agentError('bridge_insecure_directory', `${dir} must be a 0700 directory owned by the current user.`);
+  }
+}
+
+function errorResponse(error) {
+  const details = {};
+  for (const key of ['cause', 'exitCode', 'signal', 'stderr']) {
+    if (error?.[key] !== undefined && error[key] !== null) details[key] = error[key];
+  }
+  return {
+    ok: false,
+    dispatch: error?.dispatch ?? 'not_dispatched',
+    error: { code: error?.code ?? 'bridge_request_rejected', message: String(error?.message ?? error), ...details },
+    retry: 'never_automatic',
+  };
+}
+
+function lossSummary(failure) {
+  if (!failure) return null;
+  const { code, dispatch, exitCode, signal, stderr } = failure;
+  return { code, dispatch, exitCode, signal, stderr, message: failure.message };
+}
+
+export class ScoutBridge {
+  constructor(options) {
+    this.options = options;
+    this.agent = null;
+    this.opening = null;
+    this.connection = 0;
+    this.fresh = false;
+    this.disconnected = false;
+  }
+
+  /** Opens the connection lazily; reports a reconnect, never resends input. */
+  ensureAgent() {
+    if (this.agent && !this.agent.closed) return Promise.resolve(null);
+    if (!this.opening) {
+      const previous = this.agent;
+      this.opening = ScoutAgent.connect(this.options).then(agent => {
+        this.agent = agent;
+        this.connection += 1;
+        if (this.connection === 1) return null;
+        this.fresh = true;
+        const info = { reconnected: true, connection: this.connection,
+          reason: this.disconnected ? 'disconnected' : 'transport_lost',
+          previousLoss: this.disconnected ? null : lossSummary(previous?.failure) };
+        this.disconnected = false;
+        return info;
+      }).finally(() => { this.opening = null; });
+    }
+    return this.opening;
+  }
+
+  get busy() {
+    const agent = this.agent;
+    return Boolean(agent && !agent.closed && (agent.acting ||
+      [...agent.pending.values()].some(request => request.method === 'start')));
+  }
+
+  async disconnect() {
+    if (this.busy) {
+      throw agentError('bridge_input_in_flight', 'An input is running; wait for its receipt before disconnecting.');
+    }
+    const agent = this.agent;
+    if (!agent || agent.closed) return { ok: true, type: 'disconnected', connected: false };
+    const closed = await agent.close();
+    this.disconnected = true;
+    return { ...closed, ok: closed.ok === true, type: 'disconnected', connected: false };
+  }
+
+  async handle(request) {
+    const { method, params = {} } = request ?? {};
+    if (!Object.hasOwn(bridgeParams, method) || !params || typeof params !== 'object' || Array.isArray(params) ||
+        Object.keys(params).some(key => !bridgeParams[method].includes(key))) {
+      throw agentError('bridge_invalid_request',
+        `Unknown method or field. Methods: ${Object.keys(bridgeParams).join(', ')}.`);
+    }
+    if (method === 'bridge') {
+      return { ok: true, app: this.options.app, pid: process.pid, connection: this.connection,
+        connected: Boolean(this.agent && !this.agent.closed), fresh: this.fresh };
+    }
+    if (method === 'disconnect' || method === 'close') return this.disconnect();
+    const bridge = await this.ensureAgent();
+    const tag = value => (bridge ? { ...value, bridge } : value);
+    if (this.fresh && !freshSafe.has(method)) {
+      return tag(errorResponse(agentError('bridge_reconnected',
+        'Scout reconnected; revisions and ids restarted. Observe and decide again. Nothing was sent.')));
+    }
+    const agent = this.agent;
+    const p = params;
+    let result;
+    switch (method) {
+      case 'observe': result = await agent.observe(); break;
+      case 'status': result = await agent.status(); break;
+      case 'foreground': result = await agent.foreground(); break;
+      case 'act': result = await agent.act(p.viewRevision, p.action, p.timeoutMs ?? 45000); break;
+      case 'start': result = await agent.start(p.viewRevision, p.action); break;
+      case 'acknowledge': result = await agent.acknowledge(p.actionId); break;
+      case 'reconcile': result = await agent.reconcile(p.actionId, p.viewRevision); break;
+      case 'next': result = await agent.next(p.timeoutMs ?? 10000); break;
+      case 'watch': result = await agent.watch(p.condition, p.timeoutMs ?? 5000); break;
+      case 'react': result = await agent.react(p.viewRevision, p.condition, p.reaction, p.timeoutMs ?? 5000); break;
+      case 'cancel': result = await agent.cancel(p.scope, p.conditionId); break;
+      case 'query': result = await agent.query(p.method, p.params ?? {}, p.args ?? []); break;
+    }
+    if (method === 'observe' || method === 'status') this.fresh = false;
+    return tag(result);
+  }
+}
+
+function sendBridge(socketPath, request, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(socketPath);
+    let data = '';
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(agentError('bridge_call_timeout', 'The bridge did not answer in time.'));
+    }, timeoutMs);
+    socket.setEncoding('utf8');
+    socket.on('connect', () => socket.write(JSON.stringify(request) + '\n'));
+    socket.on('data', chunk => { data += chunk; });
+    socket.on('error', error => { clearTimeout(timer); reject(error); });
+    socket.on('end', () => {
+      clearTimeout(timer);
+      try { resolve(JSON.parse(data)); } catch { reject(agentError('bridge_protocol_error', 'Malformed bridge reply.')); }
+    });
+  });
+}
+
+async function serveForeground(options, paths, report) {
+  const bridge = new ScoutBridge(options);
+  try {
+    await bridge.ensureAgent();
+  } catch (error) {
+    return report(errorResponse(error));
+  }
+  let idle;
+  let stopping = false;
+  const shutdown = async () => {
+    if (stopping) return;
+    stopping = true;
+    clearTimeout(idle);
+    server.close();
+    try { unlinkSync(paths.socket); } catch {}
+    const agent = bridge.agent;
+    if (agent && !agent.closed) {
+      await Promise.race([agent.close().catch(() => {}), new Promise(resolve => setTimeout(resolve, 10000))]);
+      if (!agent.closed) agent.abort();
+    }
+    process.exit(0);
+  };
+  const armIdle = () => {
+    clearTimeout(idle);
+    idle = setTimeout(() => { if (bridge.busy) armIdle(); else shutdown(); }, idleShutdownMs);
+  };
+  const server = createServer(socket => {
+    clearTimeout(idle);
+    let data = '';
+    socket.setEncoding('utf8');
+    socket.on('error', () => {});
+    socket.on('data', async chunk => {
+      data += chunk;
+      if (data.length > 1024 * 1024) return socket.destroy();
+      const end = data.indexOf('\n');
+      if (end < 0) return;
+      socket.removeAllListeners('data');
+      let request;
+      let response;
+      try {
+        request = JSON.parse(data.slice(0, end));
+        response = await bridge.handle(request);
+      } catch (error) { response = errorResponse(error); }
+      socket.end(JSON.stringify(response) + '\n');
+      if (request?.method === 'close' && response.ok) shutdown();
+      else armIdle();
+    });
+  });
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, shutdown);
+  const previousMask = process.umask(0o177);
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(paths.socket, resolve);
+    });
+  } catch (error) {
+    await bridge.agent?.close().catch(() => {});
+    return report(errorResponse(agentError('bridge_listen_failed', error.message)));
+  } finally { process.umask(previousMask); }
+  chmodSync(paths.socket, 0o600);
+  armIdle();
+  report({ ok: true, type: 'serving', app: options.app, pid: process.pid, socket: paths.socket,
+    log: paths.log, scene: bridge.agent.latest });
+}
+
+function parseArgs(argv) {
+  const options = {};
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--foreground') options.foreground = true;
+    else if (['--app', '--socket', '--binary', '--interval-ms', '--max-items'].includes(arg)) {
+      if (i + 1 >= argv.length) throw agentError('usage', `${arg} needs a value`);
+      options[arg.slice(2)] = argv[++i];
+    } else positional.push(arg);
+  }
+  return { options, positional };
+}
+
+async function readStdin() {
+  let data = '';
+  process.stdin.setEncoding('utf8');
+  for await (const chunk of process.stdin) data += chunk;
+  return data;
+}
+
+async function callBridge(command, options, paths, method, json) {
+  const print = value => process.stdout.write(JSON.stringify(value) + '\n');
+  let params = {};
+  if (command === 'call' && json !== undefined) {
+    try { params = JSON.parse(json === '-' ? await readStdin() : json); } catch {
+      print(errorResponse(agentError('usage', 'Arguments must be one JSON object (or - to read it from stdin).')));
+      return 2;
+    }
+    if (json !== '-' && ['input', 'fill'].includes(params?.action?.method)) {
+      print(errorResponse(agentError('bridge_stdin_required',
+        'input/fill values must come through stdin (pass - and a heredoc), never process arguments. Nothing was sent.')));
+      return 2;
+    }
+  }
+  const request = { method: command === 'stop' ? 'close' : method, params };
+  try {
+    const response = await sendBridge(paths.socket, request, 150000);
+    print(response);
+    return response.ok === true ? 0 : 1;
+  } catch (error) {
+    if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) {
+      if (command === 'stop') { print({ ok: true, type: 'closed', running: false }); return 0; }
+      print(errorResponse(agentError('bridge_not_running',
+        `No Scout bridge for ${options.app}. Start one: node agent_client.mjs serve --app ${options.app}`)));
+      return 1;
+    }
+    const unknown = error.code === 'bridge_call_timeout' && ['act', 'start', 'react'].includes(request.method);
+    print(errorResponse(Object.assign(error, unknown ? { dispatch: 'dispatch_outcome_unknown' } : {})));
+    return 1;
+  }
+}
+
+async function serveBridge(argv, options, paths) {
+  const print = value => process.stdout.write(JSON.stringify(value) + '\n');
+  // Reuse a live bridge for this app; clear only a stale socket file.
+  try {
+    const existing = await sendBridge(paths.socket, { method: 'bridge' }, 5000);
+    if (existing?.app === options.app) {
+      print({ ...existing, type: 'serving', reused: true, socket: paths.socket });
+      return 0;
+    }
+    print(errorResponse(agentError('bridge_socket_in_use', `${paths.socket} serves another app.`)));
+    return 1;
+  } catch (error) {
+    if (!['ENOENT', 'ECONNREFUSED'].includes(error.code)) { print(errorResponse(error)); return 1; }
+  }
+  try {
+    if (!lstatSync(paths.socket).isSocket()) {
+      print(errorResponse(agentError('bridge_socket_in_use', `${paths.socket} is not a socket.`)));
+      return 1;
+    }
+    unlinkSync(paths.socket);
+  } catch (error) { if (error.code !== 'ENOENT') { print(errorResponse(error)); return 1; } }
+  const agentOptions = {
+    app: options.app,
+    ...(options.binary ? { binary: options.binary } : {}),
+    ...(options['interval-ms'] ? { intervalMs: Number(options['interval-ms']) } : {}),
+    ...(options['max-items'] ? { maxItems: Number(options['max-items']) } : {}),
+  };
+  if (options.foreground) {
+    // Runs until close/idle/signal; reports readiness over IPC or stdout.
+    return new Promise(resolve => {
+      serveForeground(agentOptions, paths, value => {
+        const done = () => { if (!value.ok) resolve(1); };
+        if (process.send) process.send(value, () => { process.disconnect(); done(); });
+        else { print(value); done(); }
+      });
+    });
+  }
+  const log = openSync(paths.log, 'a', 0o600);
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...argv, '--foreground'],
+    { detached: true, stdio: ['ignore', 'ignore', log, 'ipc'] });
+  return new Promise(resolve => {
+    child.once('message', value => {
+      print(value);
+      child.removeAllListeners('exit');
+      child.disconnect();
+      child.unref();
+      resolve(value.ok ? 0 : 1);
+    });
+    child.once('exit', code => {
+      print(errorResponse(agentError('bridge_start_failed', `The bridge exited (${code}) before connecting; see ${paths.log}.`)));
+      resolve(1);
+    });
+  });
+}
+
+async function main(argv) {
+  const print = value => process.stdout.write(JSON.stringify(value) + '\n');
+  let parsed;
+  try { parsed = parseArgs(argv); } catch (error) { print(errorResponse(error)); return 2; }
+  const { options, positional } = parsed;
+  const [command, method, json] = positional;
+  if (!['serve', 'call', 'stop'].includes(command) || typeof options.app !== 'string' || !options.app ||
+      (command === 'call' ? !method || positional.length > 3 : positional.length > 1)) {
+    print(errorResponse(agentError('usage',
+      'Usage: agent_client.mjs serve|stop --app <name> [--socket <path>] | call --app <name> <method> [json|-]')));
+    return 2;
+  }
+  const paths = bridgePaths(options.app, options.socket);
+  try { ensurePrivateDir(dirname(paths.socket)); } catch (error) { print(errorResponse(error)); return 1; }
+  return command === 'serve' ? serveBridge(argv, options, paths) : callBridge(command, options, paths, method, json);
+}
+
+const invoked = (() => {
+  try { return realpathSync(process.argv[1] ?? '') === realpathSync(fileURLToPath(import.meta.url)); } catch { return false; }
+})();
+if (invoked) {
+  // A foreground server resolves only on failure; everything else exits after
+  // its single JSON line is flushed (the detached server keeps running).
+  main(process.argv.slice(2)).then(code => {
+    process.stdout.write('', () => process.exit(code));
+  });
 }

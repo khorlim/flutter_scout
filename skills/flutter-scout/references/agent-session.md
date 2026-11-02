@@ -41,6 +41,31 @@ await agent.acknowledge(ticket.actionId);
 await agent.close();
 ```
 
+### Shell bridge (no persistent Node tool)
+
+`node agent_client.mjs serve --app <name> [--socket <path>]` detaches a
+process that owns one `ScoutAgent` and listens on a Unix socket (default
+`$TMPDIR/flutter-scout-<uid>/<name>.sock`, directory 0700, socket 0600). It
+prints `{type:'serving', socket, pid, log, scene}` once connected, or the
+connect error, and reuses a live bridge for the same app. `call --app <name>
+<method> [json|-]` sends one request and prints one JSON line (exit 0 iff
+`ok:true`). Methods mirror the client with named fields: `act {viewRevision,
+action, timeoutMs}`, `start`, `acknowledge {actionId}`, `reconcile {actionId,
+viewRevision}`, `next {timeoutMs}`, `watch {condition, timeoutMs}`, `react`,
+`cancel {scope, conditionId}`, `query {method, params, args}`, `observe`,
+`status`, `foreground`, plus `bridge` (bridge status), `disconnect` (close
+Scout, keep the bridge) and `close`/`stop` (close Scout and end the bridge).
+`-` reads the JSON from stdin; input/fill actions must use it.
+
+The bridge never retries or queues. When the agent process exits (or after
+`disconnect`), the next call opens a new connection and adds
+`bridge: {reconnected, reason, previousLoss}`. Revisions, action and condition
+ids restart per connection, so only observe/status/query are served until the
+caller has observed; other calls return `bridge_reconnected` with nothing sent.
+`previousLoss.dispatch: dispatch_outcome_unknown` means the earlier input may
+have run: check the fresh scene before deciding. disconnect/close are refused
+while an input is running. An idle bridge stops after 30 minutes.
+
 `next()` can remain pending while `observe`, `start`, `watch`, `react`, or
 `cancel` requests run. Use only one event consumer and route events by
 `actionId`/`conditionId`; do not discard unrelated alerts while waiting for one
@@ -172,6 +197,7 @@ the CLI cause: `session_not_registered`, `agent_session_busy`,
 `scout_helper_missing`, `scout_app_unreachable`, `scout_agent_protocol_mismatch`.
 No retries are implemented.
 
-Do not use `--single-json`, nested `serve`/`batch`, a process per request, or
-PTY echo for this stream. Use one persistent pipe and manual screenshots when
+Do not use `--single-json`, nested `flutter-scout serve`/`batch`, a Scout
+process per request, or PTY echo for this stream. Use one persistent pipe (the
+client or its shell bridge) and manual screenshots when
 appearance, custom paint, or native content matters.

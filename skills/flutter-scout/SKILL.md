@@ -38,14 +38,9 @@ file or stdin, never process arguments. Read the setup skill when needed.
 
 Read [agent-session.md](references/agent-session.md) before first use. Import
 this skill's scripts/agent_client.mjs into a persistent Node tool session.
-Keep the same object between decisions. If no persistent Node tool is
-available, keep a Node process alive with Scout connected by ordinary pipes;
-do not launch Scout per request or use PTY echo for its JSONL transport.
-For an interactive Node terminal fallback, request a short output yield
-(250–1000 ms) on each write, then read again only if the awaited result is
-still pending. A 30-second terminal yield waits even after Scout has replied;
-it is not an app-settling requirement. Prefer direct awaited Node tool calls
-when available.
+Keep the same object between decisions. Without a persistent Node tool, use
+the shipped shell bridge below. Never launch Scout per request, hand-build
+FIFO/REPL/TCP bridges, or use PTY echo for its JSONL transport.
 
 ```js
 const { ScoutAgent } = await import('/absolute/path/to/skill/scripts/agent_client.mjs');
@@ -57,6 +52,36 @@ const outcome = await scout.act(scene.viewRevision, {
 });
 // Read outcome.ok, result, scene, and intervening events before deciding again.
 ```
+
+### Shell-only agents (Claude Code)
+
+When each shell command is a fresh process, keep the one connection in the
+shipped bridge. `serve` returns once connected (with the first `scene`) and
+keeps a background process behind a private 0600 Unix socket. Each `call`
+prints one compact JSON line; exit code 0 means `ok:true`. `<client>` is this
+skill's absolute scripts/agent_client.mjs path; spell it out in every command
+because shell variables do not persist between tool calls.
+
+```bash
+node <client> serve --app task
+node <client> call --app task observe
+node <client> call --app task act '{"viewRevision":7,"action":{"method":"tap","args":["btn.save"]}}'
+node <client> call --app task query '{"method":"locate","params":{"text":"Save"}}'
+node <client> call --app task watch '{"condition":{"text":"Saved"},"timeoutMs":8000}'
+node <client> call --app task next '{"timeoutMs":8000}'
+node <client> call --app task act - <<'JSON'
+{"viewRevision":8,"action":{"method":"input","args":["value"],"params":{"target":"field.email"}}}
+JSON
+node <client> call --app task disconnect   # before reload/restart
+node <client> stop --app task              # closes Scout and the bridge
+```
+
+input/fill must use `-` with stdin; argv is refused. Other methods: status,
+foreground, start, acknowledge, reconcile, react, cancel (same fields as the
+client). After `disconnect` or a lost agent process, the next call reconnects
+and reports `bridge.reconnected` with any `previousLoss`; until you observe,
+revision-bound calls are refused (`bridge_reconnected`, nothing sent). An
+in-flight input is never resent. A bridge idle for 30 minutes stops itself.
 
 act performs one input, consumes its canonical receipt, acknowledges success,
 and returns the latest scene. Eyes continue independently while the hand runs.
@@ -129,7 +154,9 @@ retry, cross surfaces, or cancel an already-started app operation.
 
 ## Changes, images, and handoff
 
-Close the agent connection before reload/restart, then reconnect. Use reload
+Close the agent connection before reload/restart, then reconnect (bridge:
+`disconnect`, reload, then `observe`; if a scene shows `hand.halted` after a
+restart, `disconnect` and observe again). Use reload
 for Dart changes; sourceVerification:mismatch is a failure. A rejected reload
 does not imply the app died: check status and preserve a reachable session.
 Native/plugin/pubspec changes need a full launch. Lifecycle and ownership
@@ -147,7 +174,7 @@ flutter-scout --app <task> crop --changed-since '<snapshot-id>' -o /private/path
 Annotation pins: [annotations.md](references/annotations.md). Remaining API:
 [command-reference.md](references/command-reference.md).
 
-Finish with scout.close(), then stop the exact owned run unless the user wants
+Finish with scout.close() (bridge: `stop`), then stop the exact owned run unless the user wants
 it left open for immediate testing:
 
 ```bash

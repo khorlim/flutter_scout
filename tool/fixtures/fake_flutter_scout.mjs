@@ -35,7 +35,10 @@ if (mode === 'helper_missing' || mode === 'unreachable') {
 const input = createInterface({ input: process.stdin });
 input.on('line', line => {
   const request = JSON.parse(line);
-  if (log) appendFileSync(log, JSON.stringify({ pid: process.pid, method: request.method }) + '\n');
+  if (log) {
+    appendFileSync(log, JSON.stringify({ pid: process.pid, method: request.method,
+      ...(request.action ? { action: request.action.method, args: request.action.args } : {}) }) + '\n');
+  }
   if (mode === 'die_on_request' || (mode === 'die_on_start' && request.method === 'start')) {
     process.stderr.write('fatal: VM service closed\n');
     process.kill(process.pid, 'SIGKILL');
