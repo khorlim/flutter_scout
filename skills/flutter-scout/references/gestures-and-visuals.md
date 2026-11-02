@@ -16,16 +16,35 @@ layout/scroll regions are unclear. Take a fresh observation before choosing.
 Examples of action objects (targets must come from the actual current scene):
 
 ```js
-{ method: 'tap', args: [observedHandle] }
+{ method: 'tap', args: [observedHandle] }               // tap by handle
+{ method: 'tap', params: { x: 120, y: 340 } }           // tap by logical point
 { method: 'input', args: [value], params: { target: observedField } }
 { method: 'scroll', args: ['down'], params: { target: observedScroll, distance: 400 } }
+{ method: 'swipe', args: ['left'], params: { target: observedHandle, distance: 300 } }
 { method: 'reveal', args: [observedTarget], params: { within: observedScroll, maxActions: 8 } }
 { method: 'drag-start', params: { target: observedHandle } }
 { method: 'drag-move', params: { by: '-80,0' } }
 { method: 'drag-end' }
 ```
 
-After each input, check its canonical receipt. For a held drag, query
+Coordinates are numbers in `params.x`/`params.y`, never a target string.
+Scroll and swipe also accept `params.from`/`params.to` as `'x,y'` strings
+instead of a target. Scroll distance is `distance`; there is no `amount`.
+An unknown parameter fails with `unknown_parameter` and lists the parameters
+the method accepts.
+
+After each input, check its canonical receipt. When `act` returns `ok:false`
+for a known dispatch outcome, observe, check the app state, then reconcile
+against the fresh revision before deciding again. Reconcile never retries:
+
+```js
+const outcome = await scout.act(scene.viewRevision, action);
+if (!outcome.ok) {
+  const fresh = await scout.observe();
+  // Decide from fresh.view whether the failed input changed anything.
+  await scout.reconcile(outcome.actionId, fresh.viewRevision);
+}
+``` For a held drag, query
 'drag-status' for its current state; end/cancel it explicitly. A held gesture
 is not cancelled by cancelling a condition wait or closing the transport.
 An offscreen target is not permission to tap its old geometry. Bounded reveal

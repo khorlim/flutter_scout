@@ -50,8 +50,15 @@ screenshot, crop, logs, health, evidence.
 
 Supply VM capability URLs using attach --debug-url-file <0600-file> or
 --debug-url-stdin. Only explicit loopback hosts with a port are supported.
-Use --single-json first for one final envelope; stderr carries progress.
-The prefix is not accepted by agent. Help does not contact a running app.
+attach has no --name or --project; to attach a human-started app as a named
+session, use `ensure --project <app> --name <task> --debug-url-file <file>`.
+
+Global options go before the command, in any order: `--app <name>`,
+`--single-json`, `--idempotency-key <key>`. Use --single-json for one final
+envelope; stderr carries progress. It is not accepted by agent. Every command
+has its own help (`flutter-scout <command> --help` or `help <command>`), which
+lists its real options and does not contact a running app. An unknown option
+fails with `unknown_parameter` and lists that command's valid options.
 
 ### Reading finite command output
 

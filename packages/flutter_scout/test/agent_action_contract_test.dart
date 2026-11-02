@@ -62,6 +62,27 @@ void main() {
       returnsNormally,
     );
   });
+  test('unknown parameters list what the agent action accepts', () {
+    expect(
+      () => cli.debugValidateAgentAction({
+        'method': 'scroll',
+        'args': ['down'],
+        'params': {'amount': 400},
+      }),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          allOf(
+            startsWith('unknown_parameter: Parameter `amount`'),
+            contains('Allowed parameters: distance, from, target, to, x, y.'),
+            isNot(contains('allowErrors')),
+            isNot(contains('verbose')),
+          ),
+        ),
+      ),
+    );
+  });
   test('input cannot silently concatenate a mistaken field argument', () {
     expect(
       () => cli.debugValidateAgentAction({

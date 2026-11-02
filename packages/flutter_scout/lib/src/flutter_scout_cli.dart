@@ -582,6 +582,16 @@ class FlutterScoutCli {
   };
 
   /// Test seam for the agent request boundary; never enters a handler.
+  /// Test-only view of each public command's documented options, used to
+  /// check per-command help against the real parsers.
+  static Map<String, List<String>> get debugCommandHelpOptions =>
+      <String, List<String>>{
+        for (final entry in _commandHelp.entries)
+          entry.key: <String>[
+            for (final option in entry.value.options) option.$1,
+          ],
+      };
+
   void debugValidateAgentAction(Map<String, dynamic> action) =>
       _validateAgentAction(action);
 
@@ -717,10 +727,29 @@ class FlutterScoutCli {
   }
 
   Future<int> run(List<String> args) async {
-    if (args.isNotEmpty && args.first == '--single-json') {
-      return _runSingleJson(args.skip(1).toList(growable: false));
+    // Global options precede the command in any order. `--app` and
+    // `--idempotency-key` are extracted later; only the output mode must be
+    // known before dispatch.
+    var singleJson = false;
+    final remaining = <String>[];
+    var index = 0;
+    for (; index < args.length; index++) {
+      final arg = args[index];
+      if (arg == '--single-json') {
+        singleJson = true;
+      } else if (arg == '--app' || arg == '--idempotency-key') {
+        remaining.add(arg);
+        if (index + 1 < args.length) remaining.add(args[++index]);
+      } else if (arg.startsWith('--app=') ||
+          arg.startsWith('--idempotency-key=')) {
+        remaining.add(arg);
+      } else {
+        break;
+      }
     }
-    return _run(args);
+    if (!singleJson) return _run(args);
+    remaining.addAll(args.skip(index));
+    return _runSingleJson(List<String>.unmodifiable(remaining));
   }
 
   Future<int> _run(List<String> args) async {
@@ -1076,6 +1105,9 @@ class FlutterScoutCli {
         details: error.details,
         additional: error.additional,
       );
+    } on ArgParserException catch (error) {
+      exitCode = 1;
+      _writeArgumentError(command, error);
     } catch (error) {
       exitCode = 1;
       _writeStructuredError('unexpected_error', error.toString());
@@ -2640,16 +2672,173 @@ print(String(data: data, encoding: .utf8)!)
     'version',
   };
   void _printUsage({String? command}) {
-    if (command == 'launch' || command == 'ensure') {
-      stdout.writeln('''
-Flutter Scout: $command
+    final help = command == null ? null : _commandHelp[command];
+    if (help != null) {
+      stdout.writeln(_renderCommandHelp(command!, help));
+      return;
+    }
+    stdout.writeln('''Flutter Scout — agent-session interaction API
 
-Usage:
-  flutter-scout $command --device <simulator-id> [--project <path>]
-      [--dart-define-from-file <owner-only-0600-file>]
-      [--inherit-launch-context]
-      [--enable-impeller | --no-enable-impeller]
+Lifecycle: ensure, launch, attach, status, doctor, devices, apps, reload, restart, stop
+Manual evidence: screenshot, crop, logs, health, evidence, annotations
+Interaction: flutter-scout --app <name> agent [--interval-ms 250] [--max-items 60]
 
+Use the shipped scripts/agent_client.mjs in one persistent Node session, or
+its serve/call bridge from a shell-only agent.
+Agent protocol 2: observe, query, start, next, acknowledge, reconcile,
+foreground (macOS), watch, react, cancel, status, close. Images are manual.
+A ticket is not success. Consume the canonical receipt before another input.
+A not_dispatched receipt frees the hand. Other failed input requires fresh
+reconciliation; unknown dispatch stays halted.
+
+Standalone inspect/actions/waits, live, serve, explore, batch, record and replay
+were removed. There is no compatibility switch or automatic fallback.
+This protocol is independent of your model and does not require Fast mode.
+
+Named lifecycle example:
+flutter-scout --single-json ensure --device macos --project <app> --name <name>
+flutter-scout --app <name> stop --clear-session
+
+${_renderGlobalOptions()}
+Run `flutter-scout <command> --help` for that command's options.
+--single-json is available for finite lifecycle/diagnostic commands, not agent.
+Read skills/flutter-scout/SKILL.md and references/agent-session.md for contracts.
+''');
+  }
+
+  /// Converts a command's argument-parser failure into a structured error
+  /// that lists the options the command accepts, instead of a bare
+  /// `unexpected_error: FormatException`.
+  void _writeArgumentError(String command, ArgParserException error) {
+    final help = _commandHelp[command];
+    final valid = <String>[
+      for (final option in help?.options ?? const <(String, String)>[])
+        option.$1,
+    ];
+    final misplacedGlobal = _globalCommandOptions
+        .map((option) => option.$1.split(' ').first)
+        .where((name) => error.message.contains('"$name"'))
+        .firstOrNull;
+    final unknown = error.message.startsWith('Could not find an option');
+    final hints = <String>[
+      if (misplacedGlobal != null)
+        'Global option `$misplacedGlobal` goes before the command: '
+            'flutter-scout $misplacedGlobal ... $command.',
+      ?help?.optionHint,
+      if (help == null)
+        'Run `flutter-scout --help` for commands.'
+      else if (valid.isEmpty)
+        '`$command` accepts no options.'
+      else
+        'Valid options for `$command`: ${valid.join(', ')}.',
+    ];
+    _writeStructuredError(
+      unknown ? 'unknown_parameter' : 'usage',
+      '${error.message} ${hints.join(' ')}',
+      details: <String, Object?>{
+        'command': command,
+        'validOptions': valid,
+        'globalOptions': <String>[
+          for (final option in _globalCommandOptions) option.$1,
+        ],
+        'help': 'flutter-scout $command --help',
+      },
+    );
+  }
+
+  bool _isNumeric(String value) => double.tryParse(value) != null;
+}
+
+/// Help for one public command. [options] doubles as the valid-option list
+/// reported when the command's arguments fail to parse, so it must name every
+/// option the command's parser accepts; cli_help_test checks this.
+final class _CommandHelp {
+  const _CommandHelp({
+    required this.summary,
+    this.synopsis = const <String>[],
+    this.options = const <(String, String)>[],
+    this.notes,
+    this.optionHint,
+  });
+
+  final String summary;
+
+  /// Usage lines after `flutter-scout [global options] `. Empty means
+  /// `<command> [options]`.
+  final List<String> synopsis;
+  final List<(String, String)> options;
+  final String? notes;
+
+  /// Extra guidance added to an option error, for options people expect.
+  final String? optionHint;
+}
+
+const List<(String, String)> _globalCommandOptions = <(String, String)>[
+  (
+    '--app <name>',
+    'Run against the session registered by ensure/launch --name.',
+  ),
+  (
+    '--single-json',
+    'Print one final JSON envelope on stdout; progress goes to stderr.',
+  ),
+  ('--idempotency-key <key>', 'Caller idempotency key for a retried command.'),
+];
+
+const List<(String, String)> _launchBuildOptions = <(String, String)>[
+  ('--device, -d <id>', 'Device or simulator id from `flutter-scout devices`.'),
+  ('--project <path>', 'Flutter app directory (default: current directory).'),
+  ('--name <task>', 'Session name; later commands use global --app <task>.'),
+  ('--target <file>', 'Dart entrypoint passed to flutter run --target.'),
+  ('--flavor <name>', 'Build flavor.'),
+  (
+    '--launch-timeout <seconds>',
+    'Hard ceiling for producing a VM service (default 1200).',
+  ),
+  (
+    '--launch-idle-timeout <seconds>',
+    'Give up after this long without runner output or build CPU activity '
+        '(default 180).',
+  ),
+  (
+    '--dart-define-from-file <0600-file>',
+    'Compile-time defines from an owner-only file. Repeatable.',
+  ),
+  (
+    '--dart-define <name=value>',
+    'Deprecated inline nonsecret define. Repeatable.',
+  ),
+  ('--[no-]enable-impeller', 'Explicit renderer request for this run only.'),
+  (
+    '--inherit-launch-context',
+    'macOS: keep the caller signing context instead of launchd.',
+  ),
+  (
+    '--allow-parallel',
+    'Launch even if another live named session runs this project on the '
+        'same device.',
+  ),
+  (
+    '--temporary-helper',
+    'Inject flutter_scout_helper without tracked project changes.',
+  ),
+  ('--helper-path <path>', 'Local flutter_scout_helper checkout to inject.'),
+  ('--[no-]verbose', 'Verbose launch output.'),
+];
+
+const List<(String, String)> _vmUrlOptions = <(String, String)>[
+  (
+    '--debug-url-file <0600-file>',
+    'Read the VM-service URL from an owner-only file.',
+  ),
+  ('--debug-url-stdin', 'Read the VM-service URL from stdin.'),
+  (
+    '--debug-url <url>',
+    'Deprecated: exposes the capability URL in process argv.',
+  ),
+];
+
+const String _launchNotes = '''
 Renderer selection:
   An explicit renderer option is forwarded to Flutter for this run only.
   Omit it to preserve Flutter's platform default. rendererRequest records the
@@ -2663,7 +2852,9 @@ macOS signing context:
   `--inherit-launch-context` so the detached runner retains that caller security
   context. Keep the outer command alive until Scout reports ready. The tradeoff
   is that this runner does not receive launchd crash recovery and will not
-  survive logout.
+  survive logout. Either way the app itself is opened through LaunchServices,
+  so it is its own privacy (TCC) responsible process; set
+  FLUTTER_SCOUT_MACOS_DIRECT_RUN=1 to use `flutter run` instead.
 
 Compile-time value handling:
   Define files are bounded to 1 MiB, strict UTF-8, regular, non-symlink, and
@@ -2675,36 +2866,22 @@ Compile-time value handling:
   tool processes or the built app, so Dart defines are not a secret vault.
   Inline `--dart-define <name=value>` remains temporarily compatible for
   nonsecret values and emits a structured deprecation warning. A secret-looking
-  inline name or value is rejected before state or child-process creation.
-''');
-      return;
-    }
-    if (command == 'attach') {
-      stdout.writeln('''
-Flutter Scout: attach
+  inline name or value is rejected before state or child-process creation.''';
 
-Usage:
-  flutter-scout attach [--device <simulator-id>]
-      [--debug-url-file <owner-only-0600-file> | --debug-url-stdin]
-
+const String _vmTransportNotes = '''
 VM-service transport:
   The credential-bearing VM-service URL is bounded, strict UTF-8, and accepted
   only for ws/wss/http/https on explicit loopback hosts (127/8, ::1, or exact
   localhost) with an explicit port. Remote VM-service egress is unsupported.
   `--debug-url <url>` remains temporarily compatible but exposes the capability
-  URL through process argv and emits a structured deprecation warning.
-''');
-      return;
-    }
-    if (command == 'screenshot' || command == 'crop') {
-      stdout.writeln('''
-Flutter Scout: $command
+  URL through process argv and emits a structured deprecation warning.''';
 
-Usage:
-  flutter-scout screenshot [-o <path>] [--target <target>] [--annotated]
-      [--native] [--retention session|24h|7d|manual]
-  flutter-scout crop <target> | crop --text <text> | crop --rect x,y,w,h [-o <path>] [--native]
-  flutter-scout crop --changed-since <snapshot-id> [-o <path>] [--padding <0..256>]
+const String _captureNotes = '''
+Output path:
+  Without -o the image goes to the session's private screenshots directory and
+  the result's `path` names it. With -o the parent must exist, or be one missing
+  leaf Scout creates as 0700. The system alias /tmp is accepted; any other
+  symbolic-link parent is refused with the resolved directory named.
 
 Changed-region contract:
   Captures only a complete bounded semantic-region union from retained helper
@@ -2720,37 +2897,248 @@ Native capability:
   proven macOS app windows. Results disclose backend, provenance, physical-pixel
   space, and limitations. A native targeted crop proceeds only when the scoped
   Flutter physical viewport exactly matches the PNG dimensions; Scout never
-  guesses system-bar, inset, rotation, or letterbox offsets.
-''');
-      return;
-    }
-    stdout.writeln('''Flutter Scout — agent-session interaction API
+  guesses system-bar, inset, rotation, or letterbox offsets.''';
 
-Lifecycle: ensure, launch, attach, status, doctor, devices, apps, reload, restart, stop
-Manual evidence: screenshot, crop, logs, health, evidence, annotations
-Interaction: flutter-scout --app <name> agent [--interval-ms 250] [--max-items 60]
+const List<(String, String)> _retentionHelpOption = <(String, String)>[
+  (
+    '--retention session|24h|7d|manual',
+    'Private-data retention (default session).',
+  ),
+];
 
-Use the shipped scripts/agent_client.mjs in one persistent Node session.
-Agent protocol 2: observe, query, start, next, acknowledge, reconcile,
-foreground (macOS), watch, react, cancel, status, close. Images are manual.
-A ticket is not success. Consume the canonical receipt before another input.
-A not_dispatched receipt frees the hand. Other failed input requires fresh
-reconciliation; unknown dispatch stays halted.
+const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
+  'launch': _CommandHelp(
+    summary: 'Start a fresh Scout-owned flutter run for a named session.',
+    synopsis: <String>[
+      'launch --device <id> --project <app> --name <task> [options]',
+    ],
+    options: <(String, String)>[
+      ..._launchBuildOptions,
+      ('--replace', 'Replace an existing run of this named session.'),
+    ],
+    notes: _launchNotes,
+  ),
+  'ensure': _CommandHelp(
+    summary:
+        'Reuse the named session when its app is reachable, otherwise launch '
+        'with the same options. With a VM-service URL option, a reachable '
+        'human-started app becomes this named session without a relaunch.',
+    synopsis: <String>[
+      'ensure --device <id> --project <app> --name <task> [options]',
+      'ensure --project <app> --name <task> --debug-url-file <0600-file>',
+    ],
+    options: <(String, String)>[..._launchBuildOptions, ..._vmUrlOptions],
+    notes: '$_launchNotes\n\n$_vmTransportNotes',
+  ),
+  'attach': _CommandHelp(
+    summary: 'Attach the current session to a running debug app.',
+    synopsis: <String>[
+      'attach [--device <id>] [--debug-url-file <0600-file> | --debug-url-stdin]',
+    ],
+    options: <(String, String)>[
+      ('--device <id>', 'Device to discover the VM service on.'),
+      ..._vmUrlOptions,
+      ('--[no-]json', 'JSON output (default on).'),
+    ],
+    notes:
+        'attach has no --name or --project. To attach a human-started app as a '
+        'named session, run:\n'
+        '  flutter-scout ensure --project <app> --name <task> '
+        '--debug-url-file <0600-file>\n\n$_vmTransportNotes',
+    optionHint:
+        'To attach as a named session, use `flutter-scout ensure --project '
+        '<app> --name <task> --debug-url-file <0600-file>`.',
+  ),
+  'status': _CommandHelp(
+    summary: 'Report session mode, ownership, VM service and runtime health.',
+    synopsis: <String>['status'],
+  ),
+  'doctor': _CommandHelp(
+    summary: 'Diagnose setup and session problems with prioritized recovery.',
+    options: <(String, String)>[
+      ('--project <path>', 'Flutter app directory (default: current).'),
+      ('--device <id>', 'Device to check.'),
+    ],
+  ),
+  'devices': _CommandHelp(
+    summary: 'List supported Flutter devices.',
+    synopsis: <String>['devices'],
+  ),
+  'apps': _CommandHelp(
+    summary: 'List sessions registered by ensure/launch --name.',
+    options: <(String, String)>[
+      ('--all', 'Include entries whose session directory is missing.'),
+      ('--prune', 'Remove entries whose session directory is missing.'),
+      ('--running', 'Only sessions whose owner or worker process is alive.'),
+    ],
+  ),
+  'reload': _CommandHelp(
+    summary:
+        'Hot reload Dart changes and verify the loaded sources. `result` is '
+        'the string changed, unchanged or reload_rejected; details such as '
+        'sourceVerification are top-level fields.',
+    options: <(String, String)>[('--[no-]verbose', 'Full before/after state.')],
+  ),
+  'restart': _CommandHelp(
+    summary:
+        'Hot restart a Scout-owned run. `result` is the string changed or '
+        'unchanged; details are top-level fields.',
+    options: <(String, String)>[('--[no-]verbose', 'Full before/after state.')],
+  ),
+  'stop': _CommandHelp(
+    summary: 'Stop the exactly owned run of this session.',
+    options: <(String, String)>[
+      ('--clear-session', 'Also clear session state and session artifacts.'),
+    ],
+  ),
+  'logs': _CommandHelp(
+    summary:
+        'Read the Scout-owned flutter run log. Use this instead of reading '
+        'log files directly: it redacts capability URLs and drops known '
+        'toolchain noise.',
+    options: <(String, String)>[
+      ('--last <n>', 'Newest n lines (default 20, at most 1000).'),
+      ('--contains <text>', 'Only lines containing this exact text.'),
+      ('--summary', 'Error/warning counts, signals and important lines.'),
+    ],
+  ),
+  'health': _CommandHelp(
+    summary: 'Summarize runtime health and recent blocking signals.',
+    options: <(String, String)>[
+      ('--[no-]include-stale', 'Include stale signals.'),
+    ],
+  ),
+  'evidence': _CommandHelp(
+    summary: 'Write a private evidence bundle for recent commands.',
+    options: <(String, String)>[
+      ('-o, --output <new-dir>', 'Fresh bundle directory.'),
+      ('--last <n>', 'Recent events to include (default 120).'),
+      ..._retentionHelpOption,
+      ('--[no-]audit', 'Also write audit.md and transcript.txt.'),
+    ],
+  ),
+  'screenshot': _CommandHelp(
+    summary: 'Capture a manual full-screen image.',
+    synopsis: <String>[
+      'screenshot [-o <path>] [--target <target>] [--annotated] [--native] '
+          '[--retention <policy>]',
+    ],
+    options: <(String, String)>[
+      ('-o, --output <path>', 'Image path (default: session screenshots).'),
+      ('--target <target>', 'Crop to this observed target instead.'),
+      ('--[no-]annotated', 'Draw numbered marks and return their legend.'),
+      ('--[no-]native', 'Force the native platform backend.'),
+      ..._retentionHelpOption,
+    ],
+    notes: _captureNotes,
+  ),
+  'crop': _CommandHelp(
+    summary: 'Capture a manual image of one region.',
+    synopsis: <String>[
+      'crop <target> [options]',
+      'crop --text <text> [--contains] [options]',
+      'crop --rect x,y,w,h [options]',
+      'crop --changed-since <snapshot-id> [options]',
+    ],
+    options: <(String, String)>[
+      ('--target <target>', 'Observed target handle (or first positional).'),
+      ('--text <text>', 'Crop around visible text.'),
+      ('--contains', 'With --text, case-insensitive containment.'),
+      ('--rect x,y,w,h', 'Explicit logical rect.'),
+      ('--changed-since <snapshot-id>', 'Union of changed semantic regions.'),
+      ('-o, --output <path>', 'Image path (default: session screenshots).'),
+      ('--padding <0..256>', 'Logical padding (default 12).'),
+      ('--[no-]annotated', 'Draw numbered marks inside the region.'),
+      ('--[no-]native', 'Force the native platform backend.'),
+      ..._retentionHelpOption,
+    ],
+    notes: _captureNotes,
+  ),
+  'annotations': _CommandHelp(
+    summary: 'Manage human annotation pins on the running app.',
+    synopsis: <String>[
+      'annotations [list|targets|enable|disable|check|signal-handoff]',
+      'annotations resolve|dismiss|reopen|fixed <annotation-id> [--note <text>]',
+      'annotations delete <annotation-id> [<annotation-id> ...]',
+      'annotations clear [--resolved|--dismissed|--status <status>]',
+      'annotations wait [--timeout <seconds>] [--poll <ms>]',
+    ],
+  ),
+  'agent': _CommandHelp(
+    summary:
+        'Open the persistent JSONL agent session. Use the shipped '
+        'agent_client.mjs; do not combine with --single-json.',
+    options: <(String, String)>[
+      ('--interval-ms <100..10000>', 'Observation interval (default 250).'),
+      ('--max-items <1..100>', 'Scene item limit (default 60).'),
+    ],
+  ),
+  'version': _CommandHelp(
+    summary: 'Print the CLI version.',
+    synopsis: <String>['version'],
+  ),
+  'help': _CommandHelp(
+    summary: 'Print help for Flutter Scout or one command.',
+    synopsis: <String>['help [<command>]'],
+  ),
+};
 
-Standalone inspect/actions/waits, live, serve, explore, batch, record and replay
-were removed. There is no compatibility switch or automatic fallback.
-This protocol is independent of your model and does not require Fast mode.
+String _renderGlobalOptions() {
+  final buffer = StringBuffer(
+    'Global options (before the command, in any order):\n',
+  );
+  _writeOptionRows(buffer, _globalCommandOptions);
+  return buffer.toString();
+}
 
-Named lifecycle example:
-flutter-scout --single-json ensure --device macos --project <app> --name <name>
-flutter-scout --app <name> stop --clear-session
-
---single-json is available for finite lifecycle/diagnostic commands, not agent.
-Read skills/flutter-scout/SKILL.md and references/agent-session.md for contracts.
-''');
+void _writeOptionRows(StringBuffer buffer, List<(String, String)> options) {
+  var width = 0;
+  for (final option in options) {
+    if (option.$1.length > width) width = option.$1.length;
   }
+  for (final option in options) {
+    buffer.writeln('  ${option.$1.padRight(width)}  ${option.$2}');
+  }
+}
 
-  bool _isNumeric(String value) => double.tryParse(value) != null;
+String _renderCommandHelp(String command, _CommandHelp help) {
+  final buffer = StringBuffer()
+    ..writeln('Flutter Scout: $command')
+    ..writeln();
+  var line = StringBuffer();
+  for (final word in help.summary.split(' ')) {
+    if (line.isNotEmpty && line.length + 1 + word.length > 78) {
+      buffer.writeln(line);
+      line = StringBuffer();
+    }
+    if (line.isNotEmpty) line.write(' ');
+    line.write(word);
+  }
+  buffer
+    ..writeln(line)
+    ..writeln()
+    ..writeln('Usage:');
+  final synopsis = help.synopsis.isNotEmpty
+      ? help.synopsis
+      : <String>[help.options.isEmpty ? command : '$command [options]'];
+  for (final line in synopsis) {
+    buffer.writeln('  flutter-scout [global options] $line');
+  }
+  if (help.options.isNotEmpty) {
+    buffer
+      ..writeln()
+      ..writeln('Options:');
+    _writeOptionRows(buffer, help.options);
+  }
+  buffer
+    ..writeln()
+    ..write(_renderGlobalOptions());
+  if (help.notes case final notes?) {
+    buffer
+      ..writeln()
+      ..writeln(notes);
+  }
+  return buffer.toString().trimRight();
 }
 
 /// Compile-time define the CLI injects (via `--name`) so the in-app helper can

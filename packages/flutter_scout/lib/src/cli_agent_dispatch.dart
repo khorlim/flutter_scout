@@ -111,7 +111,9 @@ extension _CliAgentDispatch on FlutterScoutCli {
 
       final validation = _validatePersistentTypedPayload(decoded);
       final issue = validation.issue;
-      if (issue != null) return _typedRequestError(issue.code, issue.message);
+      if (issue != null) {
+        return _typedRequestError(issue.code, issue.detailedMessage());
+      }
       final call = validation.call!;
 
       final argv = <String>[

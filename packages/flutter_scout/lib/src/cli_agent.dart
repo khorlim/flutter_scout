@@ -9,7 +9,12 @@ void _validateAgentAction(AgentView action) {
   }
   final validation = _validatePersistentTypedPayload(action);
   final issue = validation.issue;
-  if (issue != null) throw FormatException('${issue.code}: ${issue.message}');
+  if (issue != null) {
+    throw FormatException(
+      '${issue.code}: '
+      '${issue.detailedMessage(exclude: _isAgentRejectedParameter)}',
+    );
+  }
   if (action['method'] == 'input' && validation.call!.positional.length != 1) {
     throw const FormatException(
       'input accepts exactly one value in args; put the observed field handle in params.target, or use fill with a field-to-value map.',
@@ -21,27 +26,32 @@ void _validateAgentAction(AgentView action) {
     ...validation.call!.parameters.keys,
     ...(action['params'] as Map? ?? {}).keys,
   }) {
-    if (key.toString().startsWith('expect') ||
-        const {
-          'capture',
-          'screenshot',
-          'file',
-          'stdin',
-          'urlFile',
-          'urlStdin',
-          'allowErrors',
-          'allowMismatch',
-          'assertNoErrors',
-          'rejectLog',
-          'waitMs',
-          'verbose',
-        }.contains(key)) {
+    if (_isAgentRejectedParameter(key.toString())) {
       throw const FormatException(
         'agent uses short receipts; use watch for conditions and manual screenshots. Safety overrides and file input are not supported.',
       );
     }
   }
 }
+
+/// Typed parameters the agent's short hand never accepts: long waits,
+/// expectations, capture, file input and safety overrides.
+bool _isAgentRejectedParameter(String key) =>
+    key.startsWith('expect') ||
+    const {
+      'capture',
+      'screenshot',
+      'file',
+      'stdin',
+      'urlFile',
+      'urlStdin',
+      'allowErrors',
+      'allowMismatch',
+      'assertNoErrors',
+      'rejectLog',
+      'waitMs',
+      'verbose',
+    }.contains(key);
 
 extension _CliAgent on FlutterScoutCli {
   /// The agent's view of one brief inspect. Observer reads and target-scoped

@@ -992,11 +992,31 @@ Map<String, Object?> _persistentTypedMethodCatalog() => <String, Object?>{
 };
 
 class _TypedContractIssue {
-  const _TypedContractIssue(this.code, this.message);
+  const _TypedContractIssue(this.code, this.message, {this.allowedParameters});
 
   final String code;
   final String message;
+
+  /// For `unknown_parameter`, the parameter names the method does accept.
+  final List<String>? allowedParameters;
+
+  /// [message] plus the accepted parameter names, minus [exclude]d ones, so a
+  /// caller can correct the request without reading the contract.
+  String detailedMessage({bool Function(String name)? exclude}) {
+    final allowed = allowedParameters;
+    if (allowed == null) return message;
+    final shown = [
+      for (final name in allowed)
+        if (exclude == null || !exclude(name)) name,
+    ];
+    return shown.isEmpty
+        ? '$message It accepts no named parameters.'
+        : '$message Allowed parameters: ${shown.join(', ')}.';
+  }
 }
+
+List<String> _sortedParameterNames(_TypedMethodContract contract) =>
+    contract.parameters.keys.toList()..sort();
 
 class _ValidatedTypedCall {
   const _ValidatedTypedCall({
@@ -1066,6 +1086,7 @@ _validatePersistentTypedPayload(Map<dynamic, dynamic> decoded) {
           issue: _TypedContractIssue(
             'unknown_parameter',
             'Parameter `${name.toString()}` is not allowed for `$rawMethod`.',
+            allowedParameters: _sortedParameterNames(contract),
           ),
         );
       }
@@ -1118,6 +1139,7 @@ _validatePersistentTypedPayload(Map<dynamic, dynamic> decoded) {
         issue: _TypedContractIssue(
           'unknown_parameter',
           'Option `$value` is not allowed for `$rawMethod`.',
+          allowedParameters: _sortedParameterNames(contract),
         ),
       );
     }
@@ -1128,6 +1150,7 @@ _validatePersistentTypedPayload(Map<dynamic, dynamic> decoded) {
         issue: _TypedContractIssue(
           'unknown_parameter',
           'Parameter `$rawName` is not allowed for `$rawMethod`.',
+          allowedParameters: _sortedParameterNames(contract),
         ),
       );
     }

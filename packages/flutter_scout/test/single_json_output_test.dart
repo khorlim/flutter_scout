@@ -80,6 +80,61 @@ void main() {
     },
   );
 
+  test('global options precede the command in any order', () async {
+    final cli = FlutterScoutCli();
+    final keyed = await _capture(cli, [
+      '--idempotency-key',
+      'order-check-1',
+      '--single-json',
+      'version',
+    ]);
+    expect(keyed.code, 0);
+    expect(_singleEnvelope(keyed.out)['ok'], isTrue);
+
+    final named = await _capture(cli, [
+      '--app',
+      'missing-order-session',
+      '--single-json',
+      'status',
+    ]);
+    expect(named.err, isEmpty);
+    expect(
+      _singleEnvelope(named.out)['structuredError'],
+      containsPair('code', 'session_not_registered'),
+    );
+  });
+
+  test('option errors name the valid options for that command', () async {
+    final cli = FlutterScoutCli();
+    final attach = _singleEnvelope(
+      (await _capture(cli, ['--single-json', 'attach', '--name', 'x'])).out,
+    );
+    final attachError = attach['structuredError'] as Map;
+    expect(attachError['code'], 'unknown_parameter');
+    expect(attachError['message'], contains('--name'));
+    expect(attachError['message'], contains('flutter-scout ensure --project'));
+    expect(
+      (attachError['details'] as Map)['validOptions'],
+      contains('--debug-url-file <0600-file>'),
+    );
+
+    final logs = _singleEnvelope(
+      (await _capture(cli, ['--single-json', 'logs', '--tail', '5'])).out,
+    );
+    expect(
+      (logs['structuredError'] as Map)['message'],
+      contains('Valid options for `logs`: --last <n>, --contains <text>'),
+    );
+
+    final misplaced = _singleEnvelope(
+      (await _capture(cli, ['--single-json', 'logs', '--single-json'])).out,
+    );
+    expect(
+      (misplaced['structuredError'] as Map)['message'],
+      contains('Global option `--single-json` goes before the command'),
+    );
+  });
+
   test('logs drop macOS malloc stack logging noise and count it', () async {
     Directory('.flutter_scout').createSync();
     const noise =

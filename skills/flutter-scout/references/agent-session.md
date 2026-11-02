@@ -97,7 +97,8 @@ does not by itself wake or interrupt a model that is still reasoning.
 
 Supported actions are tap, tap-text, long-press, input, fill, scroll, swipe,
 scroll-to, back, dismiss, reveal, drag-start, drag-move, drag-end, drag-cancel and deeplink,
-with normal typed parameters. Agent mode rejects
+with normal typed parameters (examples for tap by handle or `params:{x,y}`,
+input, scroll, swipe and reconcile are in gestures-and-visuals.md). Agent mode rejects
 expectation parameters, safety overrides, file input, capture and screenshots.
 Pass sensitive input through JSON stdin, never process arguments. Standalone
 interaction commands and alternate transports are removed, not fallback paths.
