@@ -792,4 +792,41 @@ void main() {
     expect(() => s.start(1, tap), throwsStateError);
     expect(s.actions, 0);
   });
+
+  test('scene names why input is blocked; old helpers still observe', () async {
+    var current = view(1, status: 'suspended');
+    final s = AgentSession(
+      read: () async => current,
+      act: (_, _) async => receipt,
+      validate: (_) {},
+    );
+    addTearDown(s.close);
+    final ready = await s.open();
+    expect(ready['actionable'], isFalse);
+    expect(ready['inputBlockedReason'], 'rendering_suspended');
+    current = {
+      ...view(2),
+      'missingHelperCapabilities': ['liveRenderingGuardV1'],
+    };
+    final scene = await s.observe();
+    expect(scene['ok'], isTrue);
+    expect(scene['inputBlockedReason'], 'helper_capability_missing');
+    expect(
+      () => s.start(scene['viewRevision'], tap),
+      throwsA(
+        predicate((e) => '$e'.contains('agent_helper_capability_missing')),
+      ),
+    );
+    s.watch({'text': 'Working'}, 1000);
+    expect((await event(s, 'condition'))['status'], 'met');
+    current = view(3);
+    final ready2 = await s.observe();
+    expect(ready2['actionable'], isTrue);
+    expect(ready2['inputBlockedReason'], isNull);
+    s.start(ready2['viewRevision'], tap);
+    expect(s.scene['inputBlockedReason'], 'action_in_flight');
+    await event(s, 'action');
+    expect(s.scene['inputBlockedReason'], 'receipt_unacknowledged');
+    expect(s.actions, 1);
+  });
 }

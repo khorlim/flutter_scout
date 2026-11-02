@@ -1,5 +1,19 @@
 import { spawn } from 'node:child_process';
 
+const notReachable = new Set(['not_attached', 'vm_service_connection_failed', 'vm_service_uri_unavailable']);
+const lossCodes = {
+  exit: ['scout_agent_exited', 'Scout agent process exited'],
+  spawn: ['scout_agent_spawn_failed', 'Scout agent process could not run; check flutter-scout is on PATH'],
+  stdin: ['scout_agent_transport_error', 'Scout agent input pipe failed'],
+  protocol: ['scout_agent_protocol_error', 'Scout agent sent malformed or uncorrelated output'],
+  timeout: ['scout_agent_request_timeout', 'Scout agent did not answer within the request budget'],
+  abort: ['scout_agent_aborted', 'Scout connection was aborted by the client'],
+};
+
+function agentError(code, message, extra = {}) {
+  return Object.assign(new Error(message), { code, dispatch: 'not_dispatched', ...extra });
+}
+
 /** Persistent JSONL client. No ports, screenshots, implicit retries or app logic. */
 export class ScoutAgent {
   static async connect({ app, binary = 'flutter-scout', cwd, intervalMs = 250, maxItems = 60 } = {}) {
@@ -9,10 +23,23 @@ export class ScoutAgent {
     const child = spawn(binary, ['--app', app, 'agent', '--interval-ms', String(intervalMs),
       '--max-items', String(maxItems)], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     const client = new ScoutAgent(child);
-    const ready = await client.ready;
-    if (!ready.ok || ready.agentProtocol !== 2) {
+    let ready;
+    try { ready = await client.ready; } catch (error) { throw await client.settle(error); }
+    if (ready.agentProtocol !== 2) {
       client.abort();
-      throw new Error('Scout agent unavailable; check the named session and update its helper');
+      throw await client.settle(agentError('scout_agent_protocol_mismatch',
+        `flutter-scout speaks agentProtocol ${ready.agentProtocol ?? 'none'}; this client needs 2. Update the CLI and this skill together.`));
+    }
+    if (!ready.ok) {
+      const cause = ready.view?.error?.code ?? ready.hand?.halted ?? null;
+      const detail = typeof ready.view?.error?.message === 'string' ? ` ${ready.view.error.message.slice(0, 300)}` : '';
+      const [code, message] = cause === 'flutter_scout_helper_not_registered'
+        ? ['scout_helper_missing', 'The app is reachable but flutter_scout_helper is not registered. Add FlutterScoutBinding.ensureInitialized() before runApp and relaunch.']
+        : notReachable.has(cause)
+          ? ['scout_app_unreachable', `The named session has no reachable app (${cause}). Check flutter-scout --app <name> status; ensure or relaunch if it stopped.`]
+          : ['scout_agent_not_ready', `Scout opened but the app is not observable (${cause ?? 'unknown'}).`];
+      client.abort();
+      throw await client.settle(agentError(code, message + detail, { cause }));
     }
     return client;
   }
@@ -24,18 +51,61 @@ export class ScoutAgent {
     this.latest = null;
     this.closed = false;
     this.closing = false;
+    this.failure = null;
     this.buffer = Buffer.alloc(0);
+    // Hand state seen by this client. Any of it turns a lost transport into
+    // an unknown dispatch instead of a clean read-only failure.
+    this.unreceipted = null;
+    this.armed = new Set();
+    this.exit = null;
+    this.stderrTail = '';
+    this.exited = new Promise(resolve => { this.resolveExited = resolve; });
     this.ready = new Promise((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
-    this.readyTimer = setTimeout(() => this.fail(), 45000);
+    this.readyTimer = setTimeout(() => this.fail('timeout'), 45000);
     child.stdout.on('data', chunk => this.receive(chunk));
-    // Drain diagnostics, but do not copy application data into client errors.
-    child.stderr.on('data', () => {});
-    child.on('error', () => this.fail());
-    child.stdin.on('error', () => this.fail());
-    child.on('exit', () => { if (!this.closed) this.fail(); });
+    // Keep only a bounded tail of CLI diagnostics for failure reports.
+    child.stderr.on('data', chunk => { this.stderrTail = (this.stderrTail + chunk.toString('utf8')).slice(-4096); });
+    child.on('error', () => this.fail('spawn'));
+    child.stdin.on('error', () => this.fail('stdin'));
+    child.on('exit', (code, signal) => {
+      this.exit = { exitCode: code ?? null, signal: signal ?? null };
+      this.resolveExited();
+      // Let buffered stdout/stderr drain before classifying the loss.
+      if (!this.closed) setTimeout(() => this.fail('exit'), 50);
+    });
+  }
+
+  /** Last non-empty CLI stderr line, bounded. */
+  get lastStderr() {
+    const lines = this.stderrTail.split('\n').map(line => line.trim()).filter(Boolean);
+    return lines.length ? lines[lines.length - 1].slice(0, 300) : null;
+  }
+
+  /** True when an input may be executing or its receipt is still unread. */
+  get inFlight() {
+    return Boolean(this.acting || this.unreceipted || this.armed.size ||
+      [...this.pending.values()].some(request => request.method === 'start'));
+  }
+
+  /** Waits briefly for the child to exit, then attaches its exit facts. */
+  async settle(error) {
+    await Promise.race([this.exited, new Promise(resolve => setTimeout(resolve, 1500).unref?.())]);
+    const own = this.exit && !this.terminated;
+    if (!this.exit) this.terminate();
+    return Object.assign(error, {
+      exitCode: own ? this.exit.exitCode : null,
+      signal: own ? this.exit.signal : null,
+      stderr: this.lastStderr,
+    });
+  }
+
+  terminate() {
+    if (this.exit) return;
+    this.terminated = true;
+    this.child.kill();
   }
 
   receive(chunk) {
@@ -43,7 +113,7 @@ export class ScoutAgent {
     for (;;) {
       const end = this.buffer.indexOf(10);
       if (end < 0) break;
-      if (end > 8 * 1024 * 1024) return this.fail();
+      if (end > 8 * 1024 * 1024) return this.fail('protocol');
       const line = this.buffer.subarray(0, end).toString('utf8');
       this.buffer = this.buffer.subarray(end + 1);
       let value;
@@ -61,7 +131,7 @@ export class ScoutAgent {
           value = { ...value };
           for (const key of ['capabilities', 'protocolRange', 'identityAvailability', 'timings']) delete value[key];
         }
-      } catch { return this.fail(); }
+      } catch { return this.fail('protocol'); }
       if (value.type === 'ready' && this.resolveReady) {
         clearTimeout(this.readyTimer);
         this.latest = value;
@@ -71,15 +141,21 @@ export class ScoutAgent {
         continue;
       }
       if (this.rejectReady && value.ok === false && !value.id) {
-        const error = Object.assign(new Error(value.error?.message ?? 'Scout agent could not open'),
-          { code: value.error?.code ?? 'scout_agent_unavailable', dispatch: 'not_dispatched' });
+        // A command-level CLI failure (unknown session, busy lease, ...) uses
+        // the canonical envelope: result:null plus structuredError.
+        const cause = value.error && typeof value.error === 'object' ? value.error : value.structuredError;
+        const error = agentError(cause?.code ?? 'scout_agent_unavailable',
+          cause?.message ?? 'Scout agent could not open');
+        clearTimeout(this.readyTimer);
         this.rejectReady(error);
         this.resolveReady = this.rejectReady = null;
-        this.fail();
+        // The CLI exits by itself after this envelope; settle() keeps its
+        // exit code and only terminates a child that lingers.
+        this.closed = true;
         return;
       }
       const request = this.pending.get(value.id);
-      if (!request) return this.fail();
+      if (!request) return this.fail('protocol');
       this.pending.delete(value.id);
       clearTimeout(request.timer);
       if (value.view && (value.viewRevision ?? -1) >= (this.latest?.viewRevision ?? -1)) this.latest = value;
@@ -91,21 +167,49 @@ export class ScoutAgent {
           this.latest = { view: value.event.view, viewRevision: value.event.viewRevision };
         }
       }
+      this.track(request, value);
       if (request.method === 'close' && value.ok === true && value.type === 'closed') {
         this.closed = true;
         this.child.stdin.end();
       }
       request.resolve(value);
     }
-    if (this.buffer.length > 8 * 1024 * 1024) this.fail();
+    if (this.buffer.length > 8 * 1024 * 1024) this.fail('protocol');
   }
 
-  fail() {
+  track(request, value) {
+    if (request.method === 'start' && value.ok === true && value.actionId) this.unreceipted = value.actionId;
+    if (request.method === 'react' && value.ok === true && value.conditionId) this.armed.add(value.conditionId);
+    if (request.method === 'cancel' && value.ok === true && request.params.scope === 'reaction') {
+      this.armed.delete(request.params.conditionId);
+    }
+    const event = value.event;
+    if (event?.type === 'action' && event.actionId === this.unreceipted) this.unreceipted = null;
+    if (event?.type === 'reaction' && event.status !== 'hand_busy') {
+      this.armed.delete(event.conditionId);
+      if (event.status === 'triggered' && event.actionId) this.unreceipted = event.actionId;
+    }
+  }
+
+  fail(reason = 'abort') {
     if (this.closed) return;
     this.closed = true;
     clearTimeout(this.readyTimer);
-    const error = Object.assign(new Error('Scout connection lost; an in-flight action may have dispatched. Reconcile; never retry automatically.'),
-      { code: 'scout_agent_transport_lost', dispatch: 'dispatch_outcome_unknown' });
+    const [code, base] = lossCodes[reason] ?? lossCodes.abort;
+    const exit = this.exit
+      ? ` (${this.exit.signal ? `signal ${this.exit.signal}` : `exit code ${this.exit.exitCode}`})` : '';
+    const inFlight = this.inFlight;
+    const stderr = this.lastStderr;
+    const message = `Scout connection lost: ${base}${exit}. ` + (inFlight
+      ? 'An input was in flight and may have dispatched. Reconcile; never retry automatically.'
+      : 'No input was in flight; reconnect and observe again.') + (stderr ? ` Last stderr: ${stderr}` : '');
+    const error = agentError(code, message, {
+      dispatch: inFlight ? 'dispatch_outcome_unknown' : 'not_dispatched',
+      exitCode: this.exit?.exitCode ?? null,
+      signal: this.exit?.signal ?? null,
+      stderr,
+    });
+    this.failure = error;
     this.rejectReady?.(error);
     this.resolveReady = this.rejectReady = null;
     for (const request of this.pending.values()) {
@@ -113,19 +217,27 @@ export class ScoutAgent {
       request.reject(error);
     }
     this.pending.clear();
-    this.child.kill();
+    this.terminate();
   }
 
   request(method, params = {}, timeoutMs = 45000) {
-    if (this.closed || (this.closing && method !== 'close')) return Promise.reject(new Error('Scout client closed'));
+    if (this.closed || (this.closing && method !== 'close')) {
+      return Promise.reject(agentError('scout_client_closed',
+        `Scout client closed${this.failure ? ` after ${this.failure.code}` : ''}; open a new connection.`,
+        { cause: this.failure?.code ?? null }));
+    }
     if (this.pending.size >= 16) return Promise.reject(new Error('At most 16 concurrent requests'));
+    if (this.serial >= 9999) {
+      return Promise.reject(agentError('scout_agent_request_limit',
+        'This connection used its 10,000 request identities; close it and open a new connection.'));
+    }
     const id = `q${++this.serial}`;
     const line = JSON.stringify({ ...params, id, method }) + '\n';
     if (Buffer.byteLength(line) > 65536) return Promise.reject(new Error('Request exceeds 64 KiB'));
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(), timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method });
-      this.child.stdin.write(line, error => { if (error) this.fail(); });
+      const timer = setTimeout(() => this.fail('timeout'), timeoutMs);
+      this.pending.set(id, { resolve, reject, timer, method, params });
+      this.child.stdin.write(line, error => { if (error) this.fail('stdin'); });
     });
   }
 
@@ -191,5 +303,5 @@ export class ScoutAgent {
     return this.closePromise;
   }
   /** Emergency transport shutdown, NOT app-operation cancellation. */
-  abort() { this.fail(); }
+  abort() { this.fail('abort'); }
 }

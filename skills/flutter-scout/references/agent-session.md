@@ -123,8 +123,10 @@ framework-frame count, and age of the last observed framework frame. An old
 frame can be a quiet screen. Disabled frames are suspended rendering, not a
 healthy unchanged screen. `pixelFreshness:not_observed` explicitly excludes
 compositor and platform-view pixels. Agent input requires active rendering and
-the helper's `liveRenderingGuardV1` capability. Old helpers remain usable with
-existing finite commands; update the helper and fully relaunch for agent mode.
+the helper's `liveRenderingGuardV1` capability. Old helpers remain observable;
+update the helper and fully relaunch for agent input. Every scene carries
+`inputBlockedReason` (null when `actionable`), e.g. `rendering_suspended`,
+`helper_capability_missing`, `receipt_unacknowledged` or a halt reason.
 
 Sampling defaults to 250 ms (configurable 100–10,000); reads are deduplicated,
 not piled up. Identical semantic/safety/rendering state is coalesced. Up to 64
@@ -160,8 +162,15 @@ foreground (no parameters), next (`timeoutMs` 0–30,000), acknowledge (`actionI
 `viewRevision`), query (`query: {method,args,params}`), cancel, close.
 Raw request lines are at most 64 KiB;
 at most 16 requests in flight and 10,000 request identities per connection.
-Malformed/uncorrelated output or transport timeout invalidates the shipped
-client with unknown-dispatch semantics. No retries are implemented.
+Malformed/uncorrelated output, child exit or transport timeout invalidates the
+shipped client. Its error has a distinct `code` (`scout_agent_exited`,
+`scout_agent_protocol_error`, `scout_agent_request_timeout`, ...) plus
+`exitCode`, `signal` and the last CLI `stderr` line. `dispatch` is
+`dispatch_outcome_unknown` only when an input (start/act, unread receipt or
+armed reaction) was in flight; otherwise `not_dispatched`. Connect failures keep
+the CLI cause: `session_not_registered`, `agent_session_busy`,
+`scout_helper_missing`, `scout_app_unreachable`, `scout_agent_protocol_mismatch`.
+No retries are implemented.
 
 Do not use `--single-json`, nested `serve`/`batch`, a process per request, or
 PTY echo for this stream. Use one persistent pipe and manual screenshots when

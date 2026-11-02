@@ -80,6 +80,10 @@
       "meaning": "An agent action lost its authoritative result; reconcile state without automatic retry.",
       "family": "operation"
     },
+    "agent_helper_capability_missing": {
+      "meaning": "The running helper lacks the rendering guard agent input requires; update the helper and relaunch. No input was dispatched.",
+      "family": "request_rejected"
+    },
     "agent_live_view_unavailable": {
       "meaning": "Active rendering or the required rendering guard could not be proven; no input was dispatched.",
       "family": "request_rejected"

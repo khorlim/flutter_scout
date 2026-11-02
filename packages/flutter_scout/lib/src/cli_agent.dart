@@ -167,12 +167,31 @@ function run(argv) {
       session = AgentSession(
         interval: Duration(milliseconds: interval),
         validate: _validateAgentAction,
-        read: () async => observer._agentObservation(
-          await observer._call('ext.flutter_scout.inspect', {
-            'brief': 'true',
-            'maxItems': '$maximum',
-          }),
-        ),
+        read: () async {
+          final Map<String, dynamic> raw;
+          try {
+            raw = await observer._call('ext.flutter_scout.inspect', {
+              'brief': 'true',
+              'maxItems': '$maximum',
+            });
+          } on ScoutCliException catch (error) {
+            // Keep the CLI-authored cause (e.g. helper not registered) so the
+            // ready/observe response says why the app is not observable.
+            return {
+              'ok': false,
+              'error': {'code': error.code, 'message': error.message},
+            };
+          }
+          final capabilities = raw['capabilities'];
+          return {
+            ...observer._agentObservation(raw),
+            // Agent input needs the helper's dispatch-time rendering guard.
+            if (raw['ok'] == true &&
+                (capabilities is! Map ||
+                    capabilities['liveRenderingGuardV1'] != true))
+              'missingHelperCapabilities': const ['liveRenderingGuardV1'],
+          };
+        },
         act: (action, observed) async {
           hand._liveDecisionView = observed;
           hand._liveDecisionTargets = AgentSession.scopedTargets(action);

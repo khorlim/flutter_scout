@@ -2,7 +2,15 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { ScoutAgent } from '../skills/flutter-scout/scripts/agent_client.mjs';
+
+const fakeBinary = fileURLToPath(new URL('./fixtures/fake_flutter_scout.mjs', import.meta.url));
+async function connectFake(mode) {
+  process.env.FAKE_SCOUT_MODE = mode;
+  try { return await ScoutAgent.connect({ app: 'demo', binary: fakeBinary }); }
+  finally { delete process.env.FAKE_SCOUT_MODE; }
+}
 
 function fixture() {
   const child = new EventEmitter();
@@ -115,7 +123,8 @@ test('malformed or uncorrelated output invalidates the connection', async () => 
   const { client, child } = fixture();
   await client.ready;
   const pending = client.observe();
-  const rejection = assert.rejects(pending, /connection lost/);
+  const rejection = assert.rejects(pending, error => error.code === 'scout_agent_protocol_error' &&
+    error.dispatch === 'not_dispatched' && /connection lost/.test(error.message));
   child.stdout.write('{bad json}\n');
   await rejection;
   assert.equal(client.closed, true);
@@ -129,4 +138,82 @@ test('close drains and is idempotent', async () => {
   send({ id: requests[0].id, ok: true, type: 'closed' });
   await closing;
   assert.equal(client.closed, true);
+});
+
+test('read-only transport loss is not blamed on an in-flight action', async () => {
+  const { client, child } = fixture();
+  await client.ready;
+  const pending = client.observe();
+  child.stderr.write('note\nfatal: VM service closed\n');
+  const rejection = assert.rejects(pending, error => {
+    assert.equal(error.code, 'scout_agent_exited');
+    assert.equal(error.dispatch, 'not_dispatched');
+    assert.equal(error.exitCode, 255);
+    assert.equal(error.stderr, 'fatal: VM service closed');
+    assert.doesNotMatch(error.message, /may have dispatched/);
+    assert.match(error.message, /exit code 255/);
+    return true;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  child.emit('exit', 255, null);
+  await rejection;
+});
+
+test('an accepted but unread input makes a later loss an unknown dispatch', async () => {
+  const { client, requests, send, child } = fixture();
+  await client.ready;
+  const ticket = client.start(1, { method: 'tap', args: ['btn.save'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await ticket;
+  const observe = client.observe();
+  const rejection = assert.rejects(observe, error => error.dispatch === 'dispatch_outcome_unknown' &&
+    /may have dispatched/.test(error.message) && error.signal === 'SIGKILL');
+  child.emit('exit', null, 'SIGKILL');
+  await rejection;
+});
+
+test('a consumed receipt clears the in-flight state', async () => {
+  const { client, requests, send, child } = fixture();
+  await client.ready;
+  const ticket = client.start(1, { method: 'tap', args: ['btn.save'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await ticket;
+  const next = client.next();
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true } } });
+  await next;
+  assert.equal(client.inFlight, false);
+  const observe = client.observe();
+  const rejection = assert.rejects(observe, error => error.dispatch === 'not_dispatched');
+  child.emit('exit', 1, null);
+  await rejection;
+});
+
+test('connect reports the CLI cause, exit code and stderr for an unknown session', async () => {
+  await assert.rejects(connectFake('not_registered'), error => {
+    assert.equal(error.code, 'session_not_registered');
+    assert.equal(error.dispatch, 'not_dispatched');
+    assert.equal(error.exitCode, 1);
+    assert.equal(error.stderr, 'no session named demo');
+    return true;
+  });
+});
+
+test('connect distinguishes a missing helper from an unreachable app', async () => {
+  await assert.rejects(connectFake('helper_missing'), error =>
+    error.code === 'scout_helper_missing' && error.cause === 'flutter_scout_helper_not_registered');
+  await assert.rejects(connectFake('unreachable'), error =>
+    error.code === 'scout_app_unreachable' && error.cause === 'not_attached');
+});
+
+test('a killed agent child reports its signal and last stderr line', async () => {
+  const client = await connectFake('die_on_request');
+  await assert.rejects(client.observe(), error => {
+    assert.equal(error.code, 'scout_agent_exited');
+    assert.equal(error.signal, 'SIGKILL');
+    assert.equal(error.stderr, 'fatal: VM service closed');
+    assert.equal(error.dispatch, 'not_dispatched');
+    return true;
+  });
+  await assert.rejects(client.observe(), error => error.code === 'scout_client_closed' &&
+    error.cause === 'scout_agent_exited');
 });

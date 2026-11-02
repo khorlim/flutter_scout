@@ -227,13 +227,28 @@ class AgentSession {
   int reads = 0;
   int actions = 0;
 
-  AgentView get scene => {
-    'actionable':
-        !_closed &&
-        _halt == null &&
-        _safe &&
-        _acting == null &&
-        _unacknowledgedAction == null,
+  /// First reason input is refused right now, or null when actionable.
+  String? get _inputBlockedReason {
+    if (_closed) return 'closed';
+    if (_halt != null) return _halt;
+    final blocked = _unsafeReason;
+    if (blocked != null) return blocked;
+    if (_helperCapabilityMissing) return 'helper_capability_missing';
+    if (_acting != null) return 'action_in_flight';
+    if (_unacknowledgedAction != null) return 'receipt_unacknowledged';
+    return null;
+  }
+
+  AgentView get scene {
+    final blocked = _inputBlockedReason;
+    return {
+      'actionable': blocked == null,
+      'inputBlockedReason': blocked,
+      ..._sceneBody,
+    };
+  }
+
+  AgentView get _sceneBody => {
     'viewRevision': _revision,
     'viewAgeMs': _clock.elapsedMilliseconds - _observedAt,
     'view': _view,
@@ -371,11 +386,26 @@ class AgentSession {
       _view?['ok'] == true &&
       (_view?['rendering'] as Map?)?['status'] == 'active' &&
       (_view?['rendering'] as Map?)?['framesEnabled'] == true;
-  bool get _safe =>
-      _live &&
-      (_view?['activeBlockingSignals'] as List? ?? []).isEmpty &&
-      (_view?['errorsSinceCursor'] as List? ?? []).isEmpty &&
-      _view?['safetyEvidenceStatus'] == 'complete';
+  String? get _unsafeReason {
+    if (_view?['ok'] != true) return 'observation_unavailable';
+    if (!_live) return 'rendering_suspended';
+    if ((_view?['activeBlockingSignals'] as List? ?? []).isNotEmpty) {
+      return 'blocking_signal_active';
+    }
+    if ((_view?['errorsSinceCursor'] as List? ?? []).isNotEmpty) {
+      return 'runtime_errors_since_cursor';
+    }
+    if (_view?['safetyEvidenceStatus'] != 'complete') {
+      return 'safety_evidence_incomplete';
+    }
+    return null;
+  }
+
+  /// Observation stays usable on an older helper; only input is refused.
+  bool get _helperCapabilityMissing =>
+      _view?['missingHelperCapabilities'] != null;
+
+  bool get _safe => _unsafeReason == null;
 
   /// Returns the view the decision was made from. A stale revision is
   /// accepted only for an action scoped to exact observed handles when the
@@ -394,9 +424,15 @@ class AgentSession {
         'again from the returned scene.',
       );
     }
-    if (!_safe) {
+    final unsafe = _unsafeReason;
+    if (unsafe == null && _helperCapabilityMissing) {
       throw StateError(
-        'agent_live_view_unavailable: restore rendering/check safety; nothing dispatched',
+        'agent_helper_capability_missing: update flutter_scout_helper and fully relaunch for agent input; nothing dispatched',
+      );
+    }
+    if (unsafe != null) {
+      throw StateError(
+        'agent_live_view_unavailable ($unsafe): restore rendering/check safety; nothing dispatched',
       );
     }
     return decision!;

@@ -47,6 +47,7 @@ const Set<String> _requiredMutationCapabilities = <String>{
 };
 
 const Set<String> _knownPreDispatchErrors = <String>{
+  'agent_helper_capability_missing',
   'agent_live_view_unavailable',
   'invalid_live_rendering_guard',
   'missing_mutation_envelope',
@@ -339,8 +340,10 @@ extension _CliProtocol on FlutterScoutCli {
     }
     final decisionView = _liveDecisionView;
     final rendering = _observationPayload(preflight)['rendering'];
+    final guardMissing =
+        (preflight['capabilities'] as Map?)?['liveRenderingGuardV1'] != true;
     if (_agentRequiresLiveRendering &&
-        ((preflight['capabilities'] as Map?)?['liveRenderingGuardV1'] != true ||
+        (guardMissing ||
             rendering is! Map ||
             rendering['status'] != 'active' ||
             rendering['framesEnabled'] != true)) {
@@ -349,9 +352,12 @@ extension _CliProtocol on FlutterScoutCli {
         replay: null,
         failure: withPreflightTiming(
           _notDispatchedProtocolFailure(
-            code: 'agent_live_view_unavailable',
-            message:
-                'Rendering is suspended or unavailable. Restore visibility and observe again; nothing was dispatched.',
+            code: guardMissing
+                ? 'agent_helper_capability_missing'
+                : 'agent_live_view_unavailable',
+            message: guardMissing
+                ? 'The running helper lacks liveRenderingGuardV1. Update flutter_scout_helper and fully relaunch for agent input; nothing was dispatched.'
+                : 'Rendering is suspended or unavailable. Restore visibility and observe again; nothing was dispatched.',
             method: method,
             runId: runId,
           ),
