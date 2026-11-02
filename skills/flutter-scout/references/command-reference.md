@@ -48,6 +48,10 @@ Lifecycle: devices, doctor, ensure, launch, attach, status, apps, reload,
 restart, stop, version. Annotation management: annotations. Manual evidence:
 screenshot, crop, logs, health, evidence.
 
+Logs: `logs --summary`, `logs --last <n>` (default 20, max 1000) and
+`logs --contains <text>`. Use these instead of reading log files directly;
+there is no `--tail`. Details: lifecycle-and-diagnostics.md.
+
 Supply VM capability URLs using attach --debug-url-file <0600-file> or
 --debug-url-stdin. Only explicit loopback hosts with a port are supported.
 attach has no --name or --project; to attach a human-started app as a named

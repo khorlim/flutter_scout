@@ -159,7 +159,9 @@ Close the agent connection before reload/restart, then reconnect (bridge:
 restart, `disconnect` and observe again). Use reload
 for Dart changes; sourceVerification:mismatch is a failure. A rejected reload
 does not imply the app died: check status and preserve a reachable session.
-Native/plugin/pubspec changes need a full launch. Lifecycle and ownership
+Native/plugin/pubspec changes need a full launch. Read runtime output with
+`flutter-scout --app <task> logs --summary` (or `--last <n>`, `--contains
+<text>`), never by opening log files. Lifecycle and ownership
 recovery details: [lifecycle-and-diagnostics.md](references/lifecycle-and-diagnostics.md).
 
 Screenshots and crops stay manual. Capture only when appearance matters or

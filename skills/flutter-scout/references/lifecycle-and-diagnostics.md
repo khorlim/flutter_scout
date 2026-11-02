@@ -75,6 +75,23 @@ flutter-scout --app <task> stop --clear-session
 flutter-scout --version
 ```
 
+## Reading logs
+
+Read runtime output with `logs`, not by opening `logs.txt` or per-run log
+files. `logs` picks the active run's log, redacts VM capability URLs and
+registered secrets, collapses duplicated app output, and drops known macOS
+toolchain noise (reported as `suppressedNoiseLines`).
+
+```bash
+flutter-scout --app <task> logs --summary            # counts, signals, important lines
+flutter-scout --app <task> logs --last 50            # newest 50 lines (max 1000)
+flutter-scout --app <task> logs --contains 'Exception' --last 20
+```
+
+There is no `--tail` or `--follow`. Results include `cursor` and `truncated`.
+Attach-only sessions report `available:false`, because Scout cannot read the
+owning IDE or terminal console.
+
 Attach-only sessions can inspect and use VM-service reload, but hot restart
 requires a Scout-owned Flutter process. A changed native plugin, asset pipeline,
 build setting, or pubspec requires relaunch.
