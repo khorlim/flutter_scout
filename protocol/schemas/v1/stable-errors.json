@@ -760,6 +760,30 @@
       "meaning": "The loopback is required before this operation can proceed.",
       "family": "operation"
     },
+    "macos_app_bundle_invalid": {
+      "meaning": "The built macOS app bundle has no readable executable.",
+      "family": "operation"
+    },
+    "macos_app_bundle_not_found": {
+      "meaning": "The macOS build succeeded but did not report the built app bundle.",
+      "family": "operation"
+    },
+    "macos_app_launch_cancelled": {
+      "meaning": "The macOS app launch was stopped before its VM service started.",
+      "family": "operation"
+    },
+    "macos_app_open_failed": {
+      "meaning": "LaunchServices could not open the built macOS app.",
+      "family": "operation"
+    },
+    "macos_app_process_not_found": {
+      "meaning": "The opened macOS app process could not be identified exactly.",
+      "family": "operation"
+    },
+    "macos_app_vm_service_not_found": {
+      "meaning": "The opened macOS app did not report a Dart VM service in time.",
+      "family": "operation"
+    },
     "managed_session_cleanup_unavailable": {
       "meaning": "The managed session cleanup capability or evidence is unavailable.",
       "family": "operation"
