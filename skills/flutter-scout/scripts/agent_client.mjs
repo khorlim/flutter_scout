@@ -83,6 +83,8 @@ export class ScoutAgent {
       this.pending.delete(value.id);
       clearTimeout(request.timer);
       if (value.view && (value.viewRevision ?? -1) >= (this.latest?.viewRevision ?? -1)) this.latest = value;
+      // A rejected hand request carries the current scene for one new decision.
+      if (value.scene?.view && (value.scene.viewRevision ?? -1) >= (this.latest?.viewRevision ?? -1)) this.latest = value.scene;
       if (value.event?.view) {
         // Historical events stay historical: never overwrite a newer view.
         if ((value.event.viewRevision ?? -1) >= (this.latest?.viewRevision ?? -1)) {

@@ -44,6 +44,18 @@ void _validateAgentAction(AgentView action) {
 }
 
 extension _CliAgent on FlutterScoutCli {
+  /// The agent's view of one brief inspect. Observer reads and target-scoped
+  /// mutation preflight share it so their decision fields stay comparable.
+  Map<String, dynamic> _agentObservation(Map<String, dynamic> raw) {
+    final compact = _compactBriefInspect(raw);
+    return {
+      ...compact,
+      ..._observationPayload(compact),
+      'safetyEvidenceStatus': raw['safetyEvidenceStatus'],
+      'payloadBounds': raw['payloadBounds'],
+    }..remove('result');
+  }
+
   Future<void> _foregroundAgentApp() async {
     if (!Platform.isMacOS || _readDevice() != 'macos') {
       throw StateError('foreground is supported only for a named macOS app');
@@ -155,21 +167,16 @@ function run(argv) {
       session = AgentSession(
         interval: Duration(milliseconds: interval),
         validate: _validateAgentAction,
-        read: () async {
-          final raw = await observer._call('ext.flutter_scout.inspect', {
+        read: () async => observer._agentObservation(
+          await observer._call('ext.flutter_scout.inspect', {
             'brief': 'true',
             'maxItems': '$maximum',
-          });
-          final compact = observer._compactBriefInspect(raw);
-          return {
-            ...compact,
-            ...observer._observationPayload(compact),
-            'safetyEvidenceStatus': raw['safetyEvidenceStatus'],
-            'payloadBounds': raw['payloadBounds'],
-          }..remove('result');
-        },
+          }),
+        ),
         act: (action, observed) async {
           hand._liveDecisionView = observed;
+          hand._liveDecisionTargets = AgentSession.scopedTargets(action);
+          hand._liveDecisionMaxItems = maximum;
           hand._agentRequiresLiveRendering = true;
           try {
             final method = action['method'] as String;
@@ -197,6 +204,7 @@ function run(argv) {
             };
           } finally {
             hand._liveDecisionView = null;
+            hand._liveDecisionTargets = null;
             hand._agentRequiresLiveRendering = false;
           }
         },
@@ -329,6 +337,16 @@ function run(argv) {
               'message': error.toString(),
             },
             'retry': 'never_automatic',
+            // The current scene lets one fresh decision follow a rejected
+            // hand request without another round trip. It is not a retry.
+            if (const {
+              'start',
+              'react',
+              'acknowledge',
+              'reconcile',
+              'foreground',
+            }.contains(request['method']))
+              'scene': session.scene,
           });
         }
       }

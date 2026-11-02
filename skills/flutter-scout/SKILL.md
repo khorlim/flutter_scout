@@ -97,11 +97,15 @@ Do not wait for a success screen after a rejected input. Already-visible text
 proves observed state, not that a new save succeeded. A timeout is not evidence
 that an app operation was cancelled or safe to repeat.
 
-After a failed action, examine its receipt and the fresh scene. For a known
-dispatch outcome only, explicitly reconcile(actionId, scene.viewRevision)
+After a failed action, examine its receipt and the fresh scene. A
+`dispatch:not_dispatched` failure (for example `live_view_changed`) sent
+nothing and leaves the hand free: decide again from outcome.scene. For a
+failure that dispatched, explicitly reconcile(actionId, scene.viewRevision)
 after checking app state. Reconciliation does not repeat input. Unknown
 dispatch, runtime replacement, or lost evidence stays halted; investigate
 before opening another connection. Never suppress errors to keep navigating.
+Exact-handle taps, input and fill tolerate unrelated text ticks (clocks,
+countdowns); real screen, surface or target changes are still rejected.
 
 Rendering suspended means restore app visibility. Never pump frames or treat
 an old semantic tree as current pixels. An active framework frame does not

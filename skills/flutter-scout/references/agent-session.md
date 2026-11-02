@@ -57,10 +57,14 @@ does not by itself wake or interrupt a model that is still reasoning.
    settling (`waitMs:0` where supported), not a business-completion wait. The
    normal safety/evidence work is still required; zero settling is not zero
    execution time. The next input is blocked until the matching event has been
-   delivered and acknowledge(actionId) succeeds. Failures cannot be acknowledged:
-   inspect the receipt, observe fresh state, then explicitly call
-   reconcile(actionId, viewRevision) only after making sense of a known dispatch
-   outcome. Reconciliation never retries. Unknown dispatch stays halted.
+   delivered and acknowledge(actionId) succeeds. A `dispatch:not_dispatched`
+   failure (such as `live_view_changed`) sent nothing: once its receipt is
+   delivered the hand is free for a new decision, with no acknowledge or
+   reconcile. Other failures cannot be acknowledged: inspect the receipt,
+   observe, then call reconcile(actionId, scene.viewRevision). Reconciliation
+   never retries. Unknown dispatch stays halted; check app state, then close
+   and reconnect. Rejected hand requests name the action and recovery call and
+   include the current `scene` for one new decision.
 3. `watch({text:'Ready'}, 8000)` returns a condition ticket; its later
    `condition` event says `met`, `timeout`, `observation_unavailable`, `stopped`,
    or `cancelled`. It doesn't occupy the hand. This proves observed state only,
@@ -130,9 +134,17 @@ continuously during a task; this is not indefinite unattended monitoring.
 Polling can miss transitions shorter than a sample, and an event is evidence
 of a past observation, not a reusable current action authorization.
 
-All actions carry the last decision's `viewRevision`; a changed revision is
-rejected. Fresh CLI preflight verifies run/runtime/snapshot and rendering; the
-helper checks generation, target safety, and rendering again at dispatch.
+All actions carry the decision's `viewRevision`; a changed revision is
+rejected, with one exception. tap or long-press on one exact observed handle,
+input with `params.target`, and fill keyed by handles still proceed when the
+only change is in-place text outside those targets, such as a clock or a
+countdown label. Route, surface, rendering, safety evidence, field values,
+scroll state, the kind and state of every control, and the target nodes must
+be unchanged, and text must not appear or disappear. Text-target, coordinate,
+gesture, navigation and deeplink actions need the exact revision. Fresh CLI
+preflight verifies run/runtime and rendering and repeats the same comparison
+against the decision view; the helper checks generation, target safety, and
+rendering again at dispatch.
 No frame age heuristic authorizes a stale decision. Runtime replacement,
 unavailable reads, unknown action outcomes, or incomplete safety stop the loop.
 Make a fresh deliberate decision after reconciliation, never just replace the

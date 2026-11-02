@@ -28,6 +28,156 @@ class AgentSession {
     'drag-cancel',
     'deeplink',
   };
+
+  /// Exact handles an action is limited to, or null when its effect is not
+  /// scoped to named observed handles (text, coordinates, gestures, routes).
+  static Set<String>? scopedTargets(AgentView action) {
+    final args = action['args'] ?? const <Object?>[];
+    final params = action['params'] ?? const <String, Object?>{};
+    if (args is! List || params is! Map) return null;
+    Set<String>? handles(Iterable<Object?> values) {
+      final result = <String>{};
+      for (final value in values) {
+        if (value is! String || value.isEmpty || value.trim() != value) {
+          return null;
+        }
+        result.add(value);
+      }
+      return result.isEmpty ? null : result;
+    }
+
+    return switch (action['method']) {
+      'tap' ||
+      'long-press' when args.length == 1 && params.isEmpty => handles(args),
+      'input'
+          when args.length == 1 &&
+              params.length == 1 &&
+              params.containsKey('target') =>
+        handles([params['target']]),
+      'fill' when args.isEmpty && params.length == 1 && params['json'] is Map =>
+        handles((params['json'] as Map).keys),
+      _ => null,
+    };
+  }
+
+  /// Whether [current] differs from [decision] only by in-place text updates
+  /// (a ticking clock, a countdown label) outside the exact [targets]. Run,
+  /// runtime, screen, route, surface, rendering, safety evidence, field
+  /// values, scroll regions, omissions and the shape of every control must
+  /// be unchanged; each target must appear once, identical in both views.
+  /// Text may change but not appear or disappear. Dispatch-time target
+  /// resolution, occlusion and hit-test checks in the app still apply.
+  static bool targetUnaffected(
+    AgentView decision,
+    AgentView current,
+    Set<String> targets,
+  ) {
+    if (targets.isEmpty || decision['ok'] != true || current['ok'] != true) {
+      return false;
+    }
+    for (final key in const [
+      'runId',
+      'runtimeInstanceId',
+      'screen',
+      'routeGuess',
+      'surfaceOnly',
+      'viewport',
+      'keyboard',
+      'activeBlockingSignals',
+      'errorsSinceCursor',
+      'errorCursor',
+      'recentErrors',
+      'errorSummary',
+      'safetyEvidenceStatus',
+      'perception',
+      'payloadBounds',
+      'omittedSections',
+      'omitted',
+      'interactablesOmitted',
+      'scrollables',
+      'fieldValues',
+      'degradedNodes',
+      'inspectWarnings',
+      'annotationMode',
+    ]) {
+      if (!_same(decision[key], current[key])) return false;
+    }
+    Object? pick(Object? value, List<String> keys) => value is Map
+        ? {
+            for (final key in keys)
+              if (value.containsKey(key)) key: value[key],
+          }
+        : value;
+    const surfaceKeys = ['kind', 'label', 'screen', 'source'];
+    const renderingKeys = ['status', 'framesEnabled', 'lifecycle'];
+    if (!_same(
+          pick(decision['activeSurface'], surfaceKeys),
+          pick(current['activeSurface'], surfaceKeys),
+        ) ||
+        !_same(
+          pick(decision['rendering'], renderingKeys),
+          pick(current['rendering'], renderingKeys),
+        )) {
+      return false;
+    }
+    int length(Object? value) =>
+        value is List ? value.length : (value == null ? 0 : -1);
+    for (final key in const [
+      'visibleText',
+      'hitTestableText',
+      'nonHitTestableText',
+      'offscreenText',
+      'structuredRows',
+    ]) {
+      if (length(decision[key]) != length(current[key]) ||
+          length(current[key]) < 0) {
+        return false;
+      }
+    }
+    final before = decision['interactables'];
+    final after = current['interactables'];
+    if (before is! List || after is! List || before.length != after.length) {
+      return false;
+    }
+    final found = <String>{};
+    for (var i = 0; i < before.length; i++) {
+      final a = before[i];
+      final b = after[i];
+      if (a is! Map || b is! Map) return false;
+      if (targets.contains(a['id']) || targets.contains(b['id'])) {
+        if (!_same(a, b) || !found.add(a['id'] as String)) return false;
+        continue;
+      }
+      // Unkeyed ids derive from labels, so a countdown button may change id
+      // and label in place. Its kind and interaction state must not change.
+      for (final key in const [
+        'kind',
+        'enabled',
+        'hitTestable',
+        'offscreen',
+        'selected',
+      ]) {
+        if (!_same(a[key], b[key])) return false;
+      }
+    }
+    return found.length == targets.length;
+  }
+
+  static bool _same(Object? a, Object? b) {
+    if (a is Map && b is Map) {
+      return a.length == b.length &&
+          a.keys.every((key) => b.containsKey(key) && _same(a[key], b[key]));
+    }
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_same(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    return a == b;
+  }
+
   AgentSession({
     required this.read,
     required this.act,
@@ -65,6 +215,12 @@ class AgentSession {
   int _observedAt = 0;
   String? _pendingAction;
   String? _unacknowledgedAction;
+  // A delivered not_dispatched receipt releases the hand; remembered only so
+  // a documented reconcile call for it is a harmless no-op.
+  String? _releasedAction;
+  // Recent views by revision, so a decision can be compared with the current
+  // screen instead of being rejected for unrelated in-place text updates.
+  final Map<int, AgentView> _history = {};
   AgentView? _receipt;
   bool _receiptDelivered = false;
   int _receiptReadCount = 0;
@@ -184,6 +340,8 @@ class AgentSession {
         if (changed) {
           _revision++;
           _viewKey = key;
+          _history[_revision] = value;
+          if (_history.length > 64) _history.remove(_history.keys.first);
         }
         if (value['ok'] != true) {
           _stop('agent_observation_unavailable');
@@ -219,13 +377,21 @@ class AgentSession {
       (_view?['errorsSinceCursor'] as List? ?? []).isEmpty &&
       _view?['safetyEvidenceStatus'] == 'complete';
 
-  void _authorize(int revision) {
-    if (_closed || _halt != null) {
-      throw StateError('Session stopped: ${_halt ?? 'closed'}');
-    }
-    if (revision != _revision) {
+  /// Returns the view the decision was made from. A stale revision is
+  /// accepted only for an action scoped to exact observed handles when the
+  /// screen differs solely by in-place text updates outside those targets.
+  AgentView _authorize(int revision, [Set<String>? targets]) {
+    if (_closed || _halt != null) throw StateError(_stoppedMessage());
+    final decision = revision == _revision ? _view : _history[revision];
+    if (revision != _revision &&
+        (targets == null ||
+            decision == null ||
+            _view == null ||
+            !targetUnaffected(decision, _view!, targets))) {
       throw StateError(
-        'agent_view_changed: observe and decide again; nothing dispatched',
+        'agent_view_changed: viewRevision $revision is stale (now $_revision) '
+        'and the change may affect this action; nothing dispatched. Decide '
+        'again from the returned scene.',
       );
     }
     if (!_safe) {
@@ -233,15 +399,42 @@ class AgentSession {
         'agent_live_view_unavailable: restore rendering/check safety; nothing dispatched',
       );
     }
+    return decision!;
+  }
+
+  bool get _knownFailure =>
+      _receiptDelivered &&
+      const {'not_dispatched', 'dispatched'}.contains(_receipt?['dispatch']);
+
+  /// Every stopped-hand rejection names the action and the literal recovery.
+  String _stoppedMessage() {
+    final id = _unacknowledgedAction;
+    if (_closed) {
+      return 'agent_session_closed: open a new connection; nothing dispatched';
+    }
+    if (_halt == 'agent_action_failed' && id != null) {
+      if (!_receiptDelivered) {
+        return "agent_receipt_required: consume action $id's receipt with "
+            'next() first; nothing dispatched';
+      }
+      if (_knownFailure) {
+        return 'agent_action_failed: action $id failed with dispatch '
+            '${_receipt?['dispatch']}; inspect its receipt, observe(), then '
+            "call reconcile('$id', scene.viewRevision). Nothing dispatched now.";
+      }
+      return 'agent_action_outcome_unknown: action $id may have reached the '
+          'app and cannot be reconciled on this connection. Check app state, '
+          'then close() and reconnect. Nothing dispatched now.';
+    }
+    return 'agent_session_stopped: $_halt; this connection accepts no more '
+        'input. Check app state, then close() and reconnect. Nothing '
+        'dispatched.';
   }
 
   /// Explicit native activation shares the hand, without fabricating frames
   /// or acknowledging an outstanding input receipt.
   Future<AgentView> foreground(Future<void> Function() activate) async {
-    final knownFailure =
-        _halt == 'agent_action_failed' &&
-        _receiptDelivered &&
-        const {'not_dispatched', 'dispatched'}.contains(_receipt?['dispatch']);
+    final knownFailure = _halt == 'agent_action_failed' && _knownFailure;
     if (_closed ||
         (_halt != null && !knownFailure) ||
         _acting != null ||
@@ -280,19 +473,26 @@ class AgentSession {
   }
 
   AgentView start(int revision, AgentView action, {String? reactionId}) {
-    _authorize(revision);
+    final decision = _authorize(revision, scopedTargets(action));
     if (_acting != null || _unacknowledgedAction != null) {
+      final id = _pendingAction ?? _unacknowledgedAction;
       throw StateError(
-        'agent_receipt_required: consume and acknowledge the previous receipt before another input',
+        _acting != null
+            ? "agent_hand_busy: action $id is in flight; consume its receipt with next() first"
+            : _receiptDelivered
+            ? "agent_receipt_required: call acknowledge('$id') before another input"
+            : "agent_receipt_required: consume action $id's receipt with next(), then acknowledge('$id')",
       );
     }
     validate(action);
-    // Clone caller-owned maps before crossing an asynchronous boundary.
+    // Clone caller-owned maps before crossing an asynchronous boundary. Fresh
+    // preflight compares against the decision view, not a later one.
     final request = jsonDecode(jsonEncode(action)) as AgentView;
-    final observed = jsonDecode(jsonEncode(_view)) as AgentView;
+    final observed = jsonDecode(jsonEncode(decision)) as AgentView;
     final id = 'a${++_ticket}';
     _pendingAction = id;
     _unacknowledgedAction = id;
+    _releasedAction = null;
     _receipt = null;
     _receiptDelivered = false;
     actions++;
@@ -314,7 +514,11 @@ class AgentSession {
       _acting = null;
       _receipt = result;
       _receiptReadCount = reads;
-      if (result['ok'] != true) _stop('agent_action_failed');
+      // A rejection that provably sent nothing leaves app state untouched:
+      // the hand is released once its receipt is delivered, never retried.
+      if (result['ok'] != true && result['dispatch'] != 'not_dispatched') {
+        _stop('agent_action_failed');
+      }
       _emit('action', {
         'actionId': id,
         'reactionId': ?reactionId,
@@ -337,42 +541,74 @@ class AgentSession {
   }
 
   /// A received successful input receipt must be acknowledged before more
-  /// input. Failed input additionally needs a fresh explicit reconciliation.
+  /// input. Failed input additionally needs a fresh explicit reconciliation,
+  /// except a delivered not_dispatched receipt, which already freed the hand.
   AgentView acknowledge(String actionId) {
+    if (_released(actionId)) {
+      throw StateError(
+        'agent_not_dispatched: action $actionId sent nothing and already '
+        'released the hand; no acknowledge or reconcile is needed. Decide '
+        'again from the current scene.',
+      );
+    }
     _requireReceipt(actionId);
     if (_receipt?['ok'] != true) {
       throw StateError(
-        'agent_reconciliation_required: inspect the failure and observe before reconcile',
+        'agent_reconciliation_required: action $actionId failed; inspect its '
+        "receipt, observe(), then call reconcile('$actionId', scene.viewRevision)",
       );
     }
     _unacknowledgedAction = null;
     return {'ok': true, ...scene};
   }
 
+  bool _released(String actionId) =>
+      actionId == _releasedAction && _unacknowledgedAction == null;
+
   void _requireReceipt(String actionId) {
     if (actionId != _unacknowledgedAction ||
         _receipt == null ||
         !_receiptDelivered) {
+      final current = _unacknowledgedAction;
       throw StateError(
-        'agent_receipt_required: consume the matching action event first',
+        current == null
+            ? 'agent_receipt_required: action $actionId is not outstanding'
+            : "agent_receipt_required: consume action $current's receipt with next() first",
       );
     }
   }
 
   AgentView reconcile(String actionId, int revision) {
+    if (_released(actionId)) {
+      // Nothing was dispatched, so there is nothing to reconcile.
+      return {
+        'ok': true,
+        'previousActionRetried': false,
+        'reconciliationRequired': false,
+        ...scene,
+      };
+    }
     _requireReceipt(actionId);
-    if (_closed ||
-        _halt != 'agent_action_failed' ||
-        revision != _revision ||
-        reads <= _receiptReadCount ||
-        !_safe ||
-        !const {
-          'not_dispatched',
-          'dispatched',
-        }.contains(_receipt?['dispatch'])) {
-      throw StateError(
-        'agent_reconciliation_unavailable: a fresh safe view and known dispatch outcome are required; unknown outcomes stay halted',
-      );
+    final retry =
+        "observe(), then call reconcile('$actionId', scene.viewRevision)";
+    final problem = _closed
+        ? 'the connection is closed'
+        : _halt == null
+        ? 'action $actionId did not fail; acknowledge it instead'
+        : _halt != 'agent_action_failed'
+        ? 'the hand stopped for $_halt, which reconciliation cannot clear'
+        : !_knownFailure
+        ? 'action $actionId has an unknown dispatch outcome and stays halted; '
+              'check app state, then close() and reconnect'
+        : revision != _revision || reads <= _receiptReadCount
+        ? 'viewRevision $revision is not a fresh observation after the '
+              'receipt; $retry'
+        : !_safe
+        ? 'rendering is not active and safe; restore visibility '
+              '(foreground() on macOS), then $retry'
+        : null;
+    if (problem != null) {
+      throw StateError('agent_reconciliation_unavailable: $problem');
     }
     _halt = null;
     _unacknowledgedAction = null;
@@ -386,7 +622,7 @@ class AgentSession {
     int? revision,
     AgentView? reaction,
   }) {
-    if (_closed || _halt != null) throw StateError('Session stopped');
+    if (_closed || _halt != null) throw StateError(_stoppedMessage());
     if (_jobs.length >= 8) throw StateError('agent_condition_limit');
     if (timeoutMs < 1 || timeoutMs > 30000) {
       throw ArgumentError('timeoutMs must be 1..30000');
@@ -656,6 +892,11 @@ class AgentSession {
     if (event['type'] == 'action' &&
         event['actionId'] == _unacknowledgedAction) {
       _receiptDelivered = true;
+      if (_receipt?['ok'] != true &&
+          _receipt?['dispatch'] == 'not_dispatched') {
+        _releasedAction = _unacknowledgedAction;
+        _unacknowledgedAction = null;
+      }
     }
   }
 

@@ -6,19 +6,27 @@ AgentView view(
   int generation, {
   String status = 'active',
   String runtime = 'one',
+  String screen = 'Probe',
   List<String> text = const ['Working'],
+  List<Map<String, Object?>> extra = const [],
 }) => {
   'ok': true,
   'runId': 'run',
   'runtimeInstanceId': runtime,
   'snapshotId': 'g$generation',
-  'screen': 'Probe',
+  'screen': screen,
   'visibleText': text,
   'safetyEvidenceStatus': 'complete',
   'rendering': {'status': status, 'framesEnabled': status == 'active'},
   'interactables': [
     {'id': 'btn.pause', 'label': 'Pause'},
+    ...extra,
   ],
+};
+const dispatchedFailure = <String, dynamic>{
+  'ok': false,
+  'dispatch': 'dispatched',
+  'error': {'code': 'expectation_not_met'},
 };
 const tap = <String, dynamic>{
   'method': 'tap',
@@ -47,7 +55,7 @@ void main() {
         validate: (_) {},
         act: (_, _) async {
           current = view(2, status: 'suspended');
-          return {'ok': false, 'dispatch': 'not_dispatched'};
+          return dispatchedFailure;
         },
       );
       addTearDown(s.close);
@@ -155,11 +163,7 @@ void main() {
         read: () async => view(1),
         act: (_, _) async {
           count++;
-          return {
-            'ok': false,
-            'dispatch': 'not_dispatched',
-            'error': {'code': 'target_ambiguous'},
-          };
+          return dispatchedFailure;
         },
         validate: (_) {},
       );
@@ -168,6 +172,17 @@ void main() {
       final id = s.start(1, tap)['actionId'];
       await event(s, 'action');
       expect(() => s.acknowledge(id), throwsStateError);
+      // Every halt names the action and the literal recovery call.
+      expect(
+        () => s.start(s.scene['viewRevision'], tap),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains("reconcile('$id', scene.viewRevision)"),
+          ),
+        ),
+      );
       await s.observe();
       expect(
         s.reconcile(id, s.scene['viewRevision'])['previousActionRetried'],
@@ -317,10 +332,10 @@ void main() {
       );
       addTearDown(s.close);
       await s.open();
-      current = view(2);
+      current = view(2, screen: 'Next');
       await s.observe();
       expect(() => s.start(1, tap), throwsStateError);
-      current = view(2, status: 'suspended');
+      current = view(2, screen: 'Next', status: 'suspended');
       await s.observe();
       expect(() => s.start(s.scene['viewRevision'], tap), throwsStateError);
       expect(calls, 0);
@@ -552,4 +567,229 @@ void main() {
       );
     },
   );
+
+  test(
+    'a delivered not_dispatched rejection frees the hand without retry',
+    () async {
+      var current = view(1);
+      final results = <AgentView>[
+        {
+          'ok': false,
+          'dispatch': 'not_dispatched',
+          'error': {'code': 'live_view_changed'},
+        },
+        receipt,
+      ];
+      var calls = 0;
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => results[calls++],
+        validate: (_) {},
+        interval: const Duration(hours: 1),
+      );
+      addTearDown(s.close);
+      await s.open();
+      final id = s.start(1, tap)['actionId'] as String;
+      await Future<void>.delayed(Duration.zero);
+      // The receipt must still be consumed before another input.
+      expect(
+        () => s.start(s.scene['viewRevision'], tap),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains(id), contains('next()')),
+          ),
+        ),
+      );
+      final failed = await event(s, 'action');
+      expect((failed['result'] as Map)['dispatch'], 'not_dispatched');
+      expect(s.scene['hand']['halted'], isNull);
+      expect(s.scene['hand']['unacknowledgedAction'], isNull);
+      // No fresh safe view is needed because nothing reached the app.
+      current = view(2, status: 'suspended');
+      await s.observe();
+      // The documented recovery call is harmless; acknowledge explains why
+      // it is unnecessary instead of hiding the failure.
+      final reconciled = s.reconcile(id, s.scene['viewRevision']);
+      expect(reconciled['ok'], isTrue);
+      expect(reconciled['previousActionRetried'], isFalse);
+      expect(
+        () => s.acknowledge(id),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('agent_not_dispatched'),
+          ),
+        ),
+      );
+      expect(calls, 1);
+      current = view(3);
+      await s.observe();
+      s.start(s.scene['viewRevision'], tap);
+      expect((await event(s, 'action'))['result'], receipt);
+      expect(calls, 2);
+    },
+  );
+
+  test(
+    'unknown outcome halt names the action and reconnection recovery',
+    () async {
+      final s = AgentSession(
+        read: () async => view(1),
+        act: (_, _) async => {
+          'ok': false,
+          'dispatch': 'dispatch_outcome_unknown',
+        },
+        validate: (_) {},
+      );
+      addTearDown(s.close);
+      await s.open();
+      final id = s.start(1, tap)['actionId'] as String;
+      await event(s, 'action');
+      await s.observe();
+      final names = isA<StateError>().having(
+        (e) => e.message,
+        'message',
+        allOf(contains(id), contains('close()')),
+      );
+      expect(() => s.start(s.scene['viewRevision'], tap), throwsA(names));
+      expect(() => s.reconcile(id, s.scene['viewRevision']), throwsA(names));
+    },
+  );
+
+  test(
+    'unrelated in-place text ticks do not invalidate an exact target decision',
+    () async {
+      var current = view(
+        1,
+        text: ['10:41', 'Resend in 39'],
+        extra: [
+          {'id': 'btn.resend_in_39', 'kind': 'button', 'enabled': false},
+        ],
+      );
+      final seen = <AgentView>[];
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, observed) async {
+          seen.add(observed);
+          return receipt;
+        },
+        validate: (_) {},
+        interval: const Duration(hours: 1),
+      );
+      addTearDown(s.close);
+      await s.open();
+      current = view(
+        2,
+        text: ['10:42', 'Resend in 38'],
+        extra: [
+          {'id': 'btn.resend_in_38', 'kind': 'button', 'enabled': false},
+        ],
+      );
+      await s.observe();
+      expect(s.scene['viewRevision'], 2);
+      final ticket = s.start(1, tap);
+      expect(ticket['ok'], isTrue);
+      await event(s, 'action');
+      // Fresh preflight compares the decision view, not the later one.
+      expect(seen.single['snapshotId'], 'g1');
+    },
+  );
+
+  test('real screen or target changes still reject a stale decision', () async {
+    final decision = view(1, text: ['10:41']);
+    final changes = <String, AgentView>{
+      'route': view(2, screen: 'Next', text: ['10:41']),
+      'new text': view(2, text: ['10:41', 'Invalid code']),
+      'target': {
+        ...view(2, text: ['10:41']),
+        'interactables': [
+          {'id': 'btn.pause', 'label': 'Pause', 'enabled': false},
+        ],
+      },
+      'control shape': view(
+        2,
+        text: ['10:41'],
+        extra: [
+          {'id': 'btn.cancel', 'kind': 'button'},
+        ],
+      ),
+      'surface': {
+        ...view(2, text: ['10:41']),
+        'activeSurface': {'kind': 'dialog'},
+      },
+    };
+    for (final entry in changes.entries) {
+      expect(
+        AgentSession.targetUnaffected(decision, entry.value, {'btn.pause'}),
+        isFalse,
+        reason: entry.key,
+      );
+    }
+    expect(
+      AgentSession.targetUnaffected(decision, view(2, text: ['10:42']), {
+        'btn.pause',
+      }),
+      isTrue,
+    );
+    // Only exact handle actions are scoped; text, coordinates and gestures
+    // keep exact revision freshness.
+    expect(AgentSession.scopedTargets(tap), {'btn.pause'});
+    expect(
+      AgentSession.scopedTargets({
+        'method': 'input',
+        'args': ['value'],
+        'params': {'target': 'field.code'},
+      }),
+      {'field.code'},
+    );
+    for (final action in <AgentView>[
+      {
+        'method': 'tap-text',
+        'args': ['Pause'],
+      },
+      {
+        'method': 'tap',
+        'args': ['10', '20'],
+      },
+      {
+        'method': 'scroll',
+        'args': ['down'],
+      },
+      {'method': 'back'},
+    ]) {
+      expect(AgentSession.scopedTargets(action), isNull, reason: '$action');
+    }
+
+    var current = decision;
+    final s = AgentSession(
+      read: () async => current,
+      act: (_, _) async => receipt,
+      validate: (_) {},
+      interval: const Duration(hours: 1),
+    );
+    addTearDown(s.close);
+    await s.open();
+    current = view(2, text: ['10:42']);
+    await s.observe();
+    expect(
+      () => s.start(1, {
+        'method': 'tap-text',
+        'args': ['Pause'],
+      }),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('agent_view_changed'),
+        ),
+      ),
+    );
+    current = view(3, screen: 'Next', text: ['10:43']);
+    await s.observe();
+    expect(() => s.start(1, tap), throwsStateError);
+    expect(s.actions, 0);
+  });
 }

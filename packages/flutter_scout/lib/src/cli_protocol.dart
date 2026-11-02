@@ -208,7 +208,11 @@ extension _CliProtocol on FlutterScoutCli {
           'commandId': preflightCommandId,
           'runId': runId,
           'brief': 'true',
-          'maxItems': '1',
+          // A target-scoped agent decision needs the same brief view it was
+          // made from; otherwise only the identity is required.
+          'maxItems': _liveDecisionView != null && _liveDecisionTargets != null
+              ? '$_liveDecisionMaxItems'
+              : '1',
         },
         timeout: const Duration(seconds: 5),
       );
@@ -354,10 +358,17 @@ extension _CliProtocol on FlutterScoutCli {
         ),
       );
     }
+    final decisionTargets = _liveDecisionTargets;
     if (decisionView != null &&
-        (decisionView['snapshotId'] != snapshotId ||
-            decisionView['runtimeInstanceId'] != runtimeInstanceId ||
-            decisionView['runId'] != runId)) {
+        (decisionView['runtimeInstanceId'] != runtimeInstanceId ||
+            decisionView['runId'] != runId ||
+            (decisionView['snapshotId'] != snapshotId &&
+                (decisionTargets == null ||
+                    !AgentSession.targetUnaffected(
+                      decisionView,
+                      _agentObservation(preflight),
+                      decisionTargets,
+                    ))))) {
       return (
         invocation: null,
         replay: null,
@@ -365,7 +376,7 @@ extension _CliProtocol on FlutterScoutCli {
           _notDispatchedProtocolFailure(
             code: 'live_view_changed',
             message:
-                'The screen changed since the agent observation. Read the returned view and choose again.',
+                'The screen changed in a way that may affect this action since the agent observation. Nothing was dispatched and the hand stays available; decide again from the returned scene.',
             method: method,
             runId: runId,
             details: {

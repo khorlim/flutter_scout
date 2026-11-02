@@ -70,6 +70,21 @@ test('act surfaces a failed receipt without acknowledgement or another tap', asy
   client.abort();
 });
 
+test('a rejected start returns the current scene for one new decision', async () => {
+  const { client, requests, child } = fixture();
+  await client.ready;
+  const result = client.act(1, { method: 'tap', args: ['btn.save'] });
+  child.stdout.write(JSON.stringify({ id: requests[0].id, ok: false, dispatch: 'not_dispatched',
+    error: { code: 'agent_request_rejected', message: 'agent_view_changed' },
+    scene: { viewRevision: 3, view: { screen: 'Now' } } }) + '\n');
+  const outcome = await result;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.scene.viewRevision, 3);
+  assert.equal(client.latest.view.screen, 'Now');
+  assert.deepEqual(requests.map(r => r.method), ['start']);
+  client.abort();
+});
+
 test('act acknowledges a successful receipt before refreshing the scene', async () => {
   const { client, requests, send } = fixture();
   await client.ready;

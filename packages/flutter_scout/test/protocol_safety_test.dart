@@ -247,6 +247,41 @@ void main() {
       },
     );
 
+    for (final change in ['clock tick', 'route change', 'unscoped action']) {
+      test('agent target-scoped preflight: $change', () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        Map<String, Object?> screen(String name, String clock) => {
+          'screen': name,
+          'safetyEvidenceStatus': 'complete',
+          'visibleText': [clock, 'Save'],
+          'interactables': const [
+            {'id': 'btn.save', 'kind': 'button', 'label': 'Save'},
+          ],
+        };
+        // The fresh helper digest differs from the decision in every case.
+        fake.preflightExtra = screen(
+          change == 'route change' ? 'saved' : 'home',
+          '10:42',
+        );
+        await _withProtocolSession(fake.uri, () async {
+          final cli = FlutterScoutCli()
+            ..debugSetLiveDecisionView({
+              'ok': true,
+              'runId': 'test-run',
+              'runtimeInstanceId': 'runtime-a',
+              'snapshotId': 'g6:${List.filled(64, 'b').join()}',
+              'errorCursor': 3,
+              'errorsSinceCursor': const <Object?>[],
+              'activeBlockingSignals': const <Object?>[],
+              ...screen('home', '10:41'),
+            }, targets: change == 'unscoped action' ? null : {'btn.save'});
+          await cli.debugRunHandler(['tap', 'btn.save']);
+        });
+        expect(fake.dispatchCount, change == 'clock tick' ? 1 : 0);
+      });
+    }
+
     test('preflights and sends a complete exactly-once envelope', () async {
       final fake = await _FakeVmService.start();
       addTearDown(fake.close);

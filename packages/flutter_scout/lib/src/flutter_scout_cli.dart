@@ -515,6 +515,11 @@ class FlutterScoutCli {
 
   bool _reuseVmConnection = false;
   Map<String, dynamic>? _liveDecisionView;
+  // Exact handles the agent decision is scoped to, and the brief item bound
+  // its view used, so preflight can compare the target rather than the
+  // whole-screen digest. Null keeps the exact snapshot comparison.
+  Set<String>? _liveDecisionTargets;
+  int _liveDecisionMaxItems = 60;
   bool _agentRequiresLiveRendering = false;
   // Private dispatch authority, set only on lanes owned by an agent session.
   // Neither argv nor a typed request can grant this authority.
@@ -583,8 +588,10 @@ class FlutterScoutCli {
   void debugSetLiveDecisionView(
     Map<String, dynamic>? view, {
     bool requireLiveRendering = false,
+    Set<String>? targets,
   }) {
     _liveDecisionView = view;
+    _liveDecisionTargets = targets;
     _agentRequiresLiveRendering = requireLiveRendering;
   }
 
@@ -2710,7 +2717,8 @@ Use the shipped scripts/agent_client.mjs in one persistent Node session.
 Agent protocol 2: observe, query, start, next, acknowledge, reconcile,
 foreground (macOS), watch, react, cancel, status, close. Images are manual.
 A ticket is not success. Consume the canonical receipt before another input.
-Failed input requires fresh reconciliation; unknown dispatch stays halted.
+A not_dispatched receipt frees the hand. Other failed input requires fresh
+reconciliation; unknown dispatch stays halted.
 
 Standalone inspect/actions/waits, live, serve, explore, batch, record and replay
 were removed. There is no compatibility switch or automatic fallback.

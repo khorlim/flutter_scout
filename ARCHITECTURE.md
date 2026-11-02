@@ -34,8 +34,10 @@ is required by the protocol.
    prints a bounded sanitized response. Evidence failure converts possible
    success into an explicit reconcile-before-retry outcome.
 6. Agent protocol 2 requires the canonical input event to be delivered and
-   acknowledged before another input. Failed input needs fresh explicit
-   reconciliation; unknown dispatch cannot be cleared. Observations continue
+   acknowledged before another input. A delivered not_dispatched failure frees
+   the hand; other failed input needs fresh explicit reconciliation; unknown
+   dispatch cannot be cleared. Exact-handle decisions tolerate in-place text
+   changes outside the target (`AgentSession.targetUnaffected`). Observations continue
    independently. Business conditions use bounded watch jobs.
 
 ## packages/flutter_scout_helper (in-app runtime)
