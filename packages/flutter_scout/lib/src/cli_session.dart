@@ -158,6 +158,15 @@ extension _CliSession on FlutterScoutCli {
       ..addOption('helper-path')
       ..addFlag('replace', defaultsTo: false, negatable: false)
       ..addFlag(
+        'allow-parallel',
+        defaultsTo: false,
+        negatable: false,
+        help:
+            'Launch even when another live named session already runs this '
+            'project on the same device and therefore shares its build '
+            'output.',
+      )
+      ..addFlag(
         'inherit-launch-context',
         defaultsTo: false,
         negatable: false,
@@ -216,6 +225,9 @@ extension _CliSession on FlutterScoutCli {
     final projectDir = Directory(project);
     if (!projectDir.existsSync()) {
       throw ScoutCliException('project_missing', 'Project not found: $project');
+    }
+    if (!parsed.flag('allow-parallel')) {
+      await _requireProjectDeviceAvailable(project: project, device: device);
     }
     final previousSessionMeta = _readSessionMeta();
     final existingVmUri = _readVmUri();
@@ -1708,6 +1720,15 @@ extension _CliSession on FlutterScoutCli {
       ..addFlag('temporary-helper', defaultsTo: false, negatable: false)
       ..addOption('helper-path')
       ..addFlag(
+        'allow-parallel',
+        defaultsTo: false,
+        negatable: false,
+        help:
+            'Launch even when another live named session already runs this '
+            'project on the same device and therefore shares its build '
+            'output.',
+      )
+      ..addFlag(
         'inherit-launch-context',
         defaultsTo: false,
         negatable: false,
@@ -1903,6 +1924,7 @@ extension _CliSession on FlutterScoutCli {
         parsed.option('helper-path')!,
       ],
       if (parsed.flag('inherit-launch-context')) '--inherit-launch-context',
+      if (parsed.flag('allow-parallel')) '--allow-parallel',
       if (parsed.option('launch-timeout') != null) ...[
         '--launch-timeout',
         parsed.option('launch-timeout')!,
@@ -1995,6 +2017,12 @@ extension _CliSession on FlutterScoutCli {
         defaultsTo: false,
         negatable: false,
         help: 'Remove missing session directories from the registry.',
+      )
+      ..addFlag(
+        'running',
+        defaultsTo: false,
+        negatable: false,
+        help: 'List only sessions whose owner or worker process is alive.',
       );
     final parsed = parser.parse(args);
     final registry = _readScoutRegistry();
@@ -2007,20 +2035,94 @@ extension _CliSession on FlutterScoutCli {
       }
       _writeScoutRegistry(registry);
     }
+    final sessions = <Map<String, Object?>>[];
+    for (final entry in registry.entries) {
+      final exists = Directory(entry.value).existsSync();
+      if (!parsed.flag('all') && !exists) continue;
+      final summary = exists
+          ? await _namedSessionSummary(entry.value)
+          : const <String, Object?>{};
+      if (parsed.flag('running') && summary['live'] != true) continue;
+      sessions.add({
+        'name': entry.key,
+        'directory': entry.value,
+        'exists': exists,
+        ...summary,
+      });
+    }
     _printJson({
       'ok': true,
       if (parsed.flag('prune')) 'pruned': missing.length,
-      'sessions': [
-        for (final entry in registry.entries)
-          if (parsed.flag('all') || Directory(entry.value).existsSync())
-            {
-              'name': entry.key,
-              'directory': entry.value,
-              'exists': Directory(entry.value).existsSync(),
-            },
-      ],
+      'sessions': sessions,
     });
     return 0;
+  }
+
+  /// State, device and age of one named session from its own metadata, with
+  /// liveness from its recorded owner or worker process.
+  Future<Map<String, Object?>> _namedSessionSummary(String directory) async {
+    final meta = _readNamedSessionMeta(directory);
+    final ownerPid =
+        int.tryParse('${meta?['pid'] ?? ''}') ??
+        int.tryParse('${meta?['workerPid'] ?? ''}');
+    final live =
+        ownerPid != null &&
+        _namedSessionIsCurrent(directory) &&
+        await _processExists(ownerPid);
+    final createdAt = DateTime.tryParse('${meta?['createdAt'] ?? ''}');
+    return {
+      'state': ?meta?['state'],
+      'live': live,
+      'project': ?meta?['project'],
+      'device': ?meta?['device'],
+      'runId': ?meta?['runId'],
+      if (createdAt != null)
+        'ageSeconds': DateTime.now().difference(createdAt).inSeconds,
+      'updatedAt': ?meta?['updatedAt'],
+    };
+  }
+
+  Future<List<Map<String, Object?>>> _projectNamedSessions(
+    String project,
+  ) async {
+    final sessions = Directory(p.join(project, '.flutter_scout', 'sessions'));
+    if (!sessions.existsSync()) return const [];
+    final result = <Map<String, Object?>>[];
+    for (final directory
+        in sessions.listSync(followLinks: false).whereType<Directory>()) {
+      result.add({
+        'name': p.basename(directory.path),
+        ...await _namedSessionSummary(directory.path),
+      });
+    }
+    result.sort((a, b) => '${a['name']}'.compareTo('${b['name']}'));
+    return result;
+  }
+
+  /// Two named sessions launching the same project on the same device share
+  /// its build output, so a second build can replace the first app.
+  Future<void> _requireProjectDeviceAvailable({
+    required String project,
+    required String device,
+  }) async {
+    final ownName = FlutterScoutCli._sessionDirectoryOverride == null
+        ? null
+        : p.basename(FlutterScoutCli._sessionDirectoryOverride!);
+    for (final session in await _projectNamedSessions(project)) {
+      if (session['name'] == ownName ||
+          session['live'] != true ||
+          session['device'] != device) {
+        continue;
+      }
+      throw ScoutCliException(
+        'project_in_use',
+        'Named session `${session['name']}` is already running this project '
+            'on $device and shares its build output. Reuse it with '
+            '`flutter-scout --app ${session['name']} ...`, stop it, or pass '
+            '--allow-parallel to launch anyway.',
+        details: {'session': session},
+      );
+    }
   }
 
   Future<Map<String, Object?>> _statusPayload() async {
@@ -2065,6 +2167,12 @@ extension _CliSession on FlutterScoutCli {
           launching ? 'launch_in_progress' : 'vm_service_uri_unavailable',
         ),
         'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
+        // Without --app, point at the named sessions that do exist here
+        // instead of only recommending a fresh launch.
+        if (FlutterScoutCli._sessionDirectoryOverride == null)
+          'projectSessions': await _projectNamedSessions(
+            Directory.current.path,
+          ),
       };
     }
     final stale = await _validateVmUri(vmUri);

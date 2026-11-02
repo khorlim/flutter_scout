@@ -151,6 +151,16 @@ List<String> _discoverNamedSessionDirectories(
   return candidates.toList(growable: false)..sort();
 }
 
+/// Whether a named session directory holds a live or in-progress run rather
+/// than a stopped or failed record.
+bool _namedSessionIsCurrent(String directory) {
+  for (final fileName in const ['vm_uri.txt', 'flutter.pid', 'launch.lock']) {
+    if (File(p.join(directory, fileName)).existsSync()) return true;
+  }
+  final state = _readNamedSessionMeta(directory)?['state']?.toString();
+  return state != null && state != 'stopped' && state != 'failed';
+}
+
 Map<String, Object?> _namedSessionCandidateDetails(String directory) {
   final meta = _readNamedSessionMeta(directory);
   return <String, Object?>{
@@ -202,6 +212,12 @@ String _resolveRegisteredScoutSession(String name, String registered) {
     seedDirectories: <String>[normalized],
   );
   if (candidates.length > 1) {
+    final current = candidates.where(_namedSessionIsCurrent).toList();
+    if (current.length == 1) return current.single;
+    if (current.isEmpty &&
+        candidates.any((path) => _sameSessionDirectory(path, normalized))) {
+      return normalized;
+    }
     throw _namedSessionAmbiguity(name, candidates);
   }
   if (candidates.isNotEmpty) return candidates.single;

@@ -257,4 +257,9 @@ extension FlutterScoutCliLaunchDiagnosticsTesting on FlutterScoutCli {
 
   String? debugSimulatorState(String simctlJson, String udid) =>
       _simulatorState(simctlJson, udid);
+
+  Future<void> debugRequireProjectDeviceAvailable({
+    required String project,
+    required String device,
+  }) => _requireProjectDeviceAvailable(project: project, device: device);
 }

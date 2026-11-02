@@ -49,6 +49,16 @@ The VM log listener is owned by the exact Flutter-run PID and exact session
 directory. It exits with its owner. Connection errors use exponential backoff
 and periodic summaries instead of writing one line per retry.
 
+One project and device can have only one live named session by default:
+`launch` or `ensure` with a new name returns `project_in_use` and names the
+running session, because both runs share the build output. Reuse that session
+with `--app <name>`, stop it, or pass `--allow-parallel` deliberately. Without
+`--app`, `status` lists the named sessions under the current project in
+`projectSessions`. `apps` reports each registered session's `state`, `live`,
+`device`, `ageSeconds` and `updatedAt`; `apps --running` lists only live ones.
+A stopped or failed session with the same name in another project no longer
+blocks a new session; only two live ones are ambiguous.
+
 Useful commands:
 
 ```bash
@@ -56,6 +66,7 @@ flutter-scout devices
 flutter-scout doctor --project <app> --device <id>
 flutter-scout ensure --device <id> --project <app> --name <task>
 flutter-scout --app <task> status
+flutter-scout apps --running
 flutter-scout apps
 flutter-scout apps --all
 flutter-scout apps --prune

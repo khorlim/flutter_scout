@@ -932,6 +932,10 @@
       "meaning": "The private permissions operation failed.",
       "family": "persistence_or_security"
     },
+    "project_in_use": {
+      "meaning": "Another live named session already runs this project on the same device.",
+      "family": "operation"
+    },
     "project_missing": {
       "meaning": "Scout reports the stable project missing failure condition.",
       "family": "operation"

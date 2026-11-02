@@ -2804,12 +2804,17 @@ void _registerScoutSession(String name, String directory, {String? project}) {
         final liveExisting = existing == null
             ? null
             : _normalizeRegisteredSessionDirectory(existing);
+        // A stopped or failed session elsewhere with the same name is history,
+        // not a competitor; only a live one makes the name ambiguous.
         final hasDifferentRegisteredSession =
             liveExisting != null &&
             Directory(liveExisting).existsSync() &&
-            !_sameSessionDirectory(liveExisting, candidate);
+            !_sameSessionDirectory(liveExisting, candidate) &&
+            _namedSessionIsCurrent(liveExisting);
         final hasDiscoveredConflict = competing.any(
-          (path) => !_sameSessionDirectory(path, candidate),
+          (path) =>
+              !_sameSessionDirectory(path, candidate) &&
+              _namedSessionIsCurrent(path),
         );
         if (hasDifferentRegisteredSession || hasDiscoveredConflict) {
           throw _namedSessionAmbiguity(name, <String>{
