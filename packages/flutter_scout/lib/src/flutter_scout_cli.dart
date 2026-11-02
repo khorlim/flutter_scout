@@ -45,6 +45,7 @@ part 'cli_storage.dart';
 part 'cli_event_journal.dart';
 part 'cli_log_storage.dart';
 part 'cli_macos_launch.dart';
+part 'cli_launch_diagnostics.dart';
 
 Map<String, String> _flutterToolEnvironment([
   Map<String, String>? inherited,

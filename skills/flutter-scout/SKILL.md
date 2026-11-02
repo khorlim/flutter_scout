@@ -23,6 +23,11 @@ Name every owned run:
 flutter-scout --single-json ensure --device macos --project <app> --name <task>
 ```
 
+A cold build may be silent for minutes; Scout keeps waiting while the build
+uses CPU. If a launch fails, read `error.message`, `failureMode` and
+`failureCause` before retrying, and raise `--launch-idle-timeout <s>` or
+`--launch-timeout <s>` only when they say a limit ended a live build.
+
 Keep the launch process attached until its final envelope. Progress belongs
 on stderr; do not merge it into JSON stdout. While heartbeats continue, do
 not start parallel status polling or another launch. Use attach only to

@@ -304,6 +304,10 @@
       "meaning": "The device discovery operation failed.",
       "family": "operation"
     },
+    "device_not_booted": {
+      "meaning": "The requested simulator exists but is not booted.",
+      "family": "operation"
+    },
     "device_not_found": {
       "meaning": "The requested device could not be found.",
       "family": "operation"

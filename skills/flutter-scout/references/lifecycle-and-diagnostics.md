@@ -89,8 +89,25 @@ A launch waits for silence, not for the clock. It gives up after
 bounded by `--launch-timeout` (default 1200). Both are accepted by `launch` and
 `ensure`, and `ensure` forwards them to the launch it falls back to.
 
-A cold first iOS or macOS build can spend minutes inside `pod install` without
-printing, which a fixed elapsed-time limit used to kill mid-build. When a launch
-does fail, `failureMode` says which limit ended it: `idle_timeout`,
-`hard_timeout`, or `runner_exited`. Only `runner_exited` means the runner itself
-stopped; for the other two, raise the limit before concluding the build failed.
+A cold first iOS or macOS build can spend minutes inside `pod install` or Swift
+package resolution without printing. While the runner is silent, Scout samples
+the CPU time of the runner's process tree; a build that keeps using CPU counts
+as progress, so only a stalled build hits the idle limit.
+
+When a launch fails, `error.message` names what ended the wait, the last output
+time and line, and the option to change. `failureMode` is `idle_timeout`,
+`hard_timeout`, `runner_exited` (the runner stopped) or `runner_probe_failed`
+(Scout could not confirm the runner for 30 s, usually under heavy machine load).
+When the log shows a known cause, `failureCause` gives `cause`, the `evidence`
+line and a `hint`: `device_unavailable`, `install_failed_insufficient_storage`,
+`dart_compile_failed`, `cocoapods_failed`, `gradle_build_failed`,
+`native_build_failed`, `app_exited_during_launch` or a `macos_app_*` code. A
+shut-down iOS Simulator fails at once with `device_not_booted` and the boot
+command. Read these fields instead of repeating the same launch.
+
+If the app launched but the helper was not reachable, the result is `ok:false`
+with `launched:true`, `ready:false`, `reason` and `detail`. The run stays owned;
+check `status` before relaunching.
+
+`stop --clear-session` escalates to SIGKILL for an exact owned Flutter tool
+that ignores SIGTERM, including one orphaned after its worker died.

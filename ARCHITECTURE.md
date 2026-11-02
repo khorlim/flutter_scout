@@ -81,6 +81,7 @@ concerns live in extensions and top-level helpers.
 | `cli_temporary_helper_storage.dart` | Bounded path/record validation, private integrity-checked backups, atomic digest-gated project-file replacement, symlink refusal, verification, and cleanup tombstones. |
 | `cli_supervisor.dart` | Detached Flutter-runner ownership and shared source/JIT/native self-invocation arguments for workers, listeners, and automatic servers. On macOS, a per-run `launchd` agent survives terminal/agent cleanup, restarts only an abnormally lost worker, adopts a surviving Flutter PID, and is unloaded by exact identity on `stop`; other platforms use the detached-process fallback. |
 | `cli_macos_launch.dart` | macOS app launch through LaunchServices (`flutter build macos`, `open -n`, `flutter attach`) so the app is its own TCC responsible process; exact app PID record, output tail, and owned-app termination. |
+| `cli_launch_diagnostics.dart` | Launch-wait diagnostics: runner process-tree CPU sampling during silent builds, supervisor probe grace, log-based failure classification, and shut-down simulator preflight. |
 | `cli_session_recovery.dart` | Safe implicit selection of a sole named session plus recovery of missing owned-run process/VM metadata. |
 | `cli_annotations.dart` | `bounds`, `annotations` command + crop materialization (cache keyed by capture identity, native fallback). |
 | `cli_actions.dart` | tap, input, tap-text, long-press, fill, wait, reload/restart, scroll/swipe/scroll-to, back, deeplink, logs, guarded capture/error options. |

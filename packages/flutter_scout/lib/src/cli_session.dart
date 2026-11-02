@@ -280,6 +280,7 @@ extension _CliSession on FlutterScoutCli {
         _registerScoutSession(instanceName, _sessionDir.path, project: project);
       }
       _writeProgress('resolve_device', {'requestedDevice': device});
+      await _requireBootedSimulator(device);
       final resolvedDevice = await _resolveFlutterDevice(device);
       if (resolvedDevice == null) {
         throw ScoutCliException(
@@ -482,6 +483,15 @@ extension _CliSession on FlutterScoutCli {
       // first macOS/iOS build is never killed while it is still making
       // progress. [hardDeadline] still bounds a runner that never finishes.
       var lastProgressAt = DateTime.now();
+      DateTime? lastOutputAt;
+      // Silent pre-build phases (pod install, Swift package resolution, Xcode
+      // under load) still burn CPU. Sample the runner tree during silence so
+      // a busy build counts as progress and only a stalled one hits the idle
+      // limit (cli_launch_diagnostics.dart).
+      var lastCpuSampleAt = DateTime.now();
+      double? lastCpuSeconds;
+      var reportedSilentBuild = false;
+      DateTime? firstProbeFailureAt;
       var stopReason = 'hard_timeout';
       var reportedPostBuildWorkerUncertainty = false;
       final hardDeadline = DateTime.now().add(launchTimeout);
@@ -491,6 +501,7 @@ extension _CliSession on FlutterScoutCli {
           final currentLines = _readLogLinesSync(logFile);
           if (currentLines.length > readLineCount) {
             lastProgressAt = DateTime.now();
+            lastOutputAt = lastProgressAt;
           }
           for (final line in currentLines.skip(readLineCount)) {
             handleLine(line);
@@ -509,7 +520,33 @@ extension _CliSession on FlutterScoutCli {
           flutterToolPid = _readFlutterToolSignalPid(flutterToolSignalPidFile);
           if (vmUri != null && flutterToolPid != null) break;
         }
-        final now = DateTime.now();
+        var now = DateTime.now();
+        if (now.difference(lastProgressAt) >= _silentBuildSampleAfter &&
+            now.difference(lastCpuSampleAt) >= _silentBuildSampleInterval) {
+          lastCpuSampleAt = now;
+          final stateWorkerPid = int.tryParse(
+            '${_readSessionConfiguredJson('supervisorStateFile')?['workerPid'] ?? ''}',
+          );
+          final rootPid = stateWorkerPid ?? supervisor.workerPid;
+          final cpuSeconds = rootPid == null
+              ? null
+              : await _processTreeCpuSeconds(rootPid);
+          final previous = lastCpuSeconds;
+          if (cpuSeconds != null &&
+              previous != null &&
+              cpuSeconds - previous >= _silentBuildBusyCpuSeconds) {
+            lastProgressAt = now;
+            if (!reportedSilentBuild) {
+              reportedSilentBuild = true;
+              _writeProgress('silent_build_busy', {
+                'cpuSecondsSinceLastSample': (cpuSeconds - previous)
+                    .toStringAsFixed(1),
+              });
+            }
+          }
+          lastCpuSeconds = cpuSeconds ?? lastCpuSeconds;
+          now = DateTime.now();
+        }
         final awaitPostBuildVmService = _shouldAwaitPostBuildVmService(
           now: now,
           buildDoneAt: launchTiming.buildDoneAt,
@@ -531,7 +568,9 @@ extension _CliSession on FlutterScoutCli {
             if (lines.isNotEmpty) 'lastLine': _compactProgressLine(lines.last),
           });
         }
-        if (!await _runnerSupervisorAlive(supervisor)) {
+        final runnerAlive = await _runnerSupervisorAlive(supervisor);
+        if (runnerAlive) firstProbeFailureAt = null;
+        if (!runnerAlive) {
           if (awaitPostBuildVmService) {
             if (!reportedPostBuildWorkerUncertainty) {
               reportedPostBuildWorkerUncertainty = true;
@@ -549,7 +588,23 @@ extension _CliSession on FlutterScoutCli {
             await Future<void>.delayed(const Duration(milliseconds: 250));
             continue;
           }
-          stopReason = 'runner_exited';
+          // A recorded exit is definitive. Otherwise a failed probe may be a
+          // transient `launchctl`/`ps` failure under heavy load, so the build
+          // is not stopped until the probe keeps failing for a grace period.
+          final exited =
+              FileSystemEntity.typeSync(workerExitFile, followLinks: false) ==
+              FileSystemEntityType.file;
+          firstProbeFailureAt ??= now;
+          if (!exited &&
+              now.difference(firstProbeFailureAt) < _runnerProbeGrace) {
+            await Future<void>.delayed(const Duration(milliseconds: 250));
+            continue;
+          }
+          final workerPid = supervisor.workerPid;
+          stopReason =
+              exited || workerPid == null || !await _processExists(workerPid)
+              ? 'runner_exited'
+              : 'runner_probe_failed';
           break;
         }
         await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -569,15 +624,28 @@ extension _CliSession on FlutterScoutCli {
           'state': 'failed',
           'updatedAt': DateTime.now().toIso8601String(),
         });
+        final failureCause = _classifyLaunchFailure(lines);
         _printJson({
           'ok': false,
           'launched': false,
           'reason': 'vm_service_uri_not_found',
           'error': <String, Object?>{
             'code': 'vm_service_uri_not_found',
-            'message':
-                'Flutter Scout did not observe a VM service URI before the bounded launch wait ended.',
+            'message': _launchFailureMessage(
+              failureMode: stopReason,
+              cause: failureCause,
+              launchTimeout: launchTimeout,
+              launchIdleTimeout: launchIdleTimeout,
+              lastOutputAt: lastOutputAt,
+              lastOutputLine: lines.isEmpty
+                  ? null
+                  : _compactProgressLine(lines.last),
+            ),
+            'cause': ?failureCause?.cause,
           },
+          if (failureCause != null) 'failureCause': failureCause.toJson(),
+          if (lastOutputAt != null)
+            'lastOutputAt': lastOutputAt.toUtc().toIso8601String(),
           // Which of the three ways the wait ended. A hard_timeout or
           // idle_timeout means Scout stopped a runner that may still have
           // been building; raise --launch-timeout / --launch-idle-timeout
@@ -655,13 +723,32 @@ extension _CliSession on FlutterScoutCli {
       });
       preserveTemporarySetupForOwnedRun = temporarySetup != null;
       _writeProgress('verify_vm_service', {'vmServiceUri': wsUri});
-      final ready = await _waitScoutReady(wsUri);
+      // A fresh Android port forward or a loaded machine can take longer than
+      // an attach check, so a new launch gets a wider readiness window.
+      final ready = await _waitScoutReady(
+        wsUri,
+        timeout: const Duration(seconds: 20),
+      );
       launchTiming.readyAt = DateTime.now();
       _printJson({
         'launched': true,
         'ready': ready.ready,
         if (!ready.ready) 'reason': ready.reason,
         if (!ready.ready) 'expected': ready.expected,
+        if (!ready.ready && ready.detail != null)
+          'detail': _redactActiveSensitiveText(ready.detail!),
+        // The app runs but Scout cannot use it yet; ok:true here made agents
+        // scrape logs and attach by hand. The session stays owned, so a
+        // later `ensure` or `status` re-checks readiness without relaunching.
+        if (!ready.ready)
+          'error': <String, Object?>{
+            'code': ready.reason,
+            'message':
+                'The app launched but the Scout helper was not reachable '
+                'within 20s (${ready.reason}). Run `flutter-scout --app '
+                '<name> status`; if it reports ready, continue. Otherwise '
+                'check that main() calls ${ready.expected}.',
+          },
         'device': resolvedDevice.id,
         'deviceName': resolvedDevice.name,
         'deviceCategory': resolvedDevice.category,
@@ -677,7 +764,7 @@ extension _CliSession on FlutterScoutCli {
         'vmServiceUri': wsUri,
         'logFile': runLogFile,
         'timing': launchTiming.toJson(completedAt: launchTiming.readyAt),
-      });
+      }, success: ready.ready);
       return ready.ready ? 0 : 1;
     } finally {
       if (temporarySetup != null && !preserveTemporarySetupForOwnedRun) {
@@ -1551,11 +1638,20 @@ extension _CliSession on FlutterScoutCli {
     if (!ready.ready) {
       output['reason'] = ready.reason;
       output['expected'] = ready.expected;
+      if (ready.detail != null) {
+        output['detail'] = _redactActiveSensitiveText(ready.detail!);
+      }
+      output['error'] = <String, Object?>{
+        'code': ready.reason,
+        'message':
+            'Attached, but the Scout helper is not reachable '
+            '(${ready.reason}). Check that main() calls ${ready.expected}.',
+      };
     }
     if (device != null) {
       output['device'] = device;
     }
-    _printJson(output);
+    _printJson(output, success: ready.ready);
     return ready.ready ? 0 : 1;
   }
 
@@ -2587,10 +2683,9 @@ extension _CliSession on FlutterScoutCli {
           ...ownershipMeta,
           'processIdentity': state['flutterProcessIdentity'],
         };
-        final flutterTrusted = await _matchesOwnedFlutterRun(
-          flutterPid,
-          flutterMeta,
-        );
+        final flutterTrusted =
+            await _matchesOwnedFlutterRun(flutterPid, flutterMeta) ||
+            await _matchesOrphanedOwnedFlutterRun(flutterPid, flutterMeta);
         if (flutterTrusted) {
           if (workerStatus != 'signaled' && workerStatus != 'stopped') {
             final signaled = Process.killPid(flutterPid);
@@ -2603,9 +2698,29 @@ extension _CliSession on FlutterScoutCli {
             final quiescence = await _waitForSupervisorWriterQuiescence(
               flutterPid,
             );
-            final flutterQuiesced = quiescence['writersQuiesced'] == true;
-            runQuiesced = runQuiesced && flutterQuiesced;
+            var flutterQuiesced = quiescence['writersQuiesced'] == true;
             flutterStatus = flutterQuiesced ? 'stopped' : 'stop_timeout';
+            // A hung Flutter tool can ignore SIGTERM. Escalate only after the
+            // exact owned identity is proven again.
+            if (!flutterQuiesced &&
+                (await _matchesOwnedFlutterRun(flutterPid, flutterMeta) ||
+                    await _matchesOrphanedOwnedFlutterRun(
+                      flutterPid,
+                      flutterMeta,
+                    )) &&
+                Process.killPid(flutterPid, ProcessSignal.sigkill)) {
+              for (var attempt = 0; attempt < 50; attempt++) {
+                if (!await _processExists(flutterPid)) {
+                  flutterQuiesced = true;
+                  break;
+                }
+                await Future<void>.delayed(const Duration(milliseconds: 100));
+              }
+              flutterStatus = flutterQuiesced
+                  ? 'killed_after_term_timeout'
+                  : 'stop_timeout';
+            }
+            runQuiesced = runQuiesced && flutterQuiesced;
           }
         } else if (state['workerExitingNormally'] == true ||
             state['exitedAt'] != null) {
@@ -2743,6 +2858,39 @@ extension _CliSession on FlutterScoutCli {
         ownsRun &&
         ownsProject &&
         ownsDevice;
+  }
+
+  /// An owned Flutter tool whose worker died is reparented to launchd, so the
+  /// recorded parent no longer matches. The immutable PID/start tuple and the
+  /// exact run and project defines in its command line still prove ownership.
+  Future<bool> _matchesOrphanedOwnedFlutterRun(
+    int processId,
+    Map<String, dynamic> meta,
+  ) async {
+    final runId = meta['runId']?.toString();
+    final project = meta['project']?.toString();
+    final expected = meta['processIdentity'];
+    if (runId == null ||
+        runId.isEmpty ||
+        project == null ||
+        project.isEmpty ||
+        expected is! Map) {
+      return false;
+    }
+    final current = await _readProcessOwnershipIdentity(
+      processId,
+      role: _flutterRunProcessRole,
+    );
+    if (current == null || current['parentPid'] != 1) return false;
+    if (!_matchesFlutterRunIdentity({...expected, 'parentPid': 1}, current)) {
+      return false;
+    }
+    final command = await _processCommand(processId);
+    return command != null &&
+        command.contains('$kScoutRunIdDefine=$runId') &&
+        command.contains(
+          '$kScoutProjectDefine=${Directory(project).absolute.path}',
+        );
   }
 
   Future<bool> _matchesOwnedVmLogListener(
