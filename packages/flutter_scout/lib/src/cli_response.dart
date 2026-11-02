@@ -190,9 +190,24 @@ extension _CliResponse on FlutterScoutCli {
 
     final envelope = <String, Object?>{
       // Insert contract fields before caller-controlled legacy fields so
-      // collection bounding can never compact these fields away.
+      // collection bounding can never compact these fields away. Within them,
+      // decision fields lead and bulky, rarely read metadata trails, so a
+      // reader that only sees the first bytes still gets the outcome.
       'messageType': _nonEmptyString(legacy['messageType']) ?? 'response',
       'ok': ok,
+      'commandName': resolvedCommandName,
+      if (!ok) 'error': structuredError,
+      'structuredError': structuredError,
+      'result': result,
+      'commandId': responseCommandId,
+      'cliCommandId': cliCommandId,
+      'runId': runId,
+      'runtimeInstanceId': runtimeInstanceId,
+      'stateGeneration': stateGeneration,
+      'identityStatus': identityStatus,
+      'logCursor': _responseLogCursor(legacy, nestedResult),
+      'eventCursor': _responseEventCursor(legacy, nestedResult),
+      'safetyEvidenceStatus': bounded.truncated ? 'truncated' : 'complete',
       'schemaVersion': _scoutCliSchemaVersion,
       'protocolVersion': protocolVersion,
       'minSupportedProtocolVersion': protocolMin,
@@ -205,21 +220,9 @@ extension _CliResponse on FlutterScoutCli {
             ? 'within_supported_range'
             : 'outside_supported_range',
       },
-      'capabilities': capabilities,
       'capabilitySource': _nonEmptyString(legacy['capabilitySource']) ?? 'cli',
-      'commandId': responseCommandId,
-      'cliCommandId': cliCommandId,
-      'commandName': resolvedCommandName,
-      'runId': runId,
-      'runtimeInstanceId': runtimeInstanceId,
-      'stateGeneration': stateGeneration,
-      'identityStatus': identityStatus,
       'identityAvailability': identityAvailability,
-      'result': result,
-      'structuredError': structuredError,
       'timings': timings,
-      'logCursor': _responseLogCursor(legacy, nestedResult),
-      'eventCursor': _responseEventCursor(legacy, nestedResult),
       'payloadBounds': <String, Object?>{
         'maxSerializedBytes': _maxCliSerializedResponseBytes,
         'maxStringCharacters': _maxCliStringCharacters,
@@ -229,8 +232,7 @@ extension _CliResponse on FlutterScoutCli {
         'truncationCount': bounded.truncationCount,
         'safetyDisposition': bounded.truncated ? 'failed_closed' : 'complete',
       },
-      if (!ok) 'error': structuredError,
-      'safetyEvidenceStatus': bounded.truncated ? 'truncated' : 'complete',
+      'capabilities': capabilities,
     };
     // Preserve legacy flattened fields additively. Canonical contract fields
     // above win collisions so a legacy value cannot weaken the envelope.

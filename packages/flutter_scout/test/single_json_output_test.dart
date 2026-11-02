@@ -57,6 +57,59 @@ void main() {
   );
 
   test(
+    'final envelopes lead with the outcome and trail bulky metadata',
+    () async {
+      final cli = FlutterScoutCli();
+      final success = _singleEnvelope(
+        (await _capture(cli, ['--single-json', 'version'])).out,
+      );
+      final keys = success.keys.toList();
+      expect(keys.take(3), ['messageType', 'ok', 'commandName']);
+      expect(keys.indexOf('result'), lessThan(keys.indexOf('capabilities')));
+      expect(keys.indexOf('result'), lessThan(keys.indexOf('timings')));
+
+      final failure = _singleEnvelope(
+        (await _capture(cli, ['--single-json', 'unknown-scout-command'])).out,
+      );
+      expect(failure.keys.take(4), [
+        'messageType',
+        'ok',
+        'commandName',
+        'error',
+      ]);
+    },
+  );
+
+  test('logs drop macOS malloc stack logging noise and count it', () async {
+    Directory('.flutter_scout').createSync();
+    const noise =
+        "dartvm(4242) MallocStackLogging: can't turn off malloc stack "
+        'logging because it was not enabled.';
+    File('.flutter_scout/logs.txt').writeAsStringSync(
+      <String>[
+        '[2026-11-02T10:00:00.000Z] [STDERR] $noise',
+        '[2026-11-02T10:00:01.000Z] [STDOUT] Building macOS application...',
+        '[2026-11-02T10:00:02.000Z] [STDERR] $noise',
+        '[2026-11-02T10:00:03.000Z] [STDOUT] MallocStackLogging: other text',
+      ].map((line) => '$line\n').join(),
+    );
+    final logs = _singleEnvelope(
+      (await _capture(FlutterScoutCli(), [
+        '--single-json',
+        'logs',
+        '--last',
+        '10',
+      ])).out,
+    );
+    expect(logs['ok'], isTrue);
+    expect(logs['suppressedNoiseLines'], 2);
+    final lines = (logs['lines'] as List).cast<String>();
+    expect(lines, hasLength(2));
+    expect(lines.any((line) => line.contains('not enabled')), isFalse);
+    expect(lines.last, contains('MallocStackLogging: other text'));
+  });
+
+  test(
     'early and command failures move to stdout only when opted in',
     () async {
       final cli = FlutterScoutCli();

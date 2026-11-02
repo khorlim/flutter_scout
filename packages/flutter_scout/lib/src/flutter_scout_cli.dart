@@ -1838,6 +1838,22 @@ print(String(data: data, encoding: .utf8)!)
     return normalized.split('/').any((segment) => testRoots.contains(segment));
   }
 
+  static final RegExp _mallocStackLoggingNoise = RegExp(
+    r"\bMallocStackLogging: can't turn off malloc stack logging because it "
+    r'was not enabled\.?\s*$',
+  );
+
+  /// Whether [line] is known macOS toolchain noise with no diagnostic value.
+  ///
+  /// When the caller's environment sets `MallocStackLogging`, every Dart VM
+  /// the Flutter tool starts during a macOS build prints
+  /// `dartvm(PID) MallocStackLogging: can't turn off malloc stack logging
+  /// because it was not enabled.` Hundreds of these drown real build output.
+  /// The match is exact, so any other MallocStackLogging message stays.
+  /// Exposed for testing without a running app.
+  static bool isToolchainNoiseLine(String line) =>
+      _mallocStackLoggingNoise.hasMatch(line);
+
   /// Collapses the double-logging of app output into a single copy per line.
   ///
   /// App `print`/`dev.log` output reaches the Scout log twice: once as

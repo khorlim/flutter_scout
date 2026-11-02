@@ -1510,8 +1510,12 @@ extension _CliActions on FlutterScoutCli {
     for (final line in rawLines) {
       _extractVmUri(line) ?? _extractFlutterToolVmUri(line);
     }
+    final signalLines = rawLines
+        .where((line) => !FlutterScoutCli.isToolchainNoiseLine(line))
+        .toList(growable: false);
+    final suppressedNoiseLines = rawLines.length - signalLines.length;
     final allLines = _dedupeVmStdoutEcho(
-      rawLines.map(_redactActiveSensitiveText).toList(growable: false),
+      signalLines.map(_redactActiveSensitiveText).toList(growable: false),
     );
     if (summary) {
       final summary = _summarizeLogLines(allLines, last: last);
@@ -1527,6 +1531,8 @@ extension _CliActions on FlutterScoutCli {
         'readBytes': chunk.bytesRead,
         'truncated': chunk.truncated,
         'session': _sessionModeInfo(),
+        if (suppressedNoiseLines > 0)
+          'suppressedNoiseLines': suppressedNoiseLines,
         if (allLines.isEmpty)
           'message':
               'The Scout-owned log file exists, but no Flutter tool output has been captured yet.',
@@ -1554,6 +1560,8 @@ extension _CliActions on FlutterScoutCli {
       'readBytes': chunk.bytesRead,
       'truncated': chunk.truncated,
       'session': _sessionModeInfo(),
+      if (suppressedNoiseLines > 0)
+        'suppressedNoiseLines': suppressedNoiseLines,
       if (contains != null && contains.isNotEmpty) 'contains': contains,
       if (contains != null && contains.isNotEmpty) 'matched': lines.length,
       if (allLines.isEmpty)

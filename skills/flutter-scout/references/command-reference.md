@@ -53,6 +53,22 @@ Supply VM capability URLs using attach --debug-url-file <0600-file> or
 Use --single-json first for one final envelope; stderr carries progress.
 The prefix is not accepted by agent. Help does not contact a running app.
 
+### Reading finite command output
+
+- With `--single-json`, stdout holds exactly one line: the final envelope
+  (`messageType:"response"`). Progress goes to stderr.
+- Without it, stdout is JSONL. Every `messageType:"heartbeat"` line carries
+  `ok:true` by contract while the command is still running; it is progress,
+  not an outcome. Read only the `messageType:"response"` line for success.
+- Envelope keys lead with `messageType`, `ok`, `commandName`, `error` (on
+  failure) and `result`; bulky `timings`, `payloadBounds` and `capabilities`
+  come last, so read fields by name instead of truncating output by bytes.
+- `result` is usually the command's payload object, also flattened at the top
+  level. `reload` and `restart` are the exception: `result` is a string,
+  `changed`, `unchanged` or `reload_rejected`, and the details such as
+  `sourceVerification`, `reloadReport`, `appReachable` and `delta` are
+  top-level fields.
+
 Retain commandId, run/runtime/state identity, dispatch, observation,
 postcondition, runtimeHealth, stability, evidence and omission status when
 summarizing. A final successful screenshot cannot make a preceding failed
