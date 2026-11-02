@@ -1,5 +1,10 @@
 ## Unreleased
 
+* Keep `FlutterScoutBinding.ensureInitialized()` safe as an application's main
+  initializer in profile and release builds. It now always establishes the
+  standard Flutter widget binding before the debug-only Scout registration,
+  preventing pre-`runApp()` platform-channel calls from failing or leaving an
+  app on its native launch screen.
 * Report passive scheduler/lifecycle and completed framework-frame facts on
   inspect, distinguishing quiet active screens from suspended rendering without
   scheduling frames. Add optional `requireLiveRendering` mutation guard and

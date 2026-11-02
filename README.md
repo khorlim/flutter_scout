@@ -24,7 +24,9 @@ void main() {
 
 If a custom debug binding already exists, keep it and call
 FlutterScoutHelper.ensureRegistered() after its initialization. No per-screen
-wrappers. Scout remains inert in normal profile/release builds.
+wrappers. Scout instrumentation is inert in normal profile/release builds;
+FlutterScoutBinding.ensureInitialized() still initializes Flutter's standard
+widget binding there, so platform-channel calls before runApp() stay safe.
 
 ```bash
 dart pub global activate --source git https://github.com/khorlim/flutter_scout.git --git-path packages/flutter_scout

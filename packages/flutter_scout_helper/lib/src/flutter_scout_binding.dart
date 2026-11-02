@@ -49,13 +49,21 @@ const String scoutHelperPackageVersion = '0.2.0-dev.1';
 class FlutterScoutBinding {
   FlutterScoutBinding._();
 
-  static void ensureInitialized() {
-    // The helper must be a true no-op outside debug, including not choosing or
-    // initializing the application's binding as a side effect.
-    if (!kDebugMode) return;
+  static void ensureInitialized() => _ensureInitialized(debugMode: kDebugMode);
+
+  static void _ensureInitialized({required bool debugMode}) {
+    // Apps may perform platform-channel work before runApp(), so this public
+    // initializer must always preserve the normal Flutter binding contract.
+    // Only the Scout registration is debug-only.
     WidgetsFlutterBinding.ensureInitialized();
-    FlutterScoutHelper.ensureRegistered();
+    if (debugMode) FlutterScoutHelper.ensureRegistered();
   }
+
+  /// Runs [ensureInitialized] as a profile/release build would, since
+  /// [kDebugMode] is a compile-time constant in tests.
+  @visibleForTesting
+  static void debugEnsureInitializedOutsideDebug() =>
+      _ensureInitialized(debugMode: false);
 }
 
 class FlutterScoutHelper {
