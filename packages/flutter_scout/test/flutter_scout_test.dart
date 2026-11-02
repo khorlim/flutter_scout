@@ -26,6 +26,24 @@ void main() {
   });
 
   group('post hot-update inspection', () {
+    Map<String, dynamic> waitStableResponse({
+      String state = 'stable',
+      int semanticChangeCount = 0,
+    }) => <String, dynamic>{
+      'ok': true,
+      'action': 'wait-stable',
+      'stable': state == 'stable',
+      'stability': <String, Object?>{
+        'state': state,
+        'actionable': state == 'stable',
+        'stoppingReason': 'semantic_quiet_and_no_frame_activity',
+        'samples': <String, Object?>{
+          'count': 3,
+          'semanticChangeCount': semanticChangeCount,
+        },
+      },
+    };
+
     test(
       'allows bounded slow helper responses after acknowledgement',
       () async {
@@ -46,13 +64,16 @@ void main() {
                   'inspection': inspectCalls,
                 };
               },
+              // The UI changed while settling, so the first snapshot is stale.
               waitStable: (_) async {
                 await Future<void>.delayed(const Duration(milliseconds: 5));
+                return waitStableResponse(semanticChangeCount: 1);
               },
             );
 
         expect(result, isNotNull);
-        expect(result!['inspection'], 2);
+        expect((result!['after']! as Map)['inspection'], 2);
+        expect(result['refreshed'], isTrue);
         expect(probeBudgets, hasLength(2));
         expect(
           probeBudgets.every(
@@ -63,13 +84,80 @@ void main() {
       },
     );
 
-    test('keeps production inspection recovery bounded', () {
+    test(
+      'returns the helper stability observation and skips a redundant inspect',
+      () async {
+        var inspectCalls = 0;
+
+        final result = await FlutterScoutCli()
+            .debugWaitForPostHotUpdateInspection(
+              timeout: const Duration(milliseconds: 100),
+              probeTimeout: const Duration(milliseconds: 20),
+              inspect: (_) async {
+                inspectCalls += 1;
+                return <String, dynamic>{
+                  'ok': true,
+                  'inspection': inspectCalls,
+                };
+              },
+              waitStable: (_) async => waitStableResponse(),
+            );
+
+        expect(inspectCalls, 1);
+        expect(result!['refreshed'], isFalse);
+        expect((result['after']! as Map)['inspection'], 1);
+        expect((result['stability']! as Map)['state'], 'stable');
+      },
+    );
+
+    test(
+      'does not spend more time when the helper cannot observe stability',
+      () async {
+        for (final waitStable
+            in <Future<Map<String, dynamic>?> Function(Duration)>[
+              (_) async => <String, dynamic>{'ok': true},
+              (_) async => <String, dynamic>{
+                'ok': false,
+                'error': {'code': 'unknown_extension'},
+              },
+              (_) async => throw TimeoutException('helper busy'),
+            ]) {
+          var inspectCalls = 0;
+          final result = await FlutterScoutCli()
+              .debugWaitForPostHotUpdateInspection(
+                timeout: const Duration(milliseconds: 100),
+                probeTimeout: const Duration(milliseconds: 20),
+                inspect: (_) async {
+                  inspectCalls += 1;
+                  return <String, dynamic>{'ok': true};
+                },
+                waitStable: waitStable,
+              );
+
+          expect(inspectCalls, 1);
+          expect(result!['stability'], isNull);
+          expect(result['refreshed'], isFalse);
+        }
+      },
+    );
+
+    test('keeps production inspection recovery bounded and short', () {
       final policy = FlutterScoutCli().debugPostHotUpdateInspectionPolicy();
 
       expect(policy['timeout'], const Duration(seconds: 30));
       expect(policy['probeTimeout'], const Duration(seconds: 12));
-      expect(policy['stableTimeout'], const Duration(seconds: 3));
       expect(policy['probeTimeout']! < policy['timeout']!, isTrue);
+      // The helper observation must fit inside the CLI call budget, and both
+      // stay well under a second of added reload latency for a settled app.
+      expect(
+        policy['stabilityObservationBudget']! < policy['stableTimeout']!,
+        isTrue,
+      );
+      expect(
+        policy['stabilityObservationBudget']! <=
+            const Duration(milliseconds: 600),
+        isTrue,
+      );
     });
 
     test('still requires a new runtime after hot restart', () async {
@@ -90,11 +178,289 @@ void main() {
                     : 'runtime-after',
               };
             },
-            waitStable: (_) async {},
+            waitStable: (_) async => waitStableResponse(),
           );
 
-      expect(result!['runtimeInstanceId'], 'runtime-after');
-      expect(inspectCalls, 3);
+      expect((result!['after']! as Map)['runtimeInstanceId'], 'runtime-after');
+      expect(inspectCalls, 2);
+    });
+  });
+
+  group('hot-update acknowledgement', () {
+    const ts = '[2026-11-02T03:00:00.000Z]';
+
+    test('reads past a log window that the old fixed cursor overflowed', () {
+      // Each poll reads only what was appended since the previous poll, so a
+      // chatty app no longer turns an applied reload into an unprovable one.
+      final chatter = <String>[
+        for (var index = 0; index < 4000; index++)
+          '$ts [FLUTTER_STDOUT] flutter: tick $index ${'x' * 80}',
+      ];
+      final scan = FlutterScoutCli().debugScanHotUpdateAcknowledgement(
+        'reload',
+        [
+          chatter,
+          chatter,
+          ['$ts [FLUTTER_STDOUT] Reloaded 1 of 13323 libraries in 7,888ms.'],
+        ],
+      );
+
+      final outcome = scan['outcome']! as Map;
+      expect(outcome['ok'], isTrue);
+      expect(outcome['message'], contains('Reloaded 1 of 13323 libraries'));
+      expect(scan.containsKey('logWindowGap'), isFalse);
+    });
+
+    test('still finds the acknowledgement after a skipped window', () {
+      final scan = FlutterScoutCli().debugScanHotUpdateAcknowledgement(
+        'restart',
+        [
+          ['$ts [FLUTTER_STDOUT] Performing hot restart...'],
+          ['$ts [FLUTTER_STDOUT] Restarted application in 123,049ms.'],
+        ],
+        truncateLastPoll: true,
+      );
+
+      expect((scan['outcome']! as Map)['ok'], isTrue);
+      expect(scan['logWindowGap'], isTrue);
+    });
+
+    test('captures the multi-line reason of a VM reload rejection', () {
+      final scan = FlutterScoutCli().debugScanHotUpdateAcknowledgement('reload', [
+        [
+          '$ts [FLUTTER_STDOUT] Performing hot reload...',
+          '$ts [FLUTTER_STDERR] Hot reload was rejected:',
+        ],
+        [
+          '$ts [FLUTTER_STDOUT] flutter: unrelated app print',
+          "$ts [FLUTTER_STDERR] Const class cannot remove fields: Library:'package:app/main.dart' Class: Settings.",
+          '$ts [FLUTTER_STDERR] Try performing a hot restart instead.',
+        ],
+      ]);
+
+      final outcome = scan['outcome']! as Map;
+      expect(outcome['rejected'], isTrue);
+      expect(outcome['rejectionReason'], 'flutter_tool_rejected');
+      expect(
+        outcome['message'],
+        "Hot reload was rejected: Const class cannot remove fields: Library:'package:app/main.dart' Class: Settings.",
+      );
+      expect(outcome['reason'], startsWith('Const class cannot remove fields'));
+      expect(outcome['rejectionDetails'], hasLength(2));
+      expect(outcome['suggestedCommand'], 'restart');
+      expect(scan['awaitsRejectionDetails'], isFalse);
+    });
+
+    test('waits for rejection reasons that have not been flushed yet', () {
+      final scan = FlutterScoutCli().debugScanHotUpdateAcknowledgement(
+        'reload',
+        [
+          ['$ts [FLUTTER_STDERR] Hot reload was rejected:'],
+        ],
+      );
+
+      final outcome = scan['outcome']! as Map;
+      expect(outcome['message'], 'Hot reload was rejected:');
+      expect(outcome.containsKey('suggestedCommand'), isFalse);
+      expect(scan['awaitsRejectionDetails'], isTrue);
+    });
+
+    test('compile errors keep their diagnostics and suggest no restart', () {
+      final scan = FlutterScoutCli().debugScanHotUpdateAcknowledgement('reload', [
+        [
+          "$ts [FLUTTER_STDERR] lib/main.dart:3:1: Error: Expected ';' after this.",
+          '$ts [FLUTTER_STDERR] Hot reload was rejected:',
+        ],
+      ]);
+
+      final outcome = scan['outcome']! as Map;
+      expect(outcome['rejectionReason'], 'dart_compile_error');
+      expect(outcome['message'], contains('lib/main.dart:3:1: Error:'));
+      expect(outcome.containsKey('suggestedCommand'), isFalse);
+      expect(scan['awaitsRejectionDetails'], isFalse);
+    });
+
+    test('records tool progress but not app prints', () {
+      final scan = FlutterScoutCli().debugScanHotUpdateAcknowledgement(
+        'restart',
+        [
+          [
+            '$ts [FLUTTER_STDOUT] flutter: app heartbeat',
+            '$ts [FLUTTER_STDOUT] Performing hot restart...',
+            '$ts [VM_STDOUT] flutter: app heartbeat',
+          ],
+        ],
+      );
+
+      expect(scan['outcome'], isNull);
+      expect(scan['toolLinesSinceSignal'], 1);
+      expect(scan['lastToolLine'], 'Performing hot restart...');
+      expect(scan['progressLineObserved'], isTrue);
+    });
+  });
+
+  group('hot-update acknowledgement timeout diagnosis', () {
+    final cli = FlutterScoutCli();
+
+    test('a dead tool is not_alive and safe to relaunch', () {
+      final diagnosis = cli.debugHotUpdateAckTimeoutDiagnosis(
+        action: 'restart',
+        toolAlive: false,
+      );
+
+      expect(diagnosis['toolState'], 'not_alive');
+      expect(diagnosis['retrySafe'], isTrue);
+      expect(diagnosis['message'], contains('exited before acknowledging'));
+    });
+
+    test('a progressing tool says not to send another signal', () {
+      final diagnosis = cli.debugHotUpdateAckTimeoutDiagnosis(
+        action: 'restart',
+        toolAlive: true,
+        processState: 'S',
+        cpuSecondsSinceSignal: 0,
+        acknowledgement: const <String, Object?>{
+          'toolLinesSinceSignal': 1,
+          'lastToolLine': 'Performing hot restart...',
+          'progressLineObserved': true,
+          'secondsSinceLastToolOutput': 28,
+        },
+        secondsSinceSignal: 30,
+      );
+
+      expect(diagnosis['toolState'], 'in_progress');
+      expect(diagnosis['retrySafe'], isFalse);
+      expect(diagnosis['lastToolLine'], 'Performing hot restart...');
+      expect(diagnosis['secondsSinceSignal'], 30);
+      expect(diagnosis['message'], contains('Do not send another restart'));
+      expect(
+        (diagnosis['nextSteps']! as List).first,
+        contains('logs --contains "Restarted application"'),
+      );
+    });
+
+    test('CPU use alone proves progress', () {
+      final diagnosis = cli.debugHotUpdateAckTimeoutDiagnosis(
+        action: 'reload',
+        toolAlive: true,
+        processState: 'R',
+        cpuSecondsSinceSignal: 4.2,
+      );
+
+      expect(diagnosis['toolState'], 'in_progress');
+      expect(diagnosis['toolCpuSecondsSinceSignal'], 4.2);
+    });
+
+    test('a new runtime after restart counts as progress', () {
+      final diagnosis = cli.debugHotUpdateAckTimeoutDiagnosis(
+        action: 'restart',
+        toolAlive: true,
+        processState: 'S',
+        cpuSecondsSinceSignal: 0,
+        runtimeReplaced: true,
+      );
+
+      expect(diagnosis['toolState'], 'in_progress');
+      expect(diagnosis['runtimeReplaced'], isTrue);
+      expect(diagnosis['message'], contains('most likely completed'));
+    });
+
+    test('a silent tool is reported as possibly hung', () {
+      final diagnosis = cli.debugHotUpdateAckTimeoutDiagnosis(
+        action: 'restart',
+        toolAlive: true,
+        processState: 'S',
+        cpuSecondsSinceSignal: 0.01,
+        secondsSinceSignal: 31,
+      );
+
+      expect(diagnosis['toolState'], 'silent');
+      expect(diagnosis['retrySafe'], isTrue);
+      expect(diagnosis['processState'], 'S');
+      expect(diagnosis['message'], contains('may be hung'));
+      expect(
+        (diagnosis['nextSteps']! as List).last,
+        contains('stop --clear-session'),
+      );
+    });
+
+    test('a stopped or zombie tool never counts as progressing', () {
+      expect(
+        cli.debugHotUpdateAckTimeoutDiagnosis(
+          action: 'reload',
+          toolAlive: true,
+          processState: 'T',
+          cpuSecondsSinceSignal: 9,
+        )['toolState'],
+        'silent',
+      );
+      expect(
+        cli.debugHotUpdateAckTimeoutDiagnosis(
+          action: 'reload',
+          toolAlive: true,
+          processState: 'Z',
+        )['toolState'],
+        'not_alive',
+      );
+    });
+
+    test('sums CPU time across the Flutter tool process tree', () {
+      const ps = '''
+  100     1   0:01.50
+  200   100   1:00.25
+  300   200 1:00:00
+  400     1   9:59.00
+''';
+      expect(cli.debugProcessTreeCpuSecondsFromPs(ps, 100), 3661.75);
+      expect(cli.debugProcessTreeCpuSecondsFromPs(ps, 999), isNull);
+    });
+  });
+
+  group('hot-update outcome details', () {
+    final cli = FlutterScoutCli();
+
+    test('source mismatch names the files that still differ', () {
+      final error = cli.debugHotUpdateSourceMismatchError(
+        'restart',
+        const <String, Object?>{
+          'status': 'mismatch',
+          'mismatched': <String>['lib/main.dart', 'lib/src/settings.dart'],
+        },
+      );
+
+      expect(error['code'], 'restart_source_mismatch');
+      expect(
+        error['message'],
+        'The VM is still running different source for 2 changed Dart files: '
+        'lib/main.dart, lib/src/settings.dart.',
+      );
+      expect(error['mismatchedFiles'], [
+        'lib/main.dart',
+        'lib/src/settings.dart',
+      ]);
+    });
+
+    test('timing always carries ack and settle fields plus overhead', () {
+      final timing = cli.debugHotUpdateTiming(
+        ackMs: 8833,
+        postAckStableMs: 410,
+        totalMs: 9400,
+        acknowledgementMessage:
+            'Reloaded 1 of 13323 libraries in 7,888ms (compile: 120 ms).',
+      );
+      expect(timing['ackMs'], 8833);
+      expect(timing['postAckStableMs'], 410);
+      expect(timing['flutterReportedMs'], 7888);
+      expect(timing['scoutOverheadMs'], 1512);
+
+      final failed = cli.debugHotUpdateTiming(
+        ackMs: 30000,
+        postAckStableMs: null,
+        totalMs: 30200,
+      );
+      expect(failed.containsKey('postAckStableMs'), isTrue);
+      expect(failed['postAckStableMs'], isNull);
+      expect(failed.containsKey('flutterReportedMs'), isFalse);
     });
   });
 

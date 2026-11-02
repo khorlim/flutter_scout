@@ -326,26 +326,115 @@ class FlutterScoutCli {
         'timeout': _postHotUpdateInspectionTimeout,
         'probeTimeout': _postHotUpdateInspectProbeTimeout,
         'stableTimeout': _postHotUpdateWaitStableTimeout,
+        'stabilityObservationBudget': _postHotUpdateStabilityObservationBudget,
       };
 
   /// Test-only deterministic seam for slow post-update helper responses.
-  Future<Map<String, dynamic>?> debugWaitForPostHotUpdateInspection({
+  /// Returns `after`, `stability` and `refreshed`, or null on timeout.
+  Future<Map<String, Object?>?> debugWaitForPostHotUpdateInspection({
     required Duration timeout,
     required Duration probeTimeout,
     required Future<Map<String, dynamic>?> Function(Duration timeout) inspect,
-    required Future<void> Function(Duration timeout) waitStable,
+    required Future<Map<String, dynamic>?> Function(Duration timeout)
+    waitStable,
     String? previousRuntimeInstanceId,
     bool requireNewRuntime = false,
-  }) => _waitForPostHotUpdateInspection(
-    timeout: timeout,
-    probeTimeout: probeTimeout,
-    stableTimeout: const Duration(milliseconds: 15),
-    retryDelay: const Duration(milliseconds: 1),
-    inspect: inspect,
-    waitStable: waitStable,
-    previousRuntimeInstanceId: previousRuntimeInstanceId,
-    requireNewRuntime: requireNewRuntime,
+  }) async {
+    final observation = await _waitForPostHotUpdateInspection(
+      timeout: timeout,
+      probeTimeout: probeTimeout,
+      stableTimeout: const Duration(milliseconds: 15),
+      retryDelay: const Duration(milliseconds: 1),
+      inspect: inspect,
+      waitStable: waitStable,
+      previousRuntimeInstanceId: previousRuntimeInstanceId,
+      requireNewRuntime: requireNewRuntime,
+    );
+    if (observation == null) return null;
+    return <String, Object?>{
+      'after': observation.after,
+      'stability': observation.stability,
+      'refreshed': observation.refreshed,
+    };
+  }
+
+  /// Test-only incremental acknowledgement scan. Each batch is ingested as one
+  /// poll; returns the outcome (or null) plus the progress facts.
+  Map<String, Object?> debugScanHotUpdateAcknowledgement(
+    String action,
+    List<List<String>> polls, {
+    bool truncateLastPoll = false,
+  }) {
+    final scanner = _HotUpdateAckScanner(action: action, startCursor: 0);
+    var cursor = 0;
+    for (var index = 0; index < polls.length; index++) {
+      final lines = polls[index];
+      final truncated = truncateLastPoll && index == polls.length - 1;
+      final start = truncated ? cursor + 1000000 : cursor;
+      final end =
+          start +
+          lines.fold<int>(0, (sum, line) => sum + utf8.encode(line).length + 1);
+      scanner.ingest(
+        lines,
+        startCursor: start,
+        endCursor: end,
+        truncated: truncated,
+      );
+      cursor = end;
+    }
+    return <String, Object?>{
+      'outcome': scanner.outcome(),
+      'cursor': scanner.cursor,
+      'awaitsRejectionDetails': switch (scanner.outcome()) {
+        final Map<String, Object?> outcome => _awaitsRejectionDetails(outcome),
+        null => false,
+      },
+      ...scanner.progressFacts(DateTime.now()),
+    };
+  }
+
+  /// Test-only view of acknowledgement-timeout classification.
+  Map<String, Object?> debugHotUpdateAckTimeoutDiagnosis({
+    required String action,
+    required bool toolAlive,
+    String? processState,
+    double? cpuSecondsSinceSignal,
+    Map<String, Object?> acknowledgement = const <String, Object?>{},
+    int secondsSinceSignal = 30,
+    bool runtimeReplaced = false,
+  }) => _hotUpdateAckTimeoutDiagnosis(
+    action: action,
+    pid: 4242,
+    toolAlive: toolAlive,
+    processState: processState,
+    cpuSecondsSinceSignal: cpuSecondsSinceSignal,
+    acknowledgement: acknowledgement,
+    secondsSinceSignal: secondsSinceSignal,
+    runtimeReplaced: runtimeReplaced,
   );
+
+  /// Test-only view of the source-mismatch error.
+  Map<String, Object?> debugHotUpdateSourceMismatchError(
+    String action,
+    Map<String, Object?> verification,
+  ) => _hotUpdateSourceMismatchError(action, verification);
+
+  /// Test-only view of the compact hot-update timing.
+  Map<String, Object?> debugHotUpdateTiming({
+    required int? ackMs,
+    required int? postAckStableMs,
+    required int totalMs,
+    String? acknowledgementMessage,
+  }) => _hotUpdateTiming(
+    ackMs: ackMs,
+    postAckStableMs: postAckStableMs,
+    totalMs: totalMs,
+    flutterReportedMs: _flutterReportedHotUpdateMs(acknowledgementMessage),
+  );
+
+  /// Test-only view of process-tree CPU accounting from `ps` output.
+  double? debugProcessTreeCpuSecondsFromPs(String output, int pid) =>
+      _processTreeCpuSecondsFromPs(output, pid);
 
   /// Test-only view of `logs --summary` classification.
   Map<String, Object?> debugLogSummary(List<String> lines, {int last = 20}) =>

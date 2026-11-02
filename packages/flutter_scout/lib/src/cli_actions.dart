@@ -673,53 +673,34 @@ extension _CliActions on FlutterScoutCli {
     );
   }
 
-  Future<int> _reload(List<String> args) async {
-    final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
-    final parsed = parser.parse(args);
-    final logCursor = _currentLogCursor();
-    final result = await _hotUpdate(
-      action: 'reload',
-      signal: ProcessSignal.sigusr1,
-      fullRestart: false,
-    );
-    final logsStopwatch = Stopwatch()..start();
-    var enrichedResult = await _withRecentLogSignals(
-      result,
-      sinceCursor: logCursor,
-    );
-    logsStopwatch.stop();
-    enrichedResult = _withMeasuredCliPhase(
-      enrichedResult,
-      phase: 'logs',
-      elapsedMs:
-          _phaseElapsedMs(enrichedResult, 'logs') +
-          logsStopwatch.elapsedMilliseconds,
-      scope:
-          'hot-update acknowledgement plus bounded post-action log collection',
-      facts: <String, Object?>{'sinceCursor': logCursor},
-    );
-    enrichedResult = _persistHotUpdateOperability(enrichedResult);
-    enrichedResult = _commitActionEvidence(
-      method: 'process.flutter.reload',
-      result: enrichedResult,
-      record: const {'cmd': 'reload'},
-    );
-    _emitActionOutput(
-      parsed.flag('verbose')
-          ? enrichedResult
-          : _compactActionResult(enrichedResult),
-    );
-    return enrichedResult['ok'] == false ? 1 : 0;
-  }
+  Future<int> _reload(List<String> args) => _hotUpdateCommand(
+    args,
+    action: 'reload',
+    signal: ProcessSignal.sigusr1,
+    fullRestart: false,
+  );
 
-  Future<int> _restart(List<String> args) async {
+  Future<int> _restart(List<String> args) => _hotUpdateCommand(
+    args,
+    action: 'restart',
+    signal: ProcessSignal.sigusr2,
+    fullRestart: true,
+  );
+
+  Future<int> _hotUpdateCommand(
+    List<String> args, {
+    required String action,
+    required ProcessSignal signal,
+    required bool fullRestart,
+  }) async {
     final parser = ArgParser()..addFlag('verbose', defaultsTo: false);
     final parsed = parser.parse(args);
+    final commandStopwatch = Stopwatch()..start();
     final logCursor = _currentLogCursor();
     final result = await _hotUpdate(
-      action: 'restart',
-      signal: ProcessSignal.sigusr2,
-      fullRestart: true,
+      action: action,
+      signal: signal,
+      fullRestart: fullRestart,
     );
     final logsStopwatch = Stopwatch()..start();
     var enrichedResult = await _withRecentLogSignals(
@@ -739,10 +720,22 @@ extension _CliActions on FlutterScoutCli {
     );
     enrichedResult = _persistHotUpdateOperability(enrichedResult);
     enrichedResult = _commitActionEvidence(
-      method: 'process.flutter.restart',
+      method: 'process.flutter.$action',
       result: enrichedResult,
-      record: const {'cmd': 'restart'},
+      record: <String, Object?>{'cmd': action},
     );
+    // `timing.totalMs` ends when the update outcome is known; `commandMs`
+    // adds Scout's receipt, log and evidence bookkeeping around it.
+    final timing = enrichedResult['timing'];
+    if (timing is Map) {
+      enrichedResult = <String, dynamic>{
+        ...enrichedResult,
+        'timing': <String, Object?>{
+          for (final entry in timing.entries) entry.key.toString(): entry.value,
+          'commandMs': commandStopwatch.elapsedMilliseconds,
+        },
+      };
+    }
     _emitActionOutput(
       parsed.flag('verbose')
           ? enrichedResult

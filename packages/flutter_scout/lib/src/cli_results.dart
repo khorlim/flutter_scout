@@ -762,6 +762,8 @@ extension _CliResults on FlutterScoutCli {
           'sourceVerification': result['sourceVerification'],
         if (result['acknowledgement'] != null)
           'acknowledgement': result['acknowledgement'],
+        if (result['previousHotUpdate'] != null)
+          'previousHotUpdate': result['previousHotUpdate'],
         if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
         if (result['active'] != null) 'active': result['active'],
         if (result['position'] != null) 'position': result['position'],
@@ -838,6 +840,10 @@ extension _CliResults on FlutterScoutCli {
         'operabilityPersistence': result['operabilityPersistence'],
       if (result['acknowledgement'] != null)
         'acknowledgement': result['acknowledgement'],
+      if (result['previousHotUpdate'] != null)
+        'previousHotUpdate': result['previousHotUpdate'],
+      if (result['acknowledgementMayBelongToPrevious'] == true)
+        'acknowledgementMayBelongToPrevious': true,
       if (result['waitedMs'] != null) 'waitedMs': result['waitedMs'],
       if (result['active'] != null) 'active': result['active'],
       if (result['position'] != null) 'position': result['position'],
@@ -1945,6 +1951,14 @@ extension _CliResults on FlutterScoutCli {
       var timed = <String, dynamic>{
         for (final entry in raw.entries)
           if (!entry.key.startsWith('_phase')) entry.key: entry.value,
+        // Every outcome carries the same compact timing shape, with null for
+        // a stage the update never reached.
+        if (raw['timing'] is! Map)
+          'timing': _hotUpdateTiming(
+            ackMs: null,
+            postAckStableMs: null,
+            totalMs: DateTime.now().difference(started).inMilliseconds,
+          ),
       };
       timed = _withPreflightPhaseTimings(timed, before?['timings']);
       // `_waitForInspectAfterHotUpdate` owns its nested reconnect/snapshot
@@ -2009,6 +2023,12 @@ extension _CliResults on FlutterScoutCli {
     final pid = _readPid();
     final sessionMeta = _readSessionMeta();
     if (pid != null && await _matchesOwnedFlutterRun(pid, sessionMeta)) {
+      // A previous acknowledgement timeout may have completed since. Report it
+      // before signalling again, because Flutter ignores a signal while busy
+      // and its late acknowledgement would otherwise look like this one's.
+      final previousHotUpdate = _reconcilePendingHotUpdateAcknowledgement();
+      final previousStillPending =
+          previousHotUpdate?['status'] == 'still_pending';
       final dispatchStopwatch = Stopwatch()..start();
       final sent = Process.killPid(pid, signal);
       dispatchStopwatch.stop();
@@ -2022,10 +2042,15 @@ extension _CliResults on FlutterScoutCli {
           },
           'fullRebuildRequired': false,
           'appReachable': before != null,
+          'previousHotUpdate': ?previousHotUpdate,
           'dispatch': 'not_dispatched',
           '_phaseDispatchMs': dispatchStopwatch.elapsedMilliseconds,
         });
       }
+      final signaledAt = DateTime.now();
+      // Sampled concurrently so the success path pays nothing for it. Only an
+      // acknowledgement timeout awaits it, to tell a busy tool from a hung one.
+      final cpuAtSignal = _processTreeCpuSeconds(pid);
       final logsStopwatch = Stopwatch()..start();
       final acknowledgement = await _waitForHotUpdateAcknowledgement(
         action: action,
@@ -2033,60 +2058,130 @@ extension _CliResults on FlutterScoutCli {
         timeout: _hotUpdateAcknowledgementTimeout(action),
       );
       logsStopwatch.stop();
+      final ackMs = DateTime.now().difference(started).inMilliseconds;
       if (acknowledgement['ok'] != true) {
         final settleStopwatch = Stopwatch()..start();
-        final reachable = await _tryInspect() != null;
+        final afterFailure = await _tryInspect();
         settleStopwatch.stop();
+        final rejected = acknowledgement['rejected'] == true;
+        final Map<String, Object?> error;
+        if (rejected) {
+          error = <String, Object?>{
+            'code': '${action}_rejected',
+            'message': acknowledgement['message'],
+            'reason': ?acknowledgement['reason'],
+            'rejectionDetails': ?acknowledgement['rejectionDetails'],
+            'suggestedCommand': ?acknowledgement['suggestedCommand'],
+          };
+        } else {
+          final toolAlive = await _matchesOwnedFlutterRun(pid, sessionMeta);
+          final runtimeAfter = afterFailure?['runtimeInstanceId']?.toString();
+          error = <String, Object?>{
+            'code': '${action}_ack_timeout',
+            ..._hotUpdateAckTimeoutDiagnosis(
+              action: action,
+              pid: pid,
+              toolAlive: toolAlive,
+              processState: toolAlive ? await _processState(pid) : null,
+              cpuSecondsSinceSignal: _cpuDelta(
+                await cpuAtSignal,
+                toolAlive ? await _processTreeCpuSeconds(pid) : null,
+              ),
+              acknowledgement: acknowledgement,
+              secondsSinceSignal: DateTime.now()
+                  .difference(signaledAt)
+                  .inSeconds,
+              runtimeReplaced:
+                  fullRestart &&
+                  beforeRuntimeInstanceId != null &&
+                  runtimeAfter != null &&
+                  runtimeAfter != beforeRuntimeInstanceId,
+              previousStillPending: previousStillPending,
+            ),
+          };
+        }
+        final elapsedMs = DateTime.now().difference(started).inMilliseconds;
         return closeNativeHotUpdateTimings(<String, dynamic>{
           'ok': false,
           'action': action,
           'method': fullRestart ? 'sigusr2_hot_restart' : 'sigusr1_hot_reload',
           'pid': pid,
-          'appReachable': reachable,
-          'elapsedMs': DateTime.now().difference(started).inMilliseconds,
+          'appReachable': afterFailure != null,
+          'elapsedMs': elapsedMs,
+          'timing': _hotUpdateTiming(
+            ackMs: ackMs,
+            postAckStableMs: null,
+            totalMs: elapsedMs,
+          ),
           'acknowledgement': acknowledgement,
-          'error': {
-            'code': acknowledgement['rejected'] == true
-                ? '${action}_rejected'
-                : '${action}_ack_timeout',
-            'message': acknowledgement['message'],
-          },
+          'previousHotUpdate': ?previousHotUpdate,
+          'error': error,
           'dispatch': 'dispatched',
           '_phaseDispatchMs': dispatchStopwatch.elapsedMilliseconds,
           '_phaseLogsMs': logsStopwatch.elapsedMilliseconds,
           '_phaseSettleMs': settleStopwatch.elapsedMilliseconds,
         });
       }
-      final acknowledgedAt = DateTime.now();
       final settleStopwatch = Stopwatch()..start();
-      final after = await _waitForInspectAfterHotUpdate(
+      // A hot reload's loaded sources are final once Flutter acknowledges it,
+      // so verify them while the helper settles. A restart must first prove
+      // the new runtime exists, so it verifies afterwards.
+      final verificationStopwatch = Stopwatch()..start();
+      final concurrentVerification = fullRestart
+          ? null
+          : _verifyLoadedDartSources()
+                // Never leave an unobserved error while the settle runs.
+                .catchError(
+                  (Object error) => <String, Object?>{
+                    'status': 'unavailable',
+                    'reason': error.toString(),
+                  },
+                )
+                .whenComplete(verificationStopwatch.stop);
+      final observation = await _waitForInspectAfterHotUpdate(
         timeout: _postHotUpdateInspectionTimeout,
         previousRuntimeInstanceId: beforeRuntimeInstanceId,
         requireNewRuntime: fullRestart,
       );
       settleStopwatch.stop();
+      final postAckStableMs = settleStopwatch.elapsedMilliseconds;
+      final after = observation?.after;
       final deltaStopwatch = Stopwatch()..start();
-      final sourceVerification = await _verifyLoadedDartSources();
+      if (fullRestart) verificationStopwatch.reset();
+      final sourceVerification =
+          await (concurrentVerification ??
+              _verifyLoadedDartSources().whenComplete(
+                verificationStopwatch.stop,
+              ));
       final sourceMismatch = sourceVerification['status'] == 'mismatch';
       final delta = _inspectDelta(before, after);
       deltaStopwatch.stop();
       final elapsedMs = DateTime.now().difference(started).inMilliseconds;
+      final stability = observation?.stability;
       return closeNativeHotUpdateTimings(<String, dynamic>{
         'ok': after != null && !sourceMismatch,
         'action': action,
         'method': fullRestart ? 'sigusr2_hot_restart' : 'sigusr1_hot_reload',
         'pid': pid,
-        'stable': after?['idle'],
+        'stable': stability?['state'] == 'stable',
+        'stability': ?stability,
         'result': _inspectChanged(before, after) ? 'changed' : 'unchanged',
         'elapsedMs': elapsedMs,
-        'timing': {
-          'ackMs': acknowledgedAt.difference(started).inMilliseconds,
-          'postAckStableMs': DateTime.now()
-              .difference(acknowledgedAt)
-              .inMilliseconds,
-          'totalMs': elapsedMs,
-        },
+        'timing': _hotUpdateTiming(
+          ackMs: ackMs,
+          postAckStableMs: postAckStableMs,
+          totalMs: elapsedMs,
+          sourceVerificationMs: verificationStopwatch.elapsedMilliseconds,
+          flutterReportedMs: _flutterReportedHotUpdateMs(
+            acknowledgement['message']?.toString(),
+          ),
+          stabilityObservation: stability == null
+              ? 'unavailable'
+              : stability['state']?.toString(),
+        ),
         'acknowledgement': acknowledgement,
+        'previousHotUpdate': ?previousHotUpdate,
+        if (previousStillPending) 'acknowledgementMayBelongToPrevious': true,
         'sourceVerification': sourceVerification,
         'before': before,
         'after': after,
@@ -2098,11 +2193,7 @@ extension _CliResults on FlutterScoutCli {
             'message': 'Timed out waiting for Flutter Scout after $action.',
           },
         if (sourceMismatch)
-          'error': {
-            'code': '${action}_source_mismatch',
-            'message':
-                'The VM is still running different source for one or more changed Dart files.',
-          },
+          'error': _hotUpdateSourceMismatchError(action, sourceVerification),
         if (after == null)
           'nextBestActions': [
             'Run flutter-scout status',
@@ -2116,7 +2207,6 @@ extension _CliResults on FlutterScoutCli {
         '_phaseDeltaMs': deltaStopwatch.elapsedMilliseconds,
       });
     }
-
     if (!fullRestart) {
       final ownershipLossReason = _readSessionMeta()?['ownershipLossReason']
           ?.toString();
@@ -2210,11 +2300,14 @@ extension _CliResults on FlutterScoutCli {
           // Some embedder/tool combinations reassemble as part of reloadSources.
         }
         dispatchStopwatch.stop();
+        final ackMs = DateTime.now().difference(started).inMilliseconds;
         final settleStopwatch = Stopwatch()..start();
-        final after = await _waitForInspectAfterHotUpdate(
+        final observation = await _waitForInspectAfterHotUpdate(
           timeout: _postHotUpdateInspectionTimeout,
         );
         settleStopwatch.stop();
+        final after = observation?.after;
+        final stability = observation?.stability;
         final deltaStopwatch = Stopwatch()..start();
         final sourceVerification = reloadSucceeded
             ? await _verifyLoadedDartSources(
@@ -2226,6 +2319,7 @@ extension _CliResults on FlutterScoutCli {
         final delta = _inspectDelta(before, after);
         deltaStopwatch.stop();
         final elapsedMs = DateTime.now().difference(started).inMilliseconds;
+        final notices = _reloadReportNotices(report.json);
         return {
           'ok': reloadSucceeded && after != null && !sourceMismatch,
           'action': 'reload',
@@ -2236,13 +2330,22 @@ extension _CliResults on FlutterScoutCli {
           if (!reloadSucceeded)
             'state':
                 'reload_rejected_running_app_still_available_with_previous_code',
-          'stable': after?['idle'],
+          'stable': stability?['state'] == 'stable',
+          'stability': ?stability,
           'result': !reloadSucceeded
               ? 'reload_rejected'
               : _inspectChanged(before, after)
               ? 'changed'
               : 'unchanged',
           'elapsedMs': elapsedMs,
+          'timing': _hotUpdateTiming(
+            ackMs: ackMs,
+            postAckStableMs: settleStopwatch.elapsedMilliseconds,
+            totalMs: elapsedMs,
+            stabilityObservation: stability == null
+                ? 'unavailable'
+                : stability['state']?.toString(),
+          ),
           'before': before,
           'after': after,
           'delta': delta,
@@ -2250,8 +2353,11 @@ extension _CliResults on FlutterScoutCli {
           if (!reloadSucceeded)
             'error': {
               'code': 'reload_sources_failed',
-              'message':
-                  'VM service reloadSources reported failure. The app remained inspectable, so it is likely still running the previous code.',
+              'message': notices.isEmpty
+                  ? 'VM service reloadSources reported failure. The app remained inspectable, so it is likely still running the previous code.'
+                  : 'VM service reloadSources rejected the reload: '
+                        '${notices.join(' ')} The app is likely still running the previous code.',
+              if (notices.isNotEmpty) 'reason': notices.join(' '),
             },
           if (after == null)
             'error': {
@@ -2259,11 +2365,10 @@ extension _CliResults on FlutterScoutCli {
               'message': 'Reload completed but Flutter Scout did not respond.',
             },
           if (sourceMismatch)
-            'error': {
-              'code': 'reload_source_mismatch',
-              'message':
-                  'Reload acknowledged, but the VM source differs from changed Dart files on disk.',
-            },
+            'error': _hotUpdateSourceMismatchError(
+              'reload',
+              sourceVerification,
+            ),
           'dispatch': 'dispatched',
           '_phaseConnectMs': connectStopwatch.elapsedMilliseconds,
           '_phaseDispatchMs': dispatchStopwatch.elapsedMilliseconds,
@@ -2456,7 +2561,7 @@ extension _CliResults on FlutterScoutCli {
     }
   }
 
-  Future<Map<String, dynamic>?> _waitForInspectAfterHotUpdate({
+  Future<_PostHotUpdateObservation?> _waitForInspectAfterHotUpdate({
     required Duration timeout,
     String? previousRuntimeInstanceId,
     bool requireNewRuntime = false,
@@ -2468,11 +2573,9 @@ extension _CliResults on FlutterScoutCli {
     previousRuntimeInstanceId: previousRuntimeInstanceId,
     requireNewRuntime: requireNewRuntime,
     inspect: (callTimeout) => _tryInspect(callTimeout: callTimeout),
-    waitStable: (callTimeout) async {
-      await _call('ext.flutter_scout.waitStable', const {
-        'timeoutMs': '1500',
-      }, callTimeout);
-    },
+    waitStable: (callTimeout) => _call('ext.flutter_scout.waitStable', {
+      'timeoutMs': '${_postHotUpdateStabilityObservationBudget.inMilliseconds}',
+    }, callTimeout),
   );
 
   Future<Map<String, Object?>> _waitForHotUpdateAcknowledgement({
@@ -2481,73 +2584,122 @@ extension _CliResults on FlutterScoutCli {
     required Duration timeout,
   }) async {
     final deadline = DateTime.now().add(timeout);
-    final successPattern = action == 'restart'
-        ? RegExp(
-            r'(restarted application in|hot restart performed|performing hot restart.*done)',
-            caseSensitive: false,
-          )
-        : RegExp(
-            r'(reloaded \d+(?: of \d+)? libraries|hot reload performed|performing hot reload.*done)',
-            caseSensitive: false,
-          );
-    while (DateTime.now().isBefore(deadline)) {
-      final file = File(_logFile);
+    final scanner = _HotUpdateAckScanner(
+      action: action,
+      startCursor: sinceCursor,
+    );
+    final file = File(_logFile);
+    void scan() {
+      // Read only what was appended since the previous poll. Rereading from
+      // the signal cursor every time made any update that logged more than
+      // one bounded window fail as unprovable even after Flutter applied it.
+      final chunk = _readLogChunk(
+        file,
+        sinceCursor: scanner.cursor,
+        maxBytes: _maxScoutLogTailBytes,
+      );
+      scanner.ingest(
+        chunk.lines,
+        startCursor: chunk.startCursor,
+        endCursor: chunk.endCursor,
+        truncated: chunk.truncated,
+      );
+    }
+
+    while (true) {
       if (file.existsSync()) {
-        var chunk = _readLogChunk(file, sinceCursor: sinceCursor);
-        if (chunk.truncated) {
-          return {
-            'ok': false,
-            'truncated': true,
-            'cursor': chunk.endCursor,
-            'retainedFromCursor': chunk.startCursor,
-            'message':
-                'Flutter tool acknowledgement logs exceeded the bounded '
-                'read window; update success cannot be proven.',
-          };
-        }
-        var failure = _hotUpdateFailureAcknowledgementFromLines(
-          action: action,
-          rawLines: chunk.lines,
-          startCursor: chunk.startCursor,
-        );
-        if (failure?['rejectionReason'] == 'dart_compile_error' &&
-            failure?['terminalRejectionObserved'] != true) {
-          // Newer Flutter tools can stop after printing frontend compiler
-          // diagnostics without emitting a final "hot reload was rejected"
-          // marker. Give the log writer one short bounded window to flush the
-          // source line and caret before returning the rejection immediately.
-          await Future<void>.delayed(const Duration(milliseconds: 150));
-          chunk = _readLogChunk(file, sinceCursor: sinceCursor);
-          if (!chunk.truncated) {
-            failure = _hotUpdateFailureAcknowledgementFromLines(
-              action: action,
-              rawLines: chunk.lines,
-              startCursor: chunk.startCursor,
-            );
+        scan();
+        var outcome = scanner.outcome();
+        if (outcome != null) {
+          if (outcome['rejectionReason'] == 'dart_compile_error' &&
+              outcome['terminalRejectionObserved'] != true) {
+            // Newer Flutter tools can stop after printing frontend compiler
+            // diagnostics without emitting a final "hot reload was rejected"
+            // marker. Give the log writer one short bounded window to flush
+            // the source line and caret before returning the rejection.
+            await Future<void>.delayed(const Duration(milliseconds: 150));
+            scan();
+            outcome = scanner.outcome() ?? outcome;
           }
-        }
-        if (failure != null) return failure;
-        var cursor = chunk.startCursor;
-        for (final rawLine in chunk.lines) {
-          cursor += utf8.encode(rawLine).length + 1;
-          final line = _redactSensitiveLogText(rawLine);
-          if (successPattern.hasMatch(line)) {
-            return {
-              'ok': true,
-              'cursor': cursor,
-              'message': _stripLogMetadata(line),
-            };
+          // Flutter prints "Hot reload was rejected:" and then each reason on
+          // its own line. Wait briefly for those reasons instead of returning
+          // a rejection with an empty explanation.
+          final flushDeadline = DateTime.now().add(
+            _hotUpdateRejectionDetailFlushBudget,
+          );
+          while (_awaitsRejectionDetails(outcome!) &&
+              DateTime.now().isBefore(flushDeadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+            scan();
+            outcome = scanner.outcome() ?? outcome;
           }
+          return outcome;
         }
       }
+      if (!DateTime.now().isBefore(deadline)) break;
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
     return {
       'ok': false,
       'timedOut': true,
+      'sinceCursor': sinceCursor,
+      'cursor': scanner.cursor,
       'message':
           'Timed out waiting for the Flutter tool to acknowledge $action. The previous runtime was not accepted as updated.',
+      ...scanner.progressFacts(DateTime.now()),
     };
+  }
+
+  /// Reports whether the acknowledgement that timed out on the previous hot
+  /// update arrived later. Flutter ignores a reload or restart signal while it
+  /// is still busy with one, so a late acknowledgement can otherwise be
+  /// mistaken for the next command's.
+  Map<String, Object?>? _reconcilePendingHotUpdateAcknowledgement() {
+    try {
+      final last = _readSessionMeta()?['lastHotUpdate'];
+      final pending = last is Map ? last['pendingAcknowledgement'] : null;
+      if (pending is! Map) return null;
+      final action = pending['action'];
+      final sinceCursor = pending['sinceCursor'];
+      if ((action != 'reload' && action != 'restart') ||
+          action is! String ||
+          sinceCursor is! int) {
+        return null;
+      }
+      if (last['runId'] != _currentRunIdFromSession()) return null;
+      final file = File(_logFile);
+      if (!file.existsSync() || sinceCursor > _currentLogCursor()) return null;
+      final chunk = _readLogChunk(
+        file,
+        sinceCursor: sinceCursor,
+        maxBytes: _maxScoutLogTailBytes,
+      );
+      final scanner =
+          _HotUpdateAckScanner(action: action, startCursor: sinceCursor)
+            ..ingest(
+              chunk.lines,
+              startCursor: chunk.startCursor,
+              endCursor: chunk.endCursor,
+              truncated: chunk.truncated,
+            );
+      final outcome = scanner.outcome();
+      return <String, Object?>{
+        'action': action,
+        'timedOutAt': pending['timedOutAt'],
+        'status': outcome == null
+            ? 'still_pending'
+            : outcome['ok'] == true
+            ? 'completed_late'
+            : 'rejected_late',
+        'message': outcome == null
+            ? 'The previous $action has still not been acknowledged. If the '
+                  'Flutter tool is busy with it, it ignores this signal.'
+            : outcome['message'],
+        if (scanner.windowGap) 'logWindowGap': true,
+      };
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -2555,13 +2707,33 @@ Duration _hotUpdateAcknowledgementTimeout(String action) => action == 'restart'
     ? const Duration(seconds: 30)
     : const Duration(seconds: 60);
 
-Future<Map<String, dynamic>?> _waitForPostHotUpdateInspection({
+/// What Scout observed after Flutter acknowledged a hot update.
+final class _PostHotUpdateObservation {
+  const _PostHotUpdateObservation({
+    required this.after,
+    required this.stability,
+    required this.refreshed,
+  });
+
+  /// The newest helper inspection.
+  final Map<String, dynamic> after;
+
+  /// The helper's own closed stability observation, or null when the helper
+  /// could not provide one. Scout never invents one.
+  final Map<String, Object?>? stability;
+
+  /// Whether a second inspection replaced the first because the stability
+  /// observation saw semantic changes.
+  final bool refreshed;
+}
+
+Future<_PostHotUpdateObservation?> _waitForPostHotUpdateInspection({
   required Duration timeout,
   required Duration probeTimeout,
   required Duration stableTimeout,
   required Duration retryDelay,
   required Future<Map<String, dynamic>?> Function(Duration timeout) inspect,
-  required Future<void> Function(Duration timeout) waitStable,
+  required Future<Map<String, dynamic>?> Function(Duration timeout) waitStable,
   String? previousRuntimeInstanceId,
   bool requireNewRuntime = false,
 }) async {
@@ -2600,33 +2772,76 @@ Future<Map<String, dynamic>?> _waitForPostHotUpdateInspection({
       }
 
       // Reassembly can make inspect reachable slightly before Flutter has
-      // unlocked pointer dispatch. Let the helper observe a stable frame so
-      // the next tap/drag is safe immediately after this command returns.
+      // unlocked pointer dispatch. One short helper observation either proves
+      // the UI is actionable or says why it cannot. Its result is the
+      // command's stability evidence, so the wait is never spent for nothing.
+      Map<String, Object?>? stability;
       final stableBudget = bounded(stableTimeout);
       if (stableBudget > Duration.zero) {
         try {
-          await waitStable(stableBudget);
+          stability = _hotUpdateStabilityFrom(await waitStable(stableBudget));
         } catch (_) {
-          await delayWithinBudget(const Duration(milliseconds: 100));
+          stability = null;
         }
       }
 
+      // The first inspection is still exact unless the observation saw the
+      // UI change. Only then is a second full inspection worth its cost.
+      final samples = stability?['samples'];
+      final semanticChanges = samples is Map
+          ? samples['semanticChangeCount']
+          : null;
+      final changed = semanticChanges is num && semanticChanges > 0;
       final refreshBudget = bounded(probeTimeout);
-      if (refreshBudget <= Duration.zero) return inspected;
-      return await inspect(refreshBudget) ?? inspected;
+      if (!changed || refreshBudget <= Duration.zero) {
+        return _PostHotUpdateObservation(
+          after: inspected,
+          stability: stability,
+          refreshed: false,
+        );
+      }
+      final refreshed = await inspect(refreshBudget);
+      return _PostHotUpdateObservation(
+        after: refreshed ?? inspected,
+        stability: stability,
+        refreshed: refreshed != null,
+      );
     }
     await delayWithinBudget(retryDelay);
   }
   return null;
 }
 
+/// Extracts the helper's closed stability observation from a waitStable
+/// response, or null when the helper did not provide one.
+Map<String, Object?>? _hotUpdateStabilityFrom(Map<String, dynamic>? response) {
+  if (response == null || response['ok'] == false) return null;
+  final stability = response['stability'];
+  if (stability is! Map || stability['state'] is! String) return null;
+  return <String, Object?>{
+    for (final entry in stability.entries) entry.key.toString(): entry.value,
+  };
+}
+
 const Duration _postHotUpdateInspectionTimeout = Duration(seconds: 30);
 const Duration _postHotUpdateInspectProbeTimeout = Duration(seconds: 12);
-const Duration _postHotUpdateWaitStableTimeout = Duration(seconds: 3);
+// The helper observes for at most this long. A settled app proves stability
+// in roughly 150 ms; an app whose visible text keeps changing (a clock, a
+// progress counter) used to hold every reload for the full old 1.5 s budget.
+const Duration _postHotUpdateStabilityObservationBudget = Duration(
+  milliseconds: 600,
+);
+// The CLI call budget adds VM-service transport margin to the observation.
+const Duration _postHotUpdateWaitStableTimeout = Duration(milliseconds: 1600);
 const Duration _postHotUpdateInspectRetryDelay = Duration(milliseconds: 250);
+const Duration _hotUpdateRejectionDetailFlushBudget = Duration(
+  milliseconds: 500,
+);
 
 const int _maxHotUpdateCompilerDiagnosticLines = 12;
 const int _maxHotUpdateCompilerDiagnosticCharacters = 4096;
+const int _maxHotUpdateAckWindowLines = 400;
+const int _maxHotUpdateToolLineCharacters = 240;
 
 final RegExp _hotUpdateTerminalRejectionPattern = RegExp(
   r'(hot reload was rejected|hot restart was rejected|could not hot reload|could not hot restart|try again after fixing the above error)',
@@ -2637,6 +2852,146 @@ final RegExp _dartCompilerErrorPattern = RegExp(
   r'(?:^|\s)(?:[^\r\n:]+[/\\])?[^\r\n:]+\.dart:\d+:\d+:\s+(?:Error|Internal problem):',
   caseSensitive: false,
 );
+
+/// Flutter appends this to every VM reload rejection reason
+/// (`ReasonForCancelling.toString` in flutter_tools).
+final RegExp _hotUpdateRestartHintPattern = RegExp(
+  r'(try performing a hot restart|hot restart instead|requires? (?:a )?(?:hot |full )?restart)',
+  caseSensitive: false,
+);
+
+final RegExp _hotUpdatePhaseLinePattern = RegExp(
+  r'^(performing hot (?:reload|restart)|reloaded \d+|restarted application|syncing files)',
+  caseSensitive: false,
+);
+
+final RegExp _hotUpdateProgressPattern = RegExp(
+  r'performing hot (?:reload|restart)',
+  caseSensitive: false,
+);
+
+RegExp _hotUpdateSuccessPattern(String action) => action == 'restart'
+    ? RegExp(
+        r'(restarted application in|hot restart performed|performing hot restart.*done)',
+        caseSensitive: false,
+      )
+    : RegExp(
+        r'(reloaded \d+(?: of \d+)? libraries|hot reload performed|performing hot reload.*done)',
+        caseSensitive: false,
+      );
+
+bool _isFlutterToolStreamLine(String line) =>
+    line.contains('[FLUTTER_STDOUT]') || line.contains('[FLUTTER_STDERR]');
+
+/// Incremental, bounded scan of Flutter-tool output after a hot-update
+/// signal. It keeps a rolling window of recent lines for multi-line
+/// rejections plus facts that tell a busy tool from a silent one.
+final class _HotUpdateAckScanner {
+  _HotUpdateAckScanner({required this.action, required int startCursor})
+    : _cursor = startCursor,
+      _windowStartCursor = startCursor,
+      _successPattern = _hotUpdateSuccessPattern(action);
+
+  final String action;
+  final RegExp _successPattern;
+  int _cursor;
+  int _windowStartCursor;
+  final List<String> _window = <String>[];
+  final List<int> _windowLineBytes = <int>[];
+  Map<String, Object?>? _success;
+  Map<String, Object?>? _failure;
+  bool _dirty = false;
+
+  int toolLineCount = 0;
+  String? lastToolLine;
+  bool progressLineObserved = false;
+  bool windowGap = false;
+  DateTime? lastToolOutputAt;
+
+  int get cursor => _cursor;
+
+  void ingest(
+    List<String> rawLines, {
+    required int startCursor,
+    required int endCursor,
+    required bool truncated,
+    DateTime? observedAt,
+  }) {
+    if (truncated || startCursor > _cursor) {
+      // Lines were skipped. Multi-line context cannot span the gap.
+      windowGap = true;
+      _window.clear();
+      _windowLineBytes.clear();
+      _windowStartCursor = startCursor;
+    }
+    var cursor = startCursor;
+    for (final rawLine in rawLines) {
+      final bytes = utf8.encode(rawLine).length + 1;
+      cursor += bytes;
+      _window.add(rawLine);
+      _windowLineBytes.add(bytes);
+      _dirty = true;
+      final line = _redactSensitiveLogText(rawLine);
+      if (_success == null && _successPattern.hasMatch(line)) {
+        _success = <String, Object?>{
+          'ok': true,
+          'cursor': cursor,
+          'message': _stripLogMetadata(line),
+        };
+      }
+      if (_isFlutterToolStreamLine(line)) {
+        final text = _stripFlutterToolLogMetadata(line).trim();
+        // App prints are relayed through the tool as "flutter: ..." and say
+        // nothing about whether the tool itself is making progress.
+        if (text.isNotEmpty && !text.startsWith('flutter: ')) {
+          toolLineCount += 1;
+          lastToolLine = text.length > _maxHotUpdateToolLineCharacters
+              ? '${text.substring(0, _maxHotUpdateToolLineCharacters)}…'
+              : text;
+          lastToolOutputAt = observedAt ?? DateTime.now();
+          if (_hotUpdateProgressPattern.hasMatch(text)) {
+            progressLineObserved = true;
+          }
+        }
+      }
+    }
+    while (_window.length > _maxHotUpdateAckWindowLines) {
+      _window.removeAt(0);
+      _windowStartCursor += _windowLineBytes.removeAt(0);
+    }
+    if (endCursor > _cursor) _cursor = endCursor;
+  }
+
+  /// The rejection or success Flutter reported, or null while none is known.
+  Map<String, Object?>? outcome() {
+    if (_dirty) {
+      _dirty = false;
+      _failure = _hotUpdateFailureAcknowledgementFromLines(
+        action: action,
+        rawLines: _window,
+        startCursor: _windowStartCursor,
+      );
+    }
+    return _failure ?? _success;
+  }
+
+  Map<String, Object?> progressFacts(DateTime now) => <String, Object?>{
+    'toolLinesSinceSignal': toolLineCount,
+    'lastToolLine': ?lastToolLine,
+    'progressLineObserved': progressLineObserved,
+    if (lastToolOutputAt != null)
+      'secondsSinceLastToolOutput': now.difference(lastToolOutputAt!).inSeconds,
+    if (windowGap) 'logWindowGap': true,
+  };
+}
+
+/// Whether a rejection was printed but its reason lines have not arrived yet.
+bool _awaitsRejectionDetails(Map<String, Object?> outcome) =>
+    outcome['rejected'] == true &&
+    outcome['rejectionReason'] != 'dart_compile_error' &&
+    outcome['terminalRejectionObserved'] == true &&
+    outcome['rejectionDetails'] == null &&
+    (outcome['terminalMessage']?.toString().trimRight().endsWith(':') ?? false);
 
 Map<String, Object?>? _hotUpdateFailureAcknowledgementFromLines({
   required String action,
@@ -2701,9 +3056,58 @@ Map<String, Object?>? _hotUpdateFailureAcknowledgementFromLines({
   final terminalMessage = terminalRejectionIndex == null
       ? null
       : _stripFlutterToolLogMetadata(sanitized[terminalRejectionIndex]);
-  final message = diagnosticLines.isNotEmpty
-      ? diagnosticLines.first
-      : terminalMessage ?? '$action was rejected by the Flutter tool.';
+
+  // A VM rejection ("Hot reload was rejected:") prints its reasons on the
+  // following tool lines. Capture them until the next phase line, bounded.
+  final rejectionDetails = <String>[];
+  var detailCharacters = 0;
+  if (terminalRejectionIndex != null && compilerErrorIndex == null) {
+    for (
+      var index = terminalRejectionIndex + 1;
+      index < sanitized.length;
+      index++
+    ) {
+      final line = sanitized[index];
+      final isVmEcho = RegExp(r'\[VM_(?:STDOUT|STDERR|LOG)\]').hasMatch(line);
+      if (isVmEcho) continue;
+      final text = _stripFlutterToolLogMetadata(line).trim();
+      if (text.startsWith('flutter: ')) continue;
+      if (text.isEmpty ||
+          _hotUpdatePhaseLinePattern.hasMatch(text) ||
+          _hotUpdateTerminalRejectionPattern.hasMatch(text)) {
+        break;
+      }
+      if (rejectionDetails.length >= _maxHotUpdateCompilerDiagnosticLines ||
+          detailCharacters + text.length >
+              _maxHotUpdateCompilerDiagnosticCharacters) {
+        break;
+      }
+      rejectionDetails.add(text);
+      detailCharacters += text.length + 1;
+    }
+  }
+  final reason = rejectionDetails
+      .where((line) => !_hotUpdateRestartHintPattern.hasMatch(line))
+      .join(' ')
+      .trim();
+  final restartSuggested =
+      action == 'reload' &&
+      compilerErrorIndex == null &&
+      [
+        ?terminalMessage,
+        ...rejectionDetails,
+      ].any(_hotUpdateRestartHintPattern.hasMatch);
+
+  final String message;
+  if (diagnosticLines.isNotEmpty) {
+    message = diagnosticLines.first;
+  } else if (terminalMessage != null) {
+    message = reason.isEmpty
+        ? terminalMessage
+        : '${terminalMessage.replaceFirst(RegExp(r'[:\s]+$'), '')}: $reason';
+  } else {
+    message = '$action was rejected by the Flutter tool.';
+  }
 
   return <String, Object?>{
     'ok': false,
@@ -2714,12 +3118,255 @@ Map<String, Object?>? _hotUpdateFailureAcknowledgementFromLines({
     'terminalRejectionObserved': terminalRejectionIndex != null,
     'cursor': endCursors.isEmpty ? startCursor : endCursors.last,
     'message': message,
+    if (reason.isNotEmpty) 'reason': reason,
+    if (rejectionDetails.isNotEmpty) 'rejectionDetails': rejectionDetails,
+    if (restartSuggested) 'suggestedCommand': 'restart',
     if (diagnosticLines.isNotEmpty) 'compilerDiagnostics': diagnosticLines,
     if (diagnosticLines.isNotEmpty)
       'compilerDiagnosticsTruncated': diagnosticsTruncated,
     'terminalMessage': ?terminalMessage,
   };
 }
+
+/// Classifies an acknowledgement timeout so an agent knows whether to wait,
+/// check logs, or relaunch, instead of blindly sending another signal.
+Map<String, Object?> _hotUpdateAckTimeoutDiagnosis({
+  required String action,
+  required int pid,
+  required bool toolAlive,
+  required String? processState,
+  required double? cpuSecondsSinceSignal,
+  required Map<String, Object?> acknowledgement,
+  required int secondsSinceSignal,
+  bool runtimeReplaced = false,
+  bool previousStillPending = false,
+}) {
+  final toolLines = acknowledgement['toolLinesSinceSignal'];
+  final toolLineCount = toolLines is int ? toolLines : 0;
+  final lastToolLine = acknowledgement['lastToolLine']?.toString();
+  final progressLine = acknowledgement['progressLineObserved'] == true;
+  final sinceOutput = acknowledgement['secondsSinceLastToolOutput'];
+  final state = processState?.trim();
+  final zombie = state != null && state.startsWith('Z');
+  final stopped = state != null && state.startsWith('T');
+  final cpuAdvanced =
+      cpuSecondsSinceSignal != null && cpuSecondsSinceSignal >= 0.25;
+  final recentOutput =
+      toolLineCount > 0 && (sinceOutput is! int || sinceOutput <= 15);
+  final toolState = !toolAlive || zombie
+      ? 'not_alive'
+      : !stopped &&
+            (runtimeReplaced || progressLine || cpuAdvanced || recentOutput)
+      ? 'in_progress'
+      : 'silent';
+  final ackText = action == 'restart' ? 'Restarted application' : 'Reloaded';
+  final logsCommand = 'flutter-scout --app <name> logs --contains "$ackText"';
+  final message = switch (toolState) {
+    'not_alive' =>
+      'The Flutter tool (pid $pid) exited before acknowledging the $action, '
+          'so the app was not proven updated.',
+    'in_progress' =>
+      '${runtimeReplaced ? 'The app already runs a new runtime, so the restart most likely completed, but Flutter has not printed its acknowledgement yet.' : 'The Flutter tool is still working on the $action (${secondsSinceSignal}s since the signal).'} '
+          'Do not send another $action: Flutter ignores reload and restart '
+          'signals while one is in progress. Check `$logsCommand` or '
+          '`status` before retrying.',
+    _ =>
+      'The Flutter tool (pid $pid${state == null ? '' : ', process state $state'}) '
+          'printed nothing and used no measurable CPU in '
+          '${secondsSinceSignal}s since the $action signal. It may be hung.',
+  };
+  final nextSteps = switch (toolState) {
+    'not_alive' => const <String>[
+      'Run flutter-scout --app <name> status',
+      'Relaunch with flutter-scout ensure (or launch --replace) to get a reload-capable run',
+    ],
+    'in_progress' => <String>[
+      'Wait, then run $logsCommand',
+      'Run flutter-scout --app <name> status',
+      'Retry the $action only after the logs show it finished or failed',
+    ],
+    _ => <String>[
+      'Run $logsCommand once more after a short wait',
+      'If it is still silent, run flutter-scout --app <name> stop --clear-session and relaunch with ensure',
+    ],
+  };
+  return <String, Object?>{
+    'message': message,
+    'toolState': toolState,
+    'toolPid': pid,
+    'processState': ?state,
+    'secondsSinceSignal': secondsSinceSignal,
+    'lastToolLine': ?lastToolLine,
+    'toolLinesSinceSignal': toolLineCount,
+    if (cpuSecondsSinceSignal != null)
+      'toolCpuSecondsSinceSignal':
+          (cpuSecondsSinceSignal * 100).roundToDouble() / 100,
+    if (runtimeReplaced) 'runtimeReplaced': true,
+    if (previousStillPending) 'previousHotUpdateStillPending': true,
+    if (acknowledgement['logWindowGap'] == true) 'logWindowGap': true,
+    'retrySafe': toolState != 'in_progress',
+    'nextSteps': nextSteps,
+  };
+}
+
+Map<String, Object?> _hotUpdateSourceMismatchError(
+  String action,
+  Map<String, Object?> verification,
+) {
+  final mismatched = verification['mismatched'];
+  final files = <String>[
+    if (mismatched is List)
+      for (final file in mismatched) file.toString(),
+  ];
+  const listedLimit = 10;
+  final listed = files.take(listedLimit).join(', ');
+  final more = files.length > listedLimit
+      ? ' (+${files.length - listedLimit} more)'
+      : '';
+  return <String, Object?>{
+    'code': '${action}_source_mismatch',
+    'message': files.isEmpty
+        ? 'The VM is still running different source for one or more changed Dart files.'
+        : 'The VM is still running different source for ${files.length} '
+              'changed Dart file${files.length == 1 ? '' : 's'}: $listed$more.',
+    'mismatchedFiles': files.take(50).toList(growable: false),
+    'nextSteps': <String>[
+      'Make sure the listed files are saved, then run $action again',
+      if (action == 'reload')
+        'If the mismatch persists, run restart'
+      else
+        'If the mismatch persists, run stop --clear-session and relaunch',
+    ],
+  };
+}
+
+/// Compact top-level timing shared by every hot-update outcome.
+Map<String, Object?> _hotUpdateTiming({
+  required int? ackMs,
+  required int? postAckStableMs,
+  required int totalMs,
+  int? sourceVerificationMs,
+  int? flutterReportedMs,
+  String? stabilityObservation,
+}) => <String, Object?>{
+  'ackMs': ackMs,
+  'postAckStableMs': postAckStableMs,
+  'sourceVerificationMs': ?sourceVerificationMs,
+  'totalMs': totalMs,
+  'flutterReportedMs': ?flutterReportedMs,
+  if (flutterReportedMs != null)
+    'scoutOverheadMs': max(0, totalMs - flutterReportedMs),
+  'stabilityObservation': ?stabilityObservation,
+};
+
+/// Parses Flutter's own duration from "Reloaded 1 of 9 libraries in 7,888ms"
+/// or "Restarted application in 1.2s".
+int? _flutterReportedHotUpdateMs(String? message) {
+  if (message == null) return null;
+  final match = RegExp(
+    r'\bin\s+([\d,]+(?:\.\d+)?)\s*(ms|s)\b',
+    caseSensitive: false,
+  ).firstMatch(message);
+  if (match == null) return null;
+  final value = double.tryParse(match.group(1)!.replaceAll(',', ''));
+  if (value == null) return null;
+  return (match.group(2)!.toLowerCase() == 's' ? value * 1000 : value).round();
+}
+
+List<String> _reloadReportNotices(Map<String, dynamic>? json) {
+  final notices = json?['notices'];
+  if (notices is! List) return const <String>[];
+  return <String>[
+    for (final notice in notices)
+      if (notice is Map && notice['message'] is String)
+        (notice['message'] as String).trim(),
+  ].where((message) => message.isNotEmpty).take(12).toList(growable: false);
+}
+
+/// Cumulative CPU seconds of [pid] and its descendants, or null when `ps`
+/// is unavailable. The Flutter tool compiles in a child frontend server.
+Future<double?> _processTreeCpuSeconds(int pid) async {
+  try {
+    final result = await Process.run('ps', const <String>[
+      '-A',
+      '-o',
+      'pid=,ppid=,time=',
+    ]).timeout(const Duration(seconds: 2));
+    if (result.exitCode != 0) return null;
+    return _processTreeCpuSecondsFromPs('${result.stdout}', pid);
+  } catch (_) {
+    return null;
+  }
+}
+
+double? _processTreeCpuSecondsFromPs(String output, int pid) {
+  final parents = <int, int>{};
+  final cpu = <int, double>{};
+  for (final line in const LineSplitter().convert(output)) {
+    final fields = line.trim().split(RegExp(r'\s+'));
+    if (fields.length < 3) continue;
+    final processId = int.tryParse(fields[0]);
+    final parentId = int.tryParse(fields[1]);
+    final seconds = _parsePsCpuTime(fields[2]);
+    if (processId == null || parentId == null || seconds == null) continue;
+    parents[processId] = parentId;
+    cpu[processId] = seconds;
+  }
+  if (!cpu.containsKey(pid)) return null;
+  final tree = <int>{pid};
+  var grew = true;
+  while (grew) {
+    grew = false;
+    for (final entry in parents.entries) {
+      if (!tree.contains(entry.key) && tree.contains(entry.value)) {
+        tree.add(entry.key);
+        grew = true;
+      }
+    }
+  }
+  return tree.fold<double>(0, (sum, id) => sum + (cpu[id] ?? 0));
+}
+
+/// Parses `ps` cumulative CPU time: `M:SS.ss`, `H:MM:SS`, or `D-HH:MM:SS`.
+double? _parsePsCpuTime(String value) {
+  var text = value.trim();
+  if (text.isEmpty) return null;
+  var days = 0;
+  final dash = text.indexOf('-');
+  if (dash > 0) {
+    final parsedDays = int.tryParse(text.substring(0, dash));
+    if (parsedDays == null) return null;
+    days = parsedDays;
+    text = text.substring(dash + 1);
+  }
+  final parts = text.split(':');
+  if (parts.length > 3) return null;
+  var seconds = 0.0;
+  for (final part in parts) {
+    final parsed = double.tryParse(part);
+    if (parsed == null) return null;
+    seconds = seconds * 60 + parsed;
+  }
+  return days * 86400 + seconds;
+}
+
+Future<String?> _processState(int pid) async {
+  try {
+    final result = await Process.run('ps', <String>[
+      '-o',
+      'state=',
+      '-p',
+      '$pid',
+    ]).timeout(const Duration(seconds: 2));
+    final state = '${result.stdout}'.trim();
+    return result.exitCode == 0 && state.isNotEmpty ? state : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+double? _cpuDelta(double? before, double? after) =>
+    before == null || after == null ? null : max(0, after - before);
 
 String _stripFlutterToolLogMetadata(String line) {
   var text = _stripLogMetadata(_stripLogAnsi(line));

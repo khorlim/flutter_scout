@@ -14,46 +14,8 @@ const Duration _silentBuildSampleInterval = Duration(seconds: 15);
 /// CPU seconds the runner tree must use between samples to count as busy.
 const double _silentBuildBusyCpuSeconds = 1.0;
 
-/// Parses `ps -o time=` values: `[[dd-]hh:]mm:ss[.cc]`.
-double? _parsePsCpuTime(String value) {
-  final match = RegExp(
-    r'^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$',
-  ).firstMatch(value.trim());
-  if (match == null) return null;
-  final days = int.parse(match.group(1) ?? '0');
-  final hours = int.parse(match.group(2) ?? '0');
-  final minutes = int.parse(match.group(3)!);
-  final seconds = double.parse(match.group(4)!);
-  return ((days * 24 + hours) * 60 + minutes) * 60 + seconds;
-}
-
-/// Sums CPU seconds of [rootPid] and all its descendants from `ps -ax` rows of
-/// `pid ppid time`.
-double? _processTreeCpuSecondsFromPs(String psOutput, int rootPid) {
-  final children = <int, List<int>>{};
-  final cpu = <int, double>{};
-  for (final line in psOutput.split('\n')) {
-    final parts = line.trim().split(RegExp(r'\s+'));
-    if (parts.length != 3) continue;
-    final pid = int.tryParse(parts[0]);
-    final ppid = int.tryParse(parts[1]);
-    final time = _parsePsCpuTime(parts[2]);
-    if (pid == null || ppid == null || time == null) continue;
-    cpu[pid] = time;
-    children.putIfAbsent(ppid, () => <int>[]).add(pid);
-  }
-  if (!cpu.containsKey(rootPid)) return null;
-  var total = 0.0;
-  final queue = <int>[rootPid];
-  final seen = <int>{};
-  while (queue.isNotEmpty) {
-    final pid = queue.removeLast();
-    if (!seen.add(pid)) continue;
-    total += cpu[pid] ?? 0;
-    queue.addAll(children[pid] ?? const <int>[]);
-  }
-  return total;
-}
+// CPU parsing and process-tree sums are shared with the reload/restart
+// acknowledgement diagnostics (_processTreeCpuSeconds in cli_results.dart).
 
 /// A classified launch failure: a stable cause, the log line that shows it,
 /// and the next step for the agent.
@@ -182,20 +144,6 @@ String _launchFailureMessage({
 }
 
 extension _CliLaunchDiagnostics on FlutterScoutCli {
-  Future<double?> _processTreeCpuSeconds(int rootPid) async {
-    try {
-      final result = await Process.run('ps', [
-        '-ax',
-        '-o',
-        'pid=,ppid=,time=',
-      ]).timeout(const Duration(seconds: 5));
-      if (result.exitCode != 0) return null;
-      return _processTreeCpuSecondsFromPs('${result.stdout}', rootPid);
-    } catch (_) {
-      return null;
-    }
-  }
-
   /// Fails fast for a shut-down iOS Simulator instead of waiting for Flutter
   /// to report that no device matched.
   Future<void> _requireBootedSimulator(String device) async {

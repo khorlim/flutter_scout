@@ -861,6 +861,23 @@ extension _CliOperability on FlutterScoutCli {
     };
   }
 
+  Map<String, Object?>? _pendingHotUpdateAcknowledgement(
+    Map<String, dynamic> result,
+  ) {
+    final error = _operabilityMap(result['error']);
+    final acknowledgement = _operabilityMap(result['acknowledgement']);
+    final code = error?['code']?.toString();
+    final sinceCursor = acknowledgement?['sinceCursor'];
+    if (code == null || !code.endsWith('_ack_timeout') || sinceCursor is! int) {
+      return null;
+    }
+    return <String, Object?>{
+      'action': result['action'],
+      'sinceCursor': sinceCursor,
+      'timedOutAt': DateTime.now().toUtc().toIso8601String(),
+    };
+  }
+
   Map<String, dynamic> _persistHotUpdateOperability(
     Map<String, dynamic> result,
   ) {
@@ -909,6 +926,9 @@ extension _CliOperability on FlutterScoutCli {
           'runtimeInstanceId': after?['runtimeInstanceId'],
           'stateGeneration': after?['stateGeneration'],
           'sourceVerification': safeSource,
+          // The next reload or restart checks whether this acknowledgement
+          // arrived late, so a retry is not mistaken for the original.
+          'pendingAcknowledgement': ?_pendingHotUpdateAcknowledgement(result),
         },
         'updatedAt': DateTime.now().toUtc().toIso8601String(),
       });

@@ -100,6 +100,40 @@ A rejected reload does not mean the app died. Check `status`, reuse/repair the
 same named session, and reserve `stop --clear-session` plus relaunch for a dead
 run or a rebuild-requiring change.
 
+## Reload and restart outcomes
+
+Every `reload` and `restart` result has a compact top-level `timing`:
+`ackMs` (signal until Flutter acknowledged), `postAckStableMs` (helper
+reachability plus one short stability observation, or null if not reached),
+`sourceVerificationMs`, `totalMs`, `commandMs`, and, when Flutter printed its
+own duration, `flutterReportedMs` and `scoutOverheadMs`. The `stability` field
+is the helper's own observation. When the helper cannot provide one, Scout
+does not wait longer and `timing.stabilityObservation` is `unavailable`.
+Source verification still runs.
+
+- `reload_rejected`: `error.message` includes Flutter's full reason, and
+  `error.rejectionDetails` lists its lines. `error.suggestedCommand: "restart"`
+  means Flutter said a hot restart is required (for example, a changed field
+  type). Compile errors carry `compilerDiagnostics` instead; fix the code.
+- `reload_source_mismatch` / `restart_source_mismatch`: `error.mismatchedFiles`
+  lists the project-relative Dart files the VM still runs differently. Save
+  them and repeat the command; if a reload mismatch persists, restart.
+- `reload_ack_timeout` / `restart_ack_timeout`: `error.toolState` says why.
+  - `not_alive`: the Flutter tool exited. Relaunch with `ensure`.
+  - `in_progress`: the tool is still working (it printed output, used CPU, or
+    the app already runs a new runtime). Do not send another signal: Flutter
+    ignores reload and restart signals while one is running. Check
+    `logs --contains "Restarted application"` (or `"Reloaded"`) or `status`,
+    and retry only after it finished or failed.
+  - `silent`: the tool printed nothing and used no CPU since the signal. It
+    may be hung. Check logs once more, then `stop --clear-session` and relaunch.
+
+  `lastToolLine`, `secondsSinceSignal`, `toolCpuSecondsSinceSignal` and
+  `processState` are the facts behind that classification. The next `reload`
+  or `restart` reports `previousHotUpdate.status` (`completed_late`,
+  `rejected_late` or `still_pending`) for the timed-out one. `status` does not
+  report it yet.
+
 When `status` reports ownership loss, `ensure` preserves the running app and
 the ownership-loss diagnosis instead of claiming Scout still owns it. Use
 `launch --replace` only when replacing that app with a fresh reload-capable run

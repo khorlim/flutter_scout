@@ -172,6 +172,8 @@ Close the agent connection before reload/restart, then reconnect (bridge:
 restart, `disconnect` and observe again). Use reload
 for Dart changes; sourceVerification:mismatch is a failure. A rejected reload
 does not imply the app died: check status and preserve a reachable session.
+Follow `error.suggestedCommand` when present. After an `*_ack_timeout`, read
+`error.toolState`: never resend while it is `in_progress`.
 Native/plugin/pubspec changes need a full launch. Read runtime output with
 `flutter-scout --app <task> logs --summary` (or `--last <n>`, `--contains
 <text>`), never by opening log files. Lifecycle and ownership
