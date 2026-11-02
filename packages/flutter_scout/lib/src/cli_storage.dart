@@ -431,23 +431,30 @@ void _atomicWriteOwnerOnlyString(String path, String value) =>
 /// Prepares only the immediate output parent without taking ownership of a
 /// caller's existing directory. A missing leaf is created through a randomized
 /// owner-only directory and atomically renamed; missing ancestors are refused.
+///
+/// The existing parent (or, for a missing leaf, its existing parent) may be a
+/// system alias such as macOS `/tmp -> /private/tmp`; see
+/// [_resolveOutputDirectory]. Any other link is refused, naming the resolved
+/// directory so the caller can pass the real path deliberately.
 void _preparePrivateArtifactOutputParent(String outputPath) {
   final output = _absoluteNormalized(outputPath);
   final parentPath = p.dirname(output);
   final parentType = FileSystemEntity.typeSync(parentPath, followLinks: false);
-  if (parentType == FileSystemEntityType.directory) return;
   if (parentType != FileSystemEntityType.notFound) {
-    _unsafeStoragePath(output, 'the output parent is a link or non-directory');
+    _resolveOutputDirectory(output, parentPath);
+    return;
   }
-  final grandparentPath = p.dirname(parentPath);
-  if (grandparentPath == parentPath ||
-      FileSystemEntity.typeSync(grandparentPath, followLinks: false) !=
-          FileSystemEntityType.directory) {
+  final requestedGrandparent = p.dirname(parentPath);
+  if (requestedGrandparent == parentPath ||
+      FileSystemEntity.typeSync(requestedGrandparent, followLinks: false) ==
+          FileSystemEntityType.notFound) {
     _unsafeStoragePath(
       output,
       'only one missing output-directory leaf may be created',
     );
   }
+  final grandparentPath = _resolveOutputDirectory(output, requestedGrandparent);
+  final leafPath = p.join(grandparentPath, p.basename(parentPath));
   final temporary = Directory(
     grandparentPath,
   ).createTempSync('.${p.basename(parentPath)}.flutter_scout_output.');
@@ -455,12 +462,12 @@ void _preparePrivateArtifactOutputParent(String outputPath) {
   try {
     _enforcePrivateMode(temporary.path, _privateDirectoryMode);
     try {
-      temporary.renameSync(parentPath);
+      temporary.renameSync(leafPath);
       temporaryExists = false;
     } on FileSystemException {
       // A concurrent caller may have created the requested leaf. It remains
       // caller-owned and must not be chmodded by Scout.
-      if (FileSystemEntity.typeSync(parentPath, followLinks: false) !=
+      if (FileSystemEntity.typeSync(leafPath, followLinks: false) !=
           FileSystemEntityType.directory) {
         rethrow;
       }
@@ -470,6 +477,54 @@ void _preparePrivateArtifactOutputParent(String outputPath) {
       temporary.deleteSync();
     }
   }
+}
+
+/// Returns the real directory for an existing output directory [path].
+///
+/// A plain directory is returned unchanged. A symbolic link is followed only
+/// when it is a system alias: it lives directly in the filesystem root and that
+/// root is writable by neither group nor others, so only the administrator can
+/// create or redirect it (macOS `/tmp`, `/var`, `/etc`). The link is resolved
+/// once and the resolved object must itself be a real directory. Every other
+/// link, including one another user could plant in a shared writable
+/// directory, is refused. The refusal names the resolved directory.
+String _resolveOutputDirectory(String output, String path) {
+  final type = FileSystemEntity.typeSync(path, followLinks: false);
+  if (type == FileSystemEntityType.directory) return path;
+  if (type != FileSystemEntityType.link) {
+    _unsafeStoragePath(output, 'the output parent is not a directory');
+  }
+  String? resolved;
+  try {
+    resolved = Directory(path).resolveSymbolicLinksSync();
+  } on FileSystemException {
+    resolved = null;
+  }
+  if (resolved == null ||
+      FileSystemEntity.typeSync(resolved, followLinks: false) !=
+          FileSystemEntityType.directory) {
+    _unsafeStoragePath(
+      output,
+      'the output parent `$path` is a symbolic link that does not resolve to '
+      'a directory',
+    );
+  }
+  if (_isSystemDirectoryAlias(path)) return resolved;
+  _unsafeStoragePath(
+    output,
+    'the output parent `$path` is a symbolic link to `$resolved`. Only '
+    'administrator-owned system aliases such as /tmp are followed; pass a '
+    'path inside `$resolved` directly if that is the intended destination',
+  );
+}
+
+bool _isSystemDirectoryAlias(String linkPath) {
+  if (!_supportsPosixModes) return false;
+  final container = p.dirname(linkPath);
+  if (container != '/') return false;
+  final stat = FileStat.statSync(container);
+  // Neither group- (0020) nor other-writable (0002).
+  return stat.type == FileSystemEntityType.directory && stat.mode & 0x12 == 0;
 }
 
 void _atomicWritePrivateJson(

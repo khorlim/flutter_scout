@@ -642,6 +642,73 @@ void main() {
           expect(outside.readAsStringSync(), 'untouched');
         });
       });
+
+      test(
+        'artifact outputs follow only system aliases for their parent',
+        () async {
+          await _withStorageTempCwd((temp) async {
+            final cli = FlutterScoutCli();
+            final real = Directory(p.join(temp.path, 'real'))..createSync();
+            final alias = Link(p.join(temp.path, 'alias'))
+              ..createSync(real.path);
+            final resolvedReal = real.resolveSymbolicLinksSync();
+            for (final output in <String>[
+              p.join(alias.path, 'shot.png'),
+              p.join(alias.path, 'missing-leaf', 'shot.png'),
+            ]) {
+              expect(
+                () => cli.debugWritePrivateArtifact(output, const <int>[1]),
+                throwsA(
+                  isA<ScoutCliException>()
+                      .having(
+                        (error) => error.code,
+                        'code',
+                        'unsafe_storage_path',
+                      )
+                      .having(
+                        (error) => error.message,
+                        'message',
+                        contains(resolvedReal),
+                      ),
+                ),
+              );
+            }
+            expect(real.listSync(), isEmpty);
+
+            // macOS exposes /tmp as an administrator-owned alias of
+            // /private/tmp. Elsewhere /tmp is a real directory, which must keep
+            // working the same way.
+            final stamp = '${pid}_${DateTime.now().microsecondsSinceEpoch}';
+            final direct = '/tmp/scout_alias_$stamp.png';
+            final leaf = Directory('/tmp/scout_alias_dir_$stamp');
+            final nested = p.join(leaf.path, 'shot.png');
+            addTearDown(() {
+              for (final path in <String>[direct, '$direct.metadata.json']) {
+                final file = File(path);
+                if (file.existsSync()) file.deleteSync();
+              }
+              if (leaf.existsSync()) leaf.deleteSync(recursive: true);
+            });
+            for (final output in <String>[direct, nested]) {
+              cli.debugWritePrivateArtifact(output, const <int>[7, 8]);
+              expect(File(output).readAsBytesSync(), const <int>[7, 8]);
+              expect(_permissions(output), 0x180);
+              final metadata =
+                  jsonDecode(File('$output.metadata.json').readAsStringSync())
+                      as Map<String, dynamic>;
+              expect(
+                metadata['artifact'],
+                p.join(
+                  Directory(p.dirname(output)).resolveSymbolicLinksSync(),
+                  p.basename(output),
+                ),
+              );
+            }
+            expect(_permissions(leaf.path), 0x1c0);
+          });
+        },
+        skip: Directory('/tmp').existsSync() ? false : 'no /tmp directory',
+      );
     },
     skip: Platform.isWindows ? 'POSIX storage contract' : false,
   );

@@ -34,11 +34,19 @@ reports failure/restoration and never chooses among ambiguous scroll regions.
 Capture visual evidence when appearance matters:
 
 ```bash
-flutter-scout screenshot -o /tmp/screen.png
-flutter-scout screenshot --annotated -o /tmp/marks.png
-flutter-scout crop field.email -o /tmp/email.png
-flutter-scout crop --changed-since '<snapshot-id>' -o /tmp/changed.png
+flutter-scout --app <task> screenshot
+flutter-scout --app <task> screenshot -o /tmp/scout/screen.png
+flutter-scout --app <task> screenshot --annotated -o /tmp/scout/marks.png
+flutter-scout --app <task> crop field.email -o /tmp/scout/email.png
+flutter-scout --app <task> crop --changed-since '<snapshot-id>' -o /tmp/scout/changed.png
 ```
+
+Without `-o`, the image goes to the session's private `screenshots/`
+directory; read the written location from the result's `path`. With `-o`, the
+parent directory must exist, or be one missing leaf that Scout creates as
+`0700`. The system alias `/tmp` (macOS `/private/tmp`) is accepted. Any other
+symbolic-link parent is refused with `unsafe_storage_path`, and the message
+names the resolved directory to pass instead.
 
 Screenshots/crops are private application data. Prefer a private destination
 and keep the default `--retention session`; use longer retention only when the
