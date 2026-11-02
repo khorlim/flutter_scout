@@ -61,6 +61,15 @@ void main() {
 
 Do not add screen wrappers, action wrappers, or test-only widgets.
 
+Call the initializer unconditionally; do not wrap it in `!kReleaseMode`. It
+always initializes Flutter's widget binding and registers Scout only in debug
+builds, so profile and release builds still start normally.
+
+Scout adds `FLUTTER_SCOUT_INSTANCE`, `FLUTTER_SCOUT_PROJECT` (an absolute path)
+and `FLUTTER_SCOUT_RUN_ID` dart-defines only to the debug runs it launches.
+Never pass them to `flutter build` for a release or store artifact, and keep
+any release-pipeline guard that rejects them.
+
 ## Install Or Run The CLI
 
 For repo-local development:

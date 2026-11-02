@@ -167,6 +167,9 @@ recovery details: [lifecycle-and-diagnostics.md](references/lifecycle-and-diagno
 Screenshots and crops stay manual. Capture only when appearance matters or
 semantic evidence is insufficient, and inspect the image before claiming
 visual verification. Details: [gestures-and-visuals.md](references/gestures-and-visuals.md).
+Instead of `sleep` before a screenshot, wait for the end state with a `watch`
+condition or a fresh observation. Scout has no frame-sequence capture; do not
+slow animations with `timeDilation` in an app a person is also using.
 
 ```bash
 flutter-scout --app <task> screenshot -o /private/path/screen.png --retention session
@@ -185,3 +188,12 @@ flutter-scout --app <task> stop --clear-session
 
 Require ok:true, sessionCleared:true, and recordedRuns.unresolved:[] before
 claiming cleanup. Never stop a human-owned or another task's run.
+
+## Outside Scout
+
+Scout sees and drives only the Flutter tree of a debug app. It does not handle
+iOS system dialogs and sheets, native UIKit/AppKit controls, device rotation or
+performance profiling. Use the simulator tooling (`xcrun simctl`, the host's
+simulator or desktop control tool) for system UI and rotation, and
+`flutter run --profile` with DevTools for frame timing; say so in the report
+instead of retrying through Scout.
