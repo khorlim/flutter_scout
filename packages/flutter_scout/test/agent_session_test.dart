@@ -129,6 +129,206 @@ void main() {
   );
 
   test(
+    'live-view rejection names rendering facts and foreground() on macOS',
+    () async {
+      final current = view(1, status: 'suspended')
+        ..['rendering'] = {
+          'status': 'suspended',
+          'framesEnabled': false,
+          'lifecycle': 'hidden',
+          'lastFrameworkFrameAgeMs': 13897,
+        };
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+        foregroundAvailable: true,
+      );
+      addTearDown(s.close);
+      await s.open();
+      final blocked = s.scene['blockedBy'] as Map;
+      expect(s.scene['actionable'], isFalse);
+      expect(blocked['reason'], 'rendering_suspended');
+      expect(blocked['nextStep'], contains('await scout.foreground()'));
+      expect(
+        () => s.start(1, tap),
+        throwsA(
+          isA<AgentRejection>()
+              .having((e) => e.code, 'code', 'agent_live_view_unavailable')
+              .having((e) => e.message, 'message', contains('lifecycle hidden'))
+              .having((e) => e.nextStep, 'nextStep', contains('foreground()'))
+              .having((e) => e.details, 'details', {
+                'reason': 'rendering_suspended',
+                'rendering': {
+                  'status': 'suspended',
+                  'framesEnabled': false,
+                  'lifecycle': 'hidden',
+                  'lastFrameworkFrameAgeMs': 13897,
+                },
+                'foregroundAvailable': true,
+                'platform': 'macos',
+                'safetyEvidenceStatus': 'complete',
+                'activeBlockingSignalCount': 0,
+                'errorsSinceCursorCount': 0,
+              }),
+        ),
+      );
+      expect(s.actions, 0);
+    },
+  );
+
+  test(
+    'active rendering blocked by safety does not suggest foreground',
+    () async {
+      final current = view(1)
+        ..['activeBlockingSignals'] = [
+          {'code': 'flutter_error'},
+        ];
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+        foregroundAvailable: true,
+      );
+      addTearDown(s.close);
+      await s.open();
+      expect(
+        () => s.start(1, tap),
+        throwsA(
+          isA<AgentRejection>()
+              .having((e) => e.details['reason'], 'reason', 'blocking_signals')
+              .having((e) => e.message, 'message', contains('flutter_error'))
+              .having(
+                (e) => e.nextStep,
+                'nextStep',
+                isNot(contains('foreground')),
+              ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'observe on a halted session reports its cause, not a generic failure',
+    () async {
+      var current = view(1);
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+      );
+      addTearDown(s.close);
+      await s.open();
+      current = view(2, runtime: 'replacement');
+      final observed = await s.observe();
+      expect(observed['ok'], isFalse);
+      expect(
+        observed['error'],
+        allOf(
+          containsPair('code', 'agent_hand_unavailable'),
+          containsPair('reason', 'agent_session_stopped'),
+        ),
+      );
+      expect(observed['error']['message'], contains('agent_runtime_changed'));
+    },
+  );
+
+  test(
+    'foreground waits passively for active rendering within its bound',
+    () async {
+      var current = view(1, status: 'suspended');
+      var activated = 0;
+      var readsAfterActivation = 0;
+      final s = AgentSession(
+        read: () async {
+          if (activated > 0 && ++readsAfterActivation == 3) current = view(2);
+          return current;
+        },
+        act: (_, _) async => receipt,
+        validate: (_) {},
+        foregroundAvailable: true,
+      );
+      addTearDown(s.close);
+      await s.open();
+      final resumed = await s.foreground(() async => activated++);
+      expect(activated, 1, reason: 'activation is never retried');
+      expect(readsAfterActivation, greaterThanOrEqualTo(3));
+      expect(resumed['ok'], isTrue);
+      expect(resumed['actionable'], isTrue);
+      expect(resumed.containsKey('error'), isFalse);
+    },
+  );
+
+  test(
+    'foreground that cannot restore rendering names lifecycle and focus',
+    () async {
+      final current = view(1, status: 'suspended')
+        ..['rendering'] = {
+          'status': 'suspended',
+          'framesEnabled': false,
+          'lifecycle': 'inactive',
+        };
+      var activated = 0;
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+        foregroundAvailable: true,
+      );
+      addTearDown(s.close);
+      await s.open();
+      final result = await s.foreground(
+        () async => activated++,
+        diagnose: () async => {
+          'frontmostApp': 'Other App',
+          'frontmostIsTarget': false,
+        },
+        wait: const Duration(milliseconds: 300),
+      );
+      expect(activated, 1);
+      expect(result['ok'], isFalse);
+      expect(result['inputDispatched'], isFalse);
+      final error = result['error'] as Map;
+      expect(error['code'], 'agent_live_view_unavailable');
+      expect(error['reason'], 'rendering_still_suspended');
+      expect(error['message'], contains('lifecycle inactive'));
+      expect(error['message'], contains('"Other App"'));
+      expect(error['nextStep'], contains('do not loop foreground()'));
+      expect(
+        error['details'],
+        allOf(
+          containsPair('frontmostIsTarget', false),
+          containsPair('activationRequested', true),
+        ),
+      );
+      expect(s.actions, 0);
+    },
+  );
+
+  test('foreground on a stopped hand names the blocking cause', () async {
+    var current = view(1);
+    final s = AgentSession(
+      read: () async => current,
+      act: (_, _) async => receipt,
+      validate: (_) {},
+    );
+    addTearDown(s.close);
+    await s.open();
+    current = view(2, runtime: 'replacement');
+    await s.observe();
+    var activated = false;
+    await expectLater(
+      s.foreground(() async => activated = true),
+      throwsA(
+        isA<AgentRejection>()
+            .having((e) => e.code, 'code', 'agent_foreground_unavailable')
+            .having((e) => e.message, 'message', contains('agent_runtime')),
+      ),
+    );
+    expect(activated, isFalse);
+  });
+
+  test(
     'another input requires delivery and acknowledgement of its receipt',
     () async {
       var count = 0;

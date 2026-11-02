@@ -140,13 +140,26 @@ countdowns); real screen, surface or target changes are still rejected.
 Rendering suspended means restore app visibility. Never pump frames or treat
 an old semantic tree as current pixels. An active framework frame does not
 prove the native window is visible. Manual images are required for visual QA.
-For a named macOS session, explicitly call `await scout.foreground()` to
-activate only its observed app process, then check the returned fresh scene.
-It uses normal OS activation, not a rendering override, and sends no UI input.
-It refuses during input or an unread/unknown receipt. A received known failure
-can restore visibility, but still needs explicit reconciliation; activation
-never clears its halt or acknowledges its receipt.
-Do not repeatedly steal focus from the user or treat activation as save success.
+When a scene has `actionable:false`, read `scene.blockedBy`: `reason` says
+whether rendering (`rendering_suspended`) or safety blocks input, `details`
+holds the rendering facts, and `nextStep` is the literal recovery. A rejected
+input carries the same fields in `error.reason`, `error.nextStep` and
+`error.details`.
+
+On macOS, keep the app window visible (not covered, minimized or on another
+Space) while sending input; a covered window stops rendering and every input
+is rejected. For a named macOS session, call `await scout.foreground()` once
+before a burst of input, and again only when a rejection reports
+`rendering_suspended`. It activates only the observed app process and takes
+focus away from the user, so do not call it per tap or in a loop. It waits up
+to 5 seconds for a fresh scene with active rendering, uses normal OS
+activation (not a rendering override) and sends no UI input. A failure names
+its cause, such as `rendering_still_suspended` with the lifecycle and the
+frontmost app: restore the window by hand rather than adding osascript or
+sleeps. It refuses during input or an unread/unknown receipt. A received known
+failure can restore visibility, but still needs explicit reconciliation;
+activation never clears its halt or acknowledges its receipt. Never treat
+activation as save success.
 
 For an authorized time-sensitive response, react can issue one exact observed
 tap or stop future input, bounded to 30 seconds. It cannot invent targets,

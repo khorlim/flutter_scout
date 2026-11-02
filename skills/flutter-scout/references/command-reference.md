@@ -11,8 +11,10 @@ Use the shipped scripts/agent_client.mjs over one persistent JSONL pipe.
 
 - observe(): current revision, view age, screen, exact targets and safety.
 - foreground(): explicit macOS activation of this session's connected app only,
-  followed by fresh observation. Shares the hand; never sends UI input, fakes
-  rendering, acknowledges receipts, or clears a failure halt.
+  then up to 5 seconds of passive observation until rendering is active.
+  Shares the hand and takes focus from the user; never sends UI input, fakes
+  rendering, acknowledges receipts, or clears a failure halt. A failure names
+  its cause in error.reason and the recovery in error.nextStep.
 - query(method, params, args): focused read-only inspect, where, locate, bounds,
   or drag-status. Parameters use camelCase; maxItems is 1..100. inspect accepts
   brief, surface, sections and since. It does not accept depth, maxNodes,

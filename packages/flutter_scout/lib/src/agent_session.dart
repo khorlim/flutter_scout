@@ -7,6 +7,31 @@ typedef AgentAct =
     Future<AgentView> Function(AgentView action, AgentView observed);
 typedef AgentValidate = void Function(AgentView action);
 
+/// A request the session refused before anything was dispatched. [code] is
+/// the specific cause, [nextStep] the literal recovery, and [details] the
+/// structured facts behind it. It stays a [StateError] for existing callers.
+class AgentRejection extends StateError {
+  AgentRejection(
+    this.code,
+    String text, {
+    this.nextStep,
+    this.details = const {},
+  }) : super('$code: $text');
+
+  final String code;
+  final String? nextStep;
+  final AgentView details;
+
+  /// The transport error: still a request rejection, with the cause named.
+  AgentView toError() => {
+    'code': 'agent_request_rejected',
+    'reason': code,
+    'message': message,
+    'nextStep': ?nextStep,
+    if (details.isNotEmpty) 'details': details,
+  };
+}
+
 /// One guarded hand, independent passive eyes, and bounded one-shot reactions.
 /// No routes, app-specific logic, automatic retries, or implicit success waits.
 class AgentSession {
@@ -184,6 +209,7 @@ class AgentSession {
     required this.validate,
     this.interval = const Duration(milliseconds: 250),
     this.maxEvents = 64,
+    this.foregroundAvailable = false,
   }) {
     if (interval <= Duration.zero || maxEvents < 1 || maxEvents > 256) {
       throw ArgumentError('Positive interval and maxEvents 1..256 required');
@@ -195,6 +221,10 @@ class AgentSession {
   final AgentValidate validate;
   final Duration interval;
   final int maxEvents;
+
+  /// Whether explicit native activation exists (a named macOS session), so
+  /// rendering rejections can name `foreground()` as the literal next step.
+  final bool foregroundAvailable;
   final Stopwatch _clock = Stopwatch()..start();
   final List<AgentView> _events = [];
   final Map<String, _ConditionJob> _jobs = {};
@@ -240,10 +270,12 @@ class AgentSession {
   }
 
   AgentView get scene {
-    final blocked = _inputBlockedReason;
+    final blocker = _blocker();
     return {
-      'actionable': blocked == null,
-      'inputBlockedReason': blocked,
+      'actionable': blocker == null,
+      'inputBlockedReason': _inputBlockedReason,
+      // Why input is refused right now, with the literal next step.
+      'blockedBy': ?blocker,
       ..._sceneBody,
     };
   }
@@ -272,10 +304,19 @@ class AgentSession {
     }
     await observe();
     _schedule();
-    return {
-      'ok': _view?['ok'] == true && _halt == null,
+    return _response(_view?['ok'] == true && _halt == null, {
       'agentProtocol': 2,
-      ...scene,
+    });
+  }
+
+  /// An unsuccessful response names its cause instead of a generic failure.
+  AgentView _response(bool ok, [AgentView extra = const {}]) {
+    final current = scene;
+    return {
+      'ok': ok,
+      ...extra,
+      if (!ok && current['blockedBy'] != null) 'error': current['blockedBy'],
+      ...current,
     };
   }
 
@@ -377,7 +418,7 @@ class AgentSession {
         _evaluateJobs();
       }
       _reading = null;
-      done.complete({'ok': value['ok'] == true && _halt == null, ...scene});
+      done.complete(_response(value['ok'] == true && _halt == null));
     }();
     return done.future;
   }
@@ -424,18 +465,163 @@ class AgentSession {
         'again from the returned scene.',
       );
     }
-    final unsafe = _unsafeReason;
-    if (unsafe == null && _helperCapabilityMissing) {
+    final unavailable = _liveViewBlocker();
+    if (unavailable != null) {
+      throw AgentRejection(
+        unavailable['code'] as String,
+        unavailable['text'] as String,
+        nextStep: unavailable['nextStep'] as String,
+        details: unavailable['details'] as AgentView,
+      );
+    }
+    if (_helperCapabilityMissing) {
       throw StateError(
         'agent_helper_capability_missing: update flutter_scout_helper and fully relaunch for agent input; nothing dispatched',
       );
     }
-    if (unsafe != null) {
-      throw StateError(
-        'agent_live_view_unavailable ($unsafe): restore rendering/check safety; nothing dispatched',
+    return decision!;
+  }
+
+  /// Why the hand refuses input now, or null when it is actionable.
+  AgentView? _blocker() {
+    if (_closed || _halt != null) {
+      return _handUnavailable(_stoppedMessage());
+    }
+    if (_acting != null) {
+      final id = _pendingAction;
+      return _handUnavailable(
+        id == null
+            ? 'agent_hand_busy: foreground activation is in progress; wait '
+                  'for its result'
+            : 'agent_hand_busy: action $id is in flight; consume its receipt '
+                  'with next() first',
       );
     }
-    return decision!;
+    final id = _unacknowledgedAction;
+    if (id != null) {
+      return _handUnavailable(
+        _receiptDelivered
+            ? "agent_receipt_required: call acknowledge('$id') before another input"
+            : "agent_receipt_required: consume action $id's receipt with next(), then acknowledge('$id')",
+      );
+    }
+    final unavailable = _liveViewBlocker();
+    if (unavailable == null) {
+      if (!_helperCapabilityMissing) return null;
+      return {
+        'code': 'agent_helper_capability_missing',
+        'reason': 'helper_capability_missing',
+        'message':
+            'agent_helper_capability_missing: the app helper lacks '
+            '${_view?['missingHelperCapabilities']}',
+        'nextStep': 'update flutter_scout_helper and fully relaunch the app',
+      };
+    }
+    return {
+      'code': unavailable['code'],
+      'reason': unavailable['reason'],
+      'message': '${unavailable['code']}: ${unavailable['text']}',
+      'nextStep': unavailable['nextStep'],
+      'details': unavailable['details'],
+    };
+  }
+
+  /// A closed, stopped, busy or receipt-bound hand. Each [message] starts
+  /// with its specific reason, which the stable code keeps as `reason`.
+  AgentView _handUnavailable(String message) => {
+    'code': 'agent_hand_unavailable',
+    'reason': message.substring(0, message.indexOf(':')),
+    'message': message,
+    if (_halt != null) 'details': {'halted': _halt},
+  };
+
+  /// The literal next step when rendering, not safety, blocks input.
+  String get _restoreRendering => foregroundAvailable
+      ? 'call await scout.foreground() once (it activates this app and takes '
+            'focus from the user), keep the window uncovered, then decide '
+            'from its returned scene'
+      : 'make the app visible on its device or simulator (not covered, '
+            'minimized or locked), then observe() again';
+
+  /// The first unproven live-input precondition as code, reason, text,
+  /// literal next step and structured facts; null when the view is live and
+  /// safe. Facts are copied from the observation, never inferred.
+  AgentView? _liveViewBlocker() {
+    if (_safe) return null;
+    final view = _view;
+    final rendering = view?['rendering'] as Map?;
+    final signals = view?['activeBlockingSignals'] as List? ?? const [];
+    final errors = view?['errorsSinceCursor'] as List? ?? const [];
+    final facts = <String, dynamic>{
+      'rendering': {
+        for (final key in const [
+          'status',
+          'framesEnabled',
+          'lifecycle',
+          'lastFrameworkFrameAgeMs',
+        ])
+          key: rendering?[key],
+      },
+      'foregroundAvailable': foregroundAvailable,
+      if (foregroundAvailable) 'platform': 'macos',
+      'safetyEvidenceStatus': view?['safetyEvidenceStatus'],
+      'activeBlockingSignalCount': signals.length,
+      'errorsSinceCursorCount': errors.length,
+    };
+    AgentView blocked(String reason, String text, String nextStep) => {
+      'code': 'agent_live_view_unavailable',
+      'reason': reason,
+      'text': '$text Nothing dispatched.',
+      'nextStep': nextStep,
+      'details': {'reason': reason, ...facts},
+    };
+    if (view?['ok'] != true) {
+      return blocked(
+        'observation_unavailable',
+        'No current protocol-valid observation of the app exists.',
+        'check the app with status, then close() and reconnect',
+      );
+    }
+    if (!_live) {
+      return blocked(
+        'rendering_suspended',
+        'Rendering is not active (status ${rendering?['status']}, '
+            'framesEnabled ${rendering?['framesEnabled']}, lifecycle '
+            '${rendering?['lifecycle']}, last framework frame '
+            '${rendering?['lastFrameworkFrameAgeMs']} ms ago), so the app '
+            'window is probably minimized, hidden or fully covered.',
+        _restoreRendering,
+      );
+    }
+    if (signals.isNotEmpty) {
+      final codes = [
+        for (final signal in signals.take(5))
+          signal is Map ? signal['code'] ?? signal['kind'] : signal,
+      ];
+      return blocked(
+        'blocking_signals',
+        'Rendering is active, but the app reports active blocking signals '
+            '$codes.',
+        'inspect scene.view.activeBlockingSignals and resolve them in the '
+            'app (Scout never overrides safety), then observe() again',
+      );
+    }
+    if (errors.isNotEmpty) {
+      return blocked(
+        'app_errors',
+        'Rendering is active, but ${errors.length} app error(s) were observed '
+            'since the error cursor.',
+        'inspect scene.view.errorsSinceCursor, fix or reload the app, then '
+            'observe() again',
+      );
+    }
+    return blocked(
+      'safety_evidence_incomplete',
+      'Rendering is active, but safety evidence is '
+          '${view?['safetyEvidenceStatus']}, not complete.',
+      'observe() again or narrow the screen; Scout never acts on incomplete '
+          'safety evidence',
+    );
   }
 
   bool get _knownFailure =>
@@ -468,43 +654,128 @@ class AgentSession {
   }
 
   /// Explicit native activation shares the hand, without fabricating frames
-  /// or acknowledging an outstanding input receipt.
-  Future<AgentView> foreground(Future<void> Function() activate) async {
+  /// or acknowledging an outstanding input receipt. After activation it
+  /// waits, bounded by [wait], for a fresh passive observation that reports
+  /// active rendering; Scout never pumps frames or retries activation. On
+  /// failure, [diagnose] may add cheap native facts (such as the frontmost
+  /// app) so the error names the cause.
+  Future<AgentView> foreground(
+    Future<void> Function() activate, {
+    Future<AgentView> Function()? diagnose,
+    Duration wait = const Duration(seconds: 5),
+  }) async {
     final knownFailure = _halt == 'agent_action_failed' && _knownFailure;
     if (_closed ||
         (_halt != null && !knownFailure) ||
         _acting != null ||
         (_unacknowledgedAction != null && !knownFailure) ||
         _view?['ok'] != true) {
-      throw StateError('Reconcile the existing hand before activating its app');
+      final blocker = _blocker();
+      throw AgentRejection(
+        'agent_foreground_unavailable',
+        'foreground needs a free hand and a valid observation; '
+            '${blocker?['message'] ?? 'no valid observation exists'}. No '
+            'activation was requested.',
+        nextStep: 'follow the blocking reason first',
+      );
     }
+    bool stopped() =>
+        _closed ||
+        (_halt != null && (!knownFailure || _halt != 'agent_action_failed'));
     final done = Completer<void>();
     _acting = done.future;
+    final started = _clock.elapsedMilliseconds;
+    AgentView facts = const {};
     try {
       await activate();
-      final deadline = DateTime.now().add(const Duration(seconds: 2));
-      do {
+      // A read already in flight may predate activation: only a read that
+      // starts afterwards can prove the activated state.
+      await _reading;
+      while (!stopped()) {
         await observe();
         if (_live ||
-            _closed ||
-            (_halt != null &&
-                (!knownFailure || _halt != 'agent_action_failed'))) {
+            stopped() ||
+            _clock.elapsedMilliseconds - started >= wait.inMilliseconds) {
           break;
         }
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      } while (DateTime.now().isBefore(deadline));
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      if (!_live && !stopped() && diagnose != null) {
+        try {
+          facts = await diagnose();
+        } catch (_) {
+          facts = const {'frontmostApp': null};
+        }
+      }
     } finally {
       _acting = null;
       done.complete();
     }
+    final ok = _safe && !stopped();
     return {
-      'ok':
-          _safe &&
-          !_closed &&
-          (_halt == null || (knownFailure && _halt == 'agent_action_failed')),
+      'ok': ok,
       'foregroundRequested': true,
       'inputDispatched': false,
+      if (!ok)
+        'error': _foregroundError(
+          facts,
+          _clock.elapsedMilliseconds - started,
+          stopped(),
+        ),
       ...scene,
+    };
+  }
+
+  /// A failed activation names its cause and the next step, never a
+  /// generic failure, and never suggests a retry loop.
+  AgentView _foregroundError(AgentView facts, int waitedMs, bool stopped) {
+    if (stopped) {
+      final error = _handUnavailable(_stoppedMessage());
+      return {
+        ...error,
+        'details': {'halted': _halt, 'activationRequested': true},
+      };
+    }
+    final unavailable = _liveViewBlocker()!;
+    final details = <String, dynamic>{
+      ...unavailable['details'] as AgentView,
+      'activationRequested': true,
+      'waitedMs': waitedMs,
+      ...facts,
+    };
+    if (_live) {
+      // Rendering resumed; safety, not visibility, still blocks input.
+      return {
+        'code': unavailable['code'],
+        'reason': unavailable['reason'],
+        'message': '${unavailable['code']}: ${unavailable['text']}',
+        'nextStep': unavailable['nextStep'],
+        'details': details,
+      };
+    }
+    final rendering = _view?['rendering'] as Map?;
+    final frontmost = facts['frontmostApp'];
+    final cause = facts['frontmostIsTarget'] == false
+        ? 'macOS kept "$frontmost" frontmost, so this app was not brought '
+              'forward (macOS can decline activation requested by a '
+              'background process, or another app took focus).'
+        : facts['frontmostIsTarget'] == true
+        ? 'The app is frontmost, so its window is probably minimized, on '
+              'another Space or display, or covered by another window.'
+        : 'The frontmost app could not be determined.';
+    details['reason'] = 'rendering_still_suspended';
+    return {
+      'code': 'agent_live_view_unavailable',
+      'reason': 'rendering_still_suspended',
+      'message':
+          'agent_live_view_unavailable: activation was requested, but after '
+          '$waitedMs ms rendering is still ${rendering?['status']} (lifecycle '
+          '${rendering?['lifecycle']}, framesEnabled '
+          '${rendering?['framesEnabled']}). $cause Nothing dispatched.',
+      'nextStep':
+          'restore and uncover the app window by hand (Dock or Mission '
+          'Control), then observe() again; do not loop foreground()',
+      'details': details,
     };
   }
 
@@ -640,8 +911,9 @@ class AgentSession {
         ? 'viewRevision $revision is not a fresh observation after the '
               'receipt; $retry'
         : !_safe
-        ? 'rendering is not active and safe; restore visibility '
-              '(foreground() on macOS), then $retry'
+        ? 'the live view is unavailable '
+              '(${_liveViewBlocker()!['reason']}); '
+              '${_liveViewBlocker()!['nextStep']}, then $retry'
         : null;
     if (problem != null) {
       throw StateError('agent_reconciliation_unavailable: $problem');

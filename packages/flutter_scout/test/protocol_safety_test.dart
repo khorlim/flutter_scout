@@ -179,6 +179,123 @@ void main() {
       timeout: const Timeout(Duration(minutes: 1)),
     );
 
+    test(
+      'agent JSONL names suspended rendering and its next step, never command_failed',
+      () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        fake.preflightExtra = <String, Object?>{
+          'capabilities': <String, bool>{
+            ...fake._capabilities(),
+            'liveRenderingGuardV1': true,
+          },
+          'screen': 'home',
+          'safetyEvidenceStatus': 'complete',
+          'rendering': const <String, Object?>{
+            'status': 'suspended',
+            'framesEnabled': false,
+            'lifecycle': 'hidden',
+            'lastFrameworkFrameAgeMs': 13897,
+          },
+          'visibleText': const <String>['Home'],
+          'interactables': const <Object?>[
+            <String, Object?>{'id': 'btn.save'},
+          ],
+        };
+
+        await _withProtocolSession(fake.uri, () async {
+          final process = await Process.start(Platform.resolvedExecutable, <
+            String
+          >[
+            '--packages=${p.join(packageRoot, '.dart_tool', 'package_config.json')}',
+            p.join(packageRoot, 'bin', 'flutter_scout.dart'),
+            'agent',
+            '--interval-ms',
+            '10000',
+          ], workingDirectory: Directory.current.path);
+          final lines = StreamIterator<String>(
+            process.stdout
+                .transform(utf8.decoder)
+                .transform(const LineSplitter()),
+          );
+          addTearDown(() async {
+            process.kill();
+            await process.exitCode.timeout(
+              const Duration(seconds: 5),
+              onTimeout: () => -1,
+            );
+          });
+
+          final ready = await _nextAgentMessage(lines);
+          expect(ready['ok'], isTrue, reason: jsonEncode(ready));
+          expect(ready['actionable'], isFalse);
+          final blocked = ready['blockedBy'] as Map;
+          expect(blocked['code'], 'agent_live_view_unavailable');
+          expect(blocked['reason'], 'rendering_suspended');
+          expect(blocked['message'], contains('lifecycle hidden'));
+          // No device file: not a named macOS session, so no foreground().
+          expect(blocked['nextStep'], contains('make the app visible'));
+          expect((blocked['details'] as Map)['foregroundAvailable'], isFalse);
+
+          process.stdin.writeln(
+            jsonEncode(<String, Object?>{
+              'id': 'blocked-start',
+              'method': 'start',
+              'viewRevision': ready['viewRevision'],
+              'action': <String, Object?>{
+                'method': 'tap',
+                'args': <String>['btn.save'],
+              },
+            }),
+          );
+          final rejected = await _nextAgentMessage(lines);
+          expect(rejected['ok'], isFalse);
+          expect(rejected['dispatch'], 'not_dispatched');
+          final error = rejected['error'] as Map;
+          expect(error['code'], 'agent_request_rejected');
+          expect(error['reason'], 'agent_live_view_unavailable');
+          expect(error['nextStep'], contains('make the app visible'));
+          expect(
+            error['details'],
+            allOf(
+              containsPair('reason', 'rendering_suspended'),
+              containsPair('rendering', <String, Object?>{
+                'status': 'suspended',
+                'framesEnabled': false,
+                'lifecycle': 'hidden',
+                'lastFrameworkFrameAgeMs': 13897,
+              }),
+            ),
+          );
+
+          process.stdin.writeln(
+            jsonEncode(const <String, Object?>{
+              'id': 'foreground-elsewhere',
+              'method': 'foreground',
+            }),
+          );
+          final foreground = await _nextAgentMessage(lines);
+          expect(foreground['ok'], isFalse);
+          expect(
+            (foreground['error'] as Map)['reason'],
+            'agent_foreground_unsupported',
+          );
+          expect(jsonEncode(foreground), isNot(contains('command_failed')));
+          expect(fake.dispatchCount, 0);
+
+          process.stdin.writeln(
+            jsonEncode(const <String, Object?>{
+              'id': 'close-agent',
+              'method': 'close',
+            }),
+          );
+          expect((await _nextAgentMessage(lines))['type'], 'closed');
+          await process.stdin.close();
+        });
+      },
+      timeout: const Timeout(Duration(minutes: 1)),
+    );
+
     for (final mode in ['active', 'suspended', 'old-helper']) {
       test('agent rendering preflight: $mode', () async {
         final fake = await _FakeVmService.start();

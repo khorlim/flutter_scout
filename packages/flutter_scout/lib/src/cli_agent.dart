@@ -66,20 +66,40 @@ extension _CliAgent on FlutterScoutCli {
     }..remove('result');
   }
 
-  Future<void> _foregroundAgentApp() async {
+  /// Requests native activation of the connected VM's macOS app and returns
+  /// its PID. Each refusal names its cause; no UI input is ever sent.
+  Future<int> _foregroundAgentApp() async {
+    const noInput = 'No activation took effect and no UI input was sent.';
     if (!Platform.isMacOS || _readDevice() != 'macos') {
-      throw StateError('foreground is supported only for a named macOS app');
+      throw AgentRejection(
+        'agent_foreground_unsupported',
+        'foreground exists only for a named macOS session. $noInput',
+        nextStep: 'make the app visible on its device, then observe() again',
+      );
     }
     final service = _cachedVmService;
-    if (service == null) throw StateError('No observed runtime connection');
-    final vm = await service.getVM().timeout(const Duration(seconds: 5));
-    final processId = vm.pid;
+    int? processId;
+    try {
+      processId = service == null
+          ? null
+          : (await service.getVM().timeout(const Duration(seconds: 5))).pid;
+    } catch (_) {
+      processId = null;
+    }
     final command = processId == null ? null : await _processCommand(processId);
     if (processId == null ||
         processId <= 0 ||
         command == null ||
         !command.contains('.app/Contents/MacOS/')) {
-      throw StateError('The observed VM is not an identifiable macOS app');
+      throw AgentRejection(
+        'agent_foreground_app_unidentifiable',
+        'the connected VM did not report the PID of a running macOS .app '
+            'bundle, so Scout cannot activate it safely. $noInput',
+        nextStep:
+            'check the session with status; bring the app forward by '
+            'hand if it is still running',
+        details: {'vmPidReported': processId != null},
+      );
     }
     // PID comes from the connected VM, never from a caller-selected app name.
     // NSRunningApplication activates an existing app only; no launch, input,
@@ -88,10 +108,9 @@ extension _CliAgent on FlutterScoutCli {
 ObjC.import('AppKit');
 function run(argv) {
   var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(argv[0]));
-  if (!app || app.isTerminated) throw new Error('Observed app is no longer running');
+  if (!app || app.isNil() || app.isTerminated) return 'not-running';
   app.unhide;
-  if (!app.activateWithOptions(3)) throw new Error('macOS refused activation');
-  return 'activation-requested';
+  return app.activateWithOptions(3) ? 'activation-requested' : 'refused';
 }
 ''';
     final result = await _runBoundedNativeProcess(
@@ -101,12 +120,71 @@ function run(argv) {
       maxStdoutBytes: 1024,
       maxStderrBytes: 1024,
     );
-    if (result.exitCode != 0 ||
-        result.timedOut ||
-        result.outputExceeded ||
-        result.stdoutText.trim() != 'activation-requested') {
-      throw StateError('Native app activation failed; no UI input was sent');
+    final status = result.stdoutText.trim();
+    if (result.exitCode == 0 &&
+        !result.timedOut &&
+        !result.outputExceeded &&
+        status == 'activation-requested') {
+      return processId;
     }
+    final details = {'pid': processId, 'osascriptStatus': status};
+    if (status == 'not-running') {
+      throw AgentRejection(
+        'agent_foreground_app_not_running',
+        'macOS reports no running app for the connected VM PID $processId. '
+            '$noInput',
+        nextStep: 'check the session with status before any further input',
+        details: details,
+      );
+    }
+    if (status == 'refused') {
+      throw AgentRejection(
+        'agent_foreground_activation_refused',
+        'macOS refused to activate the app (PID $processId). $noInput',
+        nextStep: 'bring the app window forward by hand, then observe() again',
+        details: details,
+      );
+    }
+    throw AgentRejection(
+      'agent_foreground_activation_failed',
+      'the native activation helper failed (exit ${result.exitCode}, '
+          'timedOut ${result.timedOut}). $noInput',
+      nextStep: 'bring the app window forward by hand, then observe() again',
+      details: {...details, 'exitCode': result.exitCode},
+    );
+  }
+
+  /// The frontmost macOS app after a foreground wait, read passively from
+  /// NSWorkspace, so a failure can say who holds focus. Best effort.
+  Future<Map<String, dynamic>> _frontmostMacApp(int? targetPid) async {
+    const script = r'''
+ObjC.import('AppKit');
+function run() {
+  var app = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+  if (!app || app.isNil()) return '{}';
+  return JSON.stringify({pid: app.processIdentifier, name: ObjC.unwrap(app.localizedName)});
+}
+''';
+    final result = await _runBoundedNativeProcess(
+      '/usr/bin/osascript',
+      ['-l', 'JavaScript', '-e', script],
+      timeout: const Duration(seconds: 2),
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+    );
+    Object? decoded;
+    try {
+      decoded = result.exitCode == 0 ? jsonDecode(result.stdoutText) : null;
+    } on FormatException {
+      decoded = null;
+    }
+    final pid = decoded is Map ? decoded['pid'] : null;
+    final name = decoded is Map ? decoded['name'] : null;
+    return {
+      'frontmostApp': name is String ? name : null,
+      if (pid is int && targetPid != null)
+        'frontmostIsTarget': pid == targetPid,
+    };
   }
 
   Future<int> _agent(List<String> args) async {
@@ -176,6 +254,7 @@ function run(argv) {
 
       session = AgentSession(
         interval: Duration(milliseconds: interval),
+        foregroundAvailable: Platform.isMacOS && _readDevice() == 'macos',
         validate: _validateAgentAction,
         read: () async {
           final Map<String, dynamic> raw;
@@ -278,7 +357,11 @@ function run(argv) {
           final AgentView result;
           switch (method) {
             case 'foreground':
-              result = await session.foreground(observer._foregroundAgentApp);
+              int? activatedPid;
+              result = await session.foreground(
+                () async => activatedPid = await observer._foregroundAgentApp(),
+                diagnose: () => observer._frontmostMacApp(activatedPid),
+              );
             case 'query':
               final query = object('query');
               if (!const {
@@ -361,10 +444,13 @@ function run(argv) {
             'id': id,
             'ok': false,
             'dispatch': 'not_dispatched',
-            'error': {
-              'code': 'agent_request_rejected',
-              'message': error.toString(),
-            },
+            // A named rejection keeps its cause, next step and facts.
+            'error': error is AgentRejection
+                ? error.toError()
+                : {
+                    'code': 'agent_request_rejected',
+                    'message': error.toString(),
+                  },
             'retry': 'never_automatic',
             // The current scene lets one fresh decision follow a rejected
             // hand request without another round trip. It is not a retry.

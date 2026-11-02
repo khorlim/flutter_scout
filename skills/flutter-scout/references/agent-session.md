@@ -8,6 +8,33 @@ normal native macOS activation for this session's observed VM process only.
 It shares the hand, preserves unresolved receipts/halts, sends no UI input,
 and returns a freshly observed scene. It never automatically steals focus.
 
+## macOS visibility and foreground()
+
+A macOS Flutter window that is covered, minimized or on another Space stops
+rendering, and the guard then rejects every input with
+`error.reason:'agent_live_view_unavailable'`. Keep the window visible while
+sending input. Other apps (for example several worktree builds running at
+once) can take focus and cover it again.
+
+- `scene.blockedBy` (present only when `actionable:false`) and every input
+  rejection carry `reason`, `message`, `nextStep` and `details`. Live-view
+  reasons are `rendering_suspended`, `blocking_signals`, `app_errors`,
+  `safety_evidence_incomplete` and `observation_unavailable`; details hold
+  `rendering.status`, `framesEnabled`, `lifecycle`,
+  `lastFrameworkFrameAgeMs`, `foregroundAvailable` and safety counts. A
+  stopped, busy or receipt-bound hand uses `code:'agent_hand_unavailable'`.
+- Call `await scout.foreground()` once before a burst of input and again only
+  when a rejection reports `rendering_suspended`. It takes focus away from
+  the user, so never call it per action or in a retry loop.
+- foreground() polls passive observations for up to 5 seconds until rendering
+  is active. It never pumps frames. On failure it returns `ok:false` with
+  `error.reason`, for example `rendering_still_suspended` (with lifecycle,
+  `frontmostApp` and `frontmostIsTarget`) or a request rejection such as
+  `agent_foreground_activation_refused`, `agent_foreground_app_unidentifiable`,
+  `agent_foreground_app_not_running` or `agent_foreground_unsupported`.
+  Follow `nextStep`: restore the window by hand instead of adding osascript
+  activation or sleeps.
+
 ## Client
 
 Import the shipped `scripts/agent_client.mjs` from this skill's directory in a

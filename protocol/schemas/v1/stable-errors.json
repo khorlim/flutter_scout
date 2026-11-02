@@ -80,6 +80,10 @@
       "meaning": "An agent action lost its authoritative result; reconcile state without automatic retry.",
       "family": "operation"
     },
+    "agent_hand_unavailable": {
+      "meaning": "The agent hand is closed, stopped, busy or awaiting a receipt; reason names which and the message gives the literal recovery. Nothing was dispatched.",
+      "family": "request_rejected"
+    },
     "agent_helper_capability_missing": {
       "meaning": "The running helper lacks the rendering guard agent input requires; update the helper and relaunch. No input was dispatched.",
       "family": "request_rejected"
