@@ -653,11 +653,30 @@ class FlutterScoutRuntime {
   /// Test-only: resolve and dispatch a handle-targeted tap through the same
   /// service-extension handler used by the CLI.
   @visibleForTesting
-  Future<Map<String, Object?>> debugTapTarget(String target) async {
+  Future<Map<String, Object?>> debugTapTarget(
+    String target, {
+    String? button,
+  }) async {
     final response = await _handleTap('debugTapTarget', {
       'target': target,
       'waitMs': '0',
       'lateWaitMs': '0',
+      'button': ?button,
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test-only: resolve and long-press a handle through the production
+  /// extension handler.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugLongPressTarget(
+    String target, {
+    int durationMs = 600,
+  }) async {
+    final response = await _handleLongPress('debugLongPressTarget', {
+      'target': target,
+      'durationMs': '$durationMs',
+      'waitMs': '0',
     });
     return jsonDecode(response.result!) as Map<String, Object?>;
   }

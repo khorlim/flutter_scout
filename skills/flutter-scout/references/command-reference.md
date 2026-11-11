@@ -36,6 +36,7 @@ Use the shipped scripts/agent_client.mjs over one persistent JSONL pipe.
 
 Actions: tap, tap-text, long-press, input, fill, scroll, swipe, scroll-to,
 reveal, back, dismiss, drag-start, drag-move, drag-end, drag-cancel, deeplink.
+`tap` takes `params.button: 'secondary'` for a mouse right click.
 Action parameters remain typed; no expect*, waitMs, allowErrors, file/stdin
 source flags, verbose or automatic image capture. Text/input values travel in
 the JSON pipe, not shell argv. Native deep links remain capability-gated.

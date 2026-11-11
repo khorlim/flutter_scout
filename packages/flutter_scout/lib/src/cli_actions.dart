@@ -309,6 +309,8 @@ extension _CliActions on FlutterScoutCli {
     final parser = ArgParser()
       ..addOption('x')
       ..addOption('y')
+      // `secondary` is a mouse right click, for desktop context menus.
+      ..addOption('button', allowed: const ['primary', 'secondary'])
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('verbose', defaultsTo: false);
     _addExpectOptions(parser);
@@ -359,6 +361,8 @@ extension _CliActions on FlutterScoutCli {
     if (resolvedY != null) {
       params['y'] = resolvedY;
     }
+    final button = parsed.option('button');
+    if (button != null && button != 'primary') params['button'] = button;
     return _callAndPrint(
       'ext.flutter_scout.tap',
       params: params,

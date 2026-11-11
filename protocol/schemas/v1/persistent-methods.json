@@ -29,7 +29,7 @@
     "scroll-to": ["allowErrors", "direction", "distance", "maxScrolls", "verbose"],
     "status": [],
     "swipe": ["allowErrors", "distance", "from", "target", "to", "verbose", "x", "y"],
-    "tap": ["allowErrors", "assertNoErrors", "capture", "expectField", "expectGone", "expectLog", "expectScreen", "expectSelected", "expectTarget", "expectText", "expectTimeout", "expectView", "rejectLog", "verbose", "waitMs", "x", "y"],
+    "tap": ["allowErrors", "assertNoErrors", "button", "capture", "expectField", "expectGone", "expectLog", "expectScreen", "expectSelected", "expectTarget", "expectText", "expectTimeout", "expectView", "rejectLog", "verbose", "waitMs", "x", "y"],
     "tap-text": ["allowErrors", "allowMismatch", "assertNoErrors", "capture", "contains", "expectField", "expectGone", "expectLog", "expectScreen", "expectSelected", "expectTarget", "expectText", "expectTimeout", "expectView", "rejectLog", "text", "verbose", "waitMs"],
     "wait": ["timeout", "verbose"],
     "where": ["maxResponseBytes"],

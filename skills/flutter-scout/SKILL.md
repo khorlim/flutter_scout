@@ -102,6 +102,10 @@ for a target; scout.query('inspect', {sections: 'interactables,scrollables',
 maxItems: 100}) for selected detail. Query is read-only, not permission to act
 on stale geometry: observe again and decide from the current scene.
 
+Context menus: `{method:'long-press', args:[handle]}` presses and holds, and
+`{method:'tap', args:[handle], params:{button:'secondary'}}` is a mouse right
+click (desktop `onSecondaryTap*` menus). Read the menu from the next scene.
+
 Prefer exact observed handles, then unique visible text. Ambiguity requires
 focused discovery, not another guess. For forms, `fill` takes an observed
 field-to-value map: `{method:'fill', params:{json:{[fieldHandle]:value}}}`.
@@ -148,10 +152,15 @@ input carries the same fields in `error.reason`, `error.nextStep` and
 
 On macOS, keep the app window visible (not covered, minimized or on another
 Space) while sending input; a covered window stops rendering and every input
-is rejected. For a named macOS session, call `await scout.foreground()` once
-before a burst of input, and again only when a rejection reports
-`rendering_suspended`. It activates only the observed app process and takes
-focus away from the user, so do not call it per tap or in a loop. It waits up
+is rejected. Focus is not needed: a partly visible window keeps rendering
+(lifecycle `inactive`) and Scout's input never moves the user's mouse or
+keyboard. When a person is using the Mac, ask them to leave part of the window
+visible (beside their work or on another display) instead of taking focus.
+Only when nobody is using it, call `await scout.foreground()` once before a
+burst of input, and again only when a rejection reports `rendering_suspended`.
+It activates only the observed app process and takes focus away from the
+user, so do not call it per tap or in a loop. A frontmost `loginwindow` means
+the screen is locked; ask the user to unlock it. It waits up
 to 5 seconds for a fresh scene with active rendering, uses normal OS
 activation (not a rendering override) and sends no UI input. A failure names
 its cause, such as `rendering_still_suspended` with the lifecycle and the

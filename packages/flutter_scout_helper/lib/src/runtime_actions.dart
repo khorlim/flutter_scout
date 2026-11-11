@@ -57,13 +57,21 @@ extension _RuntimeActions on FlutterScoutRuntime {
         );
       }
 
-      await _dispatchTap(point);
+      final secondary = params['button'] == 'secondary';
+      if (secondary) {
+        await _dispatchSecondaryTap(point);
+      } else {
+        await _dispatchTap(point);
+      }
       final actionSnapshot = await _snapshotAfterAction(before, params);
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
       return await _respondWithExpectation(params, {
-        'action': 'tap ${target ?? '${point.dx},${point.dy}'}',
+        'action':
+            '${secondary ? 'secondary tap' : 'tap'} '
+            '${target ?? '${point.dx},${point.dy}'}',
+        if (secondary) 'button': 'secondary',
         ..._stabilityResponseFields(actionSnapshot.stability),
         'result': _tapResult(
           changed: changed,

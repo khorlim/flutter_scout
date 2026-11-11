@@ -74,6 +74,12 @@ class AgentSession {
     return switch (action['method']) {
       'tap' ||
       'long-press' when args.length == 1 && params.isEmpty => handles(args),
+      // A right click is still one exact observed handle.
+      'tap'
+          when args.length == 1 &&
+              params.length == 1 &&
+              params['button'] == 'secondary' =>
+        handles(args),
       'input'
           when args.length == 1 &&
               params.length == 1 &&
@@ -536,10 +542,14 @@ class AgentSession {
   };
 
   /// The literal next step when rendering, not safety, blocks input.
+  /// A window that is only partly visible keeps rendering without focus, so
+  /// a person using the machine can leave it where they can see it rather
+  /// than lose focus to foreground().
   String get _restoreRendering => foregroundAvailable
-      ? 'call await scout.foreground() once (it activates this app and takes '
-            'focus from the user), keep the window uncovered, then decide '
-            'from its returned scene'
+      ? 'leave part of the app window visible (not minimized, fully covered '
+            'or on another Space; it renders without focus), then observe() '
+            'again; only when nobody is using this Mac, call await '
+            'scout.foreground() once (it takes focus from the user)'
       : 'make the app visible on its device or simulator (not covered, '
             'minimized or locked), then observe() again';
 
@@ -755,7 +765,13 @@ class AgentSession {
     }
     final rendering = _view?['rendering'] as Map?;
     final frontmost = facts['frontmostApp'];
-    final cause = facts['frontmostIsTarget'] == false
+    // macOS reports loginwindow while the screen is locked or asleep; no app
+    // can render then, and no activation will change that.
+    final locked = frontmost == 'loginwindow';
+    final cause = locked
+        ? 'The Mac\'s screen is locked or at the login window ("loginwindow" '
+              'is frontmost), so no app window can render.'
+        : facts['frontmostIsTarget'] == false
         ? 'macOS kept "$frontmost" frontmost, so this app was not brought '
               'forward (macOS can decline activation requested by a '
               'background process, or another app took focus).'
@@ -772,9 +788,11 @@ class AgentSession {
           '$waitedMs ms rendering is still ${rendering?['status']} (lifecycle '
           '${rendering?['lifecycle']}, framesEnabled '
           '${rendering?['framesEnabled']}). $cause Nothing dispatched.',
-      'nextStep':
-          'restore and uncover the app window by hand (Dock or Mission '
-          'Control), then observe() again; do not loop foreground()',
+      'nextStep': locked
+          ? 'ask the user to unlock the Mac and leave part of the app window '
+                'visible, then observe() again; do not loop foreground()'
+          : 'restore and uncover the app window by hand (Dock or Mission '
+                'Control), then observe() again; do not loop foreground()',
       'details': details,
     };
   }

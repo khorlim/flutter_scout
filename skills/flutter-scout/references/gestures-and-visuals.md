@@ -18,6 +18,8 @@ Examples of action objects (targets must come from the actual current scene):
 ```js
 { method: 'tap', args: [observedHandle] }               // tap by handle
 { method: 'tap', params: { x: 120, y: 340 } }           // tap by logical point
+{ method: 'tap', args: [observedHandle], params: { button: 'secondary' } } // right click
+{ method: 'long-press', args: [observedHandle] }        // press and hold
 { method: 'input', args: [value], params: { target: observedField } }
 { method: 'scroll', args: ['down'], params: { target: observedScroll, distance: 400 } }
 { method: 'swipe', args: ['left'], params: { target: observedHandle, distance: 300 } }

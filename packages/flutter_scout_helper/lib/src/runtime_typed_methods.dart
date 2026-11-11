@@ -764,6 +764,12 @@ final Map<String, _HelperMethodContract> _helperMethodContracts =
         operation: 'mutation',
         parameters: <String, _HelperParameterContract>{
           ..._helperExpectationParameters(),
+          // `secondary` is a mouse right click, for desktop context menus.
+          'button': const _HelperParameterContract(
+            kind: _HelperValueKind.string,
+            allowedValues: <String>['primary', 'secondary'],
+            defaultValue: 'primary',
+          ),
           'lateWaitMs': _helperWaitMs,
           'target': const _HelperParameterContract(
             kind: _HelperValueKind.string,

@@ -305,6 +305,36 @@ void main() {
     },
   );
 
+  test('foreground behind a locked screen says so', () async {
+    final current = view(1, status: 'suspended')
+      ..['rendering'] = {
+        'status': 'suspended',
+        'framesEnabled': false,
+        'lifecycle': 'hidden',
+      };
+    final s = AgentSession(
+      read: () async => current,
+      act: (_, _) async => receipt,
+      validate: (_) {},
+      foregroundAvailable: true,
+    );
+    addTearDown(s.close);
+    await s.open();
+    final result = await s.foreground(
+      () async {},
+      diagnose: () async => {
+        'frontmostApp': 'loginwindow',
+        'frontmostIsTarget': false,
+      },
+      wait: const Duration(milliseconds: 300),
+    );
+    final error = result['error'] as Map;
+    expect(error['reason'], 'rendering_still_suspended');
+    expect(error['message'], contains('screen is locked'));
+    expect(error['nextStep'], contains('unlock the Mac'));
+    expect(s.actions, 0);
+  });
+
   test('foreground on a stopped hand names the blocking cause', () async {
     var current = view(1);
     final s = AgentSession(

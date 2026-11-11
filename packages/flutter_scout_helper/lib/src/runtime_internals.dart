@@ -52,15 +52,35 @@ extension _RuntimeInternals on FlutterScoutRuntime {
   Future<void> _dispatchTapWithoutPhaseTiming(Offset point) async =>
       _dispatchPress(point, hold: const Duration(milliseconds: 30));
 
-  Future<void> _dispatchPress(Offset point, {required Duration hold}) =>
-      _inRequestPhaseAsync(
-        'dispatch',
-        () => _dispatchPressWithoutPhaseTiming(point, hold: hold),
-      );
+  /// A right click: a mouse pointer pressing the secondary button, which is
+  /// what desktop context menus (onSecondaryTap*) listen for.
+  Future<void> _dispatchSecondaryTap(Offset point) => _dispatchPress(
+    point,
+    hold: const Duration(milliseconds: 30),
+    kind: PointerDeviceKind.mouse,
+    buttons: kSecondaryMouseButton,
+  );
+
+  Future<void> _dispatchPress(
+    Offset point, {
+    required Duration hold,
+    PointerDeviceKind kind = PointerDeviceKind.touch,
+    int buttons = kPrimaryButton,
+  }) => _inRequestPhaseAsync(
+    'dispatch',
+    () => _dispatchPressWithoutPhaseTiming(
+      point,
+      hold: hold,
+      kind: kind,
+      buttons: buttons,
+    ),
+  );
 
   Future<void> _dispatchPressWithoutPhaseTiming(
     Offset point, {
     required Duration hold,
+    PointerDeviceKind kind = PointerDeviceKind.touch,
+    int buttons = kPrimaryButton,
   }) async {
     final pointer = _nextSyntheticPointer++;
     final viewId = _primaryViewId;
@@ -71,7 +91,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
           pointer: pointer,
           device: pointer,
           position: point,
-          kind: PointerDeviceKind.touch,
+          kind: kind,
           viewId: viewId,
         ),
       );
@@ -80,8 +100,8 @@ extension _RuntimeInternals on FlutterScoutRuntime {
           pointer: pointer,
           device: pointer,
           position: point,
-          kind: PointerDeviceKind.touch,
-          buttons: kPrimaryButton,
+          kind: kind,
+          buttons: buttons,
           viewId: viewId,
         ),
       );
@@ -91,7 +111,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
           pointer: pointer,
           device: pointer,
           position: point,
-          kind: PointerDeviceKind.touch,
+          kind: kind,
           viewId: viewId,
         ),
       );
@@ -100,7 +120,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
           pointer: pointer,
           device: pointer,
           position: point,
-          kind: PointerDeviceKind.touch,
+          kind: kind,
           viewId: viewId,
         ),
       );

@@ -517,15 +517,35 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     }
     if (widget is ActionChip) return widget.onPressed != null;
     if (widget is ListTile) return widget.enabled;
+    // A detector reacts to real pointers through any of its press callbacks,
+    // not only onTap/onLongPress: a row that opens a menu from
+    // onLongPressStart (to place it at the pointer) or onSecondaryTapDown (a
+    // right click) is live, and must not be refused as disabled.
     if (widget is InkWell) {
       return widget.onTap != null ||
+          widget.onTapDown != null ||
+          widget.onTapUp != null ||
           widget.onLongPress != null ||
-          widget.onDoubleTap != null;
+          widget.onDoubleTap != null ||
+          widget.onSecondaryTap != null ||
+          widget.onSecondaryTapDown != null ||
+          widget.onSecondaryTapUp != null;
     }
     if (widget is GestureDetector) {
       return widget.onTap != null ||
+          widget.onTapDown != null ||
+          widget.onTapUp != null ||
           widget.onLongPress != null ||
+          widget.onLongPressDown != null ||
+          widget.onLongPressStart != null ||
+          widget.onLongPressUp != null ||
+          widget.onLongPressEnd != null ||
           widget.onDoubleTap != null ||
+          widget.onSecondaryTap != null ||
+          widget.onSecondaryTapDown != null ||
+          widget.onSecondaryTapUp != null ||
+          widget.onSecondaryLongPress != null ||
+          widget.onSecondaryLongPressStart != null ||
           widget.onPanStart != null ||
           widget.onVerticalDragStart != null ||
           widget.onHorizontalDragStart != null;
@@ -1277,6 +1297,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
           // then what's occluding the text, so borrowing its label is safe.
           if (rect.contains(textRect.center) &&
               textNode.visibleFraction > 0 &&
+              _sameOverlayEntry(node, textNode) &&
               (textNode.hitTestable || _contains(rect, textRect)) &&
               _isUsefulActionLabel(textNode.label!))
             textNode,
@@ -1427,6 +1448,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       for (var j = 0; j < result.length; j++) {
         final candidate = result[j];
         if (candidate.kind != 'btn' || candidate.rect == null) continue;
+        // Overlap alone is not nesting: an open menu or sheet sits over the
+        // list beneath it, and its buttons must not take that list's labels.
+        if (!_sameOverlayEntry(node, candidate)) continue;
         final overlap = _overlapRatio(node.rect!, candidate.rect!);
         if (overlap > bestOverlap) {
           bestOverlap = overlap;
@@ -1469,6 +1493,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
             (other.key != null && other.key!.isNotEmpty);
         if (!labeled) continue;
         if (other.kind != 'btn' && other.kind != 'tap') continue;
+        if (!_sameOverlayEntry(node, other)) continue;
         if (_overlapRatio(node.rect!, other.rect!) >= 0.8) {
           indexesToRemove.add(i);
           break;
@@ -1480,6 +1505,31 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       for (var i = 0; i < result.length; i++)
         if (!indexesToRemove.contains(i)) result[i],
     ];
+  }
+
+  /// Whether two nodes stand on the same overlay entry (one route, dialog,
+  /// menu or sheet). Each entry's content is a direct child of the Overlay's
+  /// theater, so nodes under different children are on different surfaces:
+  /// an open menu over a list must neither merge with the rows beneath it
+  /// nor borrow their text. Without both render objects the old geometric
+  /// rule stands.
+  bool _sameOverlayEntry(ScoutNode a, ScoutNode b) {
+    final first = _overlayEntryRoot(a._renderObject);
+    final second = _overlayEntryRoot(b._renderObject);
+    if (first == null || second == null) return true;
+    return identical(first, second);
+  }
+
+  RenderObject? _overlayEntryRoot(RenderObject? renderObject) {
+    RenderObject? current = renderObject;
+    for (var depth = 0; current != null && depth < 600; depth++) {
+      final parent = current.parent;
+      if (parent != null && parent.runtimeType.toString() == '_RenderTheater') {
+        return current;
+      }
+      current = parent;
+    }
+    return null;
   }
 
   double _overlapRatio(Rect a, Rect b) {

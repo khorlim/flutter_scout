@@ -865,6 +865,11 @@ final Map<String, _TypedMethodContract> _typedMethodContracts =
         ],
         parameters: <String, _TypedValueContract>{
           ..._persistentExpectParameters(),
+          'button': const _TypedValueContract(
+            kind: _TypedJsonKind.string,
+            defaultValue: 'primary',
+            allowedValues: <String>['primary', 'secondary'],
+          ),
           'verbose': _boolFalse,
           'waitMs': _waitMs,
           'x': _coordinate,

@@ -14,7 +14,9 @@ A macOS Flutter window that is covered, minimized or on another Space stops
 rendering, and the guard then rejects every input with
 `error.reason:'agent_live_view_unavailable'`. Keep the window visible while
 sending input. Other apps (for example several worktree builds running at
-once) can take focus and cover it again.
+once) can take focus and cover it again. Focus itself is not needed: a partly
+visible, unfocused window keeps rendering (lifecycle `inactive`), and Scout's
+input goes to Flutter, not to the user's mouse or keyboard.
 
 - `scene.blockedBy` (present only when `actionable:false`) and every input
   rejection carry `reason`, `message`, `nextStep` and `details`. Live-view
@@ -23,7 +25,9 @@ once) can take focus and cover it again.
   `rendering.status`, `framesEnabled`, `lifecycle`,
   `lastFrameworkFrameAgeMs`, `foregroundAvailable` and safety counts. A
   stopped, busy or receipt-bound hand uses `code:'agent_hand_unavailable'`.
-- Call `await scout.foreground()` once before a burst of input and again only
+- When a person is using the Mac, ask them to leave part of the window
+  visible instead of calling foreground(). Only when nobody is using it, call
+  `await scout.foreground()` once before a burst of input and again only
   when a rejection reports `rendering_suspended`. It takes focus away from
   the user, so never call it per action or in a retry loop.
 - foreground() polls passive observations for up to 5 seconds until rendering
@@ -33,7 +37,8 @@ once) can take focus and cover it again.
   `agent_foreground_activation_refused`, `agent_foreground_app_unidentifiable`,
   `agent_foreground_app_not_running` or `agent_foreground_unsupported`.
   Follow `nextStep`: restore the window by hand instead of adding osascript
-  activation or sleeps.
+  activation or sleeps. A frontmost `loginwindow` means the screen is locked
+  or asleep, and no window can render until the user unlocks it.
 
 ## Client
 
