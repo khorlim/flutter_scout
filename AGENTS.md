@@ -36,22 +36,26 @@ not historical command examples in old protocol/evaluation documents.
 ## After pushing changes
 
 Whenever you update Flutter Scout code, docs, or shipped skills and then push those
-changes, update the user's local installation before finishing:
+changes, update the user's local installation before finishing. Installed skills
+live in `/Users/han/.agents/skills/` (`~/.claude/skills/` symlinks to them):
 
 ```bash
 cd /Users/han/flutter_packages/flutter_scout
-cp skills/flutter-scout/SKILL.md /Users/han/.codex/skills/flutter-scout/SKILL.md
-cp skills/flutter-scout-setup/SKILL.md /Users/han/.codex/skills/flutter-scout-setup/SKILL.md
+for s in flutter-scout flutter-scout-setup flutter-scout-annotations; do
+  rsync -a --delete --exclude .flutter_scout "skills/$s/" "/Users/han/.agents/skills/$s/"
+done
 dart pub global activate --source git https://github.com/khorlim/flutter_scout.git --git-path packages/flutter_scout
 ```
 
 Verify the refresh:
 
 ```bash
-diff -u skills/flutter-scout/SKILL.md /Users/han/.codex/skills/flutter-scout/SKILL.md
-diff -u skills/flutter-scout-setup/SKILL.md /Users/han/.codex/skills/flutter-scout-setup/SKILL.md
-test ! -e /Users/han/.codex/skills/ship-sync
-dart pub global list
+for s in flutter-scout flutter-scout-setup flutter-scout-annotations; do
+  diff -rq --exclude .flutter_scout "skills/$s" "/Users/han/.agents/skills/$s"
+done
+test ! -e /Users/han/.agents/skills/ship-sync
+grep resolved-ref ~/.pub-cache/global_packages/flutter_scout/pubspec.lock  # equals pushed HEAD
+git rev-parse HEAD
 flutter-scout --help
 ```
 
