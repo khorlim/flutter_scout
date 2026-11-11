@@ -34,6 +34,12 @@ not start parallel status polling or another launch. Use attach only to
 preserve a human-started app; VM capability URLs must enter through a 0600
 file or stdin, never process arguments. Read the setup skill when needed.
 
+When the final envelope has `helperPin` (status `app_helper_behind`), the app
+pins an older flutter_scout_helper than the installed Scout, so recent helper
+fixes are missing in it. Tell the user and offer to bump the `ref:` in the
+named `appPubspec` to `installedScoutRef` (a change in the app repository),
+then `flutter pub get` and a fresh launch. `cli_behind` means refresh the CLI.
+
 ## One eyes-and-hands connection
 
 Read [agent-session.md](references/agent-session.md) before first use. Import

@@ -787,6 +787,7 @@ extension _CliSession on FlutterScoutCli {
         'vmServiceUri': wsUri,
         'logFile': runLogFile,
         'timing': launchTiming.toJson(completedAt: launchTiming.readyAt),
+        'helperPin': ?_helperPinAdvice(project),
       }, success: ready.ready);
       return ready.ready ? 0 : 1;
     } finally {
@@ -1896,6 +1897,7 @@ extension _CliSession on FlutterScoutCli {
           if (scoutOwned) 'rendererRequest': previousMeta?['rendererRequest'],
           if (ownershipLost) 'sessionOwnershipLost': true,
           'hotUpdate': await _hotUpdateCapability(discovered.uri!),
+          'helperPin': ?_helperPinAdvice(parsed.option('project')!),
         });
         return 0;
       }

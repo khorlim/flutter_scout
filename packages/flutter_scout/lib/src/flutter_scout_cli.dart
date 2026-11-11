@@ -46,6 +46,7 @@ part 'cli_event_journal.dart';
 part 'cli_log_storage.dart';
 part 'cli_macos_launch.dart';
 part 'cli_launch_diagnostics.dart';
+part 'cli_helper_pin.dart';
 
 Map<String, String> _flutterToolEnvironment([
   Map<String, String>? inherited,
@@ -108,6 +109,27 @@ class FlutterScoutCli {
     String method,
     Map<String, dynamic> result,
   ) => _withProtocolDiagnostics(method, result);
+
+  /// Test-only: the helper-pin advice `ensure` would add for [project], read
+  /// from the real lockfiles and pub's git cache.
+  Map<String, Object?>? debugHelperPinAdviceForProject(String project) =>
+      _helperPinAdvice(project);
+
+  /// Test-only access to the launch's helper-pin advice rules.
+  Map<String, Object?>? debugHelperPinAdvice({
+    required String? appLockText,
+    required String? installedLockText,
+    String? appPubspecPath,
+    bool? Function(String older, String newer)? isAncestor,
+    bool? Function(String from, String to)? helperChanged,
+  }) => _helperPinAdviceFrom(
+    helperChanged: helperChanged,
+    appLockText: appLockText,
+    appLockPath: null,
+    appPubspecPath: appPubspecPath,
+    installedLockText: installedLockText,
+    isAncestor: isAncestor ?? (_, _) => null,
+  );
 
   /// Test-only view of the source compatibility contract used by mutation
   /// preflight. This deliberately describes this checkout, not any published
