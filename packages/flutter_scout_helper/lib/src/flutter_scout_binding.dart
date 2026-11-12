@@ -191,6 +191,11 @@ class FlutterScoutRuntime {
   // beneath instead of silently activating Scout's own UI. Human taps are
   // unaffected. A counter, not a bool, so overlapping dispatches compose.
   int _syntheticGestureDepth = 0;
+
+  /// How long the most recent full snapshot took. Large apps take well over
+  /// a second, so post-dispatch waits reserve room for one more before the
+  /// request deadline (see `_settleDeadlineEpochMs`).
+  int _lastSnapshotMs = 0;
   _HeldDragState? _heldDrag;
   Timer? _heldDragExpiry;
 
@@ -662,6 +667,33 @@ class FlutterScoutRuntime {
       'waitMs': '0',
       'lateWaitMs': '0',
       'button': ?button,
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test-only: run `dismiss` through the production handler.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugDismiss() async {
+    final response = await _handleDismiss('debugDismiss', const {
+      'waitMs': '0',
+      'lateWaitMs': '0',
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test-only: tap logical coordinates through the production handler, with
+  /// its settling waits (unlike [debugTapTarget], which skips them).
+  @visibleForTesting
+  Future<Map<String, Object?>> debugTapPoint(
+    Offset point, {
+    int waitMs = 0,
+    int lateWaitMs = 0,
+  }) async {
+    final response = await _handleTap('debugTapPoint', {
+      'x': '${point.dx}',
+      'y': '${point.dy}',
+      'waitMs': '$waitMs',
+      'lateWaitMs': '$lateWaitMs',
     });
     return jsonDecode(response.result!) as Map<String, Object?>;
   }

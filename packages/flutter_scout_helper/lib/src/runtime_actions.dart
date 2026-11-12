@@ -9,6 +9,19 @@ part of 'flutter_scout_binding.dart';
 enum _FrameAdvancePolicy { observeOnly, mutationSettling }
 
 extension _RuntimeActions on FlutterScoutRuntime {
+  /// Time a mutation reply still needs after its waits end: a final snapshot,
+  /// the delta and serialization. In a large app one snapshot alone can take
+  /// over a second.
+  int get _postWaitReserveMs => math.max(400, _lastSnapshotMs * 2 + 250);
+
+  /// The request deadline less [_postWaitReserveMs]: post-dispatch waits stop
+  /// here, so a slow app cannot push the reply past the caller's VM-call
+  /// deadline and turn a dispatched input into an unknown outcome.
+  int? get _settleDeadlineEpochMs {
+    final deadline = _requestContext?.deadlineEpochMs;
+    return deadline == null ? null : deadline - _postWaitReserveMs;
+  }
+
   Future<developer.ServiceExtensionResponse> _handleTap(
     String method,
     Map<String, String> params,
@@ -1301,6 +1314,45 @@ extension _RuntimeActions on FlutterScoutRuntime {
   /// showDialog/showModalBottomSheet/pushed screens); if nothing pops (a
   /// custom OverlayEntry modal), taps a close-like control (xmark/close/
   /// cancel/back). Reports which strategy worked.
+  static const _contextToolbarTypes = {
+    AdaptiveTextSelectionToolbar,
+    TextSelectionToolbar,
+    DesktopTextSelectionToolbar,
+    CupertinoAdaptiveTextSelectionToolbar,
+    CupertinoTextSelectionToolbar,
+    CupertinoDesktopTextSelectionToolbar,
+  };
+
+  /// A text-selection toolbar or context menu is open: one of the framework
+  /// toolbars that default and adaptive context menus are built from is
+  /// mounted.
+  bool _contextMenuShown(Element root) {
+    var shown = false;
+    void visit(Element element) {
+      if (shown) return;
+      if (_contextToolbarTypes.contains(element.widget.runtimeType)) {
+        shown = true;
+        return;
+      }
+      element.visitChildElements(visit);
+    }
+
+    visit(root);
+    return shown;
+  }
+
+  void _closeContextMenus(Element root) {
+    ContextMenuController.removeAny();
+    void visit(Element element) {
+      if (element is StatefulElement && element.state is EditableTextState) {
+        (element.state as EditableTextState).hideToolbar();
+      }
+      element.visitChildElements(visit);
+    }
+
+    visit(root);
+  }
+
   Future<developer.ServiceExtensionResponse> _handleDismiss(
     String method,
     Map<String, String> params,
@@ -1311,17 +1363,33 @@ extension _RuntimeActions on FlutterScoutRuntime {
       if (rootContext == null) {
         return _fail('no_root', 'No root element is attached.');
       }
+      // A context menu or text-selection toolbar (ContextMenuController) is
+      // an overlay over the current route, not a route: close it first, as
+      // Escape does, rather than popping the screen beneath it.
+      final closedContextMenu = _contextMenuShown(rootContext);
+      if (closedContextMenu) {
+        await _inRequestPhaseAsync<void>(
+          'dispatch',
+          () async => _closeContextMenus(rootContext),
+        );
+      }
       final navigator =
           _findViewportModalNavigator(rootContext) ??
           _findActiveNavigator(rootContext);
-      final popped = await _inRequestPhaseAsync<bool>(
-        'dispatch',
-        () async => (await navigator?.maybePop()) ?? false,
-      );
-      String strategy = popped ? 'popped_route' : 'none';
+      final popped =
+          !closedContextMenu &&
+          await _inRequestPhaseAsync<bool>(
+            'dispatch',
+            () async => (await navigator?.maybePop()) ?? false,
+          );
+      String strategy = closedContextMenu
+          ? 'closed_context_menu'
+          : popped
+          ? 'popped_route'
+          : 'none';
       String? tappedId;
       _TargetResolution? closeResolution;
-      if (!popped) {
+      if (!popped && !closedContextMenu) {
         // No route popped — look for a close-like control on the current
         // screen (a custom overlay's own X/Cancel).
         final closeNode = _findCloseControl(before);
@@ -2181,7 +2249,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     const continuousWindow = Duration(milliseconds: 220);
     final stopwatch = Stopwatch()..start();
     final requestedMs = math.max(0, timeout.inMilliseconds);
-    final requestDeadline = _requestContext?.deadlineEpochMs;
+    final requestDeadline = _settleDeadlineEpochMs;
     final wallNow = DateTime.now().millisecondsSinceEpoch;
     final requestRemaining = requestDeadline == null
         ? requestedMs
@@ -2708,8 +2776,18 @@ extension _RuntimeActions on FlutterScoutRuntime {
       );
     }
 
-    final deadline = DateTime.now().add(Duration(milliseconds: lateWaitMs));
-    while (DateTime.now().isBefore(deadline)) {
+    final settleDeadline = _settleDeadlineEpochMs;
+    final lateDeadline = DateTime.now().add(Duration(milliseconds: lateWaitMs));
+    // Each round waits up to ~330 ms and re-snapshots: stop once another
+    // round could not finish before the request's settle deadline.
+    bool lateRoundFits() {
+      final now = DateTime.now();
+      if (!now.isBefore(lateDeadline)) return false;
+      return settleDeadline == null ||
+          now.millisecondsSinceEpoch + 330 + _lastSnapshotMs < settleDeadline;
+    }
+
+    while (lateRoundFits()) {
       await Future<void>.delayed(const Duration(milliseconds: 80));
       stability = await _waitStable(
         frameAdvancePolicy: _FrameAdvancePolicy.mutationSettling,

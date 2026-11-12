@@ -417,10 +417,16 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   String? _kindFor(Widget widget, Element element) {
+    // SelectableText shows text that can be selected, not typed into: it is
+    // text to read and locate, and its inner read-only EditableText is not an
+    // input field.
+    if (widget is SelectableText) return 'text';
     if (widget is TextField ||
         widget is TextFormField ||
         widget is EditableText) {
-      if (widget is EditableText && _hasTextFieldAncestor(element)) {
+      if (widget is EditableText &&
+          (_hasTextFieldAncestor(element) ||
+              (widget.readOnly && _hasSelectableTextAncestor(element)))) {
         return null;
       }
       return 'field';
@@ -452,7 +458,63 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         widget is ListTile) {
       return 'tap';
     }
+    // An app-declared semantic button: a custom pressable built on its own
+    // pointer handling (a ripple package, a press-effect wrapper) is
+    // invisible to the widget checks above, but its Semantics says what it
+    // is. Framework buttons declare the same Semantics inside themselves;
+    // those are already reported through their own widget.
+    if (widget is Semantics &&
+        (widget.properties.button == true || widget.properties.onTap != null) &&
+        !_hasRecognizedControlAncestor(element)) {
+      return 'btn';
+    }
     return null;
+  }
+
+  /// A framework control (button, detector, tile, chip, toggle) a few levels
+  /// up: its own Semantics must not report it a second time.
+  bool _hasRecognizedControlAncestor(Element element) {
+    var found = false;
+    var depth = 0;
+    element.visitAncestorElements((Element ancestor) {
+      final widget = ancestor.widget;
+      if (widget is ButtonStyleButton ||
+          widget is IconButton ||
+          widget is FloatingActionButton ||
+          widget is CupertinoButton ||
+          widget is GestureDetector ||
+          widget is InkWell ||
+          widget is InkResponse ||
+          widget is ListTile ||
+          widget is RawChip ||
+          widget is ChoiceChip ||
+          widget is FilterChip ||
+          widget is InputChip ||
+          widget is ActionChip ||
+          widget is Switch ||
+          widget is CupertinoSwitch ||
+          widget is Checkbox ||
+          widget is TextField ||
+          widget is TextFormField) {
+        found = true;
+        return false;
+      }
+      return ++depth < 12;
+    });
+    return found;
+  }
+
+  bool _hasSelectableTextAncestor(Element element) {
+    var found = false;
+    var depth = 0;
+    element.visitAncestorElements((Element ancestor) {
+      if (ancestor.widget is SelectableText) {
+        found = true;
+        return false;
+      }
+      return ++depth < 8;
+    });
+    return found;
   }
 
   bool _hasTextFieldAncestor(Element element) {
@@ -492,6 +554,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   bool _enabledFor(Widget widget) {
+    if (widget is Semantics) return widget.properties.enabled != false;
     if (widget is TextField) {
       return widget.enabled != false && !widget.readOnly;
     }
@@ -561,7 +624,8 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         widget is GestureDetector ||
         widget is InkWell ||
         widget is InkResponse ||
-        widget is ListTile;
+        widget is ListTile ||
+        widget is Semantics;
   }
 
   String? _labelFor(Element element, Widget widget, {bool deepText = false}) {
@@ -955,6 +1019,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
   String? _ownText(Widget widget) {
     if (widget is Text) {
+      return widget.data ?? widget.textSpan?.toPlainText();
+    }
+    if (widget is SelectableText) {
       return widget.data ?? widget.textSpan?.toPlainText();
     }
     if (widget is RichText) {

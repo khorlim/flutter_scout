@@ -261,7 +261,16 @@ class _SnapshotScrollRegion {
 
 extension _RuntimeSnapshot on FlutterScoutRuntime {
   ScoutSnapshot _snapshot() =>
-      _inRequestPhase(_requestSnapshotPhase, _snapshotWithoutPhaseTiming);
+      _inRequestPhase(_requestSnapshotPhase, _timedSnapshotWithoutPhaseTiming);
+
+  ScoutSnapshot _timedSnapshotWithoutPhaseTiming() {
+    final stopwatch = Stopwatch()..start();
+    try {
+      return _snapshotWithoutPhaseTiming();
+    } finally {
+      _lastSnapshotMs = stopwatch.elapsedMilliseconds;
+    }
+  }
 
   ScoutSnapshot _snapshotWithoutPhaseTiming() {
     final root = WidgetsBinding.instance.rootElement;
