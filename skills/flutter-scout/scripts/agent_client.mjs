@@ -20,6 +20,16 @@ function agentError(code, message, extra = {}) {
   return Object.assign(new Error(message), { code, dispatch: 'not_dispatched', ...extra });
 }
 
+/** Why an input or its follow-up observation failed, from the canonical
+ * receipt first, then the scene. */
+function inputFailure(result, scene) {
+  const receipt = result && typeof result === 'object' ? result : {};
+  const error = receipt.error ?? receipt.structuredError ??
+    (receipt.ok === true ? scene?.error ?? scene?.blockedBy : null) ??
+    { code: 'input_failed_without_reason', message: 'The input receipt reported ok:false without a reason; read result and scene.' };
+  return { error, dispatch: receipt.dispatch ?? null };
+}
+
 /** Persistent JSONL client. No ports, screenshots, implicit retries or app logic. */
 export class ScoutAgent {
   static async connect({ app, binary = 'flutter-scout', cwd, intervalMs = 250, maxItems = 60 } = {}) {
@@ -293,8 +303,13 @@ export class ScoutAgent {
           if (!acknowledged.ok) return { ...acknowledged, actionId: ticket.actionId, result: event.result, events };
         }
         const scene = await this.observe();
-        return { ok: event.result?.ok === true && scene.ok === true,
-          actionId: ticket.actionId, result: event.result, scene, events };
+        const ok = event.result?.ok === true && scene.ok === true;
+        // A failed input keeps its reason in the receipt; lift it so a caller
+        // reading only the top level never sees ok:false with no error.
+        const failure = ok ? null : inputFailure(event.result, scene);
+        return { ok, actionId: ticket.actionId,
+          ...(failure ? { error: failure.error, dispatch: failure.dispatch } : {}),
+          result: event.result, scene, events };
       }
     } finally { this.acting = false; }
   }
@@ -557,12 +572,38 @@ async function serveForeground(options, paths, report) {
     log: paths.log, scene: bridge.agent.latest });
 }
 
+/** Static protocol metadata repeated in every envelope: identity, version,
+ * capability, timing and coordinate-frame boilerplate. Never an outcome,
+ * failure, omission or safety field. */
+const briefDropped = new Set([
+  'capabilities', 'timings', 'protocolRange', 'identityAvailability', 'payloadBounds',
+  'observationEffects', 'coordinateFrame', 'geometryCoordinateSpaces', 'physicalRect',
+  'physicalSuggestedTapPoint', 'heuristicMeaning', 'scoreKind', 'schemaVersion',
+  'protocolVersion', 'minSupportedProtocolVersion', 'maxSupportedProtocolVersion',
+  'helperPackageVersion', 'helperProtocolVersion', 'responseBytes', 'maxResponseBytes',
+  'commandId', 'cliCommandId', 'runId', 'runtimeInstanceId', 'stateDigest', 'snapshotId',
+  'logCursor', 'eventCursor', 'capabilitySource', 'messageType', 'limitations', 'textTarget',
+]);
+
+/** `call --brief`: the same response without [briefDropped] metadata, at any
+ * depth, so a shell agent reads decisions rather than kilobytes of tables. */
+export function briefResponse(value) {
+  if (Array.isArray(value)) return value.map(briefResponse);
+  if (!value || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!briefDropped.has(key)) out[key] = briefResponse(entry);
+  }
+  return out;
+}
+
 function parseArgs(argv) {
   const options = {};
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--foreground') options.foreground = true;
+    else if (arg === '--brief') options.brief = true;
     else if (['--app', '--socket', '--binary', '--interval-ms', '--max-items'].includes(arg)) {
       if (i + 1 >= argv.length) throw agentError('usage', `${arg} needs a value`);
       options[arg.slice(2)] = argv[++i];
@@ -595,7 +636,7 @@ async function callBridge(command, options, paths, method, json) {
   const request = { method: command === 'stop' ? 'close' : method, params };
   try {
     const response = await sendBridge(paths.socket, request, 150000);
-    print(response);
+    print(options.brief ? briefResponse(response) : response);
     return response.ok === true ? 0 : 1;
   } catch (error) {
     if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) {
@@ -674,7 +715,7 @@ async function main(argv) {
   if (!['serve', 'call', 'stop'].includes(command) || typeof options.app !== 'string' || !options.app ||
       (command === 'call' ? !method || positional.length > 3 : positional.length > 1)) {
     print(errorResponse(agentError('usage',
-      'Usage: agent_client.mjs serve|stop --app <name> [--socket <path>] | call --app <name> <method> [json|-]')));
+      'Usage: agent_client.mjs serve|stop --app <name> [--socket <path>] | call --app <name> [--brief] <method> [json|-]')));
     return 2;
   }
   const paths = bridgePaths(options.app, options.socket);

@@ -56,7 +56,8 @@ const scene = await scout.observe();
 const outcome = await scout.act(scene.viewRevision, {
   method: 'tap', args: [observedTarget],
 });
-// Read outcome.ok, result, scene, and intervening events before deciding again.
+// Read outcome.ok, error, dispatch, result, scene, and intervening events
+// before deciding again. A failed input always carries a top-level error.
 ```
 
 ### Shell-only agents (Claude Code)
@@ -64,15 +65,19 @@ const outcome = await scout.act(scene.viewRevision, {
 When each shell command is a fresh process, keep the one connection in the
 shipped bridge. `serve` returns once connected (with the first `scene`) and
 keeps a background process behind a private 0600 Unix socket. Each `call`
-prints one compact JSON line; exit code 0 means `ok:true`. `<client>` is this
-skill's absolute scripts/agent_client.mjs path; spell it out in every command
-because shell variables do not persist between tool calls.
+prints one JSON line; exit code 0 means `ok:true`. Pass `--brief` on every
+call: it drops only repeated protocol metadata (capability tables, timings,
+versions, IDs, coordinate-frame boilerplate) and keeps every outcome,
+failure, omission and safety field, so a scene is read without a parsing
+script. `<client>` is this skill's absolute scripts/agent_client.mjs path;
+spell it out in every command because shell variables do not persist between
+tool calls.
 
 ```bash
 node <client> serve --app task
-node <client> call --app task observe
-node <client> call --app task act '{"viewRevision":7,"action":{"method":"tap","args":["btn.save"]}}'
-node <client> call --app task query '{"method":"locate","params":{"text":"Save"}}'
+node <client> call --app task --brief observe
+node <client> call --app task --brief act '{"viewRevision":7,"action":{"method":"tap","args":["btn.save"]}}'
+node <client> call --app task --brief query '{"method":"locate","params":{"text":"Save"}}'
 node <client> call --app task watch '{"condition":{"text":"Saved"},"timeoutMs":8000}'
 node <client> call --app task next '{"timeoutMs":8000}'
 node <client> call --app task act - <<'JSON'
@@ -106,11 +111,25 @@ private journal. Close the connection before unrelated long coding work.
 Use scout.query('where') for layout; scout.query('locate', {text: 'Name'})
 for a target; scout.query('inspect', {sections: 'interactables,scrollables',
 maxItems: 100}) for selected detail. Query is read-only, not permission to act
-on stale geometry: observe again and decide from the current scene.
+on stale geometry: observe again and decide from the current scene. A
+`locate` answer's `result` is only its status (`unique`, `ambiguous`,
+`notFound`, ...); the match, its rect and the candidates are in `resolution`.
+A handle is an interactable's `id` (for example `btn.save`, `tap.raymond`).
+
+Targets come from Flutter's tap widgets and from `Semantics(button: true)` or
+`Semantics(onTap: ...)`. A custom pressable built on raw pointers (a ripple
+package, a press-effect wrapper) is a target only when the app gives it that
+Semantics; until then tap its visible text, and suggest the app add the
+Semantics, which also serves accessibility. `SelectableText` (chat bubbles,
+copyable values) is text, so `locate` finds its words.
 
 Context menus: `{method:'long-press', args:[handle]}` presses and holds, and
 `{method:'tap', args:[handle], params:{button:'secondary'}}` is a mouse right
 click (desktop `onSecondaryTap*` menus). Read the menu from the next scene.
+Close a menu, popover, sheet or dialog with `{method:'dismiss'}`; there is no
+key-press action. An open text-selection toolbar or context menu closes first
+(as Escape does), so dismiss never pops the screen under it. A menu opened before a hot reload keeps the items it was
+built with: dismiss and reopen it to see reloaded code.
 
 Prefer exact observed handles, then unique visible text. Ambiguity requires
 focused discovery, not another guess. For forms, `fill` takes an observed
@@ -123,6 +142,10 @@ Choose from reported candidates or narrow context. A stale state requires
 fresh observation and a new decision, not replacement of the revision on an
 old action. Coordinates are logical Flutter points, not screenshot pixels;
 use them only when observed handle/text targeting cannot express the action.
+They go in `params.x` and `params.y` as numbers, never in `args`
+(`{method:'tap', params:{x:380, y:215, button:'secondary'}}`). Take them from
+an observed `rect`/`suggestedTapPoint`, not from a screenshot: a screenshot is
+in physical pixels and may be scaled for display.
 For lazy lists, use region-scoped bounded reveal/scroll-to through act.
 
 Sensitive input belongs in agent JSON stdin through the client, never shell

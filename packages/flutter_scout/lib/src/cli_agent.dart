@@ -1,11 +1,23 @@
 part of 'flutter_scout_cli.dart';
 
 void _validateAgentAction(AgentView action) {
-  if (action.keys.any(
-        (key) => !const {'method', 'args', 'params'}.contains(key),
-      ) ||
-      !AgentSession.actionMethods.contains(action['method'])) {
-    throw const FormatException('Only documented UI actions are accepted.');
+  final unknownKeys = action.keys
+      .where((key) => !const {'method', 'args', 'params'}.contains(key))
+      .toList();
+  if (unknownKeys.isNotEmpty) {
+    throw FormatException(
+      'An action has only method, args and params; '
+      'unexpected ${unknownKeys.join(', ')}.',
+    );
+  }
+  if (!AgentSession.actionMethods.contains(action['method'])) {
+    // Name the accepted set, so a caller reaching for a key press or another
+    // gesture learns the documented equivalent (a menu closes with dismiss).
+    final accepted = AgentSession.actionMethods.toList()..sort();
+    throw FormatException(
+      'Only documented UI actions are accepted: ${accepted.join(', ')}. '
+      'Close a menu, sheet or dialog with dismiss; go back with back.',
+    );
   }
   final validation = _validatePersistentTypedPayload(action);
   final issue = validation.issue;

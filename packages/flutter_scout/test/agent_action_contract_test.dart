@@ -100,4 +100,41 @@ void main() {
       returnsNormally,
     );
   });
+  test('an unknown action names the accepted ones and how to close', () {
+    expect(
+      () => cli.debugValidateAgentAction({
+        'method': 'key',
+        'args': ['escape'],
+      }),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          allOf(contains('dismiss'), contains('long-press'), contains('tap')),
+        ),
+      ),
+    );
+  });
+  test('coordinates in args say they belong in params.x and params.y', () {
+    expect(
+      () => cli.debugValidateAgentAction({
+        'method': 'tap',
+        'args': [380, 215],
+      }),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          contains('params.x and params.y'),
+        ),
+      ),
+    );
+    expect(
+      () => cli.debugValidateAgentAction({
+        'method': 'tap',
+        'params': {'x': 380, 'y': 215, 'button': 'secondary'},
+      }),
+      returnsNormally,
+    );
+  });
 }

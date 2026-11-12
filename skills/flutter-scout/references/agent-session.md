@@ -58,6 +58,8 @@ const outcome = await agent.act(scene.viewRevision, {
   method: 'tap', args: [observedTarget],
 });
 // Check outcome.ok, outcome.result and outcome.scene before another action.
+// When ok is false, outcome.error and outcome.dispatch carry the receipt's
+// reason (or the follow-up observation's), never null.
 // Low-level alternative for fine-grained concurrent control:
 // Use the revision and exact target just observed, not a guessed identifier.
 const lowLevelScene = await agent.observe();
@@ -80,8 +82,11 @@ process that owns one `ScoutAgent` and listens on a Unix socket (default
 `$TMPDIR/flutter-scout-<uid>/<name>.sock`, directory 0700, socket 0600). It
 prints `{type:'serving', socket, pid, log, scene}` once connected, or the
 connect error, and reuses a live bridge for the same app. `call --app <name>
-<method> [json|-]` sends one request and prints one JSON line (exit 0 iff
-`ok:true`). Methods mirror the client with named fields: `act {viewRevision,
+[--brief] <method> [json|-]` sends one request and prints one JSON line (exit
+0 iff `ok:true`). `--brief` removes repeated protocol metadata at any depth
+(capabilities, timings, protocol versions, command/run ids, coordinate-frame
+and physical-pixel duplicates) and nothing else: outcomes, errors, dispatch,
+omissions and safety fields stay. Methods mirror the client with named fields: `act {viewRevision,
 action, timeoutMs}`, `start`, `acknowledge {actionId}`, `reconcile {actionId,
 viewRevision}`, `next {timeoutMs}`, `watch {condition, timeoutMs}`, `react`,
 `cancel {scope, conditionId}`, `query {method, params, args}`, `observe`,

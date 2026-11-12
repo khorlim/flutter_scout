@@ -1115,9 +1115,13 @@ _validatePersistentTypedPayload(Map<dynamic, dynamic> decoded) {
     if (value is! String || value.length > 16384 || value.contains('\u0000')) {
       return (
         call: null,
-        issue: const _TypedContractIssue(
+        issue: _TypedContractIssue(
           'invalid_arg',
-          'Every argument must be a string of at most 16384 characters.',
+          value is num
+              ? 'Every argument must be a string of at most 16384 '
+                    'characters. Coordinates are not args: pass logical '
+                    'points as numbers in params.x and params.y.'
+              : 'Every argument must be a string of at most 16384 characters.',
         ),
       );
     }

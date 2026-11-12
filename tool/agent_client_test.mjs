@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ScoutAgent } from '../skills/flutter-scout/scripts/agent_client.mjs';
+import { ScoutAgent, briefResponse } from '../skills/flutter-scout/scripts/agent_client.mjs';
 
 const fakeBinary = fileURLToPath(new URL('./fixtures/fake_flutter_scout.mjs', import.meta.url));
 async function connectFake(mode) {
@@ -73,7 +73,11 @@ test('act surfaces a failed receipt without acknowledgement or another tap', asy
   send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: false, dispatch: 'not_dispatched', error: { code: 'target_ambiguous' } } } });
   await new Promise(resolve => setImmediate(resolve));
   send({ id: requests[2].id, ok: false, viewRevision: 2, view: { screen: 'Same' } });
-  assert.equal((await result).ok, false);
+  const outcome = await result;
+  assert.equal(outcome.ok, false);
+  // The reason reaches the top level, never ok:false with no error.
+  assert.deepEqual(outcome.error, { code: 'target_ambiguous' });
+  assert.equal(outcome.dispatch, 'not_dispatched');
   assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'observe']);
   client.abort();
 });
@@ -216,4 +220,21 @@ test('a killed agent child reports its signal and last stderr line', async () =>
   });
   await assert.rejects(client.observe(), error => error.code === 'scout_client_closed' &&
     error.cause === 'scout_agent_exited');
+});
+
+test('brief output drops protocol metadata but keeps outcome and safety fields', () => {
+  const full = {
+    ok: false, dispatch: 'not_dispatched', error: { code: 'target_not_visible' },
+    capabilities: { typedEnvelopeV1: true }, timings: { totalMs: 9 }, runId: 'r',
+    scene: { viewRevision: 3, actionable: false, blockedBy: { reason: 'rendering_suspended' },
+      view: { screen: 'Chat', protocolVersion: 15, omittedSections: { reason: 'brief_mode' },
+        safetyEvidenceStatus: 'complete', interactables: [{ id: 'btn.ok', label: 'OK',
+          physicalRect: [1, 2, 3, 4], rect: [0, 0, 1, 1] }] } },
+  };
+  assert.deepEqual(briefResponse(full), {
+    ok: false, dispatch: 'not_dispatched', error: { code: 'target_not_visible' },
+    scene: { viewRevision: 3, actionable: false, blockedBy: { reason: 'rendering_suspended' },
+      view: { screen: 'Chat', omittedSections: { reason: 'brief_mode' },
+        safetyEvidenceStatus: 'complete', interactables: [{ id: 'btn.ok', label: 'OK', rect: [0, 0, 1, 1] }] } },
+  });
 });
