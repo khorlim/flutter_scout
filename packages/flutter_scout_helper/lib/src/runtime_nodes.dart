@@ -1716,7 +1716,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   List<Map<String, Object?>> _buildControlGroups(ScoutSnapshot snapshot) {
     final surface = _detectCustomInputSurface(snapshot);
     if (surface == null) return const [];
-    _rememberSensitiveValue(surface.currentValue);
+    if (surface.sensitive) _rememberSensitiveValue(surface.currentValue);
     return [surface.toControlGroupJson()];
   }
 
@@ -2386,6 +2386,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       digitText[label] = node;
     }
     if (digitText.length < 8) return null;
+    // Every numeric keypad has a 0 key; a month or date grid (days 1-9) does
+    // not. Without this, calendars were reported as keypads.
+    if (!digitText.containsKey('0')) return null;
     if (!_looksLikeKeyGrid(digitText.values.toList(growable: false))) {
       return null;
     }
@@ -2399,14 +2402,39 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (!targetFound && snapshot.overlays.isEmpty) return null;
 
     final commitAction = _customInputCommitAction(snapshot);
+    final currentValue = _visibleInputValue(snapshot, digitText.values);
     return _CustomInputSurface(
       kind: 'custom_numeric_keypad',
       label: target,
-      currentValue: _visibleInputValue(snapshot, digitText.values),
+      currentValue: currentValue,
       keys: digitText,
       commitAction: commitAction,
       targetMatched: targetFound,
+      sensitive: _customInputSurfaceIsSensitive(snapshot, currentValue),
     );
+  }
+
+  /// A keypad enters a secret only when the visible, hit-testable screen says
+  /// so (PIN, passcode, OTP, password, security code, ...) or its display is
+  /// masked. Remembering every keypad value as a secret made Scout scrub phone
+  /// numbers, prefixes such as `+60`, and date digits from all later output,
+  /// including the agent's own target ids.
+  bool _customInputSurfaceIsSensitive(
+    ScoutSnapshot snapshot,
+    String? currentValue,
+  ) {
+    if (currentValue != null && RegExp(r'[•●∗*]').hasMatch(currentValue)) {
+      return true;
+    }
+    for (final node in [...snapshot.textTargets, ...snapshot.interactables]) {
+      if (!node.hitTestable) continue;
+      for (final descriptor in [node.label, node.key]) {
+        if (descriptor != null && _sensitiveDescriptor(descriptor)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   bool _looksLikeKeyGrid(List<ScoutNode> keys) {

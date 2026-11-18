@@ -1041,6 +1041,7 @@ class _CustomInputSurface {
     required this.keys,
     required this.commitAction,
     required this.targetMatched,
+    required this.sensitive,
   });
 
   final String kind;
@@ -1049,6 +1050,12 @@ class _CustomInputSurface {
   final Map<String, ScoutNode> keys;
   final ScoutNode? commitAction;
   final bool targetMatched;
+
+  /// Whether the keypad enters a secret (PIN, passcode, OTP, password, or a
+  /// masked display). Ordinary keypads such as phone-number or quantity pads
+  /// are not secrets: their value is reported instead of being remembered and
+  /// scrubbed from every later observation.
+  final bool sensitive;
 
   Map<String, Object?> toControlGroupJson() {
     final keyNodes = keys.values.toList(growable: false)
@@ -1073,9 +1080,10 @@ class _CustomInputSurface {
       if (bounds != null)
         'rect': [bounds.left, bounds.top, bounds.width, bounds.height],
       'currentValue': <String, Object?>{
-        'redacted': true,
+        'redacted': sensitive,
         'isEmpty': currentValue == null || currentValue!.isEmpty,
         'hasValue': currentValue != null && currentValue!.isNotEmpty,
+        if (!sensitive && currentValue != null) 'value': currentValue,
       },
       'acceptedCharacters': 'digits',
       'targetMatched': targetMatched,

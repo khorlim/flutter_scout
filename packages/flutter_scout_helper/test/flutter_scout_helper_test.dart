@@ -846,6 +846,89 @@ void main() {
     expect(encoded, contains('[REDACTED]'));
   });
 
+  Widget keypadApp({required List<Widget> header, List<String>? digits}) {
+    return MaterialApp(
+      home: Scaffold(
+        body: Column(
+          children: [
+            ...header,
+            SizedBox(
+              width: 240,
+              height: 320,
+              child: GridView.count(
+                crossAxisCount: 3,
+                children: [
+                  for (final digit
+                      in digits ??
+                          const [
+                            '1',
+                            '2',
+                            '3',
+                            '4',
+                            '5',
+                            '6',
+                            '7',
+                            '8',
+                            '9',
+                            '0',
+                          ])
+                    TextButton(onPressed: () {}, child: Text(digit)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  testWidgets('a phone-number keypad reports its value and is not a secret', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    runtime.debugResetSensitiveValueTracking();
+    const number = '+60 12-345 6789';
+    await tester.pumpWidget(
+      keypadApp(header: const [Text('Malaysia'), Text(number)]),
+    );
+    await tester.pump();
+
+    final snapshot = runtime.debugSnapshot();
+    final group = snapshot.controlGroups.single;
+    expect(group['currentValue'], <String, Object?>{
+      'redacted': false,
+      'isEmpty': false,
+      'hasValue': true,
+      'value': number,
+    });
+    expect(runtime.debugSensitiveValueTracking['count'], 0);
+    // Neither the number nor its fragments may be scrubbed from later output.
+    expect(snapshot.visibleText, contains(number));
+    expect(
+      runtime.debugRedactSensitiveText('Thursday, 19 November'),
+      'Thursday, 19 November',
+    );
+  });
+
+  testWidgets('a date grid without a 0 key is not a keypad', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    runtime.debugResetSensitiveValueTracking();
+    await tester.pumpWidget(
+      keypadApp(
+        header: const [Text('November 2026'), Text('Thu 19')],
+        digits: const ['1', '2', '3', '4', '5', '6', '7', '8', '9'],
+      ),
+    );
+    await tester.pump();
+
+    final snapshot = runtime.debugSnapshot();
+    expect(snapshot.controlGroups, isEmpty);
+    expect(runtime.debugSensitiveValueTracking['count'], 0);
+    expect(snapshot.visibleText, contains('November 2026'));
+  });
+
   group('scoutAnnotationDialogPlacement', () {
     const screen = Size(400, 800);
     const safe = EdgeInsets.only(top: 44, bottom: 34);
