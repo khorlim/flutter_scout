@@ -617,6 +617,90 @@ void main() {
     });
   });
 
+  group('tolerated app errors', () {
+    final pattern = FlutterScoutCli.toleratedErrorPattern({
+      'FLUTTER_SCOUT_TOLERATED_ERRORS':
+          r'MissingPluginException.*(printer|imin)',
+    });
+
+    test('moves only matching errors out of the input-blocking lists', () {
+      final printer = {
+        'type': 'flutter_error',
+        'blocking': true,
+        'message':
+            'MissingPluginException(No implementation found for method '
+            'initPrinter on channel imin_printer)',
+      };
+      final real = {
+        'type': 'flutter_error',
+        'blocking': true,
+        'message': 'Null check operator used on a null value',
+      };
+      final result = FlutterScoutCli.applyToleratedErrors({
+        'ok': true,
+        'errorsSinceCursor': [printer, real],
+        'activeBlockingSignals': [printer],
+      }, pattern);
+      expect(result['errorsSinceCursor'], [real]);
+      expect(result['activeBlockingSignals'], isEmpty);
+      expect(result['toleratedErrors'], [printer]);
+      expect(result['toleratedErrorCount'], 1);
+    });
+
+    test('changes nothing without an explicit pattern', () {
+      final response = {
+        'errorsSinceCursor': [
+          {'message': 'MissingPluginException(... imin_printer)'},
+        ],
+      };
+      expect(
+        FlutterScoutCli.applyToleratedErrors(
+          Map<String, dynamic>.from(response),
+          FlutterScoutCli.toleratedErrorPattern(const {}),
+        ),
+        response,
+      );
+    });
+
+    test('rejects an invalid pattern instead of ignoring it', () {
+      expect(
+        () => FlutterScoutCli.toleratedErrorPattern({
+          'FLUTTER_SCOUT_TOLERATED_ERRORS': '(unclosed',
+        }),
+        throwsA(isA<ScoutCliException>()),
+      );
+    });
+  });
+
+  group('typed value secrecy', () {
+    test('only credential targets make a typed value a secret', () {
+      for (final target in [
+        'field.password',
+        'field.pin',
+        'field.otp',
+        'API key',
+        'field.verification_code',
+      ]) {
+        expect(typedValueTargetLooksSensitive(target), isTrue, reason: target);
+      }
+      for (final target in [
+        'field.required',
+        'field.name',
+        'field.search',
+        'focused',
+        'field.remarks',
+        'field.pinned_note',
+        null,
+      ]) {
+        expect(
+          typedValueTargetLooksSensitive(target),
+          isFalse,
+          reason: '$target',
+        );
+      }
+    });
+  });
+
   group('macosLaunchStallHint', () {
     // Shape of `plutil -p` for a container first created by the App Store build.
     const appStoreOwned = '''

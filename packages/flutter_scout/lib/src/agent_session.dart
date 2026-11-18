@@ -98,7 +98,133 @@ class AgentSession {
   /// be unchanged; each target must appear once, identical in both views.
   /// Text may change but not appear or disappear. Dispatch-time target
   /// resolution, occlusion and hit-test checks in the app still apply.
+  ///
+  /// With [allowUnrelatedChanges] (the caller's explicit per-action
+  /// authority), a decision also stands when other text and controls changed
+  /// but every target is identical, enabled and hit-testable, the same
+  /// surface is active, run, screen, rendering, errors and field values are
+  /// unchanged, and no newly appeared control overlaps a target. Background
+  /// progress toasts otherwise invalidate every decision.
   static bool targetUnaffected(
+    AgentView decision,
+    AgentView current,
+    Set<String> targets, {
+    bool allowUnrelatedChanges = false,
+  }) {
+    if (_onlyInPlaceTextChanged(decision, current, targets)) return true;
+    return allowUnrelatedChanges &&
+        _targetsIsolatedFromChanges(decision, current, targets);
+  }
+
+  static bool _targetsIsolatedFromChanges(
+    AgentView decision,
+    AgentView current,
+    Set<String> targets,
+  ) {
+    if (targets.isEmpty || decision['ok'] != true || current['ok'] != true) {
+      return false;
+    }
+    for (final key in const [
+      'runId',
+      'runtimeInstanceId',
+      'screen',
+      'routeGuess',
+      'surfaceOnly',
+      'viewport',
+      'keyboard',
+      'activeBlockingSignals',
+      'errorsSinceCursor',
+      'errorCursor',
+      'safetyEvidenceStatus',
+      'fieldValues',
+      'annotationMode',
+    ]) {
+      if (!_same(decision[key], current[key])) return false;
+    }
+    Object? pick(Object? value, List<String> keys) => value is Map
+        ? {
+            for (final key in keys)
+              if (value.containsKey(key)) key: value[key],
+          }
+        : value;
+    if (!_same(
+          pick(decision['activeSurface'], const [
+            'kind',
+            'label',
+            'screen',
+            'source',
+          ]),
+          pick(current['activeSurface'], const [
+            'kind',
+            'label',
+            'screen',
+            'source',
+          ]),
+        ) ||
+        !_same(
+          pick(decision['rendering'], const [
+            'status',
+            'framesEnabled',
+            'lifecycle',
+          ]),
+          pick(current['rendering'], const [
+            'status',
+            'framesEnabled',
+            'lifecycle',
+          ]),
+        )) {
+      return false;
+    }
+    final before = decision['interactables'];
+    final after = current['interactables'];
+    if (before is! List || after is! List) return false;
+    List<Map> withId(List items, String id) => [
+      for (final item in items)
+        if (item is Map && item['id'] == id) item,
+    ];
+    final targetRects = <List>[];
+    for (final id in targets) {
+      final a = withId(before, id);
+      final b = withId(after, id);
+      if (a.length != 1 || b.length != 1 || !_same(a.single, b.single)) {
+        return false;
+      }
+      final target = b.single;
+      if (target['enabled'] == false ||
+          target['hitTestable'] == false ||
+          target['offscreen'] == true) {
+        return false;
+      }
+      final rect = target['rect'];
+      if (rect is! List || rect.length != 4) return false;
+      targetRects.add(rect);
+    }
+    bool overlaps(List a, List b) {
+      final ax = (a[0] as num).toDouble(), ay = (a[1] as num).toDouble();
+      final bx = (b[0] as num).toDouble(), by = (b[1] as num).toDouble();
+      return ax < bx + (b[2] as num) &&
+          bx < ax + (a[2] as num) &&
+          ay < by + (b[3] as num) &&
+          by < ay + (a[3] as num);
+    }
+
+    final known = {
+      for (final item in before)
+        if (item is Map) jsonEncode(item),
+    };
+    for (final item in after) {
+      if (item is! Map || known.contains(jsonEncode(item))) continue;
+      final rect = item['rect'];
+      if (rect is List &&
+          rect.length == 4 &&
+          targetRects.any((target) => overlaps(rect, target))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool _onlyInPlaceTextChanged(
     AgentView decision,
     AgentView current,
     Set<String> targets,
@@ -457,14 +583,23 @@ class AgentSession {
   /// Returns the view the decision was made from. A stale revision is
   /// accepted only for an action scoped to exact observed handles when the
   /// screen differs solely by in-place text updates outside those targets.
-  AgentView _authorize(int revision, [Set<String>? targets]) {
+  AgentView _authorize(
+    int revision, [
+    Set<String>? targets,
+    bool allowUnrelatedChanges = false,
+  ]) {
     if (_closed || _halt != null) throw StateError(_stoppedMessage());
     final decision = revision == _revision ? _view : _history[revision];
     if (revision != _revision &&
         (targets == null ||
             decision == null ||
             _view == null ||
-            !targetUnaffected(decision, _view!, targets))) {
+            !targetUnaffected(
+              decision,
+              _view!,
+              targets,
+              allowUnrelatedChanges: allowUnrelatedChanges,
+            ))) {
       throw StateError(
         'agent_view_changed: viewRevision $revision is stale (now $_revision) '
         'and the change may affect this action; nothing dispatched. Decide '
@@ -798,7 +933,11 @@ class AgentSession {
   }
 
   AgentView start(int revision, AgentView action, {String? reactionId}) {
-    final decision = _authorize(revision, scopedTargets(action));
+    final decision = _authorize(
+      revision,
+      scopedTargets(action),
+      action['allowUnrelatedChanges'] == true,
+    );
     if (_acting != null || _unacknowledgedAction != null) {
       final id = _pendingAction ?? _unacknowledgedAction;
       throw StateError(
@@ -950,8 +1089,12 @@ class AgentSession {
   }) {
     if (_closed || _halt != null) throw StateError(_stoppedMessage());
     if (_jobs.length >= 8) throw StateError('agent_condition_limit');
-    if (timeoutMs < 1 || timeoutMs > 30000) {
-      throw ArgumentError('timeoutMs must be 1..30000');
+    // A reaction acts on the agent's behalf, so it stays short. A plain
+    // condition only observes; long business waits (a first data sync) would
+    // otherwise need a polling loop of observations.
+    final maximum = reaction == null ? 600000 : 30000;
+    if (timeoutMs < 1 || timeoutMs > maximum) {
+      throw ArgumentError('timeoutMs must be 1..$maximum');
     }
     _validateCondition(condition);
     if (reaction != null) {

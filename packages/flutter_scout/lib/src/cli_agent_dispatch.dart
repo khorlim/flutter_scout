@@ -137,6 +137,8 @@ extension _CliAgentDispatch on FlutterScoutCli {
   Map<String, Object?> _typedRequestError(String code, String message) => {
     'exitCode': 1,
     'error': {'code': code, 'message': message},
+    // Rejected while validating the request: nothing reached the app.
+    'preDispatch': true,
   };
 
   List<String> _typedParamsToArgs(Object? raw) {

@@ -631,6 +631,8 @@ class FlutterScoutCli {
   // its view used, so preflight can compare the target rather than the
   // whole-screen digest. Null keeps the exact snapshot comparison.
   Set<String>? _liveDecisionTargets;
+  // The caller explicitly accepted unrelated screen changes for this action.
+  bool _liveDecisionAllowsUnrelated = false;
   int _liveDecisionMaxItems = 60;
   bool _agentRequiresLiveRendering = false;
   // Private dispatch authority, set only on lanes owned by an agent session.
@@ -1931,6 +1933,76 @@ print(String(data: data, encoding: .utf8)!)
       category: null,
       emulator: false,
     );
+  }
+
+  /// Known, accepted app errors named by the caller in
+  /// `FLUTTER_SCOUT_TOLERATED_ERRORS` (one regular expression), for example
+  /// a printer plugin that has no simulator implementation. Null when unset.
+  static RegExp? toleratedErrorPattern([Map<String, String>? environment]) {
+    final raw =
+        (environment ?? Platform.environment)['FLUTTER_SCOUT_TOLERATED_ERRORS'];
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      return RegExp(raw);
+    } on FormatException catch (error) {
+      throw ScoutCliException(
+        'usage',
+        'FLUTTER_SCOUT_TOLERATED_ERRORS is not a valid regular expression: '
+            '${error.message}',
+      );
+    }
+  }
+
+  /// Moves app errors that match the caller's explicit [pattern] out of the
+  /// lists that block input into `toleratedErrors`, so a known benign error
+  /// (an absent printer plugin on a simulator) does not halt every action.
+  /// Nothing is dropped: tolerated errors stay visible with a count.
+  /// Exposed for testing.
+  static Map<String, dynamic> applyToleratedErrors(
+    Map<String, dynamic> response,
+    RegExp? pattern,
+  ) {
+    if (pattern == null) return response;
+    String describe(Object? item) => item is Map
+        ? [
+            item['type'],
+            item['code'],
+            item['kind'],
+            item['message'],
+            item['line'],
+          ].whereType<Object>().join(' ')
+        : '$item';
+    final tolerated = <Object?>[
+      ...(response['toleratedErrors'] as List? ?? const []),
+    ];
+    var changed = false;
+    for (final key in const [
+      'errorsSinceCursor',
+      'recentErrors',
+      'activeBlockingSignals',
+      'recentLogSignals',
+    ]) {
+      final list = response[key];
+      if (list is! List || list.isEmpty) continue;
+      final kept = <Object?>[];
+      for (final item in list) {
+        if (pattern.hasMatch(describe(item))) {
+          changed = true;
+          if (key == 'errorsSinceCursor' || key == 'recentLogSignals') {
+            tolerated.add(item);
+          }
+        } else {
+          kept.add(item);
+        }
+      }
+      response[key] = kept;
+    }
+    if (!changed) return response;
+    response['toleratedErrors'] = tolerated.length > 20
+        ? tolerated.sublist(tolerated.length - 20)
+        : tolerated;
+    response['toleratedErrorCount'] = tolerated.length;
+    return response;
   }
 
   /// Explains a macOS debug app that opened but never reported a VM service.

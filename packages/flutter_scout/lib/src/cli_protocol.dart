@@ -374,6 +374,7 @@ extension _CliProtocol on FlutterScoutCli {
                       decisionView,
                       _agentObservation(preflight),
                       decisionTargets,
+                      allowUnrelatedChanges: _liveDecisionAllowsUnrelated,
                     ))))) {
       return (
         invocation: null,
@@ -482,14 +483,21 @@ extension _CliProtocol on FlutterScoutCli {
         },
       };
     }
-    if (json.containsKey('ok')) return Map<String, dynamic>.from(json);
+    Map<String, dynamic> decoded;
     final result = json['result'];
-    if (result is String) {
-      final decoded = jsonDecode(result);
-      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    if (json.containsKey('ok')) {
+      decoded = Map<String, dynamic>.from(json);
+    } else if (result is String && jsonDecode(result) is Map) {
+      decoded = Map<String, dynamic>.from(jsonDecode(result) as Map);
+    } else if (result is Map) {
+      decoded = Map<String, dynamic>.from(result);
+    } else {
+      decoded = Map<String, dynamic>.from(json);
     }
-    if (result is Map) return Map<String, dynamic>.from(result);
-    return Map<String, dynamic>.from(json);
+    return FlutterScoutCli.applyToleratedErrors(
+      decoded,
+      FlutterScoutCli.toleratedErrorPattern(),
+    );
   }
 
   String? _canonicalPhaseTimingsIssue(Object? rawTimings) {

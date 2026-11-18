@@ -928,6 +928,88 @@ void main() {
     },
   );
 
+  test('allowUnrelatedChanges accepts background churn but not changes '
+      'that touch the target', () {
+    Map<String, Object?> control(
+      String id,
+      List<num> rect, {
+      bool enabled = true,
+    }) => {
+      'id': id,
+      'kind': 'button',
+      'enabled': enabled,
+      'hitTestable': true,
+      'rect': rect,
+    };
+    AgentView screen(
+      int revision,
+      List<String> text,
+      List<Map<String, Object?>> controls,
+    ) => {...view(revision, text: text), 'interactables': controls};
+    final pay = control('btn.pay', [500, 900, 200, 60]);
+    final decision = screen(1, ['Cart', 'Downloading data'], [pay]);
+    // A sync toast changes wording and a new list row appears elsewhere.
+    final churn = screen(
+      2,
+      ['Cart', 'Members · Waiting', 'AI Smoke'],
+      [
+        pay,
+        control('btn.row_3', [0, 300, 400, 60]),
+      ],
+    );
+    expect(
+      AgentSession.targetUnaffected(decision, churn, {'btn.pay'}),
+      isFalse,
+    );
+    expect(
+      AgentSession.targetUnaffected(decision, churn, {
+        'btn.pay',
+      }, allowUnrelatedChanges: true),
+      isTrue,
+    );
+    final rejected = <String, AgentView>{
+      'target disabled': screen(
+        2,
+        ['Cart'],
+        [
+          control('btn.pay', [500, 900, 200, 60], enabled: false),
+        ],
+      ),
+      'target moved': screen(
+        2,
+        ['Cart'],
+        [
+          control('btn.pay', [500, 960, 200, 60]),
+        ],
+      ),
+      'new control over the target': screen(
+        2,
+        ['Cart'],
+        [
+          pay,
+          control('btn.dismiss', [520, 880, 120, 80]),
+        ],
+      ),
+      'new surface': {
+        ...screen(2, ['Cart'], [pay]),
+        'activeSurface': {'kind': 'dialog'},
+      },
+      'other screen': {
+        ...screen(2, ['Cart'], [pay]),
+        'screen': 'Next',
+      },
+    };
+    for (final entry in rejected.entries) {
+      expect(
+        AgentSession.targetUnaffected(decision, entry.value, {
+          'btn.pay',
+        }, allowUnrelatedChanges: true),
+        isFalse,
+        reason: entry.key,
+      );
+    }
+  });
+
   test('real screen or target changes still reject a stale decision', () async {
     final decision = view(1, text: ['10:41']);
     final changes = <String, AgentView>{

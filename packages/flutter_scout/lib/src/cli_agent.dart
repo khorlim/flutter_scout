@@ -1,14 +1,34 @@
 part of 'flutter_scout_cli.dart';
 
+/// Errors raised while parsing an action's arguments, before any dispatch.
+const Set<String> _agentArgumentErrorCodes = {
+  'usage',
+  'invalid_parameter_value',
+  'invalid_parameter',
+  'unknown_parameter',
+  'missing_parameter',
+};
+
 void _validateAgentAction(AgentView action) {
   final unknownKeys = action.keys
-      .where((key) => !const {'method', 'args', 'params'}.contains(key))
+      .where(
+        (key) => !const {
+          'method',
+          'args',
+          'params',
+          'allowUnrelatedChanges',
+        }.contains(key),
+      )
       .toList();
   if (unknownKeys.isNotEmpty) {
     throw FormatException(
-      'An action has only method, args and params; '
+      'An action has only method, args, params and allowUnrelatedChanges; '
       'unexpected ${unknownKeys.join(', ')}.',
     );
+  }
+  final allowUnrelated = action['allowUnrelatedChanges'];
+  if (allowUnrelated != null && allowUnrelated is! bool) {
+    throw const FormatException('allowUnrelatedChanges must be true or false.');
   }
   if (!AgentSession.actionMethods.contains(action['method'])) {
     // Name the accepted set, so a caller reaching for a key press or another
@@ -296,6 +316,8 @@ function run() {
         act: (action, observed) async {
           hand._liveDecisionView = observed;
           hand._liveDecisionTargets = AgentSession.scopedTargets(action);
+          hand._liveDecisionAllowsUnrelated =
+              action['allowUnrelatedChanges'] == true;
           hand._liveDecisionMaxItems = maximum;
           hand._agentRequiresLiveRendering = true;
           try {
@@ -310,13 +332,38 @@ function run() {
             }
             final captured = await hand._runTypedCall(
               jsonEncode({
-                ...action,
+                // The authority flag is decided here; the typed call is unchanged.
+                for (final entry in action.entries)
+                  if (entry.key != 'allowUnrelatedChanges')
+                    entry.key: entry.value,
                 'params': parameters,
                 'idempotencyKey': _newProtocolIdentifier('agent-action'),
               }),
             );
             final result = captured['result'];
-            if (result is Map) return Map<String, dynamic>.from(result);
+            if (result is Map) {
+              final receipt = Map<String, dynamic>.from(result);
+              final code = (receipt['error'] as Map?)?['code']?.toString();
+              // Argument and usage errors fail before any VM call; without a
+              // dispatch status the hand could neither reconcile nor recover.
+              if (receipt['ok'] != true &&
+                  receipt['dispatch'] == null &&
+                  code != null &&
+                  (_knownPreDispatchErrors.contains(code) ||
+                      _agentArgumentErrorCodes.contains(code))) {
+                receipt['dispatch'] = 'not_dispatched';
+              }
+              return receipt;
+            }
+            if (captured['preDispatch'] == true) {
+              // A malformed request never reached the app; free the hand
+              // instead of halting it on an unknown outcome.
+              return {
+                'ok': false,
+                'dispatch': 'not_dispatched',
+                'error': captured['error'],
+              };
+            }
             return {
               'ok': false,
               'dispatch': 'dispatch_outcome_unknown',
@@ -325,6 +372,7 @@ function run() {
           } finally {
             hand._liveDecisionView = null;
             hand._liveDecisionTargets = null;
+            hand._liveDecisionAllowsUnrelated = false;
             hand._agentRequiresLiveRendering = false;
           }
         },
