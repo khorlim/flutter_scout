@@ -26,7 +26,10 @@ not supported command recipes.
 - Compact factual screen, surface, text, field, target and scroll information.
   Query selected sections only when necessary, not repeated raw-tree dumps.
 - Prefer exact observed semantic targets. Resolve ambiguity explicitly; do not
-  silently fuzzy-fallback a typed identity or retry a stale decision.
+  silently fuzzy-fallback a typed identity or retry a stale decision. Among
+  exact duplicates, the only one that can take input is the target, and the
+  resolution says so. Accepting unrelated screen changes, or tolerating a
+  known app error, needs the caller's explicit, visible authority.
 - Validate fresh run/runtime/snapshot, rendering and target safety at dispatch.
 - Serialize input without blocking observations. Acceptance is not success;
   acknowledgement cannot hide a failed or unknown canonical receipt.

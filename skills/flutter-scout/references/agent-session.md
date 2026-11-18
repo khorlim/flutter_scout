@@ -205,7 +205,11 @@ input with `params.target`, and fill keyed by handles still proceed when the
 only change is in-place text outside those targets, such as a clock or a
 countdown label. Route, surface, rendering, safety evidence, field values,
 scroll state, the kind and state of every control, and the target nodes must
-be unchanged, and text must not appear or disappear. Text-target, coordinate,
+be unchanged, and text must not appear or disappear. With an explicit
+`"allowUnrelatedChanges": true` on the action, those other changes are
+accepted too, as long as run, screen, surface, rendering, errors and field
+values are unchanged, every target is identical, enabled and hit-testable,
+and no new control appeared over a target. Text-target, coordinate,
 gesture, navigation and deeplink actions need the exact revision. Fresh CLI
 preflight verifies run/runtime and rendering and repeats the same comparison
 against the decision view; the helper checks generation, target safety, and

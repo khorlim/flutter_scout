@@ -132,7 +132,11 @@ key-press action. An open text-selection toolbar or context menu closes first
 built with: dismiss and reopen it to see reloaded code.
 
 Prefer exact observed handles, then unique visible text. Ambiguity requires
-focused discovery, not another guess. For forms, `fill` takes an observed
+focused discovery, not another guess. When duplicates match but only one can
+take input (the others sit behind the open sheet or dialog, or are off
+screen), that one is used and the resolution's `reason` says so.
+Icon-only controls are named from their icon (`btn.cart`): Material/Cupertino
+glyphs, and bundled PNG or SVG asset file names. For forms, `fill` takes an observed
 field-to-value map: `{method:'fill', params:{json:{[fieldHandle]:value}}}`.
 For one field, use `{method:'input', args:[value], params:{target:fieldHandle}}`.
 The input target belongs in `params.target`, not in `args`. Omitting it types
@@ -149,13 +153,32 @@ in physical pixels and may be scaled for display.
 For lazy lists, use region-scoped bounded reveal/scroll-to through act.
 
 Sensitive input belongs in agent JSON stdin through the client, never shell
-arguments or printed results. Do not use allowErrors, waitMs, expect flags,
-file input or capture flags in actions; these are rejected.
+arguments or printed results. Values typed into credential fields (password,
+PIN, OTP, token, card number, or a field the app marks sensitive) are scrubbed
+from all later output; other typed text (names, notes, amounts) stays
+readable so you can confirm it on screen. Do not use allowErrors, waitMs,
+expect flags, file input or capture flags in actions; these are rejected.
+
+Background churn: when a progress toast or live list keeps changing the
+screen, an exact-handle action can add `"allowUnrelatedChanges": true` beside
+`method`. It still dispatches only if every target is unchanged, enabled and
+hit-testable on the same surface, and nothing new appeared over it; otherwise
+it is rejected as usual. Use it only for changes you have judged unrelated.
+
+Known app errors: a caller that has judged a recurring app error harmless
+(for example a printer plugin missing on a simulator) sets
+`FLUTTER_SCOUT_TOLERATED_ERRORS` to one regular expression in the environment
+that starts the client. Matching errors move to `toleratedErrors` (still
+reported, so list them as app findings) and no longer halt input. Never use
+it to hide an error you have not understood.
 
 ## Completion and recovery
 
 Input completion and business completion are separate. watch({text: 'Saved'},
 8000) returns a ticket; consume next events until that condition's event.
+A plain watch may run up to 600,000 ms (a first data sync); one with a
+reaction stays within 30,000 ms. Each `next` waits at most 30,000 ms, so call
+it again until the condition event arrives.
 Do not wait for a success screen after a rejected input. Already-visible text
 proves observed state, not that a new save succeeded. A timeout is not evidence
 that an app operation was cancelled or safe to repeat.
