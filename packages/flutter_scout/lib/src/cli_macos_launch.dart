@@ -207,6 +207,44 @@ extension _CliMacosLaunch on FlutterScoutCli {
     return pids;
   }
 
+  /// Best-effort, read-only explanation for a launched app that never
+  /// reported a VM service. Never changes the container or the app.
+  Future<String> _macosLaunchStallHint(
+    String appPath,
+    String executable,
+    Set<int> existing,
+  ) async {
+    final current = await _pidsForExecutable(executable);
+    final appAlive = current.difference(existing).isNotEmpty;
+    String? metadata;
+    String? containerPath;
+    try {
+      final bundleId = await Process.run('/usr/bin/plutil', [
+        '-extract',
+        'CFBundleIdentifier',
+        'raw',
+        p.join(appPath, 'Contents', 'Info.plist'),
+      ]).timeout(const Duration(seconds: 5));
+      final id = '${bundleId.stdout}'.trim();
+      final home = Platform.environment['HOME'];
+      if (bundleId.exitCode == 0 && id.isNotEmpty && home != null) {
+        containerPath = p.join(home, 'Library', 'Containers', id);
+        final read = await Process.run('/usr/bin/plutil', [
+          '-p',
+          p.join(containerPath, '.com.apple.containermanagerd.metadata.plist'),
+        ]).timeout(const Duration(seconds: 5));
+        if (read.exitCode == 0) metadata = '${read.stdout}';
+      }
+    } on Object {
+      // Diagnostics only: fall back to the generic hint.
+    }
+    return FlutterScoutCli.macosLaunchStallHint(
+      appAlive: appAlive,
+      containerMetadata: metadata,
+      containerPath: containerPath,
+    );
+  }
+
   /// Opens the built bundle as a new LaunchServices instance, streams its
   /// stdout/stderr into the run log, and returns once the app reported its VM
   /// service. [isCancelled] stops waiting when the worker is asked to stop.
@@ -258,10 +296,11 @@ extension _CliMacosLaunch on FlutterScoutCli {
         );
       }
       if (DateTime.now().isAfter(deadline)) {
+        final hint = await _macosLaunchStallHint(appPath, executable, existing);
         throw ScoutCliException(
           'macos_app_vm_service_not_found',
           'The macOS app opened but did not report a Dart VM service within '
-              '${timeout.inSeconds}s. Check that it is a debug build.',
+              '${timeout.inSeconds}s. $hint',
         );
       }
       final chunk = _readFileFrom(outputFile, offset);

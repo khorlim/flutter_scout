@@ -617,6 +617,41 @@ void main() {
     });
   });
 
+  group('macosLaunchStallHint', () {
+    // Shape of `plutil -p` for a container first created by the App Store build.
+    const appStoreOwned = '''
+{
+  "MCMMetadataInfo" => {
+    "Owners" => "[{"validationCategory":"app_store","teamIdentifier":"U3B25U6JVG","signingIdentifier":"io.tunai.pro"}]"
+  }
+}''';
+
+    test('names the App Store-owned container prompt for a live app', () {
+      final hint = FlutterScoutCli.macosLaunchStallHint(
+        appAlive: true,
+        containerMetadata: appStoreOwned,
+        containerPath: '/Users/x/Library/Containers/io.tunai.pro',
+      );
+      expect(hint, contains('App Store/TestFlight build'));
+      expect(hint, contains('/Users/x/Library/Containers/io.tunai.pro'));
+      expect(hint, contains('cannot'));
+    });
+
+    test('falls back to a generic dialog hint when the owner is unknown', () {
+      final hint = FlutterScoutCli.macosLaunchStallHint(appAlive: true);
+      expect(hint, contains('alive but silent'));
+      expect(hint, isNot(contains('App Store')));
+    });
+
+    test('keeps the debug-build advice when the app is not running', () {
+      final hint = FlutterScoutCli.macosLaunchStallHint(
+        appAlive: false,
+        containerMetadata: appStoreOwned,
+      );
+      expect(hint, contains('debug build'));
+    });
+  });
+
   group('parseSimctlDevices', () {
     const payload = '''
 {

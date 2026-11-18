@@ -1933,6 +1933,42 @@ print(String(data: data, encoding: .utf8)!)
     );
   }
 
+  /// Explains a macOS debug app that opened but never reported a VM service.
+  ///
+  /// [containerMetadata] is `plutil -p` output for the app's sandbox container
+  /// metadata, when readable. A container first created by an App Store or
+  /// TestFlight build is owned by that signature, so a development-signed
+  /// debug build stalls in App Sandbox start-up until someone answers the
+  /// macOS "access data from other apps" prompt on the Mac's screen. Exposed
+  /// for testing.
+  static String macosLaunchStallHint({
+    required bool appAlive,
+    String? containerMetadata,
+    String? containerPath,
+  }) {
+    if (!appAlive) {
+      return 'Check that it is a debug build and read the run log for a '
+          'start-up crash.';
+    }
+    final categories = <String>{
+      for (final match in RegExp(
+        r'validationCategory\\?"\s*:\s*\\?"([a-z_]+)',
+      ).allMatches(containerMetadata ?? ''))
+        match.group(1)!,
+    };
+    if (categories.contains('app_store')) {
+      return 'The app process is alive but silent. Its sandbox container'
+          '${containerPath == null ? '' : ' ($containerPath)'} is owned by an '
+          'App Store/TestFlight build (validationCategory app_store), so macOS '
+          'is most likely showing an "access data from other apps" prompt on '
+          'the Mac\'s screen. Someone must answer it there once; an agent '
+          'cannot. Scout did not change the container.';
+    }
+    return 'The app process is alive but silent: it may be waiting on a macOS '
+        'permission or consent dialog on the Mac\'s screen. Check the screen '
+        'or the run log.';
+  }
+
   /// Returns the display name for a fixed Flutter desktop/web device id, or null
   /// for anything that needs real discovery. Exposed for testing.
   static String? wellKnownDeviceName(String id) => const <String, String>{
@@ -1944,6 +1980,15 @@ print(String(data: data, encoding: .utf8)!)
     'web-server': 'Web Server',
   }[id];
 
+  /// CoreSimulator answers `simctl list` slowly right after a boot or while
+  /// another simulator is starting on a loaded host; a short limit silently
+  /// dropped to the much slower Flutter discovery.
+  static const Duration _simctlDeviceListTimeout = Duration(seconds: 30);
+
+  /// `flutter devices --machine` took ~36s on an 8 GB Mac with one booted
+  /// simulator, and longer right after boot, so 20s failed real launches.
+  static const Duration flutterDeviceDiscoveryTimeout = Duration(seconds: 90);
+
   Future<_FlutterDevice?> _resolveSimulatorDevice(String requested) async {
     final ProcessResult result;
     try {
@@ -1952,7 +1997,7 @@ print(String(data: data, encoding: .utf8)!)
         'list',
         'devices',
         '--json',
-      ]).timeout(const Duration(seconds: 10));
+      ]).timeout(_simctlDeviceListTimeout);
     } on Object {
       // xcrun missing/unavailable (non-macOS host, no Xcode) -> fall back.
       return null;
@@ -2110,7 +2155,7 @@ print(String(data: data, encoding: .utf8)!)
           'devices',
           '--machine',
         ], environment: _flutterToolEnvironment()).timeout(
-          const Duration(seconds: 20),
+          flutterDeviceDiscoveryTimeout,
           onTimeout: () => ProcessResult(0, 1, '', 'flutter devices timed out'),
         );
     if (result.exitCode != 0) {

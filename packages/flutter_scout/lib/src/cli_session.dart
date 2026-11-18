@@ -1980,7 +1980,7 @@ extension _CliSession on FlutterScoutCli {
           'devices',
           '--machine',
         ], environment: _flutterToolEnvironment()).timeout(
-          const Duration(seconds: 20),
+          FlutterScoutCli.flutterDeviceDiscoveryTimeout,
           onTimeout: () => ProcessResult(0, 1, '', 'flutter devices timed out'),
         );
     if (result.exitCode != 0) {
