@@ -23,6 +23,24 @@ final class _SensitiveRedactionMatcher {
 const String _kLegacyRecordRedactedPrefix = '\u0000VAR:';
 const String _kSerializedRedaction = '<redacted>';
 
+final RegExp _sensitiveTypedTargetPattern = RegExp(
+  r'(^|[^a-z0-9])(password|passcode|passphrase|pwd|secret|pin|cvv|cvc|otp|'
+  r'token|cookie|session[ _-]?id|api[ _-]?key|security[ _-]?code|'
+  r'card[ _-]?number|account[ _-]?number|one[ _-]?time[ _-]?code|'
+  r'verification[ _-]?code)($|[^a-z0-9])',
+  caseSensitive: false,
+);
+
+/// Whether a typed value's target (a field id or label such as
+/// `field.password`) names a credential, so the value must be scrubbed from
+/// all later output. Exposed for testing.
+bool typedValueTargetLooksSensitive(String? target) {
+  if (target == null || target.isEmpty) return false;
+  return _sensitiveTypedTargetPattern.hasMatch(
+    target.replaceAll(RegExp(r'[._]'), ' '),
+  );
+}
+
 extension _CliPrivacy on FlutterScoutCli {
   void _registerSensitiveValue(Object? value) {
     if (value == null) return;
@@ -65,6 +83,17 @@ extension _CliPrivacy on FlutterScoutCli {
       // The complete untrusted string was already registered above. Leave
       // structural rejection to the central typed URI validator without
       // allowing a malformed percent escape to bypass redaction.
+    }
+  }
+
+  /// Registers only the `fill` values whose field id names a credential.
+  /// Other typed business data (names, notes, amounts) stays observable; the
+  /// helper independently redacts fields it classifies as sensitive.
+  void _registerSensitiveFillValues(Map<dynamic, dynamic> values) {
+    for (final entry in values.entries) {
+      if (typedValueTargetLooksSensitive(entry.key?.toString())) {
+        _registerSensitiveValue(entry.value);
+      }
     }
   }
 
@@ -136,7 +165,8 @@ extension _CliPrivacy on FlutterScoutCli {
         }
         if (!arg.startsWith('-')) positional.add(arg);
       }
-      if (positional.isNotEmpty) {
+      if (positional.isNotEmpty &&
+          typedValueTargetLooksSensitive(_optionValue(args, 'target'))) {
         for (final value in positional) {
           _registerSensitiveValue(value);
         }
@@ -146,7 +176,12 @@ extension _CliPrivacy on FlutterScoutCli {
       final raw = _optionValue(args, 'json');
       if (raw != null && raw.isNotEmpty) {
         try {
-          _registerSensitiveValue(jsonDecode(raw));
+          final decoded = jsonDecode(raw);
+          if (decoded is Map) {
+            _registerSensitiveFillValues(decoded);
+          } else {
+            _registerSensitiveValue(decoded);
+          }
         } catch (_) {
           _registerSensitiveValue(raw);
         }

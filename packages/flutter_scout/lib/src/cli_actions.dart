@@ -418,7 +418,15 @@ extension _CliActions on FlutterScoutCli {
       value = parsed.rest.join(' ');
     }
     final target = parsed.option('target') ?? 'focused';
-    _registerSensitiveValue(value);
+    // Protected ingress (`--file`, `--stdin`) marks a secret. A plain value
+    // (a member name, a remark) stays readable in later observations unless
+    // the target names a credential; the helper still redacts every field it
+    // classifies as sensitive and remembers what was typed into it.
+    if (filePath != null && filePath.isNotEmpty ||
+        fromStdin ||
+        typedValueTargetLooksSensitive(target)) {
+      _registerSensitiveValue(value);
+    }
     final params = <String, String>{
       'target': target,
       'value': value,
@@ -634,7 +642,11 @@ extension _CliActions on FlutterScoutCli {
         );
       }
     }
-    _registerSensitiveValue(decodedValues);
+    if (protectedSource) {
+      _registerSensitiveValue(decodedValues);
+    } else {
+      _registerSensitiveFillValues(decodedValues as Map);
+    }
     final params = <String, String>{
       'values': protectedSource ? jsonEncode(decodedValues) : raw,
       ..._expectParams(parsed),
