@@ -224,6 +224,9 @@ Instead of `sleep` before a screenshot, wait for the end state with a `watch`
 condition or a fresh observation. Scout has no frame-sequence capture; do not
 slow animations with `timeDilation` in an app a person is also using.
 
+Use `--retention manual` for screenshots you must keep after
+`stop --clear-session` (reports, test evidence); `session` images are deleted.
+
 ```bash
 flutter-scout --app <task> screenshot -o /private/path/screen.png --retention session
 flutter-scout --app <task> crop --changed-since '<snapshot-id>' -o /private/path/change.png

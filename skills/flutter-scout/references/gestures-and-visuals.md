@@ -81,7 +81,10 @@ names the resolved directory to pass instead.
 
 Screenshots/crops are private application data. Prefer a private destination
 and keep the default `--retention session`; use longer retention only when the
-task requires it.
+task requires it. `stop --clear-session` deletes every `session`-retained
+image, including ones written to your own `-o` path. Evidence that must outlive
+the session (a QA or release report, a bug report) needs `--retention manual`
+(or `24h`/`7d`) when you capture it; copying files out afterwards is fragile.
 
 Scout prefers in-app capture. A forced or required native full screenshot uses
 the exact recorded emulator: `xcrun simctl` on iOS Simulator or local-argv
