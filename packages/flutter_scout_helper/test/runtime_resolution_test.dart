@@ -138,6 +138,64 @@ void main() {
   );
 
   testWidgets(
+    'a duplicate behind an open dialog does not make the dialog control '
+    'ambiguous',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      var pageSaves = 0;
+      var dialogSaves = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: Column(
+                children: [
+                  ElevatedButton(
+                    onPressed: () => pageSaves++,
+                    child: const Text('Save'),
+                  ),
+                  TextButton(
+                    onPressed: () => showDialog<void>(
+                      context: context,
+                      builder: (_) => AlertDialog(
+                        content: const Text('Keypad'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => dialogSaves++,
+                            child: const Text('Save'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    child: const Text('Open'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+
+      final runtime = FlutterScoutHelper.debugRuntime;
+      for (final tap in [
+        () => runtime.debugTapTarget('Save'),
+        () => runtime.debugTapTextTarget('Save'),
+      ]) {
+        final response = (await tester.runAsync(tap))!;
+        expect(response['ok'], isTrue, reason: '$response');
+        expect(
+          '${resolutionOf(response)['reason']}',
+          contains('only actionable one of 2'),
+        );
+      }
+      expect(dialogSaves, 2);
+      expect(pageSaves, 0);
+    },
+  );
+
+  testWidgets(
     'scoped generated handles dispatch their exact duplicate control',
     (tester) async {
       FlutterScoutHelper.ensureRegistered();

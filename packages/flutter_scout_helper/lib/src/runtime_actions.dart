@@ -1260,6 +1260,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
         ..._stabilityResponseFields(effectiveStability),
         'reason': reason,
         'scrollsUsed': scrolls,
+        // A failure before the first scroll changed nothing, so the caller's
+        // hand can be freed; after a scroll the outcome is known and changed.
+        'activation': <String, Object?>{'dispatched': scrolls > 0},
         'before': before.summaryJson(),
         'after': after.summaryJson(),
         'delta': _delta(before, after),

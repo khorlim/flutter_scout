@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart'
+    show DiagnosticPropertiesBuilder, StringProperty;
 import 'package:flutter/material.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1089,6 +1091,41 @@ void main() {
     expect(ids.where((id) => id.startsWith('btn.cupertinobutton')), isEmpty);
     // Single-character plain text keeps its literal label — no icon_35 noise.
     expect(snapshot.textTargets.map((node) => node.id), contains('text.5'));
+  });
+
+  testWidgets('SVG asset icons name icon-only buttons', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              CupertinoButton(
+                onPressed: () {},
+                child: const SvgPicture(
+                  'SvgAssetLoader(assets/svg/fill/cart.svg)',
+                ),
+              ),
+              CupertinoButton(
+                onPressed: () {},
+                child: const SvgPicture(
+                  'SvgNetworkLoader(https://x.test/a.svg)',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final ids = FlutterScoutHelper.debugRuntime
+        .debugSnapshot()
+        .interactables
+        .map((node) => node.id)
+        .toList();
+    expect(ids, contains('btn.cart'));
+    expect(ids.where((id) => id.contains('x_test')), isEmpty);
   });
 
   testWidgets('image-only buttons get safe names from bundled asset stems', (
@@ -3514,5 +3551,24 @@ class _CurrentRouteScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(body: Center(child: Text('Current route only')));
+  }
+}
+
+/// Stands in for flutter_svg's SvgPicture, which Scout matches by type name
+/// and reads only through its diagnostics.
+class SvgPicture extends StatelessWidget {
+  const SvgPicture(this.loaderDescription, {super.key});
+
+  final String loaderDescription;
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.square(dimension: 24);
+
+  @override
+  void debugFillProperties(DiagnosticPropertiesBuilder properties) {
+    super.debugFillProperties(properties);
+    properties.add(
+      StringProperty('bytesLoader', loaderDescription, showName: false),
+    );
   }
 }

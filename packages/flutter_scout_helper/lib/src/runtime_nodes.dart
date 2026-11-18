@@ -863,6 +863,14 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       }
       return _imageAssetLabel(widget.image);
     }
+    // flutter_svg's SvgPicture (matched by name: Scout does not depend on
+    // it) publishes its bundled asset in diagnostics, for example
+    // `SvgAssetLoader(assets/svg/cart.svg)`. Apps that draw every icon as an
+    // SVG asset otherwise leave icon-only buttons unlabeled.
+    if (widget.runtimeType.toString() == 'SvgPicture') {
+      final asset = _svgAssetName(widget);
+      if (asset != null) return _assetStemLabel(asset);
+    }
     // A bare single-glyph Text/RichText (an icon font used without an Icon
     // widget) still carries its font family in its style.
     final own = _ownText(widget);
@@ -892,7 +900,32 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     } else {
       return null;
     }
+    return _assetStemLabel(assetName);
+  }
 
+  static final RegExp _svgAssetPattern = RegExp(
+    r'^(?:SvgAssetLoader|VectorGraphicAsset)\((?:[\w.-]+/)?([^()]+)\)$',
+  );
+
+  /// The bundled asset of an SVG widget, read only from an asset loader's
+  /// description (never network, file or string loaders).
+  String? _svgAssetName(Widget widget) {
+    try {
+      for (final property in widget.toDiagnosticsNode().getProperties()) {
+        final value = property.value;
+        final text = value is String ? value : property.toDescription();
+        final match = _svgAssetPattern.firstMatch(text.trim());
+        if (match != null) return match.group(1);
+      }
+    } catch (_) {
+      // Diagnostics are best effort; an unreadable icon stays unlabeled.
+    }
+    return null;
+  }
+
+  /// The final stem of a bundled asset path as a label, or null when it is
+  /// opaque, generic or could be sensitive.
+  String? _assetStemLabel(String assetName) {
     final normalized = assetName.replaceAll('\\', '/');
     var basename = normalized.split('/').last.trim();
     if (basename.isEmpty) return null;

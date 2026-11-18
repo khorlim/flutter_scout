@@ -250,6 +250,19 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       );
     }
     if (ranked.length != 1) {
+      final sole = _soleActionableCandidate(ranked);
+      if (sole != null) {
+        return _narrowedResolution(
+          _applyTargetSafety(
+            snapshot: snapshot,
+            requested: target,
+            candidate: sole,
+            safety: safety,
+            scope: scope,
+          ),
+          ranked.length,
+        );
+      }
       return _TargetResolution(
         status: _TargetResolutionStatus.ambiguous,
         requested: target,
@@ -772,6 +785,25 @@ extension _RuntimeResolution on FlutterScoutRuntime {
         ),
     ];
     _sortTargetCandidates(candidates);
+    final sole = candidates.length == 1
+        ? null
+        : _soleActionableCandidate(candidates);
+    if (sole != null) {
+      final pair = byLogicalTarget.values.firstWhere(
+        (value) => identical(value.target, sole.node),
+      );
+      return _narrowedResolution(
+        _applyTargetSafety(
+          snapshot: snapshot,
+          requested: wanted,
+          candidate: sole,
+          safety: _TargetSafety.mutate,
+          scope: scope,
+          textNode: pair.text,
+        ),
+        candidates.length,
+      );
+    }
     if (candidates.length != 1) {
       return _TargetResolution(
         status: _TargetResolutionStatus.ambiguous,
@@ -832,6 +864,45 @@ extension _RuntimeResolution on FlutterScoutRuntime {
       );
     }
     return resolved;
+  }
+
+  /// Among equally strong matches, the only one that can receive input: the
+  /// others sit behind the active modal surface or are not visible. Tapping a
+  /// control behind a sheet or scrolled out of view is impossible, so that one
+  /// is the target. Null when zero or several candidates are actionable.
+  _TargetCandidate? _soleActionableCandidate(
+    List<_TargetCandidate> candidates,
+  ) {
+    if (candidates.length < 2) return null;
+    final best = candidates.map((c) => c.score).reduce(math.max);
+    final strongest = candidates.where((c) => c.score == best).toList();
+    final actionable = [
+      for (final candidate in strongest)
+        if (candidate.onActiveSurface &&
+            candidate.node.hitTestable &&
+            candidate.node.visibleFraction > 0)
+          candidate,
+    ];
+    return actionable.length == 1 ? actionable.single : null;
+  }
+
+  _TargetResolution _narrowedResolution(_TargetResolution resolved, int total) {
+    if (!resolved.isUnique) return resolved;
+    return _TargetResolution(
+      status: resolved.status,
+      requested: resolved.requested,
+      snapshot: resolved.snapshot,
+      scope: resolved.scope,
+      candidates: resolved.candidates,
+      node: resolved.node,
+      textNode: resolved.textNode,
+      safePoint: resolved.safePoint,
+      match: resolved.match,
+      immediateHitTest: resolved.immediateHitTest,
+      reason:
+          'Chose the only actionable one of $total matches; the others are '
+          'behind the active surface or not visible.',
+    );
   }
 
   bool _nodeOnActiveSurface(ScoutSnapshot snapshot, ScoutNode node) {
