@@ -54,6 +54,9 @@ class AgentSession {
     'deeplink',
   };
 
+  /// `tap` options that change how it presses, never where.
+  static const _tapPointParams = {'button', 'taps', 'intervalMs'};
+
   /// Exact handles an action is limited to, or null when its effect is not
   /// scoped to named observed handles (text, coordinates, gestures, routes).
   static Set<String>? scopedTargets(AgentView action) {
@@ -72,13 +75,11 @@ class AgentSession {
     }
 
     return switch (action['method']) {
-      'tap' ||
       'long-press' when args.length == 1 && params.isEmpty => handles(args),
-      // A right click is still one exact observed handle.
+      // A right click or a double tap is still one exact observed handle.
       'tap'
           when args.length == 1 &&
-              params.length == 1 &&
-              params['button'] == 'secondary' =>
+              params.keys.every(_tapPointParams.contains) =>
         handles(args),
       'input'
           when args.length == 1 &&

@@ -126,6 +126,15 @@ copyable values) is text, so `locate` finds its words.
 Context menus: `{method:'long-press', args:[handle]}` presses and holds, and
 `{method:'tap', args:[handle], params:{button:'secondary'}}` is a mouse right
 click (desktop `onSecondaryTap*` menus). Read the menu from the next scene.
+Double tap: add `params:{taps:2}` to `tap` (handle or `x`/`y`) or `tap-text`.
+Both taps go out in one dispatch at one point, 100 ms apart (`intervalMs`
+0-1000), with one receipt. Use it for `onDoubleTap` controls and to test an
+impatient user (a double-tapped submit must create one record); two separate
+`act` taps land hundreds of ms apart. The second tap is never retried or
+retargeted: if the first tap changed the screen, it lands on whatever is now
+at that point, and `activation.secondTap.targetStillHit: false` plus a warning
+say so. Check the business outcome (one sale, one order) yourself.
+
 Close a menu, popover, sheet or dialog with `{method:'dismiss'}`; there is no
 key-press action. An open text-selection toolbar or context menu closes first
 (as Escape does), so dismiss never pops the screen under it. A menu opened before a hot reload keeps the items it was

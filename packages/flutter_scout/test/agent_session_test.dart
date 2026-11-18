@@ -1049,6 +1049,15 @@ void main() {
     // Only exact handle actions are scoped; text, coordinates and gestures
     // keep exact revision freshness.
     expect(AgentSession.scopedTargets(tap), {'btn.pause'});
+    // A double tap or right click on a handle still presses only that handle.
+    expect(
+      AgentSession.scopedTargets({
+        'method': 'tap',
+        'args': ['btn.pause'],
+        'params': {'taps': 2, 'intervalMs': 80, 'button': 'secondary'},
+      }),
+      {'btn.pause'},
+    );
     expect(
       AgentSession.scopedTargets({
         'method': 'input',
@@ -1065,6 +1074,11 @@ void main() {
       {
         'method': 'tap',
         'args': ['10', '20'],
+      },
+      {
+        'method': 'tap',
+        'args': ['btn.pause'],
+        'params': {'taps': 2, 'expectText': 'Paused'},
       },
       {
         'method': 'scroll',

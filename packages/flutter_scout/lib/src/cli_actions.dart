@@ -305,12 +305,33 @@ extension _CliActions on FlutterScoutCli {
     );
   }
 
+  /// `--taps 2` (double tap) and its `--interval-ms`, passed to the helper
+  /// only when given, so a plain tap keeps working against older helpers.
+  /// The helper's typed contract enforces the bounds before any dispatch.
+  Map<String, String> _tapRepeatParams(ArgResults parsed) {
+    final taps = parsed.option('taps');
+    final interval = parsed.option('interval-ms');
+    if (interval != null && taps != '2') {
+      throw const ScoutCliException(
+        'usage',
+        '--interval-ms is the gap between the taps of a double tap; pass it '
+            'with --taps 2.',
+      );
+    }
+    return {
+      if (taps != null && taps != '1') 'taps': taps,
+      'intervalMs': ?interval,
+    };
+  }
+
   ArgParser _tapArgumentParser() {
     final parser = ArgParser()
       ..addOption('x')
       ..addOption('y')
       // `secondary` is a mouse right click, for desktop context menus.
       ..addOption('button', allowed: const ['primary', 'secondary'])
+      ..addOption('taps', allowed: const ['1', '2'], help: '2 = double tap.')
+      ..addOption('interval-ms')
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('verbose', defaultsTo: false);
     _addExpectOptions(parser);
@@ -363,6 +384,7 @@ extension _CliActions on FlutterScoutCli {
     }
     final button = parsed.option('button');
     if (button != null && button != 'primary') params['button'] = button;
+    params.addAll(_tapRepeatParams(parsed));
     return _callAndPrint(
       'ext.flutter_scout.tap',
       params: params,
@@ -457,6 +479,8 @@ extension _CliActions on FlutterScoutCli {
             'Visible text to tap. Use this when the label starts with `-` or '
             'could otherwise be parsed as an option.',
       )
+      ..addOption('taps', allowed: const ['1', '2'], help: '2 = double tap.')
+      ..addOption('interval-ms')
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('allow-mismatch', defaultsTo: false, negatable: false)
       ..addFlag(
@@ -492,6 +516,7 @@ extension _CliActions on FlutterScoutCli {
       'waitMs': parsed.option('wait-ms') ?? '1500',
       if (parsed.flag('allow-mismatch')) 'allowMismatch': 'true',
       if (parsed.flag('contains')) 'contains': 'true',
+      ..._tapRepeatParams(parsed),
       ..._expectParams(parsed),
     };
     final totalStopwatch = Stopwatch()..start();

@@ -37,6 +37,11 @@ Use the shipped scripts/agent_client.mjs over one persistent JSONL pipe.
 Actions: tap, tap-text, long-press, input, fill, scroll, swipe, scroll-to,
 reveal, back, dismiss, drag-start, drag-move, drag-end, drag-cancel, deeplink.
 `tap` takes `params.button: 'secondary'` for a mouse right click.
+`tap` and `tap-text` take `params.taps: 2` for a double tap (two complete
+taps at one point in one dispatch and one receipt) and `params.intervalMs`
+(0-1000, default 100) for the gap from the first up to the second down. The
+receipt's `activation.secondTap` reports `targetStillHit` (handle and text
+targets) and `sameHitPathAsFirstTap`, with the new `hitPath` when it changed.
 Action parameters remain typed; no expect*, waitMs, allowErrors, file/stdin
 source flags, verbose or automatic image capture. Text/input values travel in
 the JSON pipe, not shell argv. Native deep links remain capability-gated.

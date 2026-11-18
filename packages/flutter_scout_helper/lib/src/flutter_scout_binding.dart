@@ -661,12 +661,16 @@ class FlutterScoutRuntime {
   Future<Map<String, Object?>> debugTapTarget(
     String target, {
     String? button,
+    int? taps,
+    int? intervalMs,
   }) async {
     final response = await _handleTap('debugTapTarget', {
       'target': target,
       'waitMs': '0',
       'lateWaitMs': '0',
       'button': ?button,
+      if (taps != null) 'taps': '$taps',
+      if (intervalMs != null) 'intervalMs': '$intervalMs',
     });
     return jsonDecode(response.result!) as Map<String, Object?>;
   }

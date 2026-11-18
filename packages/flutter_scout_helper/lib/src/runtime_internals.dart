@@ -52,14 +52,76 @@ extension _RuntimeInternals on FlutterScoutRuntime {
   Future<void> _dispatchTapWithoutPhaseTiming(Offset point) async =>
       _dispatchPress(point, hold: const Duration(milliseconds: 30));
 
-  /// A right click: a mouse pointer pressing the secondary button, which is
-  /// what desktop context menus (onSecondaryTap*) listen for.
-  Future<void> _dispatchSecondaryTap(Offset point) => _dispatchPress(
-    point,
-    hold: const Duration(milliseconds: 30),
-    kind: PointerDeviceKind.mouse,
-    buttons: kSecondaryMouseButton,
-  );
+  /// Dispatches [taps] (1 or 2) complete taps, down and up each, at one fixed
+  /// [point] in this single call, [interval] from the first up to the second
+  /// down, the way a person double taps. Nothing between the taps waits for a receipt, a
+  /// fresh view or the target: if the first tap changes the screen, the next
+  /// one still lands at the same point. Returns evidence about what was under
+  /// the point just before the second tap, or null for a single tap.
+  ///
+  /// [secondary] is a right click: a mouse pointer pressing the secondary
+  /// button, which is what desktop context menus (onSecondaryTap*) listen for.
+  /// [expected] is the resolved target's render object, when there is one.
+  Future<Map<String, Object?>?> _dispatchTaps(
+    Offset point, {
+    required int taps,
+    required Duration interval,
+    required bool secondary,
+    RenderObject? expected,
+  }) => _inRequestPhaseAsync('dispatch', () async {
+    Future<void> press() => _dispatchPressWithoutPhaseTiming(
+      point,
+      hold: const Duration(milliseconds: 30),
+      kind: secondary ? PointerDeviceKind.mouse : PointerDeviceKind.touch,
+      buttons: secondary ? kSecondaryMouseButton : kPrimaryButton,
+    );
+    if (taps <= 1) {
+      await press();
+      return null;
+    }
+    final firstPath = _hitPathAt(point);
+    await press();
+    await Future<void>.delayed(interval);
+    // A backgrounded desktop window services no frames; flush the first tap's
+    // build so the hit test below reads what the person would see.
+    _advancePendingMutationFrame();
+    final second = _repeatTapEvidence(point, firstPath, expected);
+    await press();
+    return second;
+  });
+
+  /// The render objects under [point], topmost first.
+  List<HitTestTarget> _hitPathAt(Offset point) {
+    var path = const <HitTestTarget>[];
+    _hitTest(point, (result) {
+      path = [for (final entry in result.path) entry.target];
+      return path.isNotEmpty;
+    });
+    return path;
+  }
+
+  Map<String, Object?> _repeatTapEvidence(
+    Offset point,
+    List<HitTestTarget> firstPath,
+    RenderObject? expected,
+  ) {
+    final path = _hitPathAt(point);
+    final samePath =
+        path.length == firstPath.length &&
+        [for (var i = 0; i < path.length; i++) identical(path[i], firstPath[i])]
+            .every((same) => same);
+    return {
+      if (expected != null)
+        'targetStillHit':
+            expected.attached &&
+            path.any((entry) => identical(entry, expected)),
+      'sameHitPathAsFirstTap': samePath,
+      if (!samePath)
+        'hitPath': [
+          for (final entry in path.take(12)) entry.runtimeType.toString(),
+        ],
+    };
+  }
 
   Future<void> _dispatchPress(
     Offset point, {

@@ -22,6 +22,42 @@ extension _RuntimeActions on FlutterScoutRuntime {
     return deadline == null ? null : deadline - _postWaitReserveMs;
   }
 
+  /// `taps`: 1 for a tap, 2 for a double tap. Validated by the contract.
+  int _tapCount(Map<String, String> params) =>
+      int.tryParse(params['taps'] ?? '') ?? 1;
+
+  /// The gap from one tap's up to the next tap's down.
+  Duration _tapInterval(Map<String, String> params) =>
+      Duration(milliseconds: int.tryParse(params['intervalMs'] ?? '') ?? 100);
+
+  Map<String, Object?> _multiTapActivation(
+    Map<String, String> params,
+    Map<String, Object?>? secondTap,
+  ) => secondTap == null
+      ? const <String, Object?>{}
+      : {
+          'taps': _tapCount(params),
+          'intervalMs': _tapInterval(params).inMilliseconds,
+          'secondTap': secondTap,
+        };
+
+  /// Says so when the first tap changed what lies under the point, so the
+  /// second tap did not land on the same control.
+  String? _secondTapMovedWarning(Map<String, Object?>? secondTap) {
+    if (secondTap == null) return null;
+    if (secondTap['targetStillHit'] == false) {
+      return 'The first tap removed or covered the target; the second tap '
+          'still landed at the same point, on what was there then '
+          '(activation.secondTap.hitPath).';
+    }
+    if (!secondTap.containsKey('targetStillHit') &&
+        secondTap['sameHitPathAsFirstTap'] == false) {
+      return 'The first tap changed what lies under the point; the second '
+          'tap landed on activation.secondTap.hitPath.';
+    }
+    return null;
+  }
+
   Future<developer.ServiceExtensionResponse> _handleTap(
     String method,
     Map<String, String> params,
@@ -71,17 +107,21 @@ extension _RuntimeActions on FlutterScoutRuntime {
       }
 
       final secondary = params['button'] == 'secondary';
-      if (secondary) {
-        await _dispatchSecondaryTap(point);
-      } else {
-        await _dispatchTap(point);
-      }
+      final taps = _tapCount(params);
+      final secondTap = await _dispatchTaps(
+        point,
+        taps: taps,
+        interval: _tapInterval(params),
+        secondary: secondary,
+        expected: node?._renderObject,
+      );
       final actionSnapshot = await _snapshotAfterAction(before, params);
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
       return await _respondWithExpectation(params, {
         'action':
+            '${taps == 2 ? 'double ' : ''}'
             '${secondary ? 'secondary tap' : 'tap'} '
             '${target ?? '${point.dx},${point.dy}'}',
         if (secondary) 'button': 'secondary',
@@ -101,6 +141,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
         'target': node?.toJson(),
         'activation': {
           'dispatched': true,
+          ..._multiTapActivation(params, secondTap),
           'observedChange': changed,
           'activityObserved': activityObserved,
           'note': changed
@@ -113,9 +154,12 @@ extension _RuntimeActions on FlutterScoutRuntime {
         },
         if (resolution != null) 'resolution': resolution.toJson(),
         'coordinateEvidence': ?coordinateEvidence,
-        if (!activityObserved && node?.selected != true)
-          'warnings': const [
-            'Tap dispatched without an observed synchronous UI change; check recentErrors, overlays, logs, or increase --wait-ms if the action is async.',
+        if ((!activityObserved && node?.selected != true) ||
+            _secondTapMovedWarning(secondTap) != null)
+          'warnings': [
+            if (!activityObserved && node?.selected != true)
+              'Tap dispatched without an observed synchronous UI change; check recentErrors, overlays, logs, or increase --wait-ms if the action is async.',
+            ?_secondTapMovedWarning(secondTap),
           ],
         'before': before.summaryJson(),
         'after': after.summaryJson(),
@@ -196,13 +240,20 @@ extension _RuntimeActions on FlutterScoutRuntime {
         );
       }
       final activationRisk = _tapTextActivationRisk(match);
-      await _dispatchTap(point);
+      final taps = _tapCount(params);
+      final secondTap = await _dispatchTaps(
+        point,
+        taps: taps,
+        interval: _tapInterval(params),
+        secondary: false,
+        expected: targetNode._renderObject,
+      );
       final actionSnapshot = await _snapshotAfterAction(before, params);
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
       return await _respondWithExpectation(params, {
-        'action': 'tap-text $text',
+        'action': '${taps == 2 ? 'double ' : ''}tap-text $text',
         ..._stabilityResponseFields(actionSnapshot.stability),
         'result': _tapResult(
           changed: changed,
@@ -225,14 +276,17 @@ extension _RuntimeActions on FlutterScoutRuntime {
           'activityObserved': activityObserved,
           'strategy': _tapTextStrategy(match),
           'risk': activationRisk,
+          ..._multiTapActivation(params, secondTap),
         },
         if ((!activityObserved && targetNode.selected != true) ||
-            activationRisk['level'] != 'low')
+            activationRisk['level'] != 'low' ||
+            _secondTapMovedWarning(secondTap) != null)
           'warnings': [
             if (!activityObserved && targetNode.selected != true)
               'tap-text activated the nearest actionable target, but no synchronous UI change was observed before the wait timeout.',
             if (activationRisk['level'] != 'low')
               'tap-text used a higher-risk activation path; prefer a concrete handle from inspect when repeating this action.',
+            ?_secondTapMovedWarning(secondTap),
           ],
         'before': before.summaryJson(),
         'after': after.summaryJson(),

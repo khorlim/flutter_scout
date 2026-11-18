@@ -256,6 +256,20 @@ const _waitMs = _TypedValueContract(
   maximum: 600000,
   defaultValue: 1500,
 );
+// `taps: 2` is a double tap: two complete taps at one point in one helper
+// dispatch, `intervalMs` from the first up to the second down.
+const _taps = _TypedValueContract(
+  kind: _TypedJsonKind.integer,
+  minimum: 1,
+  maximum: 2,
+  defaultValue: 1,
+);
+const _tapIntervalMs = _TypedValueContract(
+  kind: _TypedJsonKind.integer,
+  minimum: 0,
+  maximum: 1000,
+  defaultValue: 100,
+);
 const _expectTimeout = _TypedValueContract(
   kind: _TypedJsonKind.integer,
   minimum: 0,
@@ -870,6 +884,8 @@ final Map<String, _TypedMethodContract> _typedMethodContracts =
             defaultValue: 'primary',
             allowedValues: <String>['primary', 'secondary'],
           ),
+          'intervalMs': _tapIntervalMs,
+          'taps': _taps,
           'verbose': _boolFalse,
           'waitMs': _waitMs,
           'x': _coordinate,
@@ -897,6 +913,8 @@ final Map<String, _TypedMethodContract> _typedMethodContracts =
           ..._persistentExpectParameters(),
           'allowMismatch': _boolFalse,
           'contains': _boolFalse,
+          'intervalMs': _tapIntervalMs,
+          'taps': _taps,
           'text': _optionalText,
           'verbose': _boolFalse,
           'waitMs': _waitMs,

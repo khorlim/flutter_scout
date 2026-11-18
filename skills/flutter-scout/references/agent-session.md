@@ -200,7 +200,8 @@ Polling can miss transitions shorter than a sample, and an event is evidence
 of a past observation, not a reusable current action authorization.
 
 All actions carry the decision's `viewRevision`; a changed revision is
-rejected, with one exception. tap or long-press on one exact observed handle,
+rejected, with one exception. tap (including `button` and a double tap's
+`taps`/`intervalMs`) or long-press on one exact observed handle,
 input with `params.target`, and fill keyed by handles still proceed when the
 only change is in-place text outside those targets, such as a clock or a
 countdown label. Route, surface, rendering, safety evidence, field values,

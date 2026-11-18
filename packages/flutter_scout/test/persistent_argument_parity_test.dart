@@ -87,6 +87,36 @@ void main() {
       );
     });
 
+    test('bounds a double tap before dispatch', () {
+      for (final method in ['tap', 'tap-text']) {
+        final target = method == 'tap' ? 'btn.pay' : 'Confirm Payment';
+        expect(
+          cli.debugValidatePersistentTypedCall({
+            'method': method,
+            'args': [target],
+            'params': {'taps': 2, 'intervalMs': 80},
+          })['valid'],
+          isTrue,
+          reason: method,
+        );
+        for (final params in <Map<String, Object?>>[
+          {'taps': 3},
+          {'taps': 0},
+          {'taps': 2, 'intervalMs': 1001},
+          {'taps': 2, 'intervalMs': -1},
+          {'taps': '2'},
+        ]) {
+          final result = cli.debugValidatePersistentTypedCall({
+            'method': method,
+            'args': [target],
+            'params': params,
+          });
+          expect(result['valid'], isFalse, reason: '$method $params');
+          expect(result['handlerEntered'], isFalse);
+        }
+      }
+    });
+
     test('leaves malformed options to typed validation without dispatch', () {
       for (final args in <List<String>>[
         ['tap', '110', '127', '--unsupported'],

@@ -1855,8 +1855,10 @@
         "expectText",
         "expectTimeoutMs",
         "expectView",
+        "intervalMs",
         "lateWaitMs",
         "pollMs",
+        "taps",
         "target",
         "waitMs",
         "x",
@@ -1970,6 +1972,17 @@
             "secondary"
           ]
         },
+        "intervalMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "100",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 1000
+        },
         "lateWaitMs": {
           "encoding": "string",
           "semanticType": "integer",
@@ -1989,6 +2002,17 @@
           "minimumLength": 1,
           "maximumUtf8Bytes": 65536,
           "secrecy": "public"
+        },
+        "taps": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 2
         },
         "waitMs": {
           "encoding": "string",
@@ -2064,8 +2088,10 @@
         "expectText",
         "expectTimeoutMs",
         "expectView",
+        "intervalMs",
         "lateWaitMs",
         "pollMs",
+        "taps",
         "target",
         "text",
         "waitMs"
@@ -2183,6 +2209,17 @@
           "maximumUtf8Bytes": 65536,
           "secrecy": "public"
         },
+        "intervalMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "100",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 0,
+          "maximum": 1000
+        },
         "lateWaitMs": {
           "encoding": "string",
           "semanticType": "integer",
@@ -2202,6 +2239,17 @@
           "minimumLength": 1,
           "maximumUtf8Bytes": 65536,
           "secrecy": "public"
+        },
+        "taps": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "1",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1,
+          "maximum": 2
         },
         "text": {
           "encoding": "string",

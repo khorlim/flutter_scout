@@ -213,6 +213,20 @@ const _helperWaitMs = _HelperParameterContract(
   maximum: 600000,
   defaultValue: '1500',
 );
+// `taps: 2` is a double tap: two complete taps at one point in one dispatch,
+// `intervalMs` from the first up to the second down.
+const _helperTaps = _HelperParameterContract(
+  kind: _HelperValueKind.integer,
+  minimum: 1,
+  maximum: 2,
+  defaultValue: '1',
+);
+const _helperTapIntervalMs = _HelperParameterContract(
+  kind: _HelperValueKind.integer,
+  minimum: 0,
+  maximum: 1000,
+  defaultValue: '100',
+);
 const _helperDirectionDown = _HelperParameterContract(
   kind: _HelperValueKind.string,
   defaultValue: 'down',
@@ -770,11 +784,13 @@ final Map<String, _HelperMethodContract> _helperMethodContracts =
             allowedValues: <String>['primary', 'secondary'],
             defaultValue: 'primary',
           ),
+          'intervalMs': _helperTapIntervalMs,
           'lateWaitMs': _helperWaitMs,
           'target': const _HelperParameterContract(
             kind: _HelperValueKind.string,
             minLength: 1,
           ),
+          'taps': _helperTaps,
           'waitMs': _helperWaitMs,
           'x': _helperCoordinate,
           'y': _helperCoordinate,
@@ -798,11 +814,13 @@ final Map<String, _HelperMethodContract> _helperMethodContracts =
           ..._helperExpectationParameters(),
           'allowMismatch': _helperBoolFalse,
           'contains': _helperBoolFalse,
+          'intervalMs': _helperTapIntervalMs,
           'lateWaitMs': _helperWaitMs,
           'target': const _HelperParameterContract(
             kind: _HelperValueKind.string,
             minLength: 1,
           ),
+          'taps': _helperTaps,
           'text': const _HelperParameterContract(
             kind: _HelperValueKind.string,
             minLength: 1,
