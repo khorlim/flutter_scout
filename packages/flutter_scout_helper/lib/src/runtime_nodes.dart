@@ -554,7 +554,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       }
       // TickerMode(enabled:false) does NOT hide — it only pauses tickers; the
       // subtree stays visible and hit-testable (see _hidesSubtree).
-      if (widget is IgnorePointer && widget.ignoring) {
+      if (widget is IgnorePointer && _ignoresPointer(ancestor)) {
         hidden = true;
         return false;
       }

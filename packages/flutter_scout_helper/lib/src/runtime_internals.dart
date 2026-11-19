@@ -458,8 +458,22 @@ extension _RuntimeInternals on FlutterScoutRuntime {
         !_isSubtreeOnActiveHitPath(element)) {
       return true;
     }
-    if (widget is IgnorePointer) return widget.ignoring;
+    if (widget is IgnorePointer) return _ignoresPointer(element);
     return false;
+  }
+
+  /// Whether an [IgnorePointer] element ignores pointers right now. The render
+  /// object is the truth, not the widget: [ScrollableState.setIgnorePointer]
+  /// flips only `RenderIgnorePointer.ignoring` while a scroll activity runs
+  /// (for example `PageController.animateToPage`). An ancestor rebuild during
+  /// that activity bakes `ignoring: true` into the widget, and it stays there
+  /// after the activity ends until the Scrollable rebuilds again, while the
+  /// page is drawn and takes taps.
+  bool _ignoresPointer(Element element) {
+    final renderObject = element.renderObject;
+    if (renderObject is RenderIgnorePointer) return renderObject.ignoring;
+    final widget = element.widget;
+    return widget is IgnorePointer && widget.ignoring;
   }
 
   bool _changed(ScoutSnapshot before, ScoutSnapshot after) {
