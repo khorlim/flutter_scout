@@ -233,6 +233,16 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     // addressable when its primary label source flickers (e.g. an
     // async-loaded Semantics username appearing after first paint).
     final altIds = <String>{};
+    // An app may name a control's feature with a `ValueKey('feature.<id>')`
+    // just above it (a wrapper it cannot key itself): the control is also
+    // addressable by that name, whatever its label says.
+    if (rawKey == null) {
+      final anchor = _featureAnchorAbove(element);
+      if (anchor != null) {
+        final anchorId = '$kind.${_slug(anchor)}';
+        if (anchorId != baseId) altIds.add(anchorId);
+      }
+    }
     // Row context enriches switches without replacing their existing handles.
     if (rowLabel != null && label != null) {
       final alias = '$kind.${_slug(label)}';
@@ -1156,6 +1166,23 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
   String _slug(String value) {
     return _scoutSlug(value);
+  }
+
+  /// The nearest `ValueKey<String>('feature.<id>')` within a few levels
+  /// above [element], or null.
+  String? _featureAnchorAbove(Element element) {
+    String? found;
+    var depth = 0;
+    element.visitAncestorElements((ancestor) {
+      final key = ancestor.widget.key;
+      if (key is ValueKey<String> && key.value.startsWith('feature.')) {
+        found = key.value;
+        return false;
+      }
+      depth++;
+      return depth < 12;
+    });
+    return found;
   }
 
   String? _keyLabel(Key? key) {

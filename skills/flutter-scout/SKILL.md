@@ -126,6 +126,11 @@ copyable values) is text, so `locate` finds its words.
 Context menus: `{method:'long-press', args:[handle]}` presses and holds, and
 `{method:'tap', args:[handle], params:{button:'secondary'}}` is a mouse right
 click (desktop `onSecondaryTap*` menus). Read the menu from the next scene.
+Feature keys: an app may put `ValueKey('feature.<id>')` on a control or a
+few levels above it. The control then also answers to `<kind>.feature_<id>`
+(dots become `_`, e.g. `btn.feature_home_tile_member`) as an alternate handle
+next to its label handle, so a spec can name it whatever its label says.
+
 Double tap: add `params:{taps:2}` to `tap` (handle or `x`/`y`) or `tap-text`.
 Both taps go out in one dispatch at one point, 100 ms apart (`intervalMs`
 0-1000), with one receipt. Use it for `onDoubleTap` controls and to test an
