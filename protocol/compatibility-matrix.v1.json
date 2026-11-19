@@ -68,6 +68,7 @@
       "stateGeneration",
       "strictMutationEnvelope",
       "strictTypedParametersV1",
+      "targetFreshnessV1",
       "typedEnvelopeV1"
     ],
     "requiredMutationEnvelopeParameters": [

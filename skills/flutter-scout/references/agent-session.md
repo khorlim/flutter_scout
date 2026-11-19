@@ -219,19 +219,28 @@ text list never counts as a vanish.
 All actions carry the decision's `viewRevision`; a changed revision is
 rejected, with one exception. tap (including `button` and a double tap's
 `taps`/`intervalMs`) or long-press on one exact observed handle,
-input with `params.target`, and fill keyed by handles still proceed when the
-only change is in-place text outside those targets, such as a clock or a
-countdown label. Route, surface, rendering, safety evidence, field values,
-scroll state, the kind and state of every control, and the target nodes must
-be unchanged, and text must not appear or disappear. With an explicit
+input with `params.target`, fill keyed by handles, and scroll or swipe with
+`params.target` (plus `distance`) still proceed when the only change is
+in-place text outside those targets, such as a clock or a countdown label.
+Route, surface, rendering, safety evidence, field values, scroll state, the
+kind and state of every control, and the target nodes must be unchanged, and
+text must not appear or disappear. With an explicit
 `"allowUnrelatedChanges": true` on the action, those other changes are
-accepted too, as long as run, screen, surface, rendering, errors and field
-values are unchanged, every target is identical, enabled and hit-testable,
-and no new control appeared over a target. Text-target, coordinate,
-gesture, navigation and deeplink actions need the exact revision. Fresh CLI
-preflight verifies run/runtime and rendering and repeats the same comparison
-against the decision view; the helper checks generation, target safety, and
-rendering again at dispatch.
+accepted too (a sync toast, a live list, a keypad display the previous key
+press updated, a suggestion sliding in), as long as run, screen, surface,
+rendering, errors and field values are unchanged and every target is
+identical, enabled and hit-testable. A dialog or sheet is the same surface
+while it stays mounted (`activeSurface.instance`), even when its guessed name
+follows the text typed into it. Whether something now covers a target is
+decided by the app's hit test at dispatch. Text-target, coordinate,
+navigation and deeplink actions need the exact revision. A rejection names
+its cause in `details.staleReason`. Fresh CLI preflight verifies
+run/runtime and rendering and repeats the same comparison against the
+decision view; the helper checks generation, target safety, and rendering
+again at dispatch. When the app changes again between that preflight and
+dispatch, an exact-target action still dispatches only if the app finds the
+same surface, field values and identical target nodes
+(`targetFreshness.status: targets_unchanged` in the receipt).
 No frame age heuristic authorizes a stale decision. Runtime replacement,
 unavailable reads, unknown action outcomes, or incomplete safety stop the loop.
 Make a fresh deliberate decision after reconciliation, never just replace the

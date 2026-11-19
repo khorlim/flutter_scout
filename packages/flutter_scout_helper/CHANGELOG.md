@@ -1,5 +1,11 @@
 ## Unreleased
 
+* Let an exact-target agent action through a background state change between
+  the CLI's preflight and dispatch when its target nodes, surface and field
+  values are unchanged (`targetFreshnessV1`, optional `freshTargets`).
+  `activeSurface.instance` identifies a mounted dialog or sheet while its
+  guessed name follows typed text.
+
 * Keep `FlutterScoutBinding.ensureInitialized()` safe as an application's main
   initializer in profile and release builds. It now always establishes the
   standard Flutter widget binding before the debug-only Scout registration,

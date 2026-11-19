@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add optional helper `freshTargets` mutation metadata and the
+  `targetFreshnessV1` capability: an exact-target mutation survives a state
+  generation change after preflight only when its target nodes, surface and
+  field values are unchanged (`targetFreshness` in the response). Overlays and
+  `activeSurface` carry an `instance` number per mounted dialog/sheet.
+
 - Hard-cutover public CLI contract v2 lives under schemas/v2/. Agent JSONL
   protocol 2 adds query, acknowledge and reconcile, with exclusive ownership,
   receipt delivery gating and no legacy interaction entrypoints. Helper wire

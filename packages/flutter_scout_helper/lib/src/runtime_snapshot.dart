@@ -634,6 +634,13 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       textTargets: textTargets,
       logicalSize: logicalSize,
     );
+    // The surface's label and screen name are guessed from its text, which
+    // may be a display the user is typing into; its instance number says
+    // whether it is still the same mounted dialog or sheet.
+    if (activeSurface != null && viewportOverlays.isNotEmpty) {
+      final instance = viewportOverlays.last['instance'];
+      if (instance is int) activeSurface['instance'] = instance;
+    }
     // No *Screen/*Page widget (common for bottom sheets, dialogs, and
     // custom-named order/checkout surfaces) would otherwise leave `screen`
     // as the useless 'RootWidget'. Name the topmost modal surface instead.

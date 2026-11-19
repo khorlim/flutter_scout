@@ -68,7 +68,12 @@ availability without claiming compositor pixels or scheduling frames. Clients
 using `liveRenderingGuardV1` may send `requireLiveRendering:"true"`; the helper
 rejects disabled rendering immediately before mutation dispatch. Missing
 capability is not permission to ignore this guard. Existing finite commands
-do not require it. The separate CLI `agent` JSONL protocol 1 composes passive
+do not require it. Clients using `targetFreshnessV1` may send `freshTargets`
+(a JSON list of exact handles) with a mutation; when the state generation
+moved after preflight, the helper dispatches only if the retained expected
+snapshot and the current one show the same surface, field values and
+identical target nodes, and reports `targetFreshness` in the response.
+The separate CLI `agent` JSONL protocol 1 composes passive
 observations, short action tickets, condition waits and one-shot reactions;
 see the [agent contract](../skills/flutter-scout/references/agent-session.md).
 

@@ -24,6 +24,7 @@ const Map<String, bool> _scoutProtocolCapabilities = <String, bool>{
   'observationNonInterferenceV1': true,
   'renderingStateV1': true,
   'liveRenderingGuardV1': true,
+  'targetFreshnessV1': true,
   'overlayExplicitOptInV1': true,
   'strictTypedParametersV1': true,
   'boundedHelperRequestsV1': true,
@@ -70,6 +71,7 @@ const Map<String, int> _protocolParameterByteLimits = <String, int>{
   'expectedStateGeneration': 32,
   'deadlineEpochMs': 32,
   'requireLiveRendering': 5,
+  'freshTargets': 2048,
 };
 
 // The VM service requires `isolateId` to route an extension call and forwards
@@ -88,6 +90,9 @@ const Set<String> _commonProtocolParameters = <String>{
   // Protocol-15 migration alias, documented in protocol/README.md.
   'errorsSinceCursor',
   'requireLiveRendering',
+  // targetFreshnessV1: exact handles whose unchanged nodes let a mutation
+  // pass a newer state generation (background churn after preflight).
+  'freshTargets',
   'idempotencyKey',
   'runtimeInstanceId',
   'expectedStateGeneration',
@@ -132,6 +137,8 @@ class _RequestContext {
   final int? errorCursor;
   final int? deadlineEpochMs;
   bool handlerEntered = false;
+  // Set when a newer state generation was accepted for unchanged targets.
+  Map<String, Object?>? targetFreshness;
 }
 
 class _MutationRecord {
@@ -764,15 +771,27 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
     }
     final expectedGeneration = int.parse(params['expectedStateGeneration']!);
     if (expectedGeneration != current.stateGeneration) {
-      return _fail(
-        'stale_state_generation',
-        'The observed app state changed before mutation dispatch.',
-        extra: {
-          'expectedStateGeneration': expectedGeneration,
-          'actualStateGeneration': current.stateGeneration,
-          'actualSnapshotId': current.snapshotId,
-        },
-      );
+      final freshTargets = params['freshTargets'];
+      final changed = freshTargets == null
+          ? null
+          : _freshTargetsChange(freshTargets, expectedGeneration, current);
+      if (freshTargets == null || changed != null) {
+        return _fail(
+          'stale_state_generation',
+          'The observed app state changed before mutation dispatch.',
+          extra: {
+            'expectedStateGeneration': expectedGeneration,
+            'actualStateGeneration': current.stateGeneration,
+            'actualSnapshotId': current.snapshotId,
+            'staleReason': ?changed,
+          },
+        );
+      }
+      context.targetFreshness = {
+        'status': 'targets_unchanged',
+        'expectedStateGeneration': expectedGeneration,
+        'actualStateGeneration': current.stateGeneration,
+      };
     }
 
     final requestRunId = params['runId']!.trim();
@@ -786,6 +805,112 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
     }
 
     _boundRunId ??= requestRunId;
+    return null;
+  }
+
+  /// Why the exact [encoded] targets (a JSON list of handles) may have
+  /// changed between the [expectedGeneration] snapshot the client checked
+  /// and [current], or null when screen, surface, field values and every
+  /// target node (identity, label, geometry, state) are identical, so other
+  /// background changes in between cannot affect them. Dispatch-time
+  /// resolution, occlusion and hit-test checks still follow.
+  String? _freshTargetsChange(
+    String encoded,
+    int expectedGeneration,
+    ScoutSnapshot current,
+  ) {
+    List<String>? targets;
+    try {
+      final decoded = jsonDecode(encoded);
+      if (decoded is List &&
+          decoded.isNotEmpty &&
+          decoded.length <= 16 &&
+          decoded.every((item) => item is String && item.isNotEmpty)) {
+        targets = decoded.cast<String>();
+      }
+    } on FormatException {
+      targets = null;
+    }
+    if (targets == null) return 'freshTargets is not a list of handles';
+    ScoutSnapshot? observed;
+    for (final record in _navigationState.history.reversed) {
+      if (record.runtimeInstanceId == _runtimeInstanceId &&
+          record.snapshot.stateGeneration == expectedGeneration) {
+        observed = record.snapshot;
+        break;
+      }
+    }
+    if (observed == null) return 'the checked snapshot is no longer retained';
+    // A dialog's name is guessed from its text (a keypad display); the same
+    // mounted surface keeps its instance number while that text changes.
+    final sameSurfaceInstance =
+        observed.activeSurface?['instance'] is int &&
+        observed.activeSurface?['instance'] ==
+            current.activeSurface?['instance'] &&
+        observed.activeSurface?['kind'] == current.activeSurface?['kind'];
+    if (observed.routeGuess != current.routeGuess ||
+        (!sameSurfaceInstance && observed.screen != current.screen)) {
+      return 'the screen changed';
+    }
+    String surface(ScoutSnapshot snapshot) => jsonEncode([
+      for (final key in const ['kind', 'label', 'screen', 'source'])
+        snapshot.activeSurface?[key],
+    ]);
+    if (!sameSurfaceInstance && surface(observed) != surface(current)) {
+      return 'the active surface changed';
+    }
+    String fieldValues(ScoutSnapshot snapshot) => jsonEncode({
+      for (final field in snapshot.fields) field.id: field.serializedValue,
+    });
+    if (fieldValues(observed) != fieldValues(current)) {
+      return 'field values changed';
+    }
+    List<ScoutNode> withHandle(ScoutSnapshot snapshot, String handle) => [
+      for (final node in [
+        ...snapshot.interactables,
+        ...snapshot.fields,
+        ...snapshot.textTargets,
+      ])
+        if (node.id == handle || node.altIds.contains(handle)) node,
+    ];
+    // A scroll target is a list: its position may move, not its identity.
+    String? region(ScoutSnapshot snapshot, String handle) {
+      final matches = [
+        for (final item in snapshot.scrollables)
+          if (item['id'] == handle || item['scopedId'] == handle)
+            jsonEncode([
+              for (final key in const [
+                'id',
+                'scopedId',
+                'parentId',
+                'axis',
+                'axisDirection',
+                'rect',
+              ])
+                item[key],
+            ]),
+      ];
+      return matches.length == 1 ? matches.single : null;
+    }
+
+    for (final handle in targets) {
+      final before = withHandle(observed, handle);
+      final after = withHandle(current, handle);
+      if (before.isEmpty && after.isEmpty) {
+        final was = region(observed, handle);
+        if (was == null || was != region(current, handle)) {
+          return 'target $handle is not the same list in both states';
+        }
+        continue;
+      }
+      if (before.length != 1 || after.length != 1) {
+        return 'target $handle is not one control in both states';
+      }
+      if (jsonEncode(before.single.toJson()) !=
+          jsonEncode(after.single.toJson())) {
+        return 'target $handle changed';
+      }
+    }
     return null;
   }
 
@@ -1223,6 +1348,7 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
       'expectedStateGeneration': int.tryParse(
         context?.params['expectedStateGeneration'] ?? '',
       ),
+      'targetFreshness': ?context?.targetFreshness,
       'deadlineEpochMs': context?.deadlineEpochMs,
     };
   }
@@ -1722,6 +1848,7 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
       'runId': _boundRunId ?? context?.runId,
       'runtimeInstanceId': _runtimeInstanceId,
       'stateGeneration': payloadGeneration ?? _stateGeneration,
+      'targetFreshness': ?context?.targetFreshness,
       'result': result,
       'structuredError': null,
       'timings': <String, Object?>{

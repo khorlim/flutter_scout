@@ -57,6 +57,9 @@ class AgentSession {
   /// `tap` options that change how it presses, never where.
   static const _tapPointParams = {'button', 'taps', 'intervalMs'};
 
+  /// `scroll`/`swipe` options that keep the gesture on its named target.
+  static const _gestureParams = {'target', 'distance'};
+
   /// Exact handles an action is limited to, or null when its effect is not
   /// scoped to named observed handles (text, coordinates, gestures, routes).
   static Set<String>? scopedTargets(AgentView action) {
@@ -88,47 +91,89 @@ class AgentSession {
         handles([params['target']]),
       'fill' when args.isEmpty && params.length == 1 && params['json'] is Map =>
         handles((params['json'] as Map).keys),
+      // A scroll or swipe on a named observed list or control, by direction.
+      'scroll' || 'swipe'
+          when args.length <= 1 &&
+              params['target'] is String &&
+              params.keys.every(_gestureParams.contains) =>
+        handles([params['target']]),
       _ => null,
     };
   }
 
-  /// Whether [current] differs from [decision] only by in-place text updates
-  /// (a ticking clock, a countdown label) outside the exact [targets]. Run,
-  /// runtime, screen, route, surface, rendering, safety evidence, field
-  /// values, scroll regions, omissions and the shape of every control must
-  /// be unchanged; each target must appear once, identical in both views.
-  /// Text may change but not appear or disappear. Dispatch-time target
-  /// resolution, occlusion and hit-test checks in the app still apply.
-  ///
-  /// With [allowUnrelatedChanges] (the caller's explicit per-action
-  /// authority), a decision also stands when other text and controls changed
-  /// but every target is identical, enabled and hit-testable, the same
-  /// surface is active, run, screen, rendering, errors and field values are
-  /// unchanged, and no newly appeared control overlaps a target. Background
-  /// progress toasts otherwise invalidate every decision.
+  /// Whether [current] differs from [decision] only in ways that cannot
+  /// affect an action on the exact [targets]; see [staleReason].
   static bool targetUnaffected(
     AgentView decision,
     AgentView current,
     Set<String> targets, {
     bool allowUnrelatedChanges = false,
-  }) {
-    if (_onlyInPlaceTextChanged(decision, current, targets)) return true;
-    return allowUnrelatedChanges &&
-        _targetsIsolatedFromChanges(decision, current, targets);
-  }
+  }) =>
+      staleReason(
+        decision,
+        current,
+        targets,
+        allowUnrelatedChanges: allowUnrelatedChanges,
+      ) ==
+      null;
 
-  static bool _targetsIsolatedFromChanges(
+  /// Why a decision made on [decision] may no longer hold on [current] for
+  /// an action on the exact [targets], or null when it still stands.
+  ///
+  /// Without [allowUnrelatedChanges] only in-place text updates (a ticking
+  /// clock, a countdown label) outside the targets are accepted. Run,
+  /// runtime, screen, route, surface, rendering, safety evidence, field
+  /// values, scroll regions, omissions and the shape of every control must
+  /// be unchanged; each target must appear once, identical in both views.
+  /// Text may change but not appear or disappear.
+  ///
+  /// With [allowUnrelatedChanges] (the caller's explicit per-action
+  /// authority), other text and controls may also change, appear or
+  /// disappear (a sync toast, a live list, a keypad display the previous
+  /// key press updated) while every target is identical, enabled and
+  /// hit-testable and run, screen, active surface, rendering, errors and
+  /// field values are unchanged. The brief view carries no geometry, so
+  /// whether something now covers a target is decided where it can be: the
+  /// app's dispatch-time resolution, occlusion and hit-test checks, which
+  /// apply to every action either way.
+  static String? staleReason(
     AgentView decision,
     AgentView current,
-    Set<String> targets,
-  ) {
-    if (targets.isEmpty || decision['ok'] != true || current['ok'] != true) {
-      return false;
+    Set<String> targets, {
+    bool allowUnrelatedChanges = false,
+  }) {
+    if (targets.isEmpty) return 'the action has no exact observed target';
+    if (decision['ok'] != true || current['ok'] != true) {
+      return 'an observation was unavailable';
+    }
+    final shared = _sharedStateChange(decision, current);
+    if (shared != null) return shared;
+    final target = _targetChange(decision, current, targets);
+    if (target != null) return target;
+    final layout = _layoutChange(decision, current, targets);
+    if (layout == null || allowUnrelatedChanges) return null;
+    return '$layout (add "allowUnrelatedChanges": true if that change is '
+        'unrelated to this action)';
+  }
+
+  /// Changes that invalidate any decision on this screen.
+  static String? _sharedStateChange(AgentView decision, AgentView current) {
+    // A dialog's name is guessed from its text, which may be the display a
+    // key press just changed; the same mounted surface keeps its instance.
+    final before = decision['activeSurface'];
+    final after = current['activeSurface'];
+    final sameSurface =
+        before is Map &&
+        after is Map &&
+        before['instance'] is int &&
+        before['instance'] == after['instance'] &&
+        before['kind'] == after['kind'];
+    if (!sameSurface && !_same(decision['screen'], current['screen'])) {
+      return 'screen changed';
     }
     for (final key in const [
       'runId',
       'runtimeInstanceId',
-      'screen',
       'routeGuess',
       'surfaceOnly',
       'viewport',
@@ -140,7 +185,7 @@ class AgentSession {
       'fieldValues',
       'annotationMode',
     ]) {
-      if (!_same(decision[key], current[key])) return false;
+      if (!_same(decision[key], current[key])) return '$key changed';
     }
     Object? pick(Object? value, List<String> keys) => value is Map
         ? {
@@ -148,7 +193,8 @@ class AgentSession {
               if (value.containsKey(key)) key: value[key],
           }
         : value;
-    if (!_same(
+    if (!sameSurface &&
+        !_same(
           pick(decision['activeSurface'], const [
             'kind',
             'label',
@@ -161,122 +207,102 @@ class AgentSession {
             'screen',
             'source',
           ]),
-        ) ||
-        !_same(
-          pick(decision['rendering'], const [
-            'status',
-            'framesEnabled',
-            'lifecycle',
-          ]),
-          pick(current['rendering'], const [
-            'status',
-            'framesEnabled',
-            'lifecycle',
-          ]),
         )) {
-      return false;
+      return 'the active surface changed';
     }
-    final before = decision['interactables'];
-    final after = current['interactables'];
-    if (before is! List || after is! List) return false;
-    List<Map> withId(List items, String id) => [
-      for (final item in items)
-        if (item is Map && item['id'] == id) item,
-    ];
-    final targetRects = <List>[];
-    for (final id in targets) {
-      final a = withId(before, id);
-      final b = withId(after, id);
-      if (a.length != 1 || b.length != 1 || !_same(a.single, b.single)) {
-        return false;
-      }
-      final target = b.single;
-      if (target['enabled'] == false ||
-          target['hitTestable'] == false ||
-          target['offscreen'] == true) {
-        return false;
-      }
-      final rect = target['rect'];
-      if (rect is! List || rect.length != 4) return false;
-      targetRects.add(rect);
+    if (!_same(
+      pick(decision['rendering'], const [
+        'status',
+        'framesEnabled',
+        'lifecycle',
+      ]),
+      pick(current['rendering'], const [
+        'status',
+        'framesEnabled',
+        'lifecycle',
+      ]),
+    )) {
+      return 'rendering changed';
     }
-    bool overlaps(List a, List b) {
-      final ax = (a[0] as num).toDouble(), ay = (a[1] as num).toDouble();
-      final bx = (b[0] as num).toDouble(), by = (b[1] as num).toDouble();
-      return ax < bx + (b[2] as num) &&
-          bx < ax + (a[2] as num) &&
-          ay < by + (b[3] as num) &&
-          by < ay + (a[3] as num);
-    }
-
-    final known = {
-      for (final item in before)
-        if (item is Map) jsonEncode(item),
-    };
-    for (final item in after) {
-      if (item is! Map || known.contains(jsonEncode(item))) continue;
-      final rect = item['rect'];
-      if (rect is List &&
-          rect.length == 4 &&
-          targetRects.any((target) => overlaps(rect, target))) {
-        return false;
-      }
-    }
-    return true;
+    return null;
   }
 
-  static bool _onlyInPlaceTextChanged(
+  /// Whether every target appears once, identical, enabled and hit-testable.
+  static String? _targetChange(
     AgentView decision,
     AgentView current,
     Set<String> targets,
   ) {
-    if (targets.isEmpty || decision['ok'] != true || current['ok'] != true) {
-      return false;
+    final before = decision['interactables'];
+    final after = current['interactables'];
+    if (before is! List || after is! List) return 'controls are unavailable';
+    List<Map> withId(List items, String id) => [
+      for (final item in items)
+        if (item is Map && item['id'] == id) item,
+    ];
+    // A scroll target is a list, not a control. Its position may change
+    // (a scroll moves by a distance from wherever it is); not its identity.
+    Object? region(AgentView view, String id) {
+      final regions = view['scrollables'];
+      if (regions is! List) return null;
+      final matches = [
+        for (final item in regions)
+          if (item is Map && (item['id'] == id || item['scopedId'] == id))
+            [
+              for (final key in const [
+                'id',
+                'scopedId',
+                'parentId',
+                'axis',
+                'axisDirection',
+              ])
+                item[key],
+            ],
+      ];
+      return matches.length == 1 ? matches.single : null;
     }
+
+    for (final id in targets) {
+      final a = withId(before, id);
+      final b = withId(after, id);
+      if (a.isEmpty && b.isEmpty) {
+        final was = region(decision, id);
+        if (was == null) return 'target $id was not one observed control';
+        if (!_same(was, region(current, id))) return 'target $id changed';
+        continue;
+      }
+      if (a.length != 1) return 'target $id was not one observed control';
+      if (b.length != 1) return 'target $id is gone or no longer unique';
+      if (!_same(a.single, b.single)) return 'target $id changed';
+      final target = b.single;
+      if (target['enabled'] == false ||
+          target['hitTestable'] == false ||
+          target['offscreen'] == true) {
+        return 'target $id is not enabled, hit-testable and on screen';
+      }
+    }
+    return null;
+  }
+
+  /// Changes outside the targets beyond in-place text updates.
+  static String? _layoutChange(
+    AgentView decision,
+    AgentView current,
+    Set<String> targets,
+  ) {
     for (final key in const [
-      'runId',
-      'runtimeInstanceId',
-      'screen',
-      'routeGuess',
-      'surfaceOnly',
-      'viewport',
-      'keyboard',
-      'activeBlockingSignals',
-      'errorsSinceCursor',
-      'errorCursor',
       'recentErrors',
       'errorSummary',
-      'safetyEvidenceStatus',
       'perception',
       'payloadBounds',
       'omittedSections',
       'omitted',
       'interactablesOmitted',
       'scrollables',
-      'fieldValues',
       'degradedNodes',
       'inspectWarnings',
-      'annotationMode',
     ]) {
-      if (!_same(decision[key], current[key])) return false;
-    }
-    Object? pick(Object? value, List<String> keys) => value is Map
-        ? {
-            for (final key in keys)
-              if (value.containsKey(key)) key: value[key],
-          }
-        : value;
-    const surfaceKeys = ['kind', 'label', 'screen', 'source'];
-    const renderingKeys = ['status', 'framesEnabled', 'lifecycle'];
-    if (!_same(
-          pick(decision['activeSurface'], surfaceKeys),
-          pick(current['activeSurface'], surfaceKeys),
-        ) ||
-        !_same(
-          pick(decision['rendering'], renderingKeys),
-          pick(current['rendering'], renderingKeys),
-        )) {
-      return false;
+      if (!_same(decision[key], current[key])) return '$key changed';
     }
     int length(Object? value) =>
         value is List ? value.length : (value == null ? 0 : -1);
@@ -289,21 +315,20 @@ class AgentSession {
     ]) {
       if (length(decision[key]) != length(current[key]) ||
           length(current[key]) < 0) {
-        return false;
+        return 'text appeared or disappeared';
       }
     }
-    final before = decision['interactables'];
-    final after = current['interactables'];
-    if (before is! List || after is! List || before.length != after.length) {
-      return false;
+    final before = decision['interactables'] as List;
+    final after = current['interactables'] as List;
+    if (before.length != after.length) {
+      return 'controls appeared or disappeared';
     }
-    final found = <String>{};
     for (var i = 0; i < before.length; i++) {
       final a = before[i];
       final b = after[i];
-      if (a is! Map || b is! Map) return false;
+      if (a is! Map || b is! Map) return 'controls are unavailable';
       if (targets.contains(a['id']) || targets.contains(b['id'])) {
-        if (!_same(a, b) || !found.add(a['id'] as String)) return false;
+        if (a['id'] != b['id']) return 'controls moved around a target';
         continue;
       }
       // Unkeyed ids derive from labels, so a countdown button may change id
@@ -315,10 +340,10 @@ class AgentSession {
         'offscreen',
         'selected',
       ]) {
-        if (!_same(a[key], b[key])) return false;
+        if (!_same(a[key], b[key])) return 'control ${b['id']} changed state';
       }
     }
-    return found.length == targets.length;
+    return null;
   }
 
   static bool _same(Object? a, Object? b) {
@@ -656,8 +681,8 @@ class AgentSession {
   bool get _safe => _unsafeReason == null;
 
   /// Returns the view the decision was made from. A stale revision is
-  /// accepted only for an action scoped to exact observed handles when the
-  /// screen differs solely by in-place text updates outside those targets.
+  /// accepted only for an action scoped to exact observed handles when
+  /// [staleReason] finds nothing that may affect it; a rejection names why.
   AgentView _authorize(
     int revision, [
     Set<String>? targets,
@@ -665,21 +690,32 @@ class AgentSession {
   ]) {
     if (_closed || _halt != null) throw StateError(_stoppedMessage());
     final decision = revision == _revision ? _view : _history[revision];
-    if (revision != _revision &&
-        (targets == null ||
-            decision == null ||
-            _view == null ||
-            !targetUnaffected(
+    if (revision != _revision) {
+      final reason = targets == null
+          ? 'only an exact-handle tap, long-press, input or fill can use an '
+                'older revision'
+          : decision == null || _view == null
+          ? 'viewRevision $revision is no longer retained'
+          : staleReason(
               decision,
               _view!,
               targets,
               allowUnrelatedChanges: allowUnrelatedChanges,
-            ))) {
-      throw StateError(
-        'agent_view_changed: viewRevision $revision is stale (now $_revision) '
-        'and the change may affect this action; nothing dispatched. Decide '
-        'again from the returned scene.',
-      );
+            );
+      if (reason != null) {
+        throw AgentRejection(
+          'agent_view_changed',
+          'viewRevision $revision is stale (now $_revision) and the change '
+              'may affect this action: $reason; nothing dispatched. Decide '
+              'again from the returned scene.',
+          nextStep: 'observe(), then act on scene.viewRevision',
+          details: {
+            'observedRevision': revision,
+            'currentRevision': _revision,
+            'staleReason': reason,
+          },
+        );
+      }
     }
     final unavailable = _liveViewBlocker();
     if (unavailable != null) {

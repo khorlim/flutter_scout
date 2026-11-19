@@ -1518,6 +1518,7 @@ extension _CliResults on FlutterScoutCli {
     if (surface['heuristicScore'] != null)
       'heuristicScore': surface['heuristicScore'],
     if (surface['scoreKind'] != null) 'scoreKind': surface['scoreKind'],
+    if (surface['instance'] != null) 'instance': surface['instance'],
   };
 
   Map<String, Object?> _compactDelta(Map delta) {

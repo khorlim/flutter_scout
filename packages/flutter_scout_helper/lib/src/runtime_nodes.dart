@@ -1130,6 +1130,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return {
       'kind': kind,
       'widgetType': widget.runtimeType.toString(),
+      // One number per mounted dialog/sheet/barrier element: the same
+      // surface keeps it while its content changes; a new one gets another.
+      'instance': _overlayInstances[element] ??= ++_overlayInstanceCounter,
       'label': _textBelow(element, maxDepth: 8),
       'rect': rect == null
           ? null

@@ -365,17 +365,22 @@ extension _CliProtocol on FlutterScoutCli {
       );
     }
     final decisionTargets = _liveDecisionTargets;
-    if (decisionView != null &&
-        (decisionView['runtimeInstanceId'] != runtimeInstanceId ||
-            decisionView['runId'] != runId ||
-            (decisionView['snapshotId'] != snapshotId &&
-                (decisionTargets == null ||
-                    !AgentSession.targetUnaffected(
-                      decisionView,
-                      _agentObservation(preflight),
-                      decisionTargets,
-                      allowUnrelatedChanges: _liveDecisionAllowsUnrelated,
-                    ))))) {
+    final staleReason = decisionView == null
+        ? null
+        : decisionView['runtimeInstanceId'] != runtimeInstanceId ||
+              decisionView['runId'] != runId
+        ? 'the app run changed'
+        : decisionView['snapshotId'] == snapshotId
+        ? null
+        : decisionTargets == null
+        ? 'only an exact-handle action tolerates later screen changes'
+        : AgentSession.staleReason(
+            decisionView,
+            _agentObservation(preflight),
+            decisionTargets,
+            allowUnrelatedChanges: _liveDecisionAllowsUnrelated,
+          );
+    if (staleReason != null) {
       return (
         invocation: null,
         replay: null,
@@ -383,12 +388,13 @@ extension _CliProtocol on FlutterScoutCli {
           _notDispatchedProtocolFailure(
             code: 'live_view_changed',
             message:
-                'The screen changed in a way that may affect this action since the agent observation. Nothing was dispatched and the hand stays available; decide again from the returned scene.',
+                'The screen changed in a way that may affect this action since the agent observation: $staleReason. Nothing was dispatched and the hand stays available; decide again from the returned scene.',
             method: method,
             runId: runId,
             details: {
-              'observedSnapshotId': decisionView['snapshotId'],
+              'observedSnapshotId': decisionView!['snapshotId'],
               'currentSnapshotId': snapshotId,
+              'staleReason': staleReason,
             },
           ),
         ),
@@ -425,6 +431,12 @@ extension _CliProtocol on FlutterScoutCli {
       'expectedStateGeneration': '$stateGeneration',
       'deadlineEpochMs': '$deadlineEpochMs',
       if (_agentRequiresLiveRendering) 'requireLiveRendering': 'true',
+      // An exact-handle decision survives background churn after this
+      // preflight when the app finds its targets unchanged at dispatch.
+      if (decisionView != null &&
+          decisionTargets != null &&
+          (preflight['capabilities'] as Map?)?['targetFreshnessV1'] == true)
+        'freshTargets': jsonEncode(decisionTargets.toList()..sort()),
       if (errorCursor != null) 'errorCursor': '$errorCursor',
     };
     final proposed = _MutationInvocation(
@@ -795,6 +807,9 @@ extension _CliProtocol on FlutterScoutCli {
       'idempotencyKey': invocation.idempotencyKey,
       'idempotencyKeyDigest': invocation.idempotencyKeyDigest,
       'expectedStateGeneration': invocation.expectedStateGeneration,
+      // The app accepted a newer state generation for unchanged targets.
+      if (response['targetFreshness'] case final Map freshness)
+        'targetFreshness': freshness,
       'deadlineEpochMs': invocation.deadlineEpochMs,
       if (reconciledAfterTimeout) 'reconciledAfterTimeout': true,
       if (before is Map) ...<String, Object?>{

@@ -6,6 +6,10 @@ const int _navigationSnapshotHistoryLimit = 32;
 const int _navigationSnapshotHistoryApproximateByteLimit = 4 * 1024 * 1024;
 const int _navigationDefaultMaxResponseBytes = 64 * 1024;
 
+/// Stable numbers for mounted overlay elements; see `_overlayFor`.
+final Expando<int> _overlayInstances = Expando<int>('flutter_scout_overlay');
+int _overlayInstanceCounter = 0;
+
 final Expando<_NavigationState> _navigationStateByRuntime =
     Expando<_NavigationState>('flutter_scout_navigation');
 

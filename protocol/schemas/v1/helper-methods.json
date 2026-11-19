@@ -34,6 +34,7 @@
     "errorCursor",
     "errorsSinceCursor",
     "expectedStateGeneration",
+    "freshTargets",
     "idempotencyKey",
     "requireLiveRendering",
     "runId",

@@ -1030,36 +1030,30 @@ void main() {
 
   test('allowUnrelatedChanges accepts background churn but not changes '
       'that touch the target', () {
-    Map<String, Object?> control(
-      String id,
-      List<num> rect, {
-      bool enabled = true,
-    }) => {
+    // The agent's brief view: no geometry, so covering is left to the app's
+    // dispatch-time hit test.
+    Map<String, Object?> control(String id, {bool enabled = true}) => {
       'id': id,
-      'kind': 'button',
-      'enabled': enabled,
-      'hitTestable': true,
-      'rect': rect,
+      'kind': 'btn',
+      'label': id.substring(4),
+      if (!enabled) 'enabled': false,
     };
     AgentView screen(
       int revision,
       List<String> text,
       List<Map<String, Object?>> controls,
     ) => {...view(revision, text: text), 'interactables': controls};
-    final pay = control('btn.pay', [500, 900, 200, 60]);
+    final pay = control('btn.pay');
     final decision = screen(1, ['Cart', 'Downloading data'], [pay]);
     // A sync toast changes wording and a new list row appears elsewhere.
     final churn = screen(
       2,
       ['Cart', 'Members · Waiting', 'AI Smoke'],
-      [
-        pay,
-        control('btn.row_3', [0, 300, 400, 60]),
-      ],
+      [pay, control('btn.row_3')],
     );
     expect(
-      AgentSession.targetUnaffected(decision, churn, {'btn.pay'}),
-      isFalse,
+      AgentSession.staleReason(decision, churn, {'btn.pay'}),
+      contains('allowUnrelatedChanges'),
     );
     expect(
       AgentSession.targetUnaffected(decision, churn, {
@@ -1071,25 +1065,16 @@ void main() {
       'target disabled': screen(
         2,
         ['Cart'],
-        [
-          control('btn.pay', [500, 900, 200, 60], enabled: false),
-        ],
+        [control('btn.pay', enabled: false)],
       ),
-      'target moved': screen(
+      'target relabelled': screen(
         2,
         ['Cart'],
         [
-          control('btn.pay', [500, 960, 200, 60]),
+          {...pay, 'label': 'Paid'},
         ],
       ),
-      'new control over the target': screen(
-        2,
-        ['Cart'],
-        [
-          pay,
-          control('btn.dismiss', [520, 880, 120, 80]),
-        ],
-      ),
+      'target gone': screen(2, ['Cart'], [control('btn.dismiss')]),
       'new surface': {
         ...screen(2, ['Cart'], [pay]),
         'activeSurface': {'kind': 'dialog'},
@@ -1098,16 +1083,99 @@ void main() {
         ...screen(2, ['Cart'], [pay]),
         'screen': 'Next',
       },
+      'field value': {
+        ...screen(2, ['Cart'], [pay]),
+        'fieldValues': {'field.amount': '9'},
+      },
     };
     for (final entry in rejected.entries) {
       expect(
-        AgentSession.targetUnaffected(decision, entry.value, {
+        AgentSession.staleReason(decision, entry.value, {
           'btn.pay',
         }, allowUnrelatedChanges: true),
-        isFalse,
+        isNotNull,
         reason: entry.key,
       );
     }
+  });
+
+  test('a keypad dialog stays the same surface while its display, its '
+      'guessed name and a suggestion change', () {
+    final keys = [
+      for (var i = 1; i <= 3; i++) {'id': 'btn.key_$i', 'kind': 'btn'},
+    ];
+    AgentView pad(int revision, String display, {int instance = 7}) => {
+      ...view(revision, screen: '${display}Surface', text: [display]),
+      'activeSurface': {
+        'kind': 'modal',
+        'label': display,
+        'screen': '${display}Surface',
+        'source': 'regionTitle',
+        'instance': instance,
+      },
+      'interactables': [
+        if (display.length > 3) {'id': 'btn.sofa', 'kind': 'btn'},
+        ...keys,
+      ],
+    };
+    final decision = pad(1, '+60');
+    final typed = pad(5, '+60 1512');
+    expect(
+      AgentSession.targetUnaffected(decision, typed, {
+        'btn.key_2',
+      }, allowUnrelatedChanges: true),
+      isTrue,
+    );
+    // Without the authority, the new suggestion row still matters.
+    expect(
+      AgentSession.staleReason(decision, typed, {'btn.key_2'}),
+      contains('appeared'),
+    );
+    // Another dialog with the same keys is not the same surface.
+    expect(
+      AgentSession.staleReason(decision, pad(5, '+60 1512', instance: 8), {
+        'btn.key_2',
+      }, allowUnrelatedChanges: true),
+      'screen changed',
+    );
+  });
+
+  test('a scroll on a named list is scoped to that list', () {
+    final action = {
+      'method': 'scroll',
+      'args': ['up'],
+      'params': {'target': 'scroll.day_grid', 'distance': -400},
+    };
+    expect(AgentSession.scopedTargets(action), {'scroll.day_grid'});
+    AgentView grid(int revision, {required bool atStart}) => {
+      ...view(revision, text: ['10:4$revision']),
+      'scrollables': [
+        {
+          'id': 'scroll.day_grid',
+          'axis': 'vertical',
+          'axisDirection': 'down',
+          'atStart': atStart,
+        },
+      ],
+    };
+    expect(
+      AgentSession.targetUnaffected(
+        grid(1, atStart: true),
+        grid(2, atStart: false),
+        {'scroll.day_grid'},
+        allowUnrelatedChanges: true,
+      ),
+      isTrue,
+    );
+    expect(
+      AgentSession.staleReason(
+        grid(1, atStart: true),
+        view(2, text: ['10:42']),
+        {'scroll.day_grid'},
+        allowUnrelatedChanges: true,
+      ),
+      'target scroll.day_grid changed',
+    );
   });
 
   test('real screen or target changes still reject a stale decision', () async {

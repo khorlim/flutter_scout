@@ -1615,6 +1615,7 @@ class FlutterScoutRuntime {
       'heuristicScore': surface['heuristicScore'],
     if (surface['scoreKind'] != null) 'scoreKind': surface['scoreKind'],
     if (surface['provenance'] != null) 'provenance': surface['provenance'],
+    if (surface['instance'] != null) 'instance': surface['instance'],
   };
 
   bool _sameStringLists(List<String> first, List<String> second) {
