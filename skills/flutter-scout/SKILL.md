@@ -78,18 +78,23 @@ node <client> serve --app task
 node <client> call --app task --brief observe
 node <client> call --app task --brief act '{"viewRevision":7,"action":{"method":"tap","args":["btn.save"]}}'
 node <client> call --app task --brief query '{"method":"locate","params":{"text":"Save"}}'
-node <client> call --app task watch '{"condition":{"text":"Saved"},"timeoutMs":8000}'
-node <client> call --app task next '{"timeoutMs":8000}'
-node <client> call --app task act - <<'JSON'
-{"viewRevision":8,"action":{"method":"input","args":["value"],"params":{"target":"field.email"}}}
+node <client> call --app task --brief act '{"viewRevision":8,"action":{"method":"input","args":["AI Smoke"],"params":{"target":"field.customer_name"}}}'
+node <client> call --app task --brief act - <<'JSON'
+{"viewRevision":9,"action":{"method":"input","args":["<pin>"],"params":{"target":"field.staff_pin"}}}
 JSON
+node <client> call --app task --brief watch '{"condition":{"gone":"Data sync"},"timeoutMs":90000,"wait":true}'
 node <client> call --app task disconnect   # before reload/restart
 node <client> stop --app task              # closes Scout and the bridge
 ```
 
-input/fill must use `-` with stdin; argv is refused. Other methods: status,
-foreground, start, acknowledge, reconcile, react, cancel (same fields as the
-client). After `disconnect` or a lost agent process, the next call reconnects
+Typed values may go on the command line when every target is an observed
+field that is not secret. A password, PIN, OTP, card or other credential
+field (by its handle, or because Scout redacts its value in `fieldValues`),
+a field missing from the latest scene, or input without `params.target` is
+refused with `bridge_stdin_required` and nothing is sent: resend the same
+act JSON on stdin with `-`. Send `fill` maps with credentials the same way.
+Other methods: status, next, foreground, start, acknowledge, reconcile,
+react, cancel (same fields as the client). After `disconnect` or a lost agent process, the next call reconnects
 and reports `bridge.reconnected` with any `previousLoss`; until you observe,
 revision-bound calls are refused (`bridge_reconnected`, nothing sent). An
 in-flight input is never resent. A bridge idle for 30 minutes stops itself.
@@ -188,11 +193,34 @@ it to hide an error you have not understood.
 
 ## Completion and recovery
 
-Input completion and business completion are separate. watch({text: 'Saved'},
-8000) returns a ticket; consume next events until that condition's event.
+Input completion and business completion are separate. A condition is one
+of `{text: s}` (on screen), `{gone: s}` (no longer on screen), `{screen: s}`
+or `{surfaceChanged: true}`. `text` and `gone` compare `s` exactly with each
+visible text, interactable label and handle, so `{gone: 'Data sync'}` waits
+for a capsule labelled "Data sync" that shows only "45%". `gone` waits while
+a brief list it needs was cut (`omitted`); a timeout then names it in
+`absenceUnproven`.
+
+`scout.watchUntil(condition, timeoutMs)` (bridge: `watch` with `"wait":true`)
+blocks until the condition ends and returns that end: `ok:true` with
+`status:'met'`, the matching `viewRevision` and `view`; otherwise `ok:false`
+with `status` (`timeout`, `observation_unavailable`, ...). Other events it
+read are in `events`; plain view updates are only counted (`viewEvents`). It
+is the event consumer meanwhile, so do not run act or next alongside it.
+Keep one blocking call under your shell tool's time limit (about 90,000 ms
+for a 2-minute limit) and repeat it while it times out. Plain
+`watch(condition, timeoutMs)` still returns a ticket at once; then consume
+`next` events (each waits at most 30,000 ms) until that condition's event.
 A plain watch may run up to 600,000 ms (a first data sync); one with a
-reaction stays within 30,000 ms. Each `next` waits at most 30,000 ms, so call
-it again until the condition event arrives.
+reaction stays within 30,000 ms.
+
+Short-lived text: a toast or snackbar can vanish before your next observe.
+Each `observe` (and the scene `act` returns) carries `transientText`: texts
+that appeared and disappeared since your previous observe, with `shownMs`
+and `goneAgoMs`, newest last (at most 12, `transientTextOmitted` counts the
+rest). Eyes sample every 250 ms, so text shown for less than that can still
+be missed. To wait for a message that is about to appear, a watch for its
+`text` started before the act also works.
 Do not wait for a success screen after a rejected input. Already-visible text
 proves observed state, not that a new save succeeded. A timeout is not evidence
 that an app operation was cancelled or safe to repeat.

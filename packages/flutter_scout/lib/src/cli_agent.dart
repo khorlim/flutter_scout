@@ -463,7 +463,7 @@ function run() {
                   ? session.acknowledge(actionId)
                   : session.reconcile(actionId, integer('viewRevision'));
             case 'observe':
-              result = await session.observe();
+              result = await session.observeForCaller();
             case 'status':
               result = {'ok': true, ...session.scene};
             case 'next':

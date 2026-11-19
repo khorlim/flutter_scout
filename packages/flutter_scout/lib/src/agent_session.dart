@@ -384,6 +384,14 @@ class AgentSession {
   // Recent views by revision, so a decision can be compared with the current
   // screen instead of being rejected for unrelated in-place text updates.
   final Map<int, AgentView> _history = {};
+  // Short-lived text (a toast or snackbar) that appeared after the caller's
+  // last observation and vanished before the next one, from background polls.
+  static const maxTransientText = 12;
+  Set<String> _callerTexts = {};
+  Set<String> _polledTexts = {};
+  final Map<String, int> _appearedAt = {};
+  final List<({String text, int appearedAt, int goneAt})> _transient = [];
+  int _transientOmitted = 0;
   AgentView? _receipt;
   bool _receiptDelivered = false;
   int _receiptReadCount = 0;
@@ -436,6 +444,7 @@ class AgentSession {
       throw StateError('Session already opened/closed');
     }
     await observe();
+    _takeTransientText();
     _schedule();
     return _response(_view?['ok'] == true && _halt == null, {
       'agentProtocol': 2,
@@ -525,6 +534,7 @@ class AgentSession {
         ]);
         final changed = key != _viewKey;
         _view = value;
+        if (value['ok'] == true) _trackTransientText(value);
         _observedAt = _clock.elapsedMilliseconds;
         if (changed) {
           _revision++;
@@ -554,6 +564,70 @@ class AgentSession {
       done.complete(_response(value['ok'] == true && _halt == null));
     }();
     return done.future;
+  }
+
+  /// The caller's own observation: the current scene plus `transientText`,
+  /// the texts that appeared and vanished since the caller last observed
+  /// (background polls run every [interval], so text shown for less than
+  /// one interval can still be missed).
+  Future<AgentView> observeForCaller() async {
+    final result = await observe();
+    final transient = _takeTransientText();
+    return {...result, ...transient};
+  }
+
+  void _trackTransientText(AgentView value) {
+    final now = _clock.elapsedMilliseconds;
+    final texts = <String>{
+      for (final text in value['visibleText'] as List? ?? const [])
+        if (text is String) text,
+    };
+    // A truncated list cannot prove that a text vanished.
+    final complete = _complete(value, 'visibleText');
+    final carried = <String>{};
+    for (final text in _polledTexts) {
+      if (texts.contains(text)) continue;
+      if (!complete) {
+        carried.add(text);
+        continue;
+      }
+      _callerTexts.remove(text);
+      final appeared = _appearedAt.remove(text);
+      if (appeared == null) continue;
+      _transient.removeWhere((entry) => entry.text == text);
+      _transient.add((text: text, appearedAt: appeared, goneAt: now));
+      if (_transient.length > maxTransientText) {
+        _transient.removeAt(0);
+        _transientOmitted++;
+      }
+    }
+    for (final text in texts) {
+      if (!_polledTexts.contains(text) && !_callerTexts.contains(text)) {
+        _appearedAt.putIfAbsent(text, () => now);
+      }
+    }
+    _polledTexts = {...texts, ...carried};
+  }
+
+  AgentView _takeTransientText() {
+    final now = _clock.elapsedMilliseconds;
+    final result = <String, dynamic>{
+      if (_transient.isNotEmpty)
+        'transientText': [
+          for (final entry in _transient)
+            {
+              'text': entry.text,
+              'shownMs': entry.goneAt - entry.appearedAt,
+              'goneAgoMs': now - entry.goneAt,
+            },
+        ],
+      if (_transientOmitted > 0) 'transientTextOmitted': _transientOmitted,
+    };
+    _transient.clear();
+    _transientOmitted = 0;
+    _appearedAt.clear();
+    _callerTexts = Set.of(_polledTexts);
+    return result;
   }
 
   bool get _live =>
@@ -1172,25 +1246,55 @@ class AgentSession {
   }
 
   String _surface() => jsonEncode([_view?['screen'], _view?['activeSurface']]);
+
+  /// Whether [value] is the exact label or handle of a listed interactable
+  /// (a progress capsule may show only "45%" while its control is labelled
+  /// "Data sync").
+  static bool _controlPresent(AgentView? view, String value) =>
+      (view?['interactables'] as List? ?? const []).whereType<Map>().any(
+        (node) => node['label'] == value || node['id'] == value,
+      );
+
+  /// Whether [value] is on screen as an exact visible text or as the exact
+  /// label or handle of an interactable.
+  static bool _present(AgentView? view, String value) =>
+      (view?['visibleText'] as List? ?? const []).contains(value) ||
+      _controlPresent(view, value);
+
+  /// Whether [view] lists all of [section]; brief omission is not proof of
+  /// absence. Anonymous generic controls (`interactablesOmitted`) have no
+  /// label to match, so only the maxItems cut counts for interactables.
+  static bool _complete(AgentView? view, String section) {
+    final omitted = view?['omitted'];
+    if (omitted is Map) {
+      final count = omitted[section];
+      if (count != null && count != 0) return false;
+    } else if (omitted != null && omitted != 0 && omitted != false) {
+      return false;
+    }
+    final sections = (view?['omittedSections'] as Map?)?['sections'];
+    return sections == null ||
+        (sections is List && !sections.contains(section));
+  }
+
+  /// Sections whose omission keeps a `gone` job from proving absence now.
+  static List<String> _absenceUnproven(AgentView? view, _ConditionJob job) => [
+    if (!_complete(view, 'visibleText')) 'visibleText',
+    if (job.seenAsControl && !_complete(view, 'interactables')) 'interactables',
+  ];
+
   bool _matches(_ConditionJob job) {
     final c = job.condition;
-    final texts = _view?['visibleText'] as List? ?? [];
-    if (c.containsKey('text')) return texts.contains(c['text']);
+    if (c.containsKey('text')) return _present(_view, c['text'] as String);
     if (c.containsKey('gone')) {
-      // Brief omission is not proof of absence.
-      final omitted = _view?['omitted'];
-      if (omitted is Map) {
-        final textOmitted = omitted['visibleText'];
-        if (textOmitted != null && textOmitted != 0) return false;
-      } else if (omitted != null && omitted != 0 && omitted != false) {
+      final value = c['gone'] as String;
+      if (_controlPresent(_view, value)) {
+        // Once seen as a control, absence also needs the full control list.
+        job.seenAsControl = true;
         return false;
       }
-      final sections = (_view?['omittedSections'] as Map?)?['sections'];
-      if (sections != null &&
-          (sections is! List || sections.contains('visibleText'))) {
-        return false;
-      }
-      return !texts.contains(c['gone']);
+      return !(_view?['visibleText'] as List? ?? const []).contains(value) &&
+          _absenceUnproven(_view, job).isEmpty;
     }
     if (c.containsKey('screen')) return _view?['screen'] == c['screen'];
     return _surface() != job.surface;
@@ -1266,9 +1370,14 @@ class AgentSession {
   void _finishJob(_ConditionJob job, String status) {
     if (_jobs.remove(job.id) == null) return;
     job.timer?.cancel();
+    final unproven = status == 'timeout' && job.condition.containsKey('gone')
+        ? _absenceUnproven(_view, job)
+        : const <String>[];
     _emit(job.reaction == null ? 'condition' : 'reaction', {
       'conditionId': job.id,
       'status': status,
+      // Why a `gone` wait could not prove absence (truncated brief lists).
+      if (unproven.isNotEmpty) 'absenceUnproven': unproven,
       'viewRevision': _revision,
       'view': _view,
       'inflightActionCancelled': false,
@@ -1400,4 +1509,5 @@ class _ConditionJob {
   final String surface;
   Timer? timer;
   bool notified = false;
+  bool seenAsControl = false;
 }

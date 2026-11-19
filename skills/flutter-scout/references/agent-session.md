@@ -88,11 +88,16 @@ connect error, and reuses a live bridge for the same app. `call --app <name>
 and physical-pixel duplicates) and nothing else: outcomes, errors, dispatch,
 omissions and safety fields stay. Methods mirror the client with named fields: `act {viewRevision,
 action, timeoutMs}`, `start`, `acknowledge {actionId}`, `reconcile {actionId,
-viewRevision}`, `next {timeoutMs}`, `watch {condition, timeoutMs}`, `react`,
+viewRevision}`, `next {timeoutMs}`, `watch {condition, timeoutMs, wait}`, `react`,
 `cancel {scope, conditionId}`, `query {method, params, args}`, `observe`,
 `status`, `foreground`, plus `bridge` (bridge status), `disconnect` (close
 Scout, keep the bridge) and `close`/`stop` (close Scout and end the bridge).
-`-` reads the JSON from stdin; input/fill actions must use it.
+`-` reads the JSON from stdin. input/fill values may come from argv only when
+every target is a field in the latest scene whose value Scout does not
+redact and whose handle names no credential; otherwise the call returns
+`bridge_stdin_required` with nothing sent, and the same JSON goes on stdin.
+`watch` with `wait:true` is `watchUntil` (below); its call waits up to its
+`timeoutMs` plus 30 s.
 
 The bridge never retries or queues. When the agent process exits (or after
 `disconnect`), the next call opens a new connection and adds
@@ -131,6 +136,11 @@ does not by itself wake or interrupt a model that is still reasoning.
    `condition` event says `met`, `timeout`, `observation_unavailable`, `stopped`,
    or `cancelled`. It doesn't occupy the hand. This proves observed state only,
    not causality: already-visible "Ready" is not proof a new save completed.
+   `watchUntil(condition, timeoutMs)` registers the same watch, consumes
+   events until it ends and returns `{ok, status, conditionId, viewRevision,
+   view, events, viewEvents}`; `ok` is true only for `met`, and other events
+   it read (receipts, reactions, stops) are in `events`, view updates only
+   counted. It is an event consumer, like act.
 
 Supported actions are tap, tap-text, long-press, input, fill, scroll, swipe,
 scroll-to, back, dismiss, reveal, drag-start, drag-move, drag-end, drag-cancel and deeplink,
@@ -164,8 +174,11 @@ Scout rechecks later and never executes a disappeared, queued trigger.
 
 `{type:'stop'}` instead stops future Scout input without pretending to cancel
 an already-dispatched action. Conditions accept exactly one of `text`, `gone`,
-`screen`, or `surfaceChanged:true`. Text/screen matching is exact; missing text
-in an omitted brief section is not proof of `gone`. Maximum eight active jobs,
+`screen`, or `surfaceChanged:true`. Matching is exact. `text`/`gone` compare
+with every visible text, interactable label and interactable handle. Missing
+text in an omitted brief section is not proof of `gone`, nor is a missing
+control once the job has seen the value as a control and the interactables
+list is cut; such a timeout carries `absenceUnproven`. Maximum eight active jobs,
 each 1–30,000 ms; screen/surface changes retire tap rules. Timeout does nothing.
 
 Cancellation is deliberately explicit:
@@ -198,6 +211,10 @@ reserves terminal evidence, rather than silently losing alerts. Consume events
 continuously during a task; this is not indefinite unattended monitoring.
 Polling can miss transitions shorter than a sample, and an event is evidence
 of a past observation, not a reusable current action authorization.
+A caller's `observe()` adds `transientText` (`text`, `shownMs`, `goneAgoMs`):
+visible texts that samples saw appear and vanish since the caller's previous
+observe, at most 12 (`transientTextOmitted` counts older ones). A truncated
+text list never counts as a vanish.
 
 All actions carry the decision's `viewRevision`; a changed revision is
 rejected, with one exception. tap (including `button` and a double tap's

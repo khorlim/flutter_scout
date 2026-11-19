@@ -491,6 +491,106 @@ void main() {
     expect((await event(s, 'condition'))['status'], 'met');
   });
 
+  test('text and gone match interactable labels and handles too', () async {
+    final capsule = {'id': 'btn.data_sync', 'label': 'Data sync'};
+    var current = view(1, text: ['45%'], extra: [capsule]);
+    final s = AgentSession(
+      read: () async => current,
+      act: (_, _) async => receipt,
+      validate: (_) {},
+    );
+    addTearDown(s.close);
+    await s.open();
+    final label = s.watch({'text': 'Data sync'}, 1000)['conditionId'];
+    final handle = s.watch({'text': 'btn.data_sync'}, 1000)['conditionId'];
+    final gone = s.watch({'gone': 'Data sync'}, 2000)['conditionId'];
+    final met = <String>{};
+    for (var i = 0; i < 2; i++) {
+      final ended = await event(s, 'condition');
+      expect(ended['status'], 'met');
+      met.add(ended['conditionId'] as String);
+    }
+    expect(met, {label, handle});
+    // The capsule is still there: gone waits.
+    expect((await s.nextEvent(0))['type'], 'timeout');
+    current = view(2, text: ['Synced']);
+    await s.observe();
+    final ended = await event(s, 'condition');
+    expect([ended['conditionId'], ended['status']], [gone, 'met']);
+  });
+
+  test(
+    'a control seen by gone needs the full control list to be gone',
+    () async {
+      final capsule = {'id': 'btn.data_sync', 'label': 'Data sync'};
+      var current = view(1, extra: [capsule]);
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+      );
+      addTearDown(s.close);
+      await s.open();
+      s.watch({'gone': 'Data sync'}, 300);
+      s.watch({'gone': 'Loading'}, 1000);
+      // Past the maxItems cut the capsule may still exist; plain text (never
+      // seen as a control) is still provably gone from the full text list.
+      current = {
+        ...view(2),
+        'omitted': {'interactables': 3},
+      };
+      await s.observe();
+      final text = await event(s, 'condition');
+      expect(text['status'], 'met');
+      final control = await event(s, 'condition');
+      expect(control['status'], 'timeout');
+      expect(control['absenceUnproven'], ['interactables']);
+    },
+  );
+
+  test(
+    'observe reports text that came and went since the last observe',
+    () async {
+      var current = view(1);
+      final s = AgentSession(
+        read: () async => current,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+        interval: const Duration(hours: 1),
+      );
+      addTearDown(s.close);
+      await s.open();
+      current = view(2, text: ['Working', 'Saved Successfully']);
+      await s.observe();
+      current = view(3);
+      await s.observe();
+      // Truncated text cannot prove a later toast vanished.
+      current = view(4, text: ['Working', 'Undo']);
+      await s.observe();
+      current = {
+        ...view(5),
+        'omitted': {'visibleText': 2},
+      };
+      await s.observe();
+      final seen = await s.observeForCaller();
+      final transient = seen['transientText'] as List;
+      expect(transient.map((e) => e['text']), ['Saved Successfully']);
+      expect(transient.single['goneAgoMs'], isA<int>());
+      expect(transient.single['shownMs'], isA<int>());
+      // Reported once; text still on screen at the caller's observation and
+      // then gone is not transient.
+      current = view(6, text: ['Working', 'Undo']);
+      final next = await s.observeForCaller();
+      expect(next.containsKey('transientText'), isFalse);
+      current = view(7);
+      await s.observe();
+      expect(
+        (await s.observeForCaller()).containsKey('transientText'),
+        isFalse,
+      );
+    },
+  );
+
   test('quiet conditions time out without a speculative tap', () async {
     var calls = 0;
     final s = AgentSession(

@@ -273,7 +273,7 @@ export class ScoutAgent {
    * Do not run another next()/act() consumer concurrently. */
   async act(viewRevision, action, timeoutMs = 45000) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new TypeError('act timeout must be 1..120000 ms');
-    if (this.acting) throw new Error('Only one act/event consumer at a time');
+    if (this.acting || this.consuming) throw new Error('Only one act/event consumer at a time');
     this.acting = true;
     const events = [];
     const deadline = Date.now() + timeoutMs;
@@ -314,6 +314,50 @@ export class ScoutAgent {
     } finally { this.acting = false; }
   }
   watch(condition, timeoutMs = 5000) { return this.request('watch', { condition, timeoutMs }); }
+
+  /** watch() that blocks until its condition ends (met, timeout, ...) and
+   * returns that event: ok is true only when the condition was met. It is
+   * the event consumer meanwhile; other events it reads come back in
+   * `events`, except plain view updates, which are only counted. */
+  async watchUntil(condition, timeoutMs = 5000) {
+    if (this.acting || this.consuming) throw new Error('Only one act/event consumer at a time');
+    this.consuming = true;
+    const events = [];
+    let viewEvents = 0;
+    try {
+      const ticket = await this.watch(condition, timeoutMs);
+      if (!ticket.ok) return { ...ticket, events };
+      // The session ends the condition at its own deadline; this only
+      // bounds a lost event.
+      const deadline = Date.now() + timeoutMs + 15000;
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          return { ok: false, conditionId: ticket.conditionId, events, viewEvents,
+            error: { code: 'watch_event_unavailable',
+              message: 'The condition did not report an end within its timeout; observe, then cancel or watch again.' } };
+        }
+        const response = await this.next(Math.min(30000, remaining));
+        if (!response.ok) return { ...response, conditionId: ticket.conditionId, events, viewEvents };
+        const event = response.event;
+        if (event?.type === 'timeout') continue;
+        if (event?.type === 'view') { viewEvents += 1; continue; }
+        if (event?.type === 'condition' && event.conditionId === ticket.conditionId) {
+          const { type, ...ended } = event;
+          const met = event.status === 'met';
+          return { ok: met, ...ended,
+            ...(met ? {} : { error: { code: 'watch_not_met',
+              message: `The condition ended ${event.status} before it was met.` } }),
+            events, viewEvents };
+        }
+        events.push(event);
+        if (event?.type === 'closed') {
+          return { ok: false, conditionId: ticket.conditionId, events, viewEvents,
+            error: { code: 'scout_agent_closed', message: 'Scout closed before the condition ended.' } };
+        }
+      }
+    } finally { this.consuming = false; }
+  }
   react(viewRevision, condition, reaction, timeoutMs = 5000) {
     return this.request('react', { viewRevision, condition, reaction, timeoutMs });
   }
@@ -341,19 +385,19 @@ export class ScoutAgent {
 //   node agent_client.mjs serve --app <name>           # returns when connected
 //   node agent_client.mjs call --app <name> observe
 //   node agent_client.mjs call --app <name> act '{"viewRevision":3,"action":{...}}'
-//   node agent_client.mjs call --app <name> act - <<'JSON'   # input/fill: stdin only
+//   node agent_client.mjs call --app <name> act - <<'JSON'   # secret input/fill: stdin only
 //   node agent_client.mjs call --app <name> disconnect   # before reload/restart
 //   node agent_client.mjs stop --app <name>              # close Scout and the bridge
 // ---------------------------------------------------------------------------
 
 const bridgeParams = {
   observe: [], status: [], foreground: [], bridge: [], disconnect: [], close: [],
-  act: ['viewRevision', 'action', 'timeoutMs'],
-  start: ['viewRevision', 'action'],
+  act: ['viewRevision', 'action', 'timeoutMs', 'argv'],
+  start: ['viewRevision', 'action', 'argv'],
   acknowledge: ['actionId'],
   reconcile: ['actionId', 'viewRevision'],
   next: ['timeoutMs'],
-  watch: ['condition', 'timeoutMs'],
+  watch: ['condition', 'timeoutMs', 'wait'],
   react: ['viewRevision', 'condition', 'reaction', 'timeoutMs'],
   cancel: ['scope', 'conditionId'],
   query: ['method', 'params', 'args'],
@@ -362,6 +406,48 @@ const bridgeParams = {
 // Revisions, action ids and condition ids restart with every connection.
 const freshSafe = new Set(['observe', 'status', 'query', 'bridge', 'disconnect', 'close']);
 const idleShutdownMs = 30 * 60 * 1000;
+
+// Mirrors the CLI's typedValueTargetLooksSensitive (cli_privacy.dart).
+const sensitiveTargetPattern = new RegExp(
+  '(^|[^a-z0-9])(password|passcode|passphrase|pwd|secret|pin|cvv|cvc|otp|' +
+  'token|cookie|session[ _-]?id|api[ _-]?key|security[ _-]?code|' +
+  'card[ _-]?number|account[ _-]?number|one[ _-]?time[ _-]?code|' +
+  'verification[ _-]?code)($|[^a-z0-9])', 'i');
+
+/** Whether a field handle or label names a credential (`field.staff_pin`). */
+export function targetLooksSensitive(target) {
+  return typeof target === 'string' && sensitiveTargetPattern.test(target.replace(/[._]/g, ' '));
+}
+
+/** Why `action`'s typed values must not come from process arguments, or
+ * null when every target is one of the scene's `fieldValues` that Scout does
+ * not treat as secret. Unknown or unnamed targets fail closed. Without
+ * `fieldValues`, only the target names are checked. */
+export function argvTypedValueRefusal(action, fieldValues) {
+  const method = action?.method;
+  if (method !== 'input' && method !== 'fill') return null;
+  const json = action.params?.json;
+  const targets = method === 'input' ? [action.params?.target]
+    : json && typeof json === 'object' && !Array.isArray(json) ? Object.keys(json) : [null];
+  for (const target of targets) {
+    if (typeof target !== 'string' || !target) {
+      return method === 'input'
+        ? 'input without params.target types into whichever field has focus, which may be secret'
+        : 'fill needs a field-to-value map';
+    }
+    if (targetLooksSensitive(target)) return `${target} names a credential`;
+    if (fieldValues === undefined) continue;
+    const fields = fieldValues && typeof fieldValues === 'object' ? fieldValues : {};
+    if (!Object.hasOwn(fields, target)) {
+      return `${target} is not a field in the latest scene, so Scout cannot confirm it is not secret`;
+    }
+    const value = fields[target];
+    if (value && typeof value === 'object' && value.redacted === true) {
+      return `${target} is a field Scout treats as secret (obscured, or labelled as a credential)`;
+    }
+  }
+  return null;
+}
 
 function bridgePaths(app, socket) {
   if (socket) return { socket, log: `${socket}.log` };
@@ -460,6 +546,12 @@ export class ScoutBridge {
         connected: Boolean(this.agent && !this.agent.closed), fresh: this.fresh };
     }
     if (method === 'disconnect' || method === 'close') return this.disconnect();
+    if (params.argv !== undefined && params.argv !== true) {
+      throw agentError('bridge_invalid_request', 'argv is set only by the shell bridge.');
+    }
+    if (params.wait !== undefined && typeof params.wait !== 'boolean') {
+      throw agentError('bridge_invalid_request', 'wait must be true or false.');
+    }
     const bridge = await this.ensureAgent();
     const tag = value => (bridge ? { ...value, bridge } : value);
     if (this.fresh && !freshSafe.has(method)) {
@@ -468,6 +560,13 @@ export class ScoutBridge {
     }
     const agent = this.agent;
     const p = params;
+    // Typed values may come from the command line only for fields Scout
+    // can see are not secret; secrets stay out of process arguments.
+    const refusal = p.argv ? argvTypedValueRefusal(p.action, agent.latest?.view?.fieldValues ?? {}) : null;
+    if (refusal) {
+      return tag(errorResponse(agentError('bridge_stdin_required',
+        `${refusal}. Send this act JSON on stdin instead: act - <<'JSON' ... JSON. Nothing was sent.`)));
+    }
     let result;
     switch (method) {
       case 'observe': result = await agent.observe(); break;
@@ -478,7 +577,10 @@ export class ScoutBridge {
       case 'acknowledge': result = await agent.acknowledge(p.actionId); break;
       case 'reconcile': result = await agent.reconcile(p.actionId, p.viewRevision); break;
       case 'next': result = await agent.next(p.timeoutMs ?? 10000); break;
-      case 'watch': result = await agent.watch(p.condition, p.timeoutMs ?? 5000); break;
+      case 'watch':
+        result = p.wait ? await agent.watchUntil(p.condition, p.timeoutMs ?? 5000)
+          : await agent.watch(p.condition, p.timeoutMs ?? 5000);
+        break;
       case 'react': result = await agent.react(p.viewRevision, p.condition, p.reaction, p.timeoutMs ?? 5000); break;
       case 'cancel': result = await agent.cancel(p.scope, p.conditionId); break;
       case 'query': result = await agent.query(p.method, p.params ?? {}, p.args ?? []); break;
@@ -627,15 +729,31 @@ async function callBridge(command, options, paths, method, json) {
       print(errorResponse(agentError('usage', 'Arguments must be one JSON object (or - to read it from stdin).')));
       return 2;
     }
-    if (json !== '-' && ['input', 'fill'].includes(params?.action?.method)) {
-      print(errorResponse(agentError('bridge_stdin_required',
-        'input/fill values must come through stdin (pass - and a heredoc), never process arguments. Nothing was sent.')));
-      return 2;
+    const typed = ['act', 'start'].includes(method) && ['input', 'fill'].includes(params?.action?.method);
+    if (json !== '-' && typed) {
+      // A credential-named target never needs the bridge to say no.
+      const refusal = argvTypedValueRefusal(params.action);
+      if (refusal) {
+        print(errorResponse(agentError('bridge_stdin_required',
+          `${refusal}. Send this act JSON on stdin instead: act - <<'JSON' ... JSON. Nothing was sent.`)));
+        return 2;
+      }
+      // The bridge checks the live scene; one that predates this check
+      // rejects the unknown field, so nothing is sent.
+      params = { ...params, argv: true };
     }
   }
   const request = { method: command === 'stop' ? 'close' : method, params };
+  // A blocking watch answers when its condition ends.
+  const waitMs = method === 'watch' && params?.wait === true && Number.isInteger(params.timeoutMs)
+    ? params.timeoutMs + 30000 : 0;
   try {
-    const response = await sendBridge(paths.socket, request, 150000);
+    let response = await sendBridge(paths.socket, request, Math.max(150000, waitMs));
+    if (response?.error?.code === 'bridge_invalid_request' && (params?.argv || params?.wait !== undefined)) {
+      // A bridge started from an older client knows neither field.
+      response = { ...response, error: { ...response.error, message: `${response.error.message} ` +
+        'This bridge predates argv input and blocking watch: run stop, then serve again, or pass the JSON on stdin. Nothing was sent.' } };
+    }
     print(options.brief ? briefResponse(response) : response);
     return response.ok === true ? 0 : 1;
   } catch (error) {

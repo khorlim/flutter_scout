@@ -29,6 +29,8 @@ Use the shipped scripts/agent_client.mjs over one persistent JSONL pipe.
 - reconcile(actionId, viewRevision): explicit recovery from a known failed
   dispatch after fresh safe observation. Never retries; unknown stays halted.
 - watch(condition, timeoutMs): asynchronous bounded condition ticket, not input.
+- watchUntil(condition, timeoutMs): watch that returns the condition's end
+  (bridge: watch with wait:true); ok only when met.
 - react(viewRevision, condition, reaction, timeoutMs): one explicitly authorized
   exact-target tap or stop-future-input rule; at most 30 s.
 - cancel(scope, conditionId): cancel a wait/reaction or stop future actions.
@@ -47,6 +49,9 @@ source flags, verbose or automatic image capture. Text/input values travel in
 the JSON pipe, not shell argv. Native deep links remain capability-gated.
 
 Conditions accept exactly one of text, gone, screen or surfaceChanged:true.
+text/gone match visible text, interactable labels and handles exactly.
+observe() lists texts that came and went since the last observe in
+transientText.
 A timeout does not cancel app work. Missing text in an omitted section does
 not establish absence. Already-visible text does not prove a new operation.
 

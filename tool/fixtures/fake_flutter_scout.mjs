@@ -9,12 +9,13 @@ const log = process.env.FAKE_SCOUT_LOG;
 const emit = value => process.stdout.write(JSON.stringify(value) + '\n');
 const runtime = `runtime-${process.pid}`;
 let revision = 1;
-let pendingReceipt = null;
+const queued = [];
 let unacknowledged = null;
 let actions = 0;
 const scene = () => ({
   ok: true, actionable: unacknowledged === null, inputBlockedReason: unacknowledged ? 'receipt_unacknowledged' : null,
-  viewRevision: revision, view: { ok: true, screen: 'Home', runtimeInstanceId: runtime, interactables: [{ id: 'btn.save' }] },
+  viewRevision: revision, view: { ok: true, screen: 'Home', runtimeInstanceId: runtime, interactables: [{ id: 'btn.save' }],
+    fieldValues: { 'field.customer_name': '', 'field.staff_code': { redacted: true, isEmpty: true, hasValue: false } } },
   hand: { pendingAction: null, unacknowledgedAction: unacknowledged, halted: null, closed: false },
 });
 
@@ -53,18 +54,23 @@ input.on('line', line => {
       }
       actions++;
       unacknowledged = `a${actions}`;
-      pendingReceipt = { type: 'action', actionId: unacknowledged, result: { ok: true, dispatch: 'dispatched' } };
+      queued.push({ type: 'action', actionId: unacknowledged, result: { ok: true, dispatch: 'dispatched' } });
       return reply({ ok: true, actionId: unacknowledged, phase: 'accepted', dispatch: 'not_yet_established' });
     case 'next': {
-      const event = pendingReceipt ?? { type: 'timeout' };
-      pendingReceipt = null;
+      const event = queued.shift() ?? { type: 'timeout' };
       if (event.type === 'action') revision++;
       return reply({ ok: true, event });
     }
     case 'acknowledge':
       unacknowledged = null;
       return reply(scene());
-    case 'watch': return reply({ ok: true, conditionId: 'w1', oneShot: true, timeoutMs: request.timeoutMs });
+    case 'watch':
+      // Two view updates, then the condition ends.
+      queued.push({ type: 'view', viewRevision: revision, view: scene().view },
+        { type: 'view', viewRevision: revision, view: scene().view },
+        { type: 'condition', conditionId: 'w1', status: request.condition?.gone === 'never' ? 'timeout' : 'met',
+          viewRevision: revision, view: scene().view, inflightActionCancelled: false });
+      return reply({ ok: true, conditionId: 'w1', oneShot: true, timeoutMs: request.timeoutMs });
     case 'query': return reply({ ok: true, queryResult: { ok: true, method: request.query.method, matches: 1 } });
     case 'close':
       reply({ ok: true, type: 'closed', inflightActionCancelled: false });

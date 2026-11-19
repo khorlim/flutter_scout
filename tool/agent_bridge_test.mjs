@@ -70,14 +70,41 @@ test('serve, a 20-step observe/act loop, reload reconnect and stop', async () =>
   assert.equal(loop.filter(r => r.method === 'start').length, 20);
   assert.equal(loop.filter(r => r.method === 'acknowledge').length, 20);
 
-  // Sensitive input never travels in argv; stdin is accepted.
-  const typed = { viewRevision: 21, action: { method: 'input', args: ['6015 secret'], params: { target: 'f' } } };
-  const refused = await b.call('act', JSON.stringify(typed));
-  assert.equal(refused.code, 2);
-  assert.equal(refused.json.error.code, 'bridge_stdin_required');
+  // Secret input never travels in argv: a credential-named target, a field
+  // Scout redacts, an unknown field, or no target at all. Nothing is sent.
+  const input = (target, value = '6015 secret') => ({ viewRevision: 21,
+    action: { method: 'input', args: [value], ...(target ? { params: { target } } : {}) } });
+  for (const [target, code] of [['field.pin', 2], ['field.staff_code', 1], ['field.unknown', 1], [null, 2]]) {
+    const refused = await b.call('act', JSON.stringify(input(target)));
+    assert.equal(refused.code, code, JSON.stringify(refused.json));
+    assert.equal(refused.json.error.code, 'bridge_stdin_required');
+    assert.match(refused.json.error.message, /stdin/);
+    assert.equal(b.requests().length, loop.length, 'nothing sent');
+  }
+  const fill = { viewRevision: 21, action: { method: 'fill', params: { json: {
+    'field.customer_name': 'Ali', 'field.staff_code': '1234' } } } };
+  assert.equal((await b.call('act', JSON.stringify(fill))).json.error.code, 'bridge_stdin_required');
   assert.equal(b.requests().length, loop.length, 'nothing sent');
-  const viaStdin = await b.call('act', '-', { stdin: JSON.stringify(typed) });
+  const viaStdin = await b.call('act', '-', { stdin: JSON.stringify(input('field.staff_code')) });
   assert.equal(viaStdin.code, 0, JSON.stringify(viaStdin.json));
+  // An ordinary visible field accepts its value on the command line.
+  const plain = await b.call('act', JSON.stringify({ ...input('field.customer_name', 'AI Smoke'), viewRevision: 22 }));
+  assert.equal(plain.code, 0, JSON.stringify(plain.json));
+  assert.deepEqual(b.requests().filter(r => r.method === 'start').at(-1).args, ['AI Smoke']);
+  const typedCount = b.requests().length;
+
+  // A blocking watch returns the condition's end directly; view updates are
+  // counted, not returned. Not met is ok:false with the status.
+  const met = await b.call('watch', JSON.stringify({ condition: { gone: 'Data sync' }, timeoutMs: 2000, wait: true }));
+  assert.equal(met.code, 0, JSON.stringify(met.json));
+  assert.deepEqual([met.json.status, met.json.conditionId, met.json.viewEvents, met.json.events], ['met', 'w1', 2, []]);
+  assert.equal(met.json.view.screen, 'Home');
+  const missed = await b.call('watch', JSON.stringify({ condition: { gone: 'never' }, timeoutMs: 2000, wait: true }));
+  assert.deepEqual([missed.code, missed.json.status, missed.json.error.code], [1, 'timeout', 'watch_not_met']);
+  const ticket = await b.call('watch', JSON.stringify({ condition: { text: 'Saved' }, timeoutMs: 2000 }));
+  assert.deepEqual([ticket.code, ticket.json.conditionId], [0, 'w1']);
+  assert.equal(b.requests().filter(r => r.method === 'watch').length, 3);
+  assert.equal(b.requests().length > typedCount, true);
 
   // Before reload/restart: disconnect; the next call reconnects lazily.
   assert.equal((await b.call('disconnect')).json.type, 'disconnected');
