@@ -178,11 +178,24 @@ from all later output; other typed text (names, notes, amounts) stays
 readable so you can confirm it on screen. Do not use allowErrors, waitMs,
 expect flags, file input or capture flags in actions; these are rejected.
 
-Background churn: when a progress toast or live list keeps changing the
-screen, an exact-handle action can add `"allowUnrelatedChanges": true` beside
-`method`. It still dispatches only if every target is unchanged, enabled and
-hit-testable on the same surface, and nothing new appeared over it; otherwise
-it is rejected as usual. Use it only for changes you have judged unrelated.
+Background churn: when a progress toast, clock or live list keeps changing
+the screen, an exact-handle action (tap, long-press, input or fill on an
+observed handle, or scroll/swipe with `params.target`) can add
+`"allowUnrelatedChanges": true` beside `method`. It still dispatches only if
+every target is unchanged, enabled and hit-testable on the same surface; the
+app's hit test then checks nothing covers it. A rejection names the cause in
+`details.staleReason`. Use it only for changes you have judged unrelated.
+On a number keypad, observe once and tap each key with that revision and the
+flag: the display the previous key updated does not invalidate the next key.
+Read the typed value afterwards.
+
+Scroll both ways: `args: ['up'|'down'|'left'|'right']` sets the direction
+(default down) and a negative `distance` reverses it:
+
+```js
+{ method: 'scroll', params: { target: 'scroll.day_grid', distance: 600 } }  // down
+{ method: 'scroll', params: { target: 'scroll.day_grid', distance: -600 } } // back up
+```
 
 Known app errors: a caller that has judged a recurring app error harmless
 (for example a printer plugin missing on a simulator) sets

@@ -163,6 +163,9 @@ extension _CliAgentDispatch on FlutterScoutCli {
         args
           ..add('--$name')
           ..add(jsonEncode(value));
+      } else if (value is num && value < 0) {
+        // `--distance -400` would read as a missing value and an option.
+        args.add('--$name=$value');
       } else {
         args
           ..add('--$name')

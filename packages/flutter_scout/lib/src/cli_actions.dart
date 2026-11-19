@@ -1077,14 +1077,25 @@ extension _CliActions on FlutterScoutCli {
       ..addFlag('verbose', defaultsTo: false);
     _addAllowErrorsOption(parser);
     final parsed = parser.parse(args);
-    final direction = parsed.rest.isEmpty
-        ? defaultDirection
-        : parsed.rest.first;
+    var direction = parsed.rest.isEmpty ? defaultDirection : parsed.rest.first;
+    var distance = parsed.option('distance');
+    final signed = distance == null ? null : num.tryParse(distance);
+    if (command == 'scroll' && signed != null && signed < 0) {
+      // A negative distance scrolls back the other way: `distance: -400`
+      // with the default `down` scrolls up by 400.
+      direction = switch (direction) {
+        'down' => 'up',
+        'up' => 'down',
+        'left' => 'right',
+        'right' => 'left',
+        _ => direction,
+      };
+      distance = '${-signed}';
+    }
     final params = <String, String>{
       'direction': direction,
       if (parsed.option('target') != null) 'target': parsed.option('target')!,
-      if (parsed.option('distance') != null)
-        'distance': parsed.option('distance')!,
+      'distance': ?distance,
       if (parsed.option('x') != null) 'x': parsed.option('x')!,
       if (parsed.option('y') != null) 'y': parsed.option('y')!,
       if (parsed.option('from') != null) 'point': parsed.option('from')!,

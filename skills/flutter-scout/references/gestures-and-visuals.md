@@ -24,6 +24,7 @@ Examples of action objects (targets must come from the actual current scene):
 { method: 'long-press', args: [observedHandle] }        // press and hold
 { method: 'input', args: [value], params: { target: observedField } }
 { method: 'scroll', args: ['down'], params: { target: observedScroll, distance: 400 } }
+{ method: 'scroll', params: { target: observedScroll, distance: -400 } } // back up
 { method: 'swipe', args: ['left'], params: { target: observedHandle, distance: 300 } }
 { method: 'reveal', args: [observedTarget], params: { within: observedScroll, maxActions: 8 } }
 { method: 'drag-start', params: { target: observedHandle } }
@@ -34,6 +35,7 @@ Examples of action objects (targets must come from the actual current scene):
 Coordinates are numbers in `params.x`/`params.y`, never a target string.
 Scroll and swipe also accept `params.from`/`params.to` as `'x,y'` strings
 instead of a target. Scroll distance is `distance`; there is no `amount`.
+A negative scroll distance scrolls the opposite way of the direction.
 An unknown parameter fails with `unknown_parameter` and lists the parameters
 the method accepts.
 

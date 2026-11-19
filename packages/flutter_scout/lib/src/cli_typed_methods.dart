@@ -250,6 +250,12 @@ const _distance = _TypedValueContract(
   minimum: 0,
   maximum: 100000,
 );
+// A negative scroll distance scrolls the opposite way of the direction.
+const _signedDistance = _TypedValueContract(
+  kind: _TypedJsonKind.number,
+  minimum: -100000,
+  maximum: 100000,
+);
 const _waitMs = _TypedValueContract(
   kind: _TypedJsonKind.integer,
   minimum: 0,
@@ -800,7 +806,7 @@ final Map<String, _TypedMethodContract> _typedMethodContracts =
         ],
         parameters: <String, _TypedValueContract>{
           'allowErrors': _boolFalse,
-          'distance': _distance,
+          'distance': _signedDistance,
           'from': _point,
           'target': _optionalText,
           'to': _point,
