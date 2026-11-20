@@ -104,6 +104,17 @@ class FlutterScoutRuntime {
   bool _sensitiveValueCapacityExceeded = false;
   Object? _lastSensitiveTreeScanRequestContext;
   bool _sensitiveTreeScanInProgress = false;
+
+  /// Ancestor-derived facts for the snapshot being built (null between
+  /// snapshots). A snapshot is synchronous, so the tree cannot change while
+  /// it is set. See [_AncestorMemo].
+  _AncestorMemo? _ancestorMemo;
+
+  /// The last snapshot built while no frame was scheduled, and what it was
+  /// built from. See `_reusableSnapshot` in runtime_snapshot.dart.
+  ScoutSnapshot? _idleSnapshot;
+  Object? _idleSnapshotInputs;
+  bool _renderingProbeInstalled = false;
   final LinkedHashMap<String, _MutationRecord> _mutationRecords =
       LinkedHashMap<String, _MutationRecord>();
   Future<void> _mutationTail = Future<void>.value();
@@ -377,6 +388,43 @@ class FlutterScoutRuntime {
 
   @visibleForTesting
   ScoutSnapshot debugSnapshot() => _snapshot();
+
+  /// Test-only: build snapshots without [_AncestorMemo], so a test can prove
+  /// the memoized snapshot equals the walk-per-node one.
+  @visibleForTesting
+  static bool debugDisableAncestorMemo = false;
+
+  /// Test-only: always build a fresh snapshot, even on an idle screen.
+  @visibleForTesting
+  static bool debugDisableIdleSnapshotReuse = false;
+
+  /// Test-only: [_AncestorMemo]'s answers for [elements], asked in that order
+  /// against one memo: `[inclusive any, strict any, depth]` per element.
+  @visibleForTesting
+  static List<List<Object>> debugAncestorMemoFacts(
+    List<Element> elements,
+    bool Function(Element) test,
+  ) {
+    final memo = _AncestorMemo();
+    return [
+      for (final element in elements)
+        [
+          _AncestorMemo.anyAncestor(
+            element,
+            memo.insideSensitive,
+            test,
+            strict: false,
+          ),
+          _AncestorMemo.anyAncestor(
+            element,
+            memo.hiddenByAncestor,
+            test,
+            strict: true,
+          ),
+          memo.depthOf(element),
+        ],
+    ];
+  }
 
   /// Test-only entry point for the same bounded semantic stability observer
   /// used by actions and `wait stable`.

@@ -9,7 +9,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   /// current screen. Active modal-surface guesses do not use this evidence.
   Map<String, Object?> _screenCandidateEvidence(Element primary) {
     const limit = 8;
-    final candidates = <String>[primary.widget.runtimeType.toString()];
+    final candidates = <String>[_typeName(primary.widget)];
     var truncated = false;
     primary.visitAncestorElements((ancestor) {
       // Route entries are siblings under an Overlay. Stop at public widget
@@ -18,7 +18,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       if (ancestor.widget is Overlay || ancestor.widget is Navigator) {
         return false;
       }
-      final type = ancestor.widget.runtimeType.toString();
+      final type = _typeName(ancestor.widget);
       if (!(type.endsWith('Screen') || type.endsWith('Page')) ||
           _RuntimeSnapshot._frameworkScreenWidgets.contains(type)) {
         return true;
@@ -44,7 +44,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     var screen = 'RootWidget';
     _walk(root, (Element element) {
       if (screen != 'RootWidget') return;
-      final widgetType = element.widget.runtimeType.toString();
+      final widgetType = _typeName(element.widget);
       if (widgetType.endsWith('Screen')) screen = widgetType;
     });
     return screen;
@@ -77,7 +77,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     required String? label,
     required String? text,
   }) {
-    final type = widget.runtimeType.toString();
+    final type = _typeName(widget);
     if (key != null && key.isNotEmpty) return true;
     if (type.startsWith('_')) return false;
     if (kind == 'widget' || kind == 'layout') {
@@ -150,7 +150,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   List<String> _ancestorSummary(Element element) {
     final ancestors = <String>[];
     element.visitAncestorElements((ancestor) {
-      final type = ancestor.widget.runtimeType.toString();
+      final type = _typeName(ancestor.widget);
       if (!type.startsWith('_') && ancestors.length < 8) {
         ancestors.add(type);
       }
@@ -160,6 +160,8 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   int _elementDepth(Element element) {
+    final memo = _ancestorMemo;
+    if (memo != null) return memo.depthOf(element);
     var depth = 0;
     element.visitAncestorElements((_) {
       depth++;
@@ -169,7 +171,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   bool _isScoutOverlayWidget(Widget widget) {
-    return widget.runtimeType.toString().startsWith('_FlutterScout');
+    return _typeName(widget).startsWith('_FlutterScout');
   }
 
   /// The id [_nodeFromElement] would assign, computed directly from values the
@@ -179,7 +181,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   String? _scoutNodeIdFor(Element element, Widget widget, String? label) {
     final kind = _kindFor(widget, element);
     if (kind == null) return null;
-    return _stableId(kind, label, widget.key, widget.runtimeType.toString());
+    return _stableId(kind, label, widget.key, _typeName(widget));
   }
 
   ScoutNode? _nodeFromElement(
@@ -217,7 +219,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     if (redacted) _rememberSensitiveValue(rawValue);
     final label = rawLabel == null ? null : _redactSensitiveText(rawLabel);
     final key = rawKey == null ? null : _redactSensitiveText(rawKey);
-    final widgetType = element.widget.runtimeType.toString();
+    final widgetType = _typeName(element.widget);
     final rawValidationMessage = kind == 'field'
         ? _validationMessageForFieldWidget(widget)
         : null;
@@ -546,24 +548,31 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   bool _isHiddenByAncestor(Element element) {
-    var hidden = false;
-    element.visitAncestorElements((Element ancestor) {
+    bool hides(Element ancestor) {
       final widget = ancestor.widget;
-      if (widget is Offstage && widget.offstage) {
-        hidden = true;
-        return false;
-      }
+      if (widget is Offstage && widget.offstage) return true;
       if (widget is Visibility && !widget.visible && !widget.maintainSize) {
-        hidden = true;
-        return false;
+        return true;
       }
       // TickerMode(enabled:false) does NOT hide — it only pauses tickers; the
       // subtree stays visible and hit-testable (see _hidesSubtree).
-      if (widget is IgnorePointer && _ignoresPointer(ancestor)) {
-        hidden = true;
-        return false;
-      }
-      return true;
+      return widget is IgnorePointer && _ignoresPointer(ancestor);
+    }
+
+    final memo = _ancestorMemo;
+    if (memo != null) {
+      return _AncestorMemo.anyAncestor(
+        element,
+        memo.hiddenByAncestor,
+        hides,
+        strict: true,
+      );
+    }
+    var hidden = false;
+    element.visitAncestorElements((Element ancestor) {
+      if (!hides(ancestor)) return true;
+      hidden = true;
+      return false;
     });
     return hidden;
   }
@@ -678,7 +687,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       // Prefer that exact decoration subtree over a neighbouring row's text.
       return _fieldPrefixLabel(element, widget.decoration?.prefixIcon);
     }
-    final widgetType = widget.runtimeType.toString();
+    final widgetType = _typeName(widget);
     if (widget is Switch ||
         widget is CupertinoSwitch ||
         widget is Checkbox ||
@@ -888,7 +897,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     // it) publishes its bundled asset in diagnostics, for example
     // `SvgAssetLoader(assets/svg/cart.svg)`. Apps that draw every icon as an
     // SVG asset otherwise leave icon-only buttons unlabeled.
-    if (widget.runtimeType.toString() == 'SvgPicture') {
+    if (_typeName(widget) == 'SvgPicture') {
       final asset = _svgAssetName(widget);
       if (asset != null) return _assetStemLabel(asset);
     }
@@ -1140,7 +1149,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final visibleRect = rect == null ? null : _visibleRectFor(rect);
     return {
       'kind': kind,
-      'widgetType': widget.runtimeType.toString(),
+      'widgetType': _typeName(widget),
       // One number per mounted dialog/sheet/barrier element: the same
       // surface keeps it while its content changes; a new one gets another.
       'instance': _overlayInstances[element] ??= ++_overlayInstanceCounter,
@@ -1164,7 +1173,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       final color = widget.color;
       return widget.dismissible || (color != null && color.a > 0.05);
     }
-    final type = widget.runtimeType.toString();
+    final type = _typeName(widget);
     if (type.contains('AnimatedModalBarrier')) return true;
     return false;
   }
@@ -1211,7 +1220,10 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         !renderObject.hasSize) {
       return null;
     }
-    final topLeft = renderObject.localToGlobal(Offset.zero);
+    final transform = _ancestorMemo?.transformToRoot(renderObject);
+    final topLeft = transform == null
+        ? renderObject.localToGlobal(Offset.zero)
+        : MatrixUtils.transformPoint(transform, Offset.zero);
     final rect = topLeft & renderObject.size;
     // A degenerate/invalid transform (or a non-finite size) can make
     // localToGlobal return NaN or Infinity, producing a non-finite rect. Such
@@ -1662,15 +1674,38 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   }
 
   RenderObject? _overlayEntryRoot(RenderObject? renderObject) {
+    final memo = _ancestorMemo?.overlayEntryRoot;
+    if (renderObject == null) return null;
+    if (memo != null && memo.containsKey(renderObject)) {
+      return memo[renderObject];
+    }
+    // Every render object passed on the way up shares the answer: the child
+    // of the first theater above it (or none within 600 levels).
+    final path = <RenderObject>[];
     RenderObject? current = renderObject;
+    RenderObject? root;
+    var resolved = false;
     for (var depth = 0; current != null && depth < 600; depth++) {
+      if (memo != null && memo.containsKey(current)) {
+        root = memo[current];
+        resolved = true;
+        break;
+      }
+      path.add(current);
       final parent = current.parent;
-      if (parent != null && parent.runtimeType.toString() == '_RenderTheater') {
-        return current;
+      if (parent != null && _typeName(parent) == '_RenderTheater') {
+        root = current;
+        resolved = true;
+        break;
       }
       current = parent;
     }
-    return null;
+    if (memo != null && resolved) {
+      for (final member in path) {
+        memo[member] = root;
+      }
+    }
+    return root;
   }
 
   double _overlapRatio(Rect a, Rect b) {

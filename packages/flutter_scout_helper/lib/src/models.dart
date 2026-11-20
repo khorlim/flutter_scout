@@ -99,6 +99,7 @@ class ScoutSnapshot {
     List<Map<String, Object?>>? suggestedActions,
     List<Map<String, Object?>>? perceptionGaps,
     Map<String, Object?>? captureBackend,
+    List<Map<String, Object?>>? recentErrors,
     int? stateGeneration,
     String? stateDigest,
   }) {
@@ -129,7 +130,7 @@ class ScoutSnapshot {
       controlGroups: controlGroups ?? this.controlGroups,
       structuredRows: structuredRows ?? this.structuredRows,
       suggestedActions: suggestedActions ?? this.suggestedActions,
-      recentErrors: recentErrors,
+      recentErrors: recentErrors ?? this.recentErrors,
       stateGeneration: stateGeneration ?? this.stateGeneration,
       stateDigest: stateDigest ?? this.stateDigest,
       degradedNodes: degradedNodes,
@@ -1332,13 +1333,38 @@ class _ActionSnapshotResult {
   bool get stable => stability.stable;
 }
 
+// Preserve localized labels/keys, including decomposed letter marks. ASCII
+// handles remain unchanged; unrelated CJK labels no longer collapse to the
+// same empty slug.
+final RegExp _kSlugSeparators = RegExp(r'[^\p{L}\p{N}\p{M}]+', unicode: true);
+final RegExp _kSlugRepeatedUnderscores = RegExp(r'_+');
+final RegExp _kSlugEdgeUnderscores = RegExp(r'^_|_$');
+
+// `runtimeType.toString()` is slow in debug builds and the snapshot asks it
+// of every element, several times. Types are canonical objects, so an
+// identity map returns the same name without hashing the type.
+final Map<Type, String> _typeNames = Map<Type, String>.identity();
+
+String _typeName(Object value) {
+  final type = value.runtimeType;
+  final known = _typeNames[type];
+  if (known != null) return known;
+  if (_typeNames.length >= 4096) _typeNames.clear();
+  return _typeNames[type] = type.toString();
+}
+
+// Every snapshot slugs the same labels again; the function is pure, so a
+// bounded cache returns the earlier answer.
+final Map<String, String> _scoutSlugCache = <String, String>{};
+
 String _scoutSlug(String value) {
+  final known = _scoutSlugCache[value];
+  if (known != null) return known;
   final slug = value
       .toLowerCase()
-      // Preserve localized labels/keys, including decomposed letter marks.
-      // ASCII handles remain unchanged; unrelated CJK labels no longer
-      // collapse to the same empty slug.
-      .replaceAll(RegExp(r'[^\p{L}\p{N}\p{M}]+', unicode: true), '_')
-      .replaceAll(RegExp(r'_+'), '_');
-  return slug.replaceAll(RegExp(r'^_|_$'), '');
+      .replaceAll(_kSlugSeparators, '_')
+      .replaceAll(_kSlugRepeatedUnderscores, '_')
+      .replaceAll(_kSlugEdgeUnderscores, '');
+  if (_scoutSlugCache.length >= 4096) _scoutSlugCache.clear();
+  return _scoutSlugCache[value] = slug;
 }

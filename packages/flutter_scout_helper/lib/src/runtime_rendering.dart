@@ -2,6 +2,7 @@ part of 'flutter_scout_binding.dart';
 
 extension _RuntimeRendering on FlutterScoutRuntime {
   void _installRenderingProbe() {
+    _renderingProbeInstalled = true;
     // Observe natural framework frames without requesting one. A persistent
     // callback itself does not schedule frames or keep a background app awake.
     WidgetsBinding.instance.addPersistentFrameCallback((_) {

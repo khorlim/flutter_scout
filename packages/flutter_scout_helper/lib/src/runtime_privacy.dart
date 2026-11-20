@@ -82,12 +82,17 @@ extension _RuntimePrivacy on FlutterScoutRuntime {
   }
 
   bool _isSensitiveEditableState(EditableTextState state) {
+    final memo = _ancestorMemo?.sensitiveState;
+    final known = memo?[state];
+    if (known != null) return known;
     final context = state.context;
-    return _shouldRedactField(
+    final sensitive = _shouldRedactField(
       element: context as Element,
       editable: state,
       key: _keyLabel(state.widget.key),
     );
+    memo?[state] = sensitive;
+    return sensitive;
   }
 
   /// True only for descendants rendered by a sensitive EditableText. This
@@ -100,6 +105,15 @@ extension _RuntimePrivacy on FlutterScoutRuntime {
           _isSensitiveEditableState(candidate.state as EditableTextState);
     }
 
+    final memo = _ancestorMemo;
+    if (memo != null) {
+      return _AncestorMemo.anyAncestor(
+        element,
+        memo.insideSensitive,
+        sensitive,
+        strict: false,
+      );
+    }
     if (sensitive(element)) return true;
     var result = false;
     element.visitAncestorElements((ancestor) {

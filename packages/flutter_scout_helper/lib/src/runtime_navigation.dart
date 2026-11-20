@@ -124,7 +124,7 @@ class _NavigationScrollRegion {
             baseId: baseId,
             occurrence: occurrence,
             key: key,
-            widgetType: element.widget.runtimeType.toString(),
+            widgetType: _typeName(element.widget),
             axisDirection: axisDirection,
             rect: rect,
             visibleRect: visibleRect,

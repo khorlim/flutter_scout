@@ -259,6 +259,153 @@ class _SnapshotScrollRegion {
   }
 }
 
+/// Facts every node asks of its ancestors (inside a secret field? hidden by
+/// an Offstage/Visibility/IgnorePointer? how deep? which overlay entry?),
+/// computed once per element for one snapshot. Without it each node walks to
+/// the root for each fact, which is nodes x depth: on a deep app screen (a
+/// dialog over a form over a list over Home) that was most of a snapshot.
+///
+/// Each lookup walks up only until it meets an element already answered,
+/// then records the answer for every element on the way, so a snapshot costs
+/// one walk of the tree. Only valid while one synchronous snapshot runs.
+class _AncestorMemo {
+  final Map<Element, bool> insideSensitive = Map<Element, bool>.identity();
+  final Map<Element, bool> hiddenByAncestor = Map<Element, bool>.identity();
+  final Map<Element, int> depth = Map<Element, int>.identity();
+  final Map<EditableTextState, bool> sensitiveState =
+      Map<EditableTextState, bool>.identity();
+  final Map<RenderObject, RenderObject?> overlayEntryRoot =
+      Map<RenderObject, RenderObject?>.identity();
+  final Map<RenderObject, Matrix4> globalTransform =
+      Map<RenderObject, Matrix4>.identity();
+
+  /// Intersection of the rects of the clipping ancestors above an element
+  /// ([Rect.largest] when none clips); an empty rect means fully clipped.
+  final Map<Element, Rect> clipAbove = Map<Element, Rect>.identity();
+
+  /// The same matrix as `renderObject.getTransformTo(null)`, built from the
+  /// parent's cached matrix: Flutter multiplies each parent's paint transform
+  /// from the root's child down, leaving out the root view itself. Null when
+  /// the chain does not end at the owner's root node; the caller then asks
+  /// Flutter directly.
+  Matrix4? transformToRoot(RenderObject renderObject) {
+    final known = globalTransform[renderObject];
+    if (known != null) return known;
+    final path = <RenderObject>[];
+    RenderObject? current = renderObject;
+    while (current != null && !globalTransform.containsKey(current)) {
+      path.add(current);
+      current = current.parent;
+    }
+    if (current == null &&
+        !identical(path.last, renderObject.owner?.rootNode)) {
+      return null;
+    }
+    for (final node in path.reversed) {
+      final parent = node.parent;
+      final Matrix4 transform;
+      if (parent == null || parent.parent == null) {
+        transform = Matrix4.identity();
+      } else {
+        transform = globalTransform[parent]!.clone();
+        parent.applyPaintTransform(node, transform);
+      }
+      globalTransform[node] = transform;
+    }
+    return globalTransform[renderObject];
+  }
+
+  /// [clipAbove] for [element]; [clipRect] gives an ancestor's own clip
+  /// ([Rect.largest] when it does not clip).
+  Rect clipAboveOf(Element element, Rect Function(Element) clipRect) {
+    final known = clipAbove[element];
+    if (known != null) return known;
+    final path = <Element>[element];
+    Rect? base;
+    Element? baseParent;
+    element.visitAncestorElements((ancestor) {
+      final cached = clipAbove[ancestor];
+      if (cached != null) {
+        base = cached;
+        baseParent = ancestor;
+        return false;
+      }
+      path.add(ancestor);
+      return true;
+    });
+    // path.last is the root (nothing above it clips) or the child of
+    // baseParent, whose own clip applies to it.
+    var above = baseParent == null
+        ? Rect.largest
+        : base!.intersect(clipRect(baseParent!));
+    for (var i = path.length - 1; i >= 0; i--) {
+      final member = path[i];
+      clipAbove[member] = above;
+      if (i > 0) above = above.intersect(clipRect(member));
+    }
+    return clipAbove[element]!;
+  }
+
+  /// Whether [element] or (with [strict]) a proper ancestor satisfies [test],
+  /// memoized in [memo]. [memo] holds the inclusive answer for an element
+  /// when [strict] is false, and the strict answer (ancestors only) when true.
+  static bool anyAncestor(
+    Element element,
+    Map<Element, bool> memo,
+    bool Function(Element) test, {
+    required bool strict,
+  }) {
+    final known = memo[element];
+    if (known != null) return known;
+    if (!strict && test(element)) return memo[element] = true;
+    final path = <Element>[element];
+    var result = false;
+    element.visitAncestorElements((ancestor) {
+      if (test(ancestor)) {
+        result = true;
+        return false;
+      }
+      final cached = memo[ancestor];
+      if (cached != null) {
+        // Inclusive memo: `cached` already counts the ancestor itself, which
+        // was just tested false. Strict memo: the ancestor itself is not
+        // counted by `cached`, but it was just tested false too.
+        result = cached;
+        return false;
+      }
+      path.add(ancestor);
+      return true;
+    });
+    for (final member in path) {
+      memo[member] = result;
+    }
+    return result;
+  }
+
+  int depthOf(Element element) {
+    final known = depth[element];
+    if (known != null) return known;
+    final path = <Element>[element];
+    var base = 0;
+    element.visitAncestorElements((ancestor) {
+      final cached = depth[ancestor];
+      if (cached != null) {
+        base = cached + 1;
+        return false;
+      }
+      path.add(ancestor);
+      return true;
+    });
+    // path[i] is i levels below the last element on the path, whose depth is
+    // `base` (0 at the root when no ancestor was cached).
+    final top = path.length - 1;
+    for (var i = 0; i <= top; i++) {
+      depth[path[i]] = base + (top - i);
+    }
+    return depth[element]!;
+  }
+}
+
 extension _RuntimeSnapshot on FlutterScoutRuntime {
   ScoutSnapshot _snapshot() =>
       _inRequestPhase(_requestSnapshotPhase, _timedSnapshotWithoutPhaseTiming);
@@ -273,6 +420,63 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
   }
 
   ScoutSnapshot _snapshotWithoutPhaseTiming() {
+    final reused = _reusableSnapshot();
+    if (reused != null) return reused;
+    final outermost =
+        _ancestorMemo == null && !FlutterScoutRuntime.debugDisableAncestorMemo;
+    if (outermost) _ancestorMemo = _AncestorMemo();
+    try {
+      final snapshot = _buildSnapshot();
+      _rememberIdleSnapshot(snapshot);
+      return snapshot;
+    } finally {
+      if (outermost) _ancestorMemo = null;
+    }
+  }
+
+  /// What a snapshot is built from besides the widget and render trees.
+  Object _snapshotInputs() => (
+    frames: _completedFrameworkFrames,
+    errors: _errorCursor,
+    annotations: _annotationRevision.value,
+    secrets: _knownSensitiveValues.length,
+    framesEnabled: WidgetsBinding.instance.framesEnabled,
+    // Test seams change what a snapshot reads.
+    nodeProbe: debugSnapshotNodeProbe,
+    captureProbe: debugCaptureBackendProbe,
+  );
+
+  /// Keeps a snapshot taken while no frame was scheduled: until the next
+  /// frame the trees it read cannot change (a build, layout, scroll or text
+  /// edit needs a frame, and schedules one).
+  void _rememberIdleSnapshot(ScoutSnapshot snapshot) {
+    final idle =
+        _renderingProbeInstalled &&
+        !WidgetsBinding.instance.hasScheduledFrame &&
+        !FlutterScoutRuntime.debugDisableIdleSnapshotReuse;
+    _idleSnapshot = idle ? snapshot : null;
+    _idleSnapshotInputs = idle ? _snapshotInputs() : null;
+  }
+
+  /// The last idle snapshot when nothing it was built from has changed: no
+  /// frame since, none scheduled, no new error, annotation or secret. The
+  /// eyes poll every 250 ms; on an idle screen this answers without walking
+  /// the tree again, which left the UI thread free for the app's own frames.
+  /// Error ages are read fresh.
+  ScoutSnapshot? _reusableSnapshot() {
+    final cached = _idleSnapshot;
+    if (cached == null ||
+        FlutterScoutRuntime.debugDisableIdleSnapshotReuse ||
+        WidgetsBinding.instance.hasScheduledFrame ||
+        _idleSnapshotInputs != _snapshotInputs()) {
+      return null;
+    }
+    return cached.copyWith(
+      recentErrors: _recentErrors(useRequestCursor: false),
+    );
+  }
+
+  ScoutSnapshot _buildSnapshot() {
     final root = WidgetsBinding.instance.rootElement;
     final nodes = <ScoutNode>[];
     final rawScrollables = <_SnapshotScrollRegion>[];
@@ -331,7 +535,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         // Per-element fault isolation: reading one misbehaving widget (a
         // throwing property getter, corrupt render state, …) must skip that
         // element only — never blind the agent to the entire screen.
-        final widgetType = element.widget.runtimeType.toString();
+        final widgetType = _typeName(element.widget);
         try {
           debugSnapshotNodeProbe?.call(element);
           final elementDepth = _elementDepth(element);
@@ -970,7 +1174,8 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     required int ordinal,
   }) {
     final widget = element.widget;
-    final renderType = element.renderObject?.runtimeType.toString() ?? '';
+    final renderObject = element.renderObject;
+    final renderType = renderObject == null ? '' : _typeName(renderObject);
     final platformSurface = <String>[
       widgetType,
       renderType,
@@ -1031,9 +1236,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           'The widget tree exposes the Texture region, not the externally supplied texture pixels or meaning.';
     } else if (customPaint) {
       painterTypes = <String>[
-        if (widget.painter != null) widget.painter.runtimeType.toString(),
+        if (widget.painter case final painter?) _typeName(painter),
         if (widget.foregroundPainter != null)
-          widget.foregroundPainter.runtimeType.toString(),
+          _typeName(widget.foregroundPainter!),
       ];
       final painterSemanticsDeclared =
           widget.painter?.semanticsBuilder != null ||
@@ -1140,16 +1345,28 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
   Rect? _visiblePerceptionRectFor(Element element, Rect rect) {
     var visible = _visibleRectFor(rect);
     if (visible == null) return null;
+    bool clipsDescendants(Widget widget) =>
+        widget is Scrollable ||
+        widget is ClipRect ||
+        widget is ClipRRect ||
+        widget is ClipOval ||
+        widget is PhysicalModel ||
+        widget is PhysicalShape;
+    final memo = _ancestorMemo;
+    if (memo != null) {
+      final clip = memo.clipAboveOf(
+        element,
+        (ancestor) => clipsDescendants(ancestor.widget)
+            ? _rectFor(ancestor) ?? Rect.largest
+            : Rect.largest,
+      );
+      final intersection = visible.intersect(clip);
+      return intersection.width <= 0 || intersection.height <= 0
+          ? null
+          : intersection;
+    }
     element.visitAncestorElements((ancestor) {
-      final widget = ancestor.widget;
-      final clipsDescendants =
-          widget is Scrollable ||
-          widget is ClipRect ||
-          widget is ClipRRect ||
-          widget is ClipOval ||
-          widget is PhysicalModel ||
-          widget is PhysicalShape;
-      if (!clipsDescendants) return true;
+      if (!clipsDescendants(ancestor.widget)) return true;
       final ancestorRect = _rectFor(ancestor);
       if (ancestorRect == null) return true;
       final intersection = visible!.intersect(ancestorRect);
@@ -1706,7 +1923,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
   bool _isModalBarrierWidget(Widget widget) {
     if (widget is ModalBarrier) return true;
     // AnimatedModalBarrier is private-typed; match by name.
-    return widget.runtimeType.toString().contains('ModalBarrier');
+    return _typeName(widget).contains('ModalBarrier');
   }
 
   bool _hasConcreteModalSurface(Element root, Size logicalSize) {
@@ -1749,7 +1966,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       return 'Dialog';
     }
     if (widget is BottomSheet) return 'BottomSheet';
-    final type = widget.runtimeType.toString();
+    final type = _typeName(widget);
     if (type.contains('CupertinoActionSheet')) return 'ActionSheet';
     if (type.contains('CupertinoAlertDialog')) return 'Dialog';
     if (type.contains('DraggableScrollableSheet') ||
@@ -1777,7 +1994,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     _walkVisible(root, (Element element) {
       final depth = _elementDepth(element);
       if (depth <= bestDepth) return;
-      final type = element.widget.runtimeType.toString();
+      final type = _typeName(element.widget);
       if (type.startsWith('_')) return;
       if (_frameworkWidgetPrefixes.any(type.startsWith)) return;
       if (_frameworkScreenWidgets.contains(type)) return;
@@ -1979,7 +2196,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       if (!_isInsideActiveAnnotationModal(element, modalElement)) return;
       if (_isInsideSensitiveEditable(element)) return;
       final widget = element.widget;
-      final widgetType = widget.runtimeType.toString();
+      final widgetType = _typeName(widget);
       final rawKey = _annotationKeyLabel(widget.key);
       final key = rawKey == null ? null : _redactSensitiveText(rawKey);
       final rawText = _ownText(widget)?.trim();

@@ -457,7 +457,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
           label: key ?? widget.axisDirection.name,
           value: null,
           validationMessage: null,
-          widgetType: widget.runtimeType.toString(),
+          widgetType: _typeName(widget),
           key: key,
           rect: rect,
           visibleRect: visibleRect,
@@ -975,8 +975,7 @@ extension _RuntimeResolution on FlutterScoutRuntime {
     var containsTarget = false;
     final hit = _hitTest(point, (result) {
       path = [
-        for (final entry in result.path.take(12))
-          entry.target.runtimeType.toString(),
+        for (final entry in result.path.take(12)) _typeName(entry.target),
       ];
       containsTarget =
           expected != null &&

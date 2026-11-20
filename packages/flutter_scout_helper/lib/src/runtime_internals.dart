@@ -117,9 +117,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
             path.any((entry) => identical(entry, expected)),
       'sameHitPathAsFirstTap': samePath,
       if (!samePath)
-        'hitPath': [
-          for (final entry in path.take(12)) entry.runtimeType.toString(),
-        ],
+        'hitPath': [for (final entry in path.take(12)) _typeName(entry)],
     };
   }
 
