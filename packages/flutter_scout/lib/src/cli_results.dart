@@ -579,7 +579,14 @@ extension _CliResults on FlutterScoutCli {
     int? sinceCursor,
   }) async {
     if (settleDelay > Duration.zero && File(_logFile).existsSync()) {
-      await Future<void>.delayed(settleDelay);
+      // The window is for log lines the action caused. The helper already
+      // waited out its settle phase after dispatch, which is part of the same
+      // window, so only the rest is left (with a short floor for the log
+      // listener to write what the app printed at the end).
+      const floor = Duration(milliseconds: 30);
+      final settled = Duration(milliseconds: _phaseElapsedMs(result, 'settle'));
+      final remaining = settleDelay - settled;
+      await Future<void>.delayed(remaining > floor ? remaining : floor);
     }
     final signals = sinceCursor == null
         ? _freshRecentLogSignals()
