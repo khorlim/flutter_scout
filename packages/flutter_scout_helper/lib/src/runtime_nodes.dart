@@ -483,6 +483,11 @@ extension _RuntimeNodes on FlutterScoutRuntime {
 
   /// A framework control (button, detector, tile, chip, toggle) a few levels
   /// up: its own Semantics must not report it a second time.
+  ///
+  /// A detector with no press callbacks is a drag or scale surface (a
+  /// Slidable's or Dismissible's swipe detector around a row), not the control
+  /// that owns the row's Semantics: counting it would hide the row's button
+  /// behind a node that cannot be pressed.
   bool _hasRecognizedControlAncestor(Element element) {
     var found = false;
     var depth = 0;
@@ -492,7 +497,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
           widget is IconButton ||
           widget is FloatingActionButton ||
           widget is CupertinoButton ||
-          widget is GestureDetector ||
+          (widget is GestureDetector && _detectorHandlesPress(widget)) ||
           widget is InkWell ||
           widget is InkResponse ||
           widget is ListTile ||
@@ -605,25 +610,31 @@ extension _RuntimeNodes on FlutterScoutRuntime {
           widget.onSecondaryTapUp != null;
     }
     if (widget is GestureDetector) {
-      return widget.onTap != null ||
-          widget.onTapDown != null ||
-          widget.onTapUp != null ||
-          widget.onLongPress != null ||
-          widget.onLongPressDown != null ||
-          widget.onLongPressStart != null ||
-          widget.onLongPressUp != null ||
-          widget.onLongPressEnd != null ||
-          widget.onDoubleTap != null ||
-          widget.onSecondaryTap != null ||
-          widget.onSecondaryTapDown != null ||
-          widget.onSecondaryTapUp != null ||
-          widget.onSecondaryLongPress != null ||
-          widget.onSecondaryLongPressStart != null ||
+      return _detectorHandlesPress(widget) ||
           widget.onPanStart != null ||
           widget.onVerticalDragStart != null ||
           widget.onHorizontalDragStart != null;
     }
     return true;
+  }
+
+  /// Whether a detector reacts to a press (tap, long press, double tap or
+  /// secondary tap), as opposed to only drags or scales.
+  bool _detectorHandlesPress(GestureDetector widget) {
+    return widget.onTap != null ||
+        widget.onTapDown != null ||
+        widget.onTapUp != null ||
+        widget.onLongPress != null ||
+        widget.onLongPressDown != null ||
+        widget.onLongPressStart != null ||
+        widget.onLongPressUp != null ||
+        widget.onLongPressEnd != null ||
+        widget.onDoubleTap != null ||
+        widget.onSecondaryTap != null ||
+        widget.onSecondaryTapDown != null ||
+        widget.onSecondaryTapUp != null ||
+        widget.onSecondaryLongPress != null ||
+        widget.onSecondaryLongPressStart != null;
   }
 
   bool _usesDeepTextLabel(Widget widget) {

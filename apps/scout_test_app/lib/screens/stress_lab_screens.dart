@@ -736,42 +736,150 @@ class _GesturesScreenState extends State<GesturesScreen> {
           ),
         ),
       ),
-      body: ReorderableListView.builder(
-        key: const ValueKey('gesture_reorder_list'),
-        padding: const EdgeInsets.all(8),
-        itemCount: _items.length,
-        // ignore: deprecated_member_use
-        onReorder: (oldIndex, newIndex) {
-          setState(() {
-            if (newIndex > oldIndex) newIndex -= 1;
-            final moved = _items.removeAt(oldIndex);
-            _items.insert(newIndex, moved);
-            _status = 'reordered $moved';
-          });
-        },
-        itemBuilder: (context, index) {
-          final item = _items[index];
-          return Dismissible(
-            key: ValueKey('dismiss_$item'),
-            background: Container(
-              color: Colors.red,
-              alignment: Alignment.centerLeft,
-              padding: const EdgeInsets.only(left: 16),
-              child: const Icon(Icons.delete, color: Colors.white),
+      body: Column(
+        children: [
+          _SlideRow(
+            label: 'Latte x2',
+            onPressed: () => setState(() => _status = 'opened Latte x2'),
+            onDelete: () => setState(() => _status = 'deleted Latte x2'),
+          ),
+          Expanded(child: _reorderList()),
+        ],
+      ),
+    );
+  }
+
+  Widget _reorderList() {
+    return ReorderableListView.builder(
+      key: const ValueKey('gesture_reorder_list'),
+      padding: const EdgeInsets.all(8),
+      itemCount: _items.length,
+      // ignore: deprecated_member_use
+      onReorder: (oldIndex, newIndex) {
+        setState(() {
+          if (newIndex > oldIndex) newIndex -= 1;
+          final moved = _items.removeAt(oldIndex);
+          _items.insert(newIndex, moved);
+          _status = 'reordered $moved';
+        });
+      },
+      itemBuilder: (context, index) {
+        final item = _items[index];
+        return Dismissible(
+          key: ValueKey('dismiss_$item'),
+          background: Container(
+            color: Colors.red,
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.only(left: 16),
+            child: const Icon(Icons.delete, color: Colors.white),
+          ),
+          onDismissed: (_) => setState(() {
+            _items.removeAt(index);
+            _status = 'dismissed $item';
+          }),
+          child: ListTile(
+            tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+            leading: const Icon(Icons.drag_handle),
+            title: Text(item),
+            subtitle: const Text('Swipe to delete, long-press for menu'),
+            onLongPress: () => _longPressMenu(item),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// A swipe-to-reveal row built like `flutter_slidable`: a plain
+/// GestureDetector with only horizontal drag callbacks around a row whose
+/// press handling is raw pointer events behind a `Semantics(button:)`.
+class _SlideRow extends StatefulWidget {
+  const _SlideRow({
+    required this.label,
+    required this.onPressed,
+    required this.onDelete,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+  final VoidCallback onDelete;
+
+  @override
+  State<_SlideRow> createState() => _SlideRowState();
+}
+
+class _SlideRowState extends State<_SlideRow> {
+  static const _actionWidth = 96.0;
+  double _offset = 0;
+  Offset _downAt = Offset.zero;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 64,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: SizedBox(
+                width: _actionWidth,
+                child: Material(
+                  color: Colors.red,
+                  child: InkWell(
+                    onTap: () {
+                      setState(() => _offset = 0);
+                      widget.onDelete();
+                    },
+                    child: const Center(
+                      child: Text(
+                        'Delete',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ),
-            onDismissed: (_) => setState(() {
-              _items.removeAt(index);
-              _status = 'dismissed $item';
-            }),
-            child: ListTile(
-              tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-              leading: const Icon(Icons.drag_handle),
-              title: Text(item),
-              subtitle: const Text('Swipe to delete, long-press for menu'),
-              onLongPress: () => _longPressMenu(item),
+          ),
+          Transform.translate(
+            offset: Offset(_offset, 0),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: (_) {},
+              onHorizontalDragUpdate: (details) => setState(() {
+                _offset = (_offset + details.primaryDelta!).clamp(
+                  -_actionWidth,
+                  0.0,
+                );
+              }),
+              onHorizontalDragEnd: (_) => setState(() {
+                _offset = _offset < -_actionWidth / 2 ? -_actionWidth : 0;
+              }),
+              child: Semantics(
+                button: true,
+                label: widget.label,
+                onTap: widget.onPressed,
+                child: Listener(
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (event) => _downAt = event.position,
+                  onPointerUp: (event) {
+                    if ((event.position - _downAt).distance < 8) {
+                      widget.onPressed();
+                    }
+                  },
+                  child: Container(
+                    color: colors.surfaceContainerHighest,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    alignment: Alignment.centerLeft,
+                    child: Text(widget.label),
+                  ),
+                ),
+              ),
             ),
-          );
-        },
+          ),
+        ],
       ),
     );
   }

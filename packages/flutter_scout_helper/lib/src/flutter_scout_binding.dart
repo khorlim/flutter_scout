@@ -655,6 +655,18 @@ class FlutterScoutRuntime {
     return jsonDecode(response.result!) as Map<String, Object?>;
   }
 
+  /// Test-only: run a swipe through the same service-extension handler the
+  /// CLI uses.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugSwipe(Map<String, String> params) async {
+    final response = await _handleSwipe('debugSwipe', {
+      'waitMs': '0',
+      'lateWaitMs': '0',
+      ...params,
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
   /// Test-only: resolve and dispatch a handle-targeted tap through the same
   /// service-extension handler used by the CLI.
   @visibleForTesting

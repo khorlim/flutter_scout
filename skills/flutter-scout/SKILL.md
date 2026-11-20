@@ -127,6 +127,9 @@ package, a press-effect wrapper) is a target only when the app gives it that
 Semantics; until then tap its visible text, and suggest the app add the
 Semantics, which also serves accessibility. `SelectableText` (chat bubbles,
 copyable values) is text, so `locate` finds its words.
+A row inside a swipe wrapper (`Slidable`, `Dismissible`) keeps its own
+handle: tap it, or reveal its actions with `{method:'swipe', args:['left'],
+params:{target: handle, distance: 150}}` and tap the action from the next scene.
 
 Context menus: `{method:'long-press', args:[handle]}` presses and holds, and
 `{method:'tap', args:[handle], params:{button:'secondary'}}` is a mouse right
