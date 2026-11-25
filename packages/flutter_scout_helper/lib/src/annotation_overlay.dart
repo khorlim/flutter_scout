@@ -41,12 +41,14 @@ class _ScoutInstanceBadge extends StatelessWidget {
     required this.menuOpen,
     required this.interactive,
     required this.agentAttached,
+    required this.agentControlling,
     required this.onTap,
   });
 
   final bool menuOpen;
   final bool interactive;
   final ValueListenable<bool> agentAttached;
+  final ValueListenable<bool> agentControlling;
   final VoidCallback onTap;
 
   @override
@@ -61,9 +63,11 @@ class _ScoutInstanceBadge extends StatelessWidget {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: interactive ? onTap : null,
-            child: ValueListenableBuilder<bool>(
-              valueListenable: agentAttached,
-              builder: (context, attached, _) {
+            child: ListenableBuilder(
+              listenable: Listenable.merge([agentAttached, agentControlling]),
+              builder: (context, _) {
+                final attached = agentAttached.value;
+                final controlling = attached && agentControlling.value;
                 final dot = attached ? ScoutColors.signal : _scoutSessionHue;
                 return AnimatedContainer(
                   duration: ScoutMotion.base,
@@ -124,6 +128,30 @@ class _ScoutInstanceBadge extends StatelessWidget {
                             style: _badgeName,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                      // While an agent is attached the label is also the
+                      // session indicator: what Scout is doing right now.
+                      if (attached) ...[
+                        Text(
+                          '  ·  ',
+                          style: _badgeName.copyWith(
+                            color: ScoutColors.inkDim.withValues(alpha: 0.6),
+                          ),
+                        ),
+                        AnimatedDefaultTextStyle(
+                          duration: ScoutMotion.base,
+                          style: _badgeName.copyWith(
+                            color: controlling
+                                ? ScoutColors.signal
+                                : ScoutColors.inkDim,
+                            fontWeight: controlling
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                          ),
+                          child: Text(
+                            controlling ? 'controlling' : 'observing',
                           ),
                         ),
                       ],
@@ -982,6 +1010,8 @@ class _FlutterScoutAnnotationOverlayState
                   interactive: interactive,
                   agentAttached:
                       widget.runtime._drivingOverlay.attachedNotifier,
+                  agentControlling:
+                      widget.runtime._drivingOverlay.controllingNotifier,
                   onTap: _toggleMenu,
                 ),
                 if (interactive && _menuOpen)

@@ -281,6 +281,7 @@ class FlutterScoutRuntime {
     _installRecorderRoute();
     _broadcastVmUri();
     _reconcileAnnotationOverlay();
+    _drivingOverlay.attachedNotifier.addListener(_reconcileAnnotationOverlay);
   }
 
   int get _activeAnnotationCount =>

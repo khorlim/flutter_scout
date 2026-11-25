@@ -106,8 +106,10 @@ void main() {
       await frames(700);
 
       // The overlay animates a press: its ticker keeps a frame scheduled.
+      // The first input also turns the session label to "controlling"
+      // (a short widget animation, which is app-side work); sample after it.
       await tester.runAsync(() => runtime.debugTapTarget('tap.ping'));
-      await frames(48);
+      await frames(300);
       expect(tester.binding.hasScheduledFrame, isTrue);
       final first = runtime.debugSnapshot();
       await frames(48);

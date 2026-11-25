@@ -1330,8 +1330,12 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       _debugForceOverlayInteractive ||
       (_annotationOverlayOptedIn && _annotationOverlayUiActive);
 
+  // The session label also shows while an agent is attached, even in a
+  // human-started app, because it carries the controlling/observing state.
   bool get _annotationOverlayVisible =>
-      _launchSessionBadgeVisible || _annotationOverlayInteractive;
+      _launchSessionBadgeVisible ||
+      _drivingOverlay.attached ||
+      _annotationOverlayInteractive;
 
   void _reconcileAnnotationOverlay() {
     if (_annotationOverlayVisible) {

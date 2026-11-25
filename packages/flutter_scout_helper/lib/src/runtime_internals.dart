@@ -36,15 +36,22 @@ extension _RuntimeInternals on FlutterScoutRuntime {
       _rememberSensitiveValue(value);
     }
     if (_drivingOverlay.attached) {
-      final box = state.context.findRenderObject();
-      if (box is RenderBox && box.hasSize) {
-        final rect = box.localToGlobal(Offset.zero) & box.size;
-        // A credential never reaches the overlay: no value, no length.
-        final shown = sensitive || _knownSensitiveValues.contains(value)
-            ? null
-            : value;
-        _drawInput((overlay) => overlay.typing(rect, shown));
-      }
+      // A credential never reaches the overlay: no value, no length.
+      final shown = sensitive || _knownSensitiveValues.contains(value)
+          ? null
+          : value;
+      // Read the field's geometry when the overlay draws (after the act's
+      // layout), so the chip sits after the new text, not the old.
+      _drawInput((overlay) {
+        if (!state.mounted) return;
+        final editable = state.renderEditable;
+        if (!editable.attached || !editable.hasSize) return;
+        final origin = editable.localToGlobal(Offset.zero);
+        final caret = editable.getLocalRectForCaret(
+          TextPosition(offset: state.textEditingValue.text.length),
+        );
+        overlay.typing(origin & editable.size, caret.shift(origin), shown);
+      });
     }
     state.requestKeyboard();
     state.userUpdateTextEditingValue(

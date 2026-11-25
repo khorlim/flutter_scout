@@ -4,7 +4,8 @@ part of 'flutter_scout_binding.dart';
 // people watching the app see what the agent does: a cursor (desktop) or
 // touch dot (iOS/Android) that glides to each target, a ripple at the exact
 // hit point, a filling ring for a long press, a trail for drags and scrolls,
-// the field being typed into, and a calm edge glow plus status pill.
+// the field being typed into, and a calm edge glow. The session label in
+// the corner (annotation_overlay.dart) says whether Scout is controlling.
 //
 // It is a picture of input, never part of it:
 // - Dispatch never waits for it. The input lands first; the visual timeline
@@ -38,7 +39,6 @@ abstract final class _DrivingColors {
   static const rim = Color(0x8C06100E);
   static const glass = Color(0xE60B1211);
   static const ink = ScoutColors.ink;
-  static const inkDim = ScoutColors.inkDim;
   static const white = Color(0xFFFFFFFF);
 }
 
@@ -90,6 +90,8 @@ class _DrivingEffect {
     this.scroll = false,
     this.rect = Rect.zero,
     this.label,
+    this.chip = Rect.zero,
+    this.caret = Rect.zero,
   });
 
   final _DrivingEffectKind kind;
@@ -102,6 +104,11 @@ class _DrivingEffect {
   final double hold;
   final bool scroll;
   final Rect rect;
+
+  /// Typing: where the keystroke chip sits (inside the field, after the
+  /// text), and the caret at the end of the typed text.
+  final Rect chip;
+  final Rect caret;
 
   /// Trail points (drag/scroll) and the time each was reached.
   final List<Offset> path = <Offset>[];
@@ -300,8 +307,11 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
 
   // ---- drawn state ------------------------------------------------------
   final _DrivingFade glow = _DrivingFade(0);
-  final _DrivingFade pill = _DrivingFade(0);
-  final _DrivingFade pillActive = _DrivingFade(0);
+
+  /// Controlling (an input within the last few seconds) or observing. It
+  /// changes at those transitions only, so the session label can follow it
+  /// without rebuilding per frame.
+  final ValueNotifier<bool> controllingNotifier = ValueNotifier<bool>(false);
   final _DrivingFade cursorAlpha = _DrivingFade(0);
   // Cursor path as keyframes (time, point), eased between neighbours. A new
   // input replaces whatever path is still ahead, so a fast sequence of keys
@@ -392,8 +402,6 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     attachedNotifier.value = true;
     _scheduleInstall();
     glow.to(_observingGlow, now, reducedMotion ? 150 : 520);
-    pill.to(1, now, reducedMotion ? 150 : 420);
-    pillActive.to(0, now, 0);
     _kick();
   }
 
@@ -414,7 +422,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
       return;
     }
     glow.to(0, now, 320);
-    pill.to(0, now, 260);
+    controllingNotifier.value = false;
     cursorAlpha.to(0, now, 260);
     _tagUntil = math.min(_tagUntil, now);
     _kick();
@@ -543,8 +551,6 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
         effects.isNotEmpty ||
         _glowSettleAt >= 0 ||
         glow.active(now) ||
-        pill.active(now) ||
-        pillActive.active(now) ||
         cursorAlpha.active(now) ||
         (now > _tagUntil && now < _tagUntil + _tagFade) ||
         now < _keyTimes.last;
@@ -583,7 +589,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
       if (!_attached) return;
       _active = false;
       glow.to(_observingGlow, now, 600);
-      pillActive.to(0, now, 300);
+      controllingNotifier.value = false;
       cursorAlpha.to(0, now, 450);
       _kick();
     });
@@ -610,7 +616,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     _tagUntil = now + _tagHold;
     if (!_active) {
       _active = true;
-      pillActive.to(1, now, 220);
+      controllingNotifier.value = true;
     }
     glow.to(1, now, 90);
     _glowSettleAt = now + 90;
@@ -779,30 +785,64 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     _kick();
   }
 
-  /// Typing into the field at [globalRect]. [text] is null for a credential
-  /// field: the chip then shows dots and never the value or its length.
-  void typing(Rect globalRect, String? text) {
+  /// Typing into the editable area at [globalArea]; [globalCaret] is the
+  /// caret after the typed text. [text] is null for a credential field: the
+  /// chip then shows dots and never the value or its length. The chip sits
+  /// inside the field after the text, so it never covers app text; without
+  /// room for it only the caret at the end of the text pulses.
+  void typing(Rect globalArea, Rect globalCaret, String? text) {
     if (!_live) return;
-    final topLeft = _toLocal(globalRect.topLeft);
-    final rect = topLeft & globalRect.size;
-    final glideEnd = _beginInput(rect.center);
+    final origin = _toLocal(Offset.zero);
+    final area = globalArea.shift(origin);
+    final caret = globalCaret.shift(origin);
+    final glideEnd = _beginInput(area.center);
     // fill types several fields; draw them one after another.
     final start = math.max(glideEnd + 60, _typingFreeAt);
-    final shown = text == null ? '••••••' : _tail(text, 32);
+    final shown = text ?? '••••••';
+    final room = area.right - 4 - (caret.right + 10);
+    final label = room >= 48
+        ? _chipFitting(shown.isEmpty ? 'Cleared' : shown, room - 20)
+        : null;
+    final chip = label == null
+        ? Rect.zero
+        : Rect.fromLTWH(
+            area.right - 4 - (label.width + 20),
+            caret.center.dy - (label.height + 6) / 2,
+            label.width + 20,
+            label.height + 6,
+          );
     final typeMs = reducedMotion
         ? 0.0
-        : (shown.characters.length * 26.0).clamp(180, 780).toDouble();
-    _typingFreeAt = start + typeMs + 120;
+        : (shown.characters.length * 22.0).clamp(160, 560).toDouble();
+    _typingFreeAt = start + typeMs + 100;
     _add(
       _DrivingEffect(
         kind: _DrivingEffectKind.typing,
         start: start,
-        end: start + typeMs + 900,
-        rect: rect,
+        end: start + typeMs + 520,
+        rect: area,
         hold: typeMs,
-        label: _chip(shown.isEmpty ? 'Cleared' : shown, mono: true),
+        label: label,
+        chip: chip,
+        caret: caret,
       ),
     );
+  }
+
+  /// A chip label no wider than [maxWidth]: the tail of [text] (the latest
+  /// keystrokes), with a leading ellipsis when cut.
+  TextPainter? _chipFitting(String text, double maxWidth) {
+    final chars = text.characters.toList();
+    for (var keep = math.min(chars.length, 32); keep >= 2; keep--) {
+      final cut = keep < chars.length;
+      final painter = _chip(
+        '${cut ? '…' : ''}${chars.sublist(chars.length - keep).join()}',
+        mono: true,
+      );
+      if (painter.width <= maxWidth) return painter;
+      painter.dispose();
+    }
+    return null;
   }
 
   void back() => _cue(_DrivingEffectKind.back, 'Back');
@@ -821,12 +861,6 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
         label: _chip(label),
       ),
     );
-  }
-
-  static String _tail(String text, int max) {
-    final chars = text.characters;
-    if (chars.length <= max) return text;
-    return '…${chars.skip(chars.length - max + 1)}';
   }
 
   TextPainter _chip(String text, {bool mono = false}) => TextPainter(
@@ -918,8 +952,6 @@ class _ScoutDrivingPainter extends CustomPainter {
     ..lineTo(13.6, 12.3)
     ..close();
 
-  static TextPainter? _pillControlling;
-  static TextPainter? _pillObserving;
   static TextPainter? _tag;
 
   static TextPainter _label(String text, {double size = 11.5, Color? color}) =>
@@ -944,14 +976,13 @@ class _ScoutDrivingPainter extends CustomPainter {
     final now = c.now;
     final glow = c.glow.at(now);
     if (glow > 0.003) _paintGlow(canvas, size, glow);
-    final pill = c.pill.at(now);
     for (final effect in c.effects) {
       if (now < effect.start && effect.kind != _DrivingEffectKind.typing) {
         continue;
       }
       switch (effect.kind) {
         case _DrivingEffectKind.press:
-          _paintPress(canvas, effect, now);
+          _paintPress(canvas, size, effect, now);
         case _DrivingEffectKind.longPress:
           _paintLongPress(canvas, effect, now);
         case _DrivingEffectKind.trail:
@@ -966,7 +997,6 @@ class _ScoutDrivingPainter extends CustomPainter {
     }
     final cursorAlpha = c.cursorAlpha.at(now);
     if (cursorAlpha > 0.01) _paintCursor(canvas, size, now, cursorAlpha);
-    if (pill > 0.01) _paintPill(canvas, size, pill, c.pillActive.at(now));
   }
 
   // ---- session ----------------------------------------------------------
@@ -985,60 +1015,6 @@ class _ScoutDrivingPainter extends CustomPainter {
       ..strokeWidth = 1.6
       ..color = _DrivingColors.accent.withValues(alpha: 0.9 * level);
     canvas.drawRRect(rrect, _stroke);
-  }
-
-  void _paintPill(Canvas canvas, Size size, double alpha, double active) {
-    final controlling = _pillControlling ??= _label('Scout is controlling');
-    final observing = _pillObserving ??= _label(
-      'Scout is observing',
-      color: _DrivingColors.inkDim,
-    );
-    final text = active >= 0.5 ? controlling : observing;
-    final view = WidgetsBinding.instance.platformDispatcher.implicitView;
-    final top = view == null ? 0.0 : view.padding.top / view.devicePixelRatio;
-    const height = 24.0;
-    final width = 30 + text.width + 12;
-    final rect = Rect.fromLTWH(
-      (size.width - width) / 2,
-      top + 8,
-      width,
-      height,
-    );
-    // Step aside visually when the agent works right under the pill.
-    final cursor = c.cursorPosition;
-    final near =
-        c.cursorAlpha.value > 0.05 && rect.inflate(28).contains(cursor);
-    final a = alpha * (near ? 0.3 : (0.78 + 0.22 * active));
-    final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(12));
-    _shadow.color = const Color(0x40000000).withValues(alpha: 0.25 * a);
-    canvas.drawRRect(rrect.shift(const Offset(0, 2)), _shadow);
-    _fill.color = _DrivingColors.glass.withValues(alpha: 0.9 * a);
-    canvas.drawRRect(rrect, _fill);
-    _stroke
-      ..strokeWidth = 1
-      ..color = _DrivingColors.accent.withValues(
-        alpha: (0.25 + 0.35 * active) * a,
-      );
-    canvas.drawRRect(rrect, _stroke);
-    final dot = Offset(rect.left + 14, rect.center.dy);
-    _fill.color = Color.lerp(
-      _DrivingColors.inkDim,
-      _DrivingColors.accent,
-      active,
-    )!.withValues(alpha: a);
-    canvas.drawCircle(dot, 3.6, _fill);
-    if (active > 0.01) {
-      _stroke
-        ..strokeWidth = 1.4
-        ..color = _DrivingColors.accent.withValues(alpha: 0.35 * active * a);
-      canvas.drawCircle(dot, 6.2, _stroke);
-    }
-    _paintText(
-      canvas,
-      text,
-      Offset(rect.left + 26, rect.center.dy - text.height / 2),
-      a,
-    );
   }
 
   // ---- cursor / touch dot -----------------------------------------------
@@ -1074,8 +1050,10 @@ class _ScoutDrivingPainter extends CustomPainter {
   void _paintCursor(Canvas canvas, Size size, double now, double alpha) {
     final p = c.cursorPosition;
     final depth = c.reducedMotion ? 0.0 : _pressDepth(now);
+    // Just "Scout": it tells the AI pointer from a person's mouse. The
+    // session's name lives on the session label.
     final tag = _tag ??= _label(
-      _scoutInstanceLabel.isEmpty ? 'Scout' : 'Scout · $_scoutInstanceLabel',
+      'Scout',
       size: 11,
       color: const Color(0xFF03201C),
     );
@@ -1134,6 +1112,18 @@ class _ScoutDrivingPainter extends CustomPainter {
 
   /// The name tag beside the cursor; it flips to the cursor's left (and
   /// above it) when it would leave the window.
+  /// [rect] moved (not resized) to lie [margin] inside the window.
+  static Rect _inside(Size size, Rect rect, {double margin = 4}) {
+    final maxLeft = math.max(margin, size.width - rect.width - margin);
+    final maxTop = math.max(margin, size.height - rect.height - margin);
+    return Rect.fromLTWH(
+      rect.left.clamp(margin, maxLeft).toDouble(),
+      rect.top.clamp(margin, maxTop).toDouble(),
+      rect.width,
+      rect.height,
+    );
+  }
+
   void _paintTag(
     Canvas canvas,
     Size size,
@@ -1151,7 +1141,7 @@ class _ScoutDrivingPainter extends CustomPainter {
     if (at.dy + height > size.height - 4) {
       at = Offset(at.dx, cursor.dy - 6 - height);
     }
-    final rect = Rect.fromLTWH(at.dx, at.dy, tag.width + 12, tag.height + 5);
+    final rect = _inside(size, Rect.fromLTWH(at.dx, at.dy, width, height));
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(7));
     _shadow.color = Color.fromRGBO(0, 0, 0, 0.22 * alpha);
     canvas.drawRRect(rrect.shift(const Offset(0, 1.5)), _shadow);
@@ -1196,7 +1186,7 @@ class _ScoutDrivingPainter extends CustomPainter {
     }
   }
 
-  void _paintPress(Canvas canvas, _DrivingEffect e, double now) {
+  void _paintPress(Canvas canvas, Size size, _DrivingEffect e, double now) {
     for (var i = 0; i < e.taps; i++) {
       _ring(
         canvas,
@@ -1208,7 +1198,13 @@ class _ScoutDrivingPainter extends CustomPainter {
     final label = e.label;
     if (label != null) {
       final t = (now - e.start) / (e.end - e.start);
-      _paintChip(canvas, label, e.point + const Offset(16, -34), _chipAlpha(t));
+      _paintChip(
+        canvas,
+        size,
+        label,
+        e.point + const Offset(16, -34),
+        _chipAlpha(t),
+      );
     }
   }
 
@@ -1350,56 +1346,45 @@ class _ScoutDrivingPainter extends CustomPainter {
       ..strokeWidth = 2
       ..color = _DrivingColors.accent.withValues(alpha: alpha);
     canvas.drawRRect(rrect, _stroke);
-    final label = e.label;
-    if (label == null) return;
-    // Keystroke chip under the field (above it near the bottom edge), with
-    // the text arriving and a caret at its end.
     final progress = e.hold <= 0
         ? 1.0
         : ((now - e.start) / e.hold).clamp(0.0, 1.0);
-    final below = e.rect.bottom + 40 < size.height;
-    final chipTop = below
-        ? e.rect.bottom + 8
-        : e.rect.top - 8 - (label.height + 10);
-    final left = e.rect.left
-        .clamp(4.0, math.max(4.0, size.width - label.width - 30))
-        .toDouble();
-    final chip = Rect.fromLTWH(
-      left,
-      chipTop,
-      label.width + 26,
-      label.height + 10,
-    );
-    final crrect = RRect.fromRectAndRadius(chip, const Radius.circular(9));
-    _shadow.color = Color.fromRGBO(0, 0, 0, 0.25 * alpha);
-    canvas.drawRRect(crrect.shift(const Offset(0, 2)), _shadow);
+    // Caret at the end of the typed text: solid while typing, then a pulse.
+    final caretT = now - e.start - e.hold;
+    final caretAlpha = caretT < 0
+        ? 1.0
+        : (0.5 + 0.5 * math.cos(caretT / 520 * 2 * math.pi)).clamp(0.0, 1.0);
+    final label = e.label;
+    if (label == null) {
+      _fill.color = _DrivingColors.accent.withValues(alpha: caretAlpha * alpha);
+      canvas.drawRect(
+        Rect.fromLTWH(e.caret.right + 2, e.caret.top, 2, e.caret.height),
+        _fill,
+      );
+      return;
+    }
+    // Keystroke chip inside the field, after the text, with the text
+    // arriving and a caret at its end.
+    final chip = e.chip;
+    final crrect = RRect.fromRectAndRadius(chip, const Radius.circular(7));
     _fill.color = _DrivingColors.glass.withValues(alpha: 0.94 * alpha);
     canvas.drawRRect(crrect, _fill);
     _stroke
       ..strokeWidth = 1
       ..color = _DrivingColors.accent.withValues(alpha: 0.45 * alpha);
     canvas.drawRRect(crrect, _stroke);
-    final textLeft = chip.left + 10;
+    final textLeft = chip.left + 8;
+    final textTop = chip.top + 3;
     final visibleWidth = label.width * progress;
     canvas.save();
     canvas.clipRect(
       Rect.fromLTWH(textLeft, chip.top, visibleWidth + 0.5, chip.height),
     );
-    _paintText(canvas, label, Offset(textLeft, chip.top + 5), alpha);
+    _paintText(canvas, label, Offset(textLeft, textTop), alpha);
     canvas.restore();
-    // Caret: solid while typing, then one soft pulse.
-    final caretT = now - e.start - e.hold;
-    final caretAlpha = caretT < 0
-        ? 1.0
-        : (0.5 + 0.5 * math.cos(caretT / 520 * 2 * math.pi)).clamp(0.0, 1.0);
     _fill.color = _DrivingColors.accent.withValues(alpha: caretAlpha * alpha);
     canvas.drawRect(
-      Rect.fromLTWH(
-        textLeft + visibleWidth + 1.5,
-        chip.top + 5,
-        1.8,
-        label.height,
-      ),
+      Rect.fromLTWH(textLeft + visibleWidth + 1.5, textTop, 1.6, label.height),
       _fill,
     );
   }
@@ -1412,13 +1397,17 @@ class _ScoutDrivingPainter extends CustomPainter {
     return 1;
   }
 
-  void _paintChip(Canvas canvas, TextPainter label, Offset at, double alpha) {
+  void _paintChip(
+    Canvas canvas,
+    Size size,
+    TextPainter label,
+    Offset at,
+    double alpha,
+  ) {
     if (alpha <= 0) return;
-    final rect = Rect.fromLTWH(
-      at.dx,
-      at.dy,
-      label.width + 18,
-      label.height + 8,
+    final rect = _inside(
+      size,
+      Rect.fromLTWH(at.dx, at.dy, label.width + 18, label.height + 8),
     );
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(8));
     _shadow.color = Color.fromRGBO(0, 0, 0, 0.25 * alpha);
@@ -1458,6 +1447,7 @@ class _ScoutDrivingPainter extends CustomPainter {
     if (label != null) {
       _paintChip(
         canvas,
+        size,
         label,
         center + Offset(30, -label.height / 2 - 4),
         alpha,
@@ -1476,8 +1466,9 @@ class _ScoutDrivingPainter extends CustomPainter {
     final width = label.width + 18;
     _paintChip(
       canvas,
+      size,
       label,
-      Offset((size.width - width) / 2, top + 40 + rise),
+      Offset((size.width - width) / 2, top + 12 + rise),
       alpha,
     );
   }
