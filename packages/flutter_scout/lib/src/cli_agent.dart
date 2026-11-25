@@ -278,6 +278,10 @@ function run() {
       final hand = FlutterScoutCli()
         .._reuseVmConnection = true
         .._agentLane = true;
+      // Opt-in, recorded by launch/ensure/attach --headless-drive.
+      final headless = _sessionHeadlessDrive;
+      observer._headlessDrive = headless;
+      hand._headlessDrive = headless;
       final outputZone = Zone.current;
       final requests = <String, Future<void>>{};
       final seenIds = <String>{};
@@ -322,14 +326,27 @@ function run() {
       session = AgentSession(
         interval: Duration(milliseconds: interval),
         foregroundAvailable: Platform.isMacOS && _readDevice() == 'macos',
+        headlessDrive: headless,
         validate: _validateAgentAction,
         read: () async {
-          final Map<String, dynamic> raw;
+          Map<String, dynamic> raw;
           try {
+            final sentHeadless = observer._sendHeadlessDrive;
             raw = await observer._call('ext.flutter_scout.inspect', {
               'brief': 'true',
               'maxItems': '$maximum',
             });
+            // The first response proves the helper accepts headlessDrive:
+            // share that with the hand and re-read as a driven observation.
+            if (headless && observer._sendHeadlessDrive) {
+              hand._helperHeadlessDriveV1 = true;
+              if (!sentHeadless) {
+                raw = await observer._call('ext.flutter_scout.inspect', {
+                  'brief': 'true',
+                  'maxItems': '$maximum',
+                });
+              }
+            }
           } on ScoutCliException catch (error) {
             // Keep the CLI-authored cause (e.g. helper not registered) so the
             // ready/observe response says why the app is not observable.

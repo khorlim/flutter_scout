@@ -47,6 +47,7 @@ part 'cli_log_storage.dart';
 part 'cli_macos_launch.dart';
 part 'cli_launch_diagnostics.dart';
 part 'cli_helper_pin.dart';
+part 'cli_headless.dart';
 
 Map<String, String> _flutterToolEnvironment([
   Map<String, String>? inherited,
@@ -635,6 +636,12 @@ class FlutterScoutCli {
   bool _liveDecisionAllowsUnrelated = false;
   int _liveDecisionMaxItems = 60;
   bool _agentRequiresLiveRendering = false;
+  // The session opted into headless drive; requests carry `headlessDrive`
+  // once a helper response proved `headlessDriveV1` (older helpers reject
+  // unknown parameters).
+  bool _headlessDrive = false;
+  bool _helperHeadlessDriveV1 = false;
+  bool get _sendHeadlessDrive => _headlessDrive && _helperHeadlessDriveV1;
   // Private dispatch authority, set only on lanes owned by an agent session.
   // Neither argv nor a typed request can grant this authority.
   bool _agentLane = false;

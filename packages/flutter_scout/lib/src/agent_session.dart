@@ -368,6 +368,7 @@ class AgentSession {
     this.interval = const Duration(milliseconds: 250),
     this.maxEvents = 64,
     this.foregroundAvailable = false,
+    this.headlessDrive = false,
   }) {
     if (interval <= Duration.zero || maxEvents < 1 || maxEvents > 256) {
       throw ArgumentError('Positive interval and maxEvents 1..256 required');
@@ -383,6 +384,11 @@ class AgentSession {
   /// Whether explicit native activation exists (a named macOS session), so
   /// rendering rejections can name `foreground()` as the literal next step.
   final bool foregroundAvailable;
+
+  /// Whether this session opted into headless drive (`--headless-drive`):
+  /// a hidden app whose helper reports rendering `driven` accepts input, and
+  /// every scene says so. Off, suspended rendering is refused as before.
+  final bool headlessDrive;
   final Stopwatch _clock = Stopwatch()..start();
   final List<AgentView> _events = [];
   final Map<String, _ConditionJob> _jobs = {};
@@ -442,7 +448,32 @@ class AgentSession {
       'inputBlockedReason': _inputBlockedReason,
       // Why input is refused right now, with the literal next step.
       'blockedBy': ?blocker,
+      if (headlessDrive) 'headless': _headlessScene,
       ..._sceneBody,
+    };
+  }
+
+  /// Plain statement of headless drive for every scene of an opted-in
+  /// session: whether Scout is driving a hidden app right now, and why.
+  AgentView get _headlessScene {
+    final rendering = _view?['rendering'] as Map?;
+    final drive = rendering?['headlessDrive'] as Map?;
+    if (drive == null) {
+      return {
+        'driving': false,
+        'notice': _view?['ok'] == true
+            ? 'Headless drive is on for this session, but the app helper '
+                  'did not report it (update flutter_scout_helper and fully '
+                  'relaunch); a hidden app is refused as usual.'
+            : 'Headless drive is on for this session; no current '
+                  'observation exists.',
+      };
+    }
+    return {
+      'driving': rendering?['status'] == 'driven',
+      'reason': drive['reason'],
+      'lifecycle': rendering?['lifecycle'],
+      'notice': drive['notice'],
     };
   }
 
@@ -550,6 +581,7 @@ class AgentSession {
           rendering?['status'],
           rendering?['framesEnabled'],
           rendering?['lifecycle'],
+          (rendering?['headlessDrive'] as Map?)?['reason'],
           value['activeBlockingSignals'],
           value['errorsSinceCursor'],
           value['recentErrors'],
@@ -659,9 +691,15 @@ class AgentSession {
       _view?['ok'] == true &&
       (_view?['rendering'] as Map?)?['status'] == 'active' &&
       (_view?['rendering'] as Map?)?['framesEnabled'] == true;
+
+  /// A hidden app the helper is driving for this opted-in session.
+  bool get _driven =>
+      headlessDrive &&
+      _view?['ok'] == true &&
+      (_view?['rendering'] as Map?)?['status'] == 'driven';
   String? get _unsafeReason {
     if (_view?['ok'] != true) return 'observation_unavailable';
-    if (!_live) return 'rendering_suspended';
+    if (!_live && !_driven) return 'rendering_suspended';
     if ((_view?['activeBlockingSignals'] as List? ?? []).isNotEmpty) {
       return 'blocking_signal_active';
     }
@@ -820,6 +858,7 @@ class AgentSession {
       },
       'foregroundAvailable': foregroundAvailable,
       if (foregroundAvailable) 'platform': 'macos',
+      'headlessDrive': headlessDrive,
       'safetyEvidenceStatus': view?['safetyEvidenceStatus'],
       'activeBlockingSignalCount': signals.length,
       'errorsSinceCursorCount': errors.length,
@@ -838,7 +877,7 @@ class AgentSession {
         'check the app with status, then close() and reconnect',
       );
     }
-    if (!_live) {
+    if (!_live && !_driven) {
       return blocked(
         'rendering_suspended',
         'Rendering is not active (status ${rendering?['status']}, '
@@ -967,7 +1006,9 @@ class AgentSession {
       _acting = null;
       done.complete();
     }
-    final ok = _safe && !stopped();
+    // Activation succeeded only if the app renders on its own again; a
+    // headless-driven scene is still a hidden window.
+    final ok = _live && _safe && !stopped();
     return {
       'ok': ok,
       'foregroundRequested': true,
@@ -992,14 +1033,15 @@ class AgentSession {
         'details': {'halted': _halt, 'activationRequested': true},
       };
     }
-    final unavailable = _liveViewBlocker()!;
+    // Null while a headless-driven scene is safe but still not visible.
+    final unavailable = _liveViewBlocker();
     final details = <String, dynamic>{
-      ...unavailable['details'] as AgentView,
+      ...?unavailable?['details'] as AgentView?,
       'activationRequested': true,
       'waitedMs': waitedMs,
       ...facts,
     };
-    if (_live) {
+    if (_live && unavailable != null) {
       // Rendering resumed; safety, not visibility, still blocks input.
       return {
         'code': unavailable['code'],

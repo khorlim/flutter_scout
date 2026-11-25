@@ -164,6 +164,7 @@ extension _CliProtocol on FlutterScoutCli {
       'clientProtocolMax': '$_scoutCliProtocolMax',
       'commandId': _newProtocolIdentifier('read'),
       if (runId != null && runId.isNotEmpty) 'runId': runId,
+      if (_sendHeadlessDrive) 'headlessDrive': 'true',
     };
   }
 
@@ -210,6 +211,7 @@ extension _CliProtocol on FlutterScoutCli {
           'commandId': preflightCommandId,
           'runId': runId,
           'brief': 'true',
+          if (_sendHeadlessDrive) 'headlessDrive': 'true',
           // A target-scoped agent decision needs the same brief view it was
           // made from; otherwise only the identity is required.
           'maxItems': _liveDecisionView != null && _liveDecisionTargets != null
@@ -343,11 +345,15 @@ extension _CliProtocol on FlutterScoutCli {
     final rendering = _observationPayload(preflight)['rendering'];
     final guardMissing =
         (preflight['capabilities'] as Map?)?['liveRenderingGuardV1'] != true;
+    // A headless-drive session also accepts a hidden app the helper drives.
+    final driven =
+        _sendHeadlessDrive && rendering is Map && rendering['status'] == 'driven';
     if (_agentRequiresLiveRendering &&
         (guardMissing ||
             rendering is! Map ||
-            rendering['status'] != 'active' ||
-            rendering['framesEnabled'] != true)) {
+            (!driven &&
+                (rendering['status'] != 'active' ||
+                    rendering['framesEnabled'] != true)))) {
       return (
         invocation: null,
         replay: null,
@@ -432,6 +438,9 @@ extension _CliProtocol on FlutterScoutCli {
       'expectedStateGeneration': '$stateGeneration',
       'deadlineEpochMs': '$deadlineEpochMs',
       if (_agentRequiresLiveRendering) 'requireLiveRendering': 'true',
+      if (_headlessDrive &&
+          (preflight['capabilities'] as Map?)?['headlessDriveV1'] == true)
+        'headlessDrive': 'true',
       // An exact-handle decision survives background churn after this
       // preflight when the app finds its targets unchanged at dispatch.
       if (decisionView != null &&
@@ -482,7 +491,11 @@ extension _CliProtocol on FlutterScoutCli {
     final response = await service
         .callServiceExtension(method, isolateId: isolateId, args: params)
         .timeout(timeout);
-    return _decodeServiceExtensionResponse(response);
+    final decoded = _decodeServiceExtensionResponse(response);
+    if ((decoded['capabilities'] as Map?)?['headlessDriveV1'] == true) {
+      _helperHeadlessDriveV1 = true;
+    }
+    return decoded;
   }
 
   Map<String, dynamic> _decodeServiceExtensionResponse(Response response) {
