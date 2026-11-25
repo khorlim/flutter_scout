@@ -460,12 +460,12 @@ void main() {
 
       // Default state: the launcher is present, the menu is closed, and the
       // annotation FAB is NOT shown (it only appears while annotating).
-      expect(find.text('SCOUT'), findsOneWidget);
+      expect(find.text('Scout'), findsOneWidget);
       expect(find.text('ANNOTATE'), findsNothing);
       expect(find.text('RECORD'), findsNothing);
 
       // Open the menu from the launcher.
-      await tester.tap(find.text('SCOUT'));
+      await tester.tap(find.text('Scout'));
       await settle();
       expect(find.text('ANNOTATE'), findsOneWidget);
       expect(find.text('RECORD'), findsOneWidget);
@@ -479,7 +479,7 @@ void main() {
         findsNothing,
         reason: 'menu closes on select',
       );
-      await tester.tap(find.text('SCOUT'));
+      await tester.tap(find.text('Scout'));
       await settle();
       expect(
         find.text('REC'),
@@ -495,7 +495,7 @@ void main() {
       expect(find.text('ANNOTATE'), findsNothing, reason: 'menu closes');
 
       // Reopen: the Annotate row now reports ON.
-      await tester.tap(find.text('SCOUT'));
+      await tester.tap(find.text('Scout'));
       await settle();
       expect(find.textContaining('ON'), findsWidgets);
 

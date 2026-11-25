@@ -10,38 +10,13 @@ const String _scoutInstanceLabel = String.fromEnvironment(
   'FLUTTER_SCOUT_INSTANCE',
 );
 
-/// Resolved badge palette for the current session: a distinct hue derived from
-/// the instance label, kept dark enough that the light ink text stays readable.
-class _ScoutSessionPalette {
-  const _ScoutSessionPalette({
-    required this.fill,
-    required this.fillDark,
-    required this.foreground,
-    required this.accent,
-  });
+/// Each `--name`d session gets its own hue on the session label's dot, so
+/// overlapping worktree runs are told apart at a glance. The hue is a stable
+/// hash of the label (same session → same colour across relaunches, no
+/// flicker on hot reload); the dot sits on dark glass, so only the hue varies.
+final Color _scoutSessionHue = _deriveScoutSessionHue(_scoutInstanceLabel);
 
-  /// Top-of-gradient fill; [fillDark] is the darker bottom stop.
-  final Color fill;
-  final Color fillDark;
-
-  /// Text/icon colour — light ink; [fill] is kept dark enough that it always
-  /// clears WCAG AA contrast, on every hue.
-  final Color foreground;
-
-  /// Brighter same-hue tint used for the rim border and glow.
-  final Color accent;
-}
-
-/// Each `--name`d session gets its own badge colour so overlapping worktree
-/// runs are told apart at a glance. The hue is a stable hash of the label (same
-/// session → same colour across relaunches, no flicker on hot reload); only the
-/// hue varies. Saturation/lightness are pinned so the fill stays dark enough
-/// that the light ink text clears WCAG AA on every hue.
-final _ScoutSessionPalette _scoutSessionPalette = _deriveScoutSessionPalette(
-  _scoutInstanceLabel,
-);
-
-_ScoutSessionPalette _deriveScoutSessionPalette(String label) {
+Color _deriveScoutSessionHue(String label) {
   // FNV-1a over code units: deterministic across runs and platforms, unlike
   // String.hashCode, so a given name always maps to the same hue.
   var hash = 0x811c9dc5;
@@ -50,44 +25,35 @@ _ScoutSessionPalette _deriveScoutSessionPalette(String label) {
     hash = (hash * 0x01000193) & 0xffffffff;
   }
   final hue = (hash % 360).toDouble();
-  // Fill lightness (~0.26) is low enough that light ink text clears WCAG AA
-  // (>=4.5:1) on every hue — verified worst case ~4.9:1 in the yellow band — so
-  // the text colour never needs to flip, keeping the badge visually consistent.
-  final fill = HSLColor.fromAHSL(1, hue, 0.64, 0.26).toColor();
-  final fillDark = HSLColor.fromAHSL(1, hue, 0.66, 0.18).toColor();
-  final accent = HSLColor.fromAHSL(1, hue, 0.90, 0.64).toColor();
-  return _ScoutSessionPalette(
-    fill: fill,
-    fillDark: fillDark,
-    foreground: ScoutColors.ink,
-    accent: accent,
-  );
+  return HSLColor.fromAHSL(1, hue, 0.90, 0.64).toColor();
 }
 
-String get _scoutLauncherLabel =>
-    _scoutInstanceLabel.isEmpty ? 'SCOUT' : _scoutInstanceLabel.toUpperCase();
-
-/// A small HUD launcher pinned to the bottom-left. It names the running Scout
-/// session (per-session colour so overlapping worktree runs are told apart) and
-/// becomes the entry point to the Scout menu after an explicit annotation or
-/// recording UI opt-in. Before that it is a passive, hit-test-transparent label.
-/// With no `--name` label it falls back to a neutral "SCOUT" chip.
+/// The session label: Scout's small glass chip in the bottom-left corner. It
+/// names the running session (a per-session hue on its dot tells overlapping
+/// worktree runs apart) and shares the driving overlay's look (dark glass,
+/// hairline, signal accent, sentence-case type) so the two read as one
+/// system. While an agent is attached the dot turns signal-cyan with a halo,
+/// matching the edge glow and the "Scout is …" pill. Before an explicit
+/// annotation or recording opt-in it is a passive, hit-test-transparent label;
+/// afterwards it opens the Scout menu.
 class _ScoutInstanceBadge extends StatelessWidget {
   const _ScoutInstanceBadge({
     required this.menuOpen,
     required this.interactive,
+    required this.agentAttached,
     required this.onTap,
   });
 
   final bool menuOpen;
   final bool interactive;
+  final ValueListenable<bool> agentAttached;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Positioned(
-      left: 0,
-      bottom: 0,
+      left: ScoutSpace.s,
+      bottom: ScoutSpace.s,
       child: IgnorePointer(
         ignoring: !interactive,
         child: ExcludeSemantics(
@@ -95,87 +61,113 @@ class _ScoutInstanceBadge extends StatelessWidget {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: interactive ? onTap : null,
-            child: AnimatedContainer(
-              duration: ScoutMotion.base,
-              curve: ScoutMotion.enter,
-              padding: const EdgeInsets.symmetric(
-                horizontal: ScoutSpace.s,
-                vertical: ScoutSpace.xs,
-              ),
-              decoration: BoxDecoration(
-                // Per-session gradient fill so overlapping runs are distinguishable.
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    _scoutSessionPalette.fill,
-                    _scoutSessionPalette.fillDark,
-                  ],
-                ),
-                // Squared bottom-left so the badge hugs the exact corner of the
-                // app; the other three corners stay rounded like a corner tab.
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(ScoutRadius.panel),
-                  topRight: Radius.circular(ScoutRadius.panel),
-                  bottomRight: Radius.circular(ScoutRadius.panel),
-                ),
-                border: Border.all(
-                  // Brighten the rim while the menu is open so the launcher reads
-                  // as the active/expanded control.
-                  color: _scoutSessionPalette.accent.withValues(
-                    alpha: menuOpen ? 0.95 : 0.55,
-                  ),
-                  width: 1,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: _scoutSessionPalette.accent.withValues(
-                      alpha: menuOpen ? 0.5 : 0.30,
-                    ),
-                    blurRadius: 16,
-                    spreadRadius: -6,
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.my_location,
-                    size: 12,
-                    color: _scoutSessionPalette.foreground,
-                  ),
-                  const SizedBox(width: ScoutSpace.xs),
-                  Text(
-                    _scoutLauncherLabel,
-                    style: ScoutType.label.copyWith(
-                      fontSize: 9,
-                      letterSpacing: 0.6,
-                      color: _scoutSessionPalette.foreground,
-                    ),
-                  ),
-                  if (interactive) ...[
-                    const SizedBox(width: ScoutSpace.xs),
-                    // Chevron flips up→down to signal the menu's open state.
-                    AnimatedRotation(
-                      turns: menuOpen ? 0.5 : 0.0,
-                      duration: ScoutMotion.base,
-                      curve: ScoutMotion.enter,
-                      child: Icon(
-                        Icons.keyboard_arrow_up,
-                        size: 13,
-                        color: _scoutSessionPalette.foreground,
+            child: ValueListenableBuilder<bool>(
+              valueListenable: agentAttached,
+              builder: (context, attached, _) {
+                final dot = attached ? ScoutColors.signal : _scoutSessionHue;
+                return AnimatedContainer(
+                  duration: ScoutMotion.base,
+                  curve: ScoutMotion.enter,
+                  height: 26,
+                  padding: const EdgeInsets.only(left: 9, right: 11),
+                  decoration: BoxDecoration(
+                    color: const Color(0xE60B1211),
+                    borderRadius: BorderRadius.circular(13),
+                    border: Border.all(
+                      color: ScoutColors.signal.withValues(
+                        alpha: menuOpen ? 0.7 : (attached ? 0.4 : 0.2),
                       ),
                     ),
-                  ],
-                ],
-              ),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x33000000),
+                        blurRadius: 10,
+                        offset: Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      AnimatedContainer(
+                        duration: ScoutMotion.base,
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: dot,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            if (attached)
+                              BoxShadow(
+                                color: ScoutColors.signal.withValues(
+                                  alpha: 0.55,
+                                ),
+                                blurRadius: 6,
+                                spreadRadius: 1,
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 7),
+                      const Text('Scout', style: _badgeTitle),
+                      if (_scoutInstanceLabel.isNotEmpty) ...[
+                        Text(
+                          '  ·  ',
+                          style: _badgeName.copyWith(
+                            color: ScoutColors.inkDim.withValues(alpha: 0.6),
+                          ),
+                        ),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 180),
+                          child: const Text(
+                            _scoutInstanceLabel,
+                            style: _badgeName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                      if (interactive) ...[
+                        const SizedBox(width: 4),
+                        // Chevron flips up→down to signal the menu's state.
+                        AnimatedRotation(
+                          turns: menuOpen ? 0.5 : 0.0,
+                          duration: ScoutMotion.base,
+                          curve: ScoutMotion.enter,
+                          child: const Icon(
+                            Icons.keyboard_arrow_up,
+                            size: 14,
+                            color: ScoutColors.inkDim,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                );
+              },
             ),
           ),
         ),
       ),
     );
   }
+
+  static const _badgeTitle = TextStyle(
+    decoration: TextDecoration.none,
+    fontSize: 12,
+    height: 1.2,
+    fontWeight: FontWeight.w600,
+    letterSpacing: 0.2,
+    color: ScoutColors.ink,
+  );
+  static const _badgeName = TextStyle(
+    decoration: TextDecoration.none,
+    fontSize: 12,
+    height: 1.2,
+    fontWeight: FontWeight.w500,
+    letterSpacing: 0.1,
+    color: ScoutColors.inkDim,
+  );
 }
 
 /// The Scout launcher menu: a HUD panel of overlay actions anchored just above
@@ -244,7 +236,9 @@ class _ScoutMenu extends StatelessWidget {
                       const SizedBox(width: ScoutSpace.xs),
                       Expanded(
                         child: Text(
-                          'SCOUT · $_scoutLauncherLabel',
+                          _scoutInstanceLabel.isEmpty
+                              ? 'Scout'
+                              : 'Scout · $_scoutInstanceLabel',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: ScoutType.meta,
@@ -986,6 +980,8 @@ class _FlutterScoutAnnotationOverlayState
                 _ScoutInstanceBadge(
                   menuOpen: interactive && _menuOpen,
                   interactive: interactive,
+                  agentAttached:
+                      widget.runtime._drivingOverlay.attachedNotifier,
                   onTap: _toggleMenu,
                 ),
                 if (interactive && _menuOpen)

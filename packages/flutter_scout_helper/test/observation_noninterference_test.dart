@@ -26,7 +26,7 @@ void main() {
       final semantics = tester.ensureSemantics();
 
       expect(runtime.debugOverlayInstalled, isFalse);
-      expect(find.text('SCOUT'), findsNothing);
+      expect(find.text('Scout'), findsNothing);
       expect(find.bySemanticsLabel('business increment'), findsOneWidget);
       expect(find.bySemanticsLabel('bottom left app action'), findsOneWidget);
 
@@ -116,7 +116,7 @@ void main() {
       expect(probe.tickerValue, tickerValueBefore);
       expect(runtime.debugManualMutationFrameAdvanceCount, manualFramesBefore);
       expect(runtime.debugOverlayInstalled, isFalse);
-      expect(find.text('SCOUT'), findsNothing);
+      expect(find.text('Scout'), findsNothing);
       expect(find.bySemanticsLabel('business increment'), findsOneWidget);
       expect(find.bySemanticsLabel('bottom left app action'), findsOneWidget);
 
@@ -148,7 +148,7 @@ void main() {
       runtime.debugSetAnnotationMode(false);
       await tester.pump();
       expect(runtime.debugOverlayInstalled, isFalse);
-      expect(find.text('SCOUT'), findsNothing);
+      expect(find.text('Scout'), findsNothing);
 
       runtime.debugStartRecording(name: 'non-interference-proof');
       await tester.pump();
@@ -205,8 +205,8 @@ void main() {
 
     expect(runtime.debugOverlayInstalled, isTrue);
     expect(runtime.debugOverlayInteractive, isFalse);
-    expect(find.text('SCOUT'), findsOneWidget);
-    expect(find.bySemanticsLabel('SCOUT'), findsNothing);
+    expect(find.text('Scout'), findsOneWidget);
+    expect(find.bySemanticsLabel('Scout'), findsNothing);
 
     // The passive label occupies this visual corner but must not consume the
     // app's pointer or add a control to its semantics tree.
@@ -216,7 +216,7 @@ void main() {
     runtime.debugSetAnnotationMode(true);
     await tester.pump();
     expect(runtime.debugOverlayInteractive, isTrue);
-    await tester.tap(find.text('SCOUT'));
+    await tester.tap(find.text('Scout'));
     await tester.pump(const Duration(milliseconds: 300));
     expect(find.text('ANNOTATE'), findsOneWidget);
 

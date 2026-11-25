@@ -165,6 +165,10 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
 
   bool get enabled => !_scoutOverlayDisabledByDefine;
   bool get attached => _attached;
+
+  /// Changes only on attach/detach (not per frame), so the session label can
+  /// follow the agent's presence without rebuilding on every tick.
+  final ValueNotifier<bool> attachedNotifier = ValueNotifier<bool>(false);
   bool get hiddenForCapture => _captureHideDepth > 0;
   bool get controlling => _active;
   bool get installed => _entry != null && (_host?.mounted ?? false);
@@ -224,6 +228,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
       return;
     }
     _attached = true;
+    attachedNotifier.value = true;
     _scheduleInstall();
     glow.to(_observingGlow, now, reducedMotion ? 150 : 520);
     pill.to(1, now, reducedMotion ? 150 : 420);
@@ -238,6 +243,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     _idleTimer = null;
     if (!_attached) return;
     _attached = false;
+    attachedNotifier.value = false;
     _active = false;
     _heldDrag = null;
     if (_entry == null) {
