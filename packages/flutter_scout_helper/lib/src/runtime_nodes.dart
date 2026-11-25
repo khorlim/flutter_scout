@@ -1774,19 +1774,69 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return 10;
   }
 
+  /// Numbers equal handles (`btn.save`, `btn.save_2`, ...). Numbering is
+  /// sticky: a control that held an ordinal in the previous snapshot keeps it
+  /// while it stays mounted, and only newcomers take the lowest free one in
+  /// screen order. So adding a cart row named like a grid tile gives the row
+  /// `_2` instead of renumbering the tile, and no handle silently moves to
+  /// another control between scenes. When a control is replaced its handle
+  /// can pass to the new one, but its `instance` differs, so a decision made
+  /// on the old control is refused as stale.
   List<ScoutNode> _disambiguateIds(List<ScoutNode> nodes) {
-    final counts = <String, int>{};
+    final groups = <String, List<int>>{};
+    for (var index = 0; index < nodes.length; index++) {
+      groups.putIfAbsent(nodes[index].id, () => <int>[]).add(index);
+    }
+    final ordinals = List<int>.filled(nodes.length, 1);
+    for (final entry in groups.entries) {
+      final members = entry.value;
+      if (members.length < 2) continue;
+      final taken = <int>{};
+      final newcomers = <int>[];
+      for (final index in members) {
+        final instance = nodes[index].instance;
+        final kept = instance == null
+            ? null
+            : _ordinalIn(_previousNodeHandles[instance], entry.key);
+        if (kept != null && taken.add(kept)) {
+          ordinals[index] = kept;
+        } else {
+          newcomers.add(index);
+        }
+      }
+      var next = 1;
+      for (final index in newcomers) {
+        while (taken.contains(next)) {
+          next++;
+        }
+        taken.add(next);
+        ordinals[index] = next;
+      }
+    }
     final fallbackIds = <String>{};
-    return [
-      for (final node in nodes)
+    final result = [
+      for (var index = 0; index < nodes.length; index++)
         _disambiguateFallbackId(
-          _disambiguateNode(
-            node,
-            counts.update(node.id, (value) => value + 1, ifAbsent: () => 1),
-          ),
+          _disambiguateNode(nodes[index], ordinals[index]),
           fallbackIds,
         ),
     ];
+    _previousNodeHandles
+      ..clear()
+      ..addAll({
+        for (final node in result)
+          if (node.instance case final int instance) instance: node.id,
+      });
+    return result;
+  }
+
+  /// The ordinal [handle] had among controls named [base], or null.
+  int? _ordinalIn(String? handle, String base) {
+    if (handle == null) return null;
+    if (handle == base) return 1;
+    if (!handle.startsWith('${base}_')) return null;
+    final ordinal = int.tryParse(handle.substring(base.length + 1));
+    return ordinal != null && ordinal >= 2 ? ordinal : null;
   }
 
   ScoutNode _disambiguateFallbackId(ScoutNode node, Set<String> fallbackIds) {

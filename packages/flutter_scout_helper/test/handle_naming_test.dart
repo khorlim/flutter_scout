@@ -143,4 +143,49 @@ void main() {
       'unique',
     );
   });
+
+  testWidgets('a same-named control appearing earlier on screen does not '
+      'take the handle of the control that had it', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    final cart = ValueNotifier<List<String>>([]);
+    addTearDown(cart.dispose);
+    Widget tile(String name) =>
+        SizedBox(height: 48, child: _pressable(child: Text(name)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ValueListenableBuilder<List<String>>(
+            valueListenable: cart,
+            // The cart list sits above the grid (separate subtrees, as in a
+            // POS order screen), so its row comes first in screen order.
+            builder: (context, items, _) => Column(
+              children: [
+                Column(children: [for (final item in items) tile(item)]),
+                Column(children: [tile('Thai Yoga'), tile('Foot Massage')]),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    ScoutNode named(String id) =>
+        runtime.debugSnapshot().interactables.singleWhere((n) => n.id == id);
+    final gridTile = named('btn.thai_yoga');
+
+    cart.value = ['Thai Yoga'];
+    await tester.pump();
+    final afterAdd = named('btn.thai_yoga');
+    expect(afterAdd.instance, gridTile.instance);
+    expect(afterAdd.rect, gridTile.rect!.shift(const Offset(0, 48)));
+    final cartRow = named('btn.thai_yoga_2');
+    expect(cartRow.instance, isNot(gridTile.instance));
+    expect(cartRow.rect!.top, lessThan(afterAdd.rect!.top));
+
+    // A fresh screen numbers by position again.
+    cart.value = [];
+    await tester.pump();
+    expect(named('btn.thai_yoga').instance, gridTile.instance);
+  });
 }

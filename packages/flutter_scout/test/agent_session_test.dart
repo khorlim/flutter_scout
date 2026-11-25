@@ -1158,6 +1158,48 @@ void main() {
     ]);
   });
 
+  test('a handle that now names another control is refused as stale even '
+      'with allowUnrelatedChanges', () {
+    Map<String, Object?> tile(int instance) => {
+      'id': 'btn.thai_yoga',
+      'kind': 'btn',
+      'label': 'Thai Yoga',
+      'instance': instance,
+      'enabled': true,
+    };
+    final decision = {
+      ...view(1),
+      'interactables': [tile(10)],
+    };
+    final moved = {
+      ...view(2),
+      'interactables': [tile(11)],
+    };
+    final stale = AgentSession.staleChange(decision, moved, {
+      'btn.thai_yoga',
+    }, allowUnrelatedChanges: true)!;
+    expect(stale.reason, 'target btn.thai_yoga changed');
+    expect(stale.changes, [
+      {
+        'field': 'interactables[btn.thai_yoga].instance',
+        'before': 10,
+        'after': 11,
+      },
+    ]);
+    expect(
+      AgentSession.targetUnaffected(
+        decision,
+        {
+          ...view(2),
+          'interactables': [tile(10)],
+        },
+        {'btn.thai_yoga'},
+        allowUnrelatedChanges: true,
+      ),
+      isTrue,
+    );
+  });
+
   test('a keypad dialog stays the same surface while its display, its '
       'guessed name and a suggestion change', () {
     final keys = [

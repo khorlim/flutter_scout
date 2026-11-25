@@ -1,5 +1,13 @@
 ## Unreleased
 
+* Duplicate handle numbering is sticky. A control that held `btn.x` or
+  `btn.x_2` in the previous snapshot keeps it while it stays mounted; only
+  newcomers take the lowest free number in screen order. Adding a cart row
+  named like a grid tile now gives the row `btn.thai_yoga_2` instead of
+  renumbering the tile. If a handle passes to a replacement control, its
+  `instance` differs, so a stale decision on it is refused (agent
+  `target <id> changed`, helper dispatch-time `target <id> changed`) instead
+  of hitting the new control.
 * Controls report the specific state Flutter knows: `checked` (Checkbox,
   CupertinoCheckbox, Radio under a RadioGroup, `Semantics(checked:)`),
   `toggled` (Switch, CupertinoSwitch, `Semantics(toggled:)`) and `expanded`

@@ -11,6 +11,9 @@ final Expando<int> _overlayInstances = Expando<int>('flutter_scout_overlay');
 int _overlayInstanceCounter = 0;
 final Expando<int> _nodeInstances = Expando<int>('flutter_scout_node');
 int _nodeInstanceCounter = 0;
+// Handle of each control instance in the latest snapshot, for sticky
+// duplicate numbering (see _disambiguateIds).
+final Map<int, String> _previousNodeHandles = <int, String>{};
 
 final Expando<_NavigationState> _navigationStateByRuntime =
     Expando<_NavigationState>('flutter_scout_navigation');
