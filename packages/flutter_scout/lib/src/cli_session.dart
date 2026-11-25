@@ -2558,6 +2558,7 @@ extension _CliSession on FlutterScoutCli {
       'runtimeObservation': runtimeObservation,
       'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
       'headlessDrive': _headlessDriveReport(),
+      'systemDialogs': ?await _systemDialogDoctor(),
       if (device == null || device.isEmpty || device == 'macos')
         'hostPower': ?await _hostPowerFacts(),
     });

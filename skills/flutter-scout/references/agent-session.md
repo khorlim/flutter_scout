@@ -188,8 +188,9 @@ receipt, settle or stability signal.
    and reconnect. Rejected hand requests name the action and recovery call and
    include the current `scene` for one new decision.
 3. `watch({text:'Ready'}, 8000)` returns a condition ticket; its later
-   `condition` event says `met`, `timeout`, `observation_unavailable`, `stopped`,
-   or `cancelled`. It doesn't occupy the hand. This proves observed state only,
+   `condition` event says `met`, `timeout`, `observation_unavailable`,
+   `system_dialog` (a native dialog appeared), `stopped`, or `cancelled`.
+   It doesn't occupy the hand. This proves observed state only,
    not causality: already-visible "Ready" is not proof a new save completed.
    `watchUntil(condition, timeoutMs)` registers the same watch, consumes
    events until it ends and returns `{ok, status, conditionId, viewRevision,
@@ -198,7 +199,8 @@ receipt, settle or stability signal.
    counted. It is an event consumer, like act.
 
 Supported actions are tap, tap-text, long-press, input, fill, scroll, swipe,
-scroll-to, back, dismiss, reveal, drag-start, drag-move, drag-end, drag-cancel and deeplink,
+scroll-to, back, dismiss, reveal, drag-start, drag-move, drag-end, drag-cancel, deeplink
+and system-tap (one observed native dialog button; system-dialogs.md),
 with normal typed parameters (examples for tap by handle or `params:{x,y}`,
 input, scroll, swipe and reconcile are in gestures-and-visuals.md). Agent mode rejects
 expectation parameters, safety overrides, file input, capture and screenshots.
@@ -206,7 +208,7 @@ Pass sensitive input through JSON stdin, never process arguments. Standalone
 interaction commands and alternate transports are removed, not fallback paths.
 
 Use query(method, params, args) for focused read-only inspect, where, locate,
-bounds and drag-status. For example query('locate', {text: 'Save'}) or
+bounds, drag-status and system-dialog (a fresh native dialog probe). For example query('locate', {text: 'Save'}) or
 query('inspect', {sections: 'interactables,scrollables', maxItems: 100}). It
 returns a canonical read result, not fresh authorization for another input;
 observe and decide again after using it. No arbitrary command is accepted.
@@ -256,7 +258,8 @@ healthy unchanged screen. `pixelFreshness:not_observed` explicitly excludes
 compositor and platform-view pixels. Agent input requires active rendering and
 the helper's `liveRenderingGuardV1` capability. Old helpers remain observable;
 update the helper and fully relaunch for agent input. Every scene carries
-`inputBlockedReason` (null when `actionable`), e.g. `rendering_suspended`,
+`inputBlockedReason` (null when `actionable`), e.g. `system_dialog` (a native
+dialog covers the app; `view.systemDialog`), `rendering_suspended`,
 `helper_capability_missing`, `receipt_unacknowledged` or a halt reason.
 
 Sampling defaults to 250 ms (configurable 100–10,000); reads are deduplicated,

@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "protocolVersion": 15,
   "artifactKind": "flutter_scout_public_cli_envelope_goldens",
-  "commandCount": 19,
-  "errorCount": 368,
-  "sha256": "0197dc8fd8a2e9568e00020d22608bc6964801872cfd6668b5e0cd1b606db99f"
+  "commandCount": 20,
+  "errorCount": 387,
+  "sha256": "df11a13a65e1254314a888e30707dbe7d1e4a08d9bf7ed2cac97951a6877b632"
 }

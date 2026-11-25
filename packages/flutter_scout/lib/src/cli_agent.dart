@@ -26,6 +26,10 @@ void _validateAgentAction(AgentView action) {
       'unexpected ${unknownKeys.join(', ')}.',
     );
   }
+  if (action['method'] == 'system-tap') {
+    _validateSystemTapAction(action);
+    return;
+  }
   final allowUnrelated = action['allowUnrelatedChanges'];
   if (allowUnrelated != null && allowUnrelated is! bool) {
     throw const FormatException('allowUnrelatedChanges must be true or false.');
@@ -36,7 +40,8 @@ void _validateAgentAction(AgentView action) {
     final accepted = AgentSession.actionMethods.toList()..sort();
     throw FormatException(
       'Only documented UI actions are accepted: ${accepted.join(', ')}. '
-      'Close a menu, sheet or dialog with dismiss; go back with back.',
+      'Close a menu, sheet or dialog with dismiss; go back with back; '
+      'answer a native system dialog with system-tap.',
     );
   }
   final validation = _validatePersistentTypedPayload(action);
@@ -327,6 +332,13 @@ function run() {
         });
       }
 
+      // Native dialogs above the app (iOS Simulator / Android emulator only).
+      // The eyes probe only while Flutter reports the app not resumed or not
+      // rendering, while a dialog was last seen, or on an explicit query.
+      final systemDialogs = _SystemDialogProbe(
+        observer,
+        vmPid: observer._sessionAppVmPid,
+      );
       session = AgentSession(
         interval: Duration(milliseconds: interval),
         foregroundAvailable: Platform.isMacOS && _readDevice() == 'macos',
@@ -361,8 +373,12 @@ function run() {
           }
           if (raw['ok'] == true) await renewOverlay();
           final capabilities = raw['capabilities'];
+          final systemDialog = raw['ok'] == true
+              ? await systemDialogs.forObservation(raw)
+              : null;
           return {
             ...observer._agentObservation(raw),
+            'systemDialog': ?systemDialog,
             // Agent input needs the helper's dispatch-time rendering guard.
             if (raw['ok'] == true &&
                 (capabilities is! Map ||
@@ -371,6 +387,20 @@ function run() {
           };
         },
         act: (action, observed) async {
+          if (action['method'] == 'system-tap') {
+            try {
+              return await systemDialogs.tap(action, observed);
+            } catch (error) {
+              return {
+                'ok': false,
+                'dispatch': 'dispatch_outcome_unknown',
+                'error': {
+                  'code': 'system_tap_outcome_unknown',
+                  'message': '$error',
+                },
+              };
+            }
+          }
           hand._liveDecisionView = observed;
           hand._liveDecisionTargets = AgentSession.scopedTargets(action);
           hand._liveDecisionAllowsUnrelated =
@@ -481,6 +511,32 @@ function run() {
               );
             case 'query':
               final query = object('query');
+              if (query['method'] == 'system-dialog') {
+                // Explicit fresh probe, even while Flutter reports the app
+                // resumed. The next observation reflects what it found.
+                final extra = {...query}..remove('method');
+                if (extra.values.any(
+                  (value) =>
+                      !(value is Map && value.isEmpty) &&
+                      !(value is List && value.isEmpty),
+                )) {
+                  throw const FormatException(
+                    'query system-dialog takes no args or params',
+                  );
+                }
+                final probed = systemDialogs.target == null
+                    ? {
+                        'present': null,
+                        'status': 'unsupported',
+                        'reason':
+                            'system dialogs are probed only on the recorded '
+                            'iOS Simulator or Android emulator',
+                      }
+                    : await systemDialogs.probe(force: true);
+                await session.observe();
+                result = {'ok': true, 'systemDialog': probed};
+                break;
+              }
               if (!const {
                     'inspect',
                     'where',
@@ -492,7 +548,8 @@ function run() {
                     (key) => !const {'method', 'args', 'params'}.contains(key),
                   )) {
                 throw const FormatException(
-                  'query accepts only inspect, where, locate, bounds, drag-status',
+                  'query accepts only inspect, where, locate, bounds, '
+                  'drag-status, system-dialog',
                 );
               }
               // Rare focused queries have isolated mutable CLI context. They

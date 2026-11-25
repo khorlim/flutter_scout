@@ -178,6 +178,19 @@ retargeted: if the first tap changed the screen, it lands on whatever is now
 at that point, and `activation.secondTap.targetStillHit: false` plus a warning
 say so. Check the business outcome (one sale, one order) yourself.
 
+System permission prompts (iOS Simulator, Android emulator): when one covers
+the app, the scene has `view.systemDialog` (title, owner, button handles such
+as `sys.allow`, `sys.dont_allow`, `sys.while_using`) and refuses Flutter input
+with `inputBlockedReason:'system_dialog'`. Answer it only when the task says
+which answer to give: `{method:'system-tap', args:['sys.allow']}`. A dialog of
+another app needs `params.dialogOwner`; credential and Apple Account prompts
+are never answered. Observe again after a tap that requests a permission: the
+prompt appears after the receipt. To avoid prompts, pre-grant with
+`flutter-scout --app <task> permissions grant camera` (the iOS Simulator
+terminates the running app for any change). iOS needs AXe
+(`brew install cameroncooke/axe/axe`). Details and the per-platform service
+table: [system-dialogs.md](references/system-dialogs.md).
+
 Close a menu, popover, sheet or dialog with `{method:'dismiss'}`; there is no
 key-press action. An open text-selection toolbar or context menu closes first
 (as Escape does), so dismiss never pops the screen under it. A menu opened before a hot reload keeps the items it was
@@ -418,9 +431,12 @@ claiming cleanup. Never stop a human-owned or another task's run.
 
 ## Outside Scout
 
-Scout sees and drives only the Flutter tree of a debug app. It does not handle
-iOS system dialogs and sheets, native UIKit/AppKit controls, device rotation or
-performance profiling. Use the simulator tooling (`xcrun simctl`, the host's
-simulator or desktop control tool) for system UI and rotation, and
+Scout sees and drives the Flutter tree of a debug app, plus native system
+dialogs above it on the iOS Simulator and Android emulators (see above). It
+does not handle system dialogs on physical devices or macOS (TCC prompts),
+other native UIKit/AppKit controls or sheets, device rotation or performance
+profiling. On a physical iPhone, ask the user to answer the prompt or set the
+permission in Settings. Use the simulator tooling (`xcrun simctl`, the host's
+simulator or desktop control tool) for other system UI and rotation, and
 `flutter run --profile` with DevTools for frame timing; say so in the report
 instead of retrying through Scout.

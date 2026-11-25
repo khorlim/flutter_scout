@@ -112,6 +112,30 @@
       "meaning": "The standalone interaction or legacy transport was removed; use the persistent agent session.",
       "family": "request_rejected"
     },
+    "agent_system_dialog_button_ambiguous": {
+      "meaning": "More than one button of the observed system dialog has that handle; Scout never guesses which one is meant and nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "agent_system_dialog_button_not_observed": {
+      "meaning": "The system-tap handle is not a button of the observed system dialog; nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "agent_system_dialog_changed": {
+      "meaning": "The system dialog decided on is no longer the one shown; nothing was pressed. Observe and decide again.",
+      "family": "request_rejected"
+    },
+    "agent_system_dialog_not_observed": {
+      "meaning": "No system dialog was observed at the decision viewRevision; system-tap answers only an observed dialog and nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "agent_system_dialog_other_app": {
+      "meaning": "The system dialog belongs to another app or an unproven owner; it is answered only with an explicit matching params.dialogOwner. Nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "agent_system_dialog_refused": {
+      "meaning": "The system dialog asks for credentials, a password or an Apple Account; Scout never answers it. Nothing was pressed.",
+      "family": "request_rejected"
+    },
     "ambiguous_recording": {
       "meaning": "Scout reports the stable ambiguous recording failure condition.",
       "family": "persistence_or_security"
@@ -944,6 +968,18 @@
       "meaning": "Scout reports the stable origin not allowed failure condition.",
       "family": "operation"
     },
+    "permission_change_incomplete": {
+      "meaning": "Not every requested permission change took effect (for example a permission the app does not declare); details.results lists each one. Nothing was retried.",
+      "family": "operation"
+    },
+    "permission_change_may_terminate_app": {
+      "meaning": "The permission change may terminate the running session app; nothing changed. Pass --allow-app-termination when that is intended.",
+      "family": "request_rejected"
+    },
+    "permission_service_unsupported": {
+      "meaning": "The platform cannot pre-grant that permission service; nothing changed. Answer its prompt with system-tap or ask the user.",
+      "family": "request_rejected"
+    },
     "previous_runner_cleanup_unverified": {
       "family": "lifecycle",
       "meaning": "An older runner may still be live and Scout could not verify its shutdown. Ownership records are preserved; inspect stop output before retrying."
@@ -1263,6 +1299,46 @@
     "swipe_no_effect": {
       "meaning": "The swipe was dispatched, but nothing on screen moved; observe again before deciding.",
       "family": "operation"
+    },
+    "system_dialog_button_ambiguous": {
+      "meaning": "At dispatch, more than one button of the system dialog had that handle; nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "system_dialog_button_not_observed": {
+      "meaning": "At dispatch, the handle was not a button of the system dialog on screen; nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "system_dialog_changed": {
+      "meaning": "At dispatch, the system dialog on screen differed from the one decided on; nothing was pressed.",
+      "family": "resolution_or_observation"
+    },
+    "system_dialog_credential_refused": {
+      "meaning": "At dispatch, the system dialog was a credential, password or Apple Account prompt, which Scout never answers; nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "system_dialog_gone": {
+      "meaning": "At dispatch, the observed system dialog was no longer shown; nothing was pressed.",
+      "family": "resolution_or_observation"
+    },
+    "system_dialog_other_app": {
+      "meaning": "At dispatch, the system dialog belonged to another app or an unproven owner without a matching params.dialogOwner; nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "system_dialog_probe_unavailable": {
+      "meaning": "The system dialog could not be read again before pressing (tool missing or failed); nothing was pressed.",
+      "family": "resolution_or_observation"
+    },
+    "system_dialog_tool_unavailable": {
+      "meaning": "The native tool that presses system dialog buttons (adb or AXe) could not be started; nothing was pressed.",
+      "family": "operation"
+    },
+    "system_dialog_unsupported": {
+      "meaning": "System dialogs are handled only on the recorded iOS Simulator or Android emulator; nothing was pressed.",
+      "family": "request_rejected"
+    },
+    "system_tap_outcome_unknown": {
+      "meaning": "The native tool failed or timed out while pressing a system dialog button; the touch may or may not have been sent. Nothing is retried.",
+      "family": "execution_or_reconciliation"
     },
     "tap_failed": {
       "meaning": "The tap operation failed.",

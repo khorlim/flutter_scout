@@ -16,7 +16,7 @@ Use the shipped scripts/agent_client.mjs over one persistent JSONL pipe.
   rendering, acknowledges receipts, or clears a failure halt. A failure names
   its cause in error.reason and the recovery in error.nextStep.
 - query(method, params, args): focused read-only inspect, where, locate, bounds,
-  or drag-status. Parameters use camelCase; maxItems is 1..100. inspect accepts
+  drag-status, or system-dialog (a fresh native probe; no params). Parameters use camelCase; maxItems is 1..100. inspect accepts
   brief, surface, sections and since. It does not accept depth, maxNodes,
   waitForIdle or compact. Observe again after focused queries before deciding.
 - act(viewRevision, {method,args,params}): one guarded input with independent
@@ -37,7 +37,10 @@ Use the shipped scripts/agent_client.mjs over one persistent JSONL pipe.
 - status(), close(): connection status and graceful drain/close, not app stop.
 
 Actions: tap, tap-text, long-press, input, fill, scroll, swipe, scroll-to,
-reveal, back, dismiss, drag-start, drag-move, drag-end, drag-cancel, deeplink.
+reveal, back, dismiss, drag-start, drag-move, drag-end, drag-cancel, deeplink,
+system-tap. `system-tap` takes one observed `view.systemDialog` button handle
+in args (`['sys.allow']`) and optional `params.dialogOwner` for another app's
+dialog; see system-dialogs.md.
 `tap` takes `params.button: 'secondary'` for a mouse right click.
 `tap` and `tap-text` take `params.taps: 2` for a double tap (two complete
 taps at one point in one dispatch and one receipt) and `params.intervalMs`
@@ -58,7 +61,9 @@ not establish absence. Already-visible text does not prove a new operation.
 ## Finite lifecycle and manual diagnostics
 
 Lifecycle: devices, doctor, ensure, launch, attach, status, apps, reload,
-restart, stop, version. Annotation management: annotations. Manual evidence:
+restart, stop, version, permissions (`permissions grant|revoke|reset
+<service>... [--app-id] [--device] [--allow-app-termination]`, `permissions
+list`; system-dialogs.md). Annotation management: annotations. Manual evidence:
 screenshot, crop, logs, health, evidence. screenshot and crop take
 `--with-overlay` to keep the in-app driving overlay (left out by default).
 

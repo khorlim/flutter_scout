@@ -102,6 +102,12 @@ sleeps, `normalRunStoppedBy` (what stops a visible-window run) and what
 headless drive does not cover (system sleep, closed lid). Scout never changes
 these settings.
 
+For an iOS Simulator or Android emulator session, `doctor` also reports
+`systemDialogs`: the mechanism for native permission prompts
+(`axe_accessibility` or `adb_uiautomator`), whether it is installed, and the
+install hint (`brew install cameroncooke/axe/axe`) when AXe is missing. See
+system-dialogs.md.
+
 Useful commands:
 
 ```bash

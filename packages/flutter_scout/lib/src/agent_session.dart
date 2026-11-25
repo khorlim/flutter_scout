@@ -52,6 +52,9 @@ class AgentSession {
     'drag-end',
     'drag-cancel',
     'deeplink',
+    // One button of an observed native system dialog (iOS Simulator,
+    // Android emulator); see [systemTapAuthorization].
+    'system-tap',
   };
 
   /// `tap` options that change how it presses, never where.
@@ -588,6 +591,10 @@ class AgentSession {
           value['perception'],
           value['payloadBounds'],
           value['error'],
+          // A native dialog appearing, changing or going away is a new view;
+          // probe timings are not.
+          (value['systemDialog'] as Map?)?['fingerprint'] ??
+              (value['systemDialog'] as Map?)?['status'],
         ]);
         final changed = key != _viewKey;
         _view = value;
@@ -699,6 +706,7 @@ class AgentSession {
       (_view?['rendering'] as Map?)?['status'] == 'driven';
   String? get _unsafeReason {
     if (_view?['ok'] != true) return 'observation_unavailable';
+    if (_systemDialog != null) return 'system_dialog';
     if (!_live && !_driven) return 'rendering_suspended';
     if ((_view?['activeBlockingSignals'] as List? ?? []).isNotEmpty) {
       return 'blocking_signal_active';
@@ -710,6 +718,18 @@ class AgentSession {
       return 'safety_evidence_incomplete';
     }
     return null;
+  }
+
+  /// The native system dialog covering the app in the current view, if any.
+  /// Flutter input is refused while it is shown: a person could not reach
+  /// the app either.
+  AgentView? get _systemDialog => _presentDialog(_view);
+
+  static AgentView? _presentDialog(AgentView? view) {
+    final dialog = view?['systemDialog'];
+    return dialog is Map && dialog['present'] == true
+        ? Map<String, dynamic>.from(dialog)
+        : null;
   }
 
   /// Observation stays usable on an older helper; only input is refused.
@@ -876,6 +896,46 @@ class AgentSession {
         'No current protocol-valid observation of the app exists.',
         'check the app with status, then close() and reconnect',
       );
+    }
+    final dialog = _systemDialog;
+    if (dialog != null) {
+      final buttons = [
+        for (final button in dialog['buttons'] as List? ?? const [])
+          if (button is Map) button['handle'],
+      ];
+      final owner = dialog['owner'] as Map?;
+      return {
+        ...blocked(
+          'system_dialog',
+          'A native ${dialog['platform']} system dialog covers the app: '
+              '"${dialog['title']}" (buttons ${buttons.join(', ')}; owner '
+              '${owner?['name'] ?? 'unknown'}). Flutter input is blocked '
+              'until it is answered.',
+          dialog['answerable'] == false
+              ? 'ask the user to answer it; Scout never answers credential '
+                    'or Apple Account prompts'
+              : "answer it only when the task authorizes that answer: "
+                    "act {method:'system-tap', args:['<handle>']} with one "
+                    'of scene.view.systemDialog.buttons; or pre-grant with '
+                    '`flutter-scout --app <name> permissions grant '
+                    '<service>`, or ask the user. Scout never answers it by '
+                    'itself',
+        ),
+        'details': {
+          'reason': 'system_dialog',
+          'systemDialog': {
+            for (final key in const [
+              'platform',
+              'kind',
+              'title',
+              'owner',
+              'answerable',
+            ])
+              key: dialog[key],
+            'buttons': buttons,
+          },
+        },
+      };
     }
     if (!_live && !_driven) {
       return blocked(
@@ -1086,11 +1146,13 @@ class AgentSession {
   }
 
   AgentView start(int revision, AgentView action, {String? reactionId}) {
-    final decision = _authorize(
-      revision,
-      scopedTargets(action),
-      action['allowUnrelatedChanges'] == true,
-    );
+    final decision = action['method'] == 'system-tap'
+        ? _authorizeSystemTap(revision, action, reactionId: reactionId)
+        : _authorize(
+            revision,
+            scopedTargets(action),
+            action['allowUnrelatedChanges'] == true,
+          );
     if (_acting != null || _unacknowledgedAction != null) {
       final id = _pendingAction ?? _unacknowledgedAction;
       throw StateError(
@@ -1157,6 +1219,130 @@ class AgentSession {
     };
   }
 
+  /// A `system-tap` answers one native dialog: it needs a free hand, the
+  /// exact dialog observed at [revision] still shown, and a button of that
+  /// dialog that [systemTapAuthorization] allows. Flutter's own rendering
+  /// and safety state do not block it (the dialog is what covers the app).
+  /// The CLI probes the dialog again at dispatch.
+  AgentView _authorizeSystemTap(
+    int revision,
+    AgentView action, {
+    String? reactionId,
+  }) {
+    if (_closed || _halt != null) throw StateError(_stoppedMessage());
+    if (reactionId != null) {
+      throw AgentRejection(
+        'agent_system_tap_not_reactive',
+        'system-tap is never a reaction; an agent answers a dialog only by '
+            'its own decision. Nothing dispatched.',
+      );
+    }
+    final decision = revision == _revision ? _view : _history[revision];
+    final decided = _presentDialog(decision);
+    final args = action['args'];
+    final handle = args is List && args.length == 1 ? args.single : null;
+    final current = _systemDialog;
+    final refusal = systemTapAuthorization(
+      decided,
+      current,
+      handle is String ? handle : '',
+      dialogOwner: (action['params'] as Map?)?['dialogOwner'] as String?,
+    );
+    if (refusal != null) {
+      throw AgentRejection(
+        refusal.code,
+        '${refusal.message} Nothing dispatched.',
+        nextStep: refusal.code == 'agent_system_dialog_changed'
+            ? 'observe(), then decide again from scene.view.systemDialog'
+            : 'read scene.view.systemDialog; answer only a button it lists, '
+                  'or ask the user',
+        details: {
+          'observedRevision': revision,
+          'currentRevision': _revision,
+          'systemDialog': ?current,
+        },
+      );
+    }
+    return decision!;
+  }
+
+  /// Why a `system-tap` of [handle] decided on [decided] (the dialog in the
+  /// decision view) must not start while [current] is shown, or null. The
+  /// same rules as the CLI's dispatch-time check, on the observed facts.
+  static ({String code, String message})? systemTapAuthorization(
+    AgentView? decided,
+    AgentView? current,
+    String handle, {
+    String? dialogOwner,
+  }) {
+    if (decided == null) {
+      return (
+        code: 'agent_system_dialog_not_observed',
+        message:
+            'no system dialog was observed at that viewRevision; system-tap '
+            'answers only a dialog in scene.view.systemDialog.',
+      );
+    }
+    if (current == null || current['fingerprint'] != decided['fingerprint']) {
+      return (
+        code: 'agent_system_dialog_changed',
+        message: current == null
+            ? 'the observed system dialog is no longer shown.'
+            : 'a different system dialog is shown now ("${current['title']}").',
+      );
+    }
+    if (decided['answerable'] != true) {
+      return (
+        code: 'agent_system_dialog_refused',
+        message:
+            'Scout never answers credential, password or Apple Account '
+            'prompts ("${decided['title']}"); ask the user.',
+      );
+    }
+    Map? button;
+    var count = 0;
+    for (final candidate in decided['buttons'] as List? ?? const []) {
+      if (candidate is Map && candidate['handle'] == handle) {
+        button = candidate;
+        count++;
+      }
+    }
+    if (button == null) {
+      return (
+        code: 'agent_system_dialog_button_not_observed',
+        message:
+            '$handle is not a button of the observed dialog; its buttons '
+            'are ${[for (final b in decided['buttons'] as List? ?? const [])
+              if (b is Map) b['handle']].join(', ')}.',
+      );
+    }
+    if (count > 1 || button['ambiguous'] == true) {
+      return (
+        code: 'agent_system_dialog_button_ambiguous',
+        message:
+            'more than one button of the dialog is named $handle; Scout does '
+            'not guess which one is meant.',
+      );
+    }
+    final owner = decided['owner'] as Map?;
+    if (owner?['belongsToSessionApp'] != true) {
+      final name = owner?['name'] as String? ?? 'unknown';
+      if (dialogOwner != name) {
+        return (
+          code: 'agent_system_dialog_other_app',
+          message: owner?['belongsToSessionApp'] == false
+              ? 'the dialog belongs to "$name", not to this session\'s app; '
+                    'answer it only when the task covers that app, with '
+                    'params.dialogOwner: "$name".'
+              : 'Scout could not prove which app the dialog belongs to; '
+                    'answer it only when the task covers it, with '
+                    'params.dialogOwner: "unknown".',
+        );
+      }
+    }
+    return null;
+  }
+
   /// A received successful input receipt must be acknowledged before more
   /// input. Failed input additionally needs a fresh explicit reconciliation,
   /// except a delivered not_dispatched receipt, which already freed the hand.
@@ -1220,7 +1406,7 @@ class AgentSession {
         : revision != _revision || reads <= _receiptReadCount
         ? 'viewRevision $revision is not a fresh observation after the '
               'receipt; $retry'
-        : !_safe
+        : !_safe && _unsafeReason != 'system_dialog'
         ? 'the live view is unavailable '
               '(${_liveViewBlocker()!['reason']}); '
               '${_liveViewBlocker()!['nextStep']}, then $retry'
@@ -1386,7 +1572,14 @@ class AgentSession {
         continue;
       }
       if (!_safe) {
-        _finishJob(job, 'observation_unavailable');
+        // A native dialog over the app ends a wait with its own cause: the
+        // agent decides how to answer it; nothing waits through it.
+        _finishJob(
+          job,
+          _unsafeReason == 'system_dialog'
+              ? 'system_dialog'
+              : 'observation_unavailable',
+        );
         continue;
       }
       final reaction = job.reaction;

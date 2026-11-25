@@ -80,6 +80,11 @@
       "operation": "read",
       "persistentMethod": false
     },
+    "permissions": {
+      "surface": "machine",
+      "operation": "lifecycle",
+      "persistentMethod": false
+    },
     "reload": {
       "surface": "machine",
       "operation": "mutation",

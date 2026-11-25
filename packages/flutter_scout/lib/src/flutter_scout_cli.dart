@@ -13,6 +13,7 @@ import 'package:vm_service/vm_service.dart';
 import 'package:vm_service/vm_service_io.dart';
 
 import 'agent_session.dart';
+import 'system_dialog.dart';
 
 part 'cli_vm_connection.dart';
 part 'cli_typed_methods.dart';
@@ -48,6 +49,8 @@ part 'cli_macos_launch.dart';
 part 'cli_launch_diagnostics.dart';
 part 'cli_helper_pin.dart';
 part 'cli_headless.dart';
+part 'cli_system_dialog.dart';
+part 'cli_permissions.dart';
 
 Map<String, String> _flutterToolEnvironment([
   Map<String, String>? inherited,
@@ -1211,6 +1214,7 @@ class FlutterScoutCli {
         'restart' => _restart(rest),
         'deeplink' => _deeplink(rest),
         'logs' => _logs(rest),
+        'permissions' => _permissions(rest),
         'vm-log-listener' => _vmLogListener(rest),
         'flutter-run-worker' => _flutterRunWorker(rest),
         'screenshot' => _screenshot(rest),
@@ -2258,17 +2262,39 @@ print(String(data: data, encoding: .utf8)!)
       final id = item['id']?.toString();
       final name = item['name']?.toString();
       if (id == requested || name == requested) {
-        return _FlutterDevice(
-          id: id ?? requested,
-          name: name ?? requested,
-          platform: item['platform']?.toString(),
-          category: item['category']?.toString(),
-          emulator: item['emulator'] == true,
-        );
+        return _flutterDeviceFromMachine(item, requested);
       }
     }
     return null;
   }
+
+  /// One `flutter devices --machine` entry as a recorded device. Flutter
+  /// names the platform `targetPlatform` (`android-arm64`, `ios`) and has
+  /// no category; phones and emulators of those platforms are mobile.
+  static _FlutterDevice _flutterDeviceFromMachine(
+    Map<String, dynamic> item,
+    String requested,
+  ) {
+    final platform = (item['platform'] ?? item['targetPlatform'])?.toString();
+    final category =
+        item['category']?.toString() ??
+        (platform != null &&
+                (platform.startsWith('android') || platform == 'ios')
+            ? 'mobile'
+            : null);
+    return _FlutterDevice(
+      id: item['id']?.toString() ?? requested,
+      name: item['name']?.toString() ?? requested,
+      platform: platform,
+      category: category,
+      emulator: item['emulator'] == true,
+    );
+  }
+
+  /// Test seam for [_flutterDeviceFromMachine].
+  static Map<String, Object?> debugFlutterDeviceFromMachine(
+    Map<String, dynamic> item,
+  ) => _flutterDeviceFromMachine(item, '${item['id']}').toJson();
 
   String? _extractVmUri(String text) {
     final lines = text.split('\n').reversed;
@@ -2902,6 +2928,7 @@ print(String(data: data, encoding: .utf8)!)
     'help',
     'launch',
     'logs',
+    'permissions',
     'reload',
     'restart',
     'screenshot',
@@ -2917,7 +2944,7 @@ print(String(data: data, encoding: .utf8)!)
     }
     stdout.writeln('''Flutter Scout — agent-session interaction API
 
-Lifecycle: ensure, launch, attach, status, doctor, devices, apps, reload, restart, stop
+Lifecycle: ensure, launch, attach, status, doctor, devices, apps, reload, restart, stop, permissions
 Manual evidence: screenshot, crop, logs, health, evidence, annotations
 Interaction: flutter-scout --app <name> agent [--interval-ms 250] [--max-items 60] [--no-overlay]
 
@@ -2925,6 +2952,8 @@ Use the shipped scripts/agent_client.mjs in one persistent Node session, or
 its serve/call bridge from a shell-only agent.
 Agent protocol 2: observe, query, start, next, acknowledge, reconcile,
 foreground (macOS), watch, react, cancel, status, close. Images are manual.
+Native permission prompts on the iOS Simulator / Android emulator appear as
+scene.view.systemDialog; answer one only with act system-tap <sys.handle>.
 A ticket is not success. Consume the canonical receipt before another input.
 A not_dispatched receipt frees the hand. Other failed input requires fresh
 reconciliation; unknown dispatch stays halted.
@@ -3271,6 +3300,33 @@ const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
       ('--last <n>', 'Newest n lines (default 20, at most 1000).'),
       ('--contains <text>', 'Only lines containing this exact text.'),
       ('--summary', 'Error/warning counts, signals and important lines.'),
+    ],
+  ),
+  'permissions': _CommandHelp(
+    summary:
+        'Grant, revoke or reset app permissions on the iOS Simulator '
+        '(simctl privacy) or an Android emulator (pm grant/revoke, appops) '
+        'so no prompt appears. `permissions list` names the services. The '
+        'iOS Simulator has no notifications, tracking or Bluetooth service: '
+        'answer those prompts with the agent action system-tap.',
+    synopsis: <String>[
+      'permissions grant|revoke|reset <service>... [--app-id <id>] '
+          '[--device <id>] [--allow-app-termination]',
+      'permissions list [--device <id>]',
+    ],
+    options: <(String, String)>[
+      (
+        '--app-id <id>',
+        'Bundle id or package (default: the running session app).',
+      ),
+      (
+        '--device <id>',
+        'A booted simulator or emulator instead of the session device.',
+      ),
+      (
+        '--allow-app-termination',
+        'Allow a change that may terminate the running session app.',
+      ),
     ],
   ),
   'health': _CommandHelp(

@@ -1,0 +1,88 @@
+[
+  {
+    "type": "Application",
+    "role": "AXApplication",
+    "AXLabel": " ",
+    "pid": 12750,
+    "frame": {"x": 0, "y": 0, "width": 402, "height": 874},
+    "children": [
+      {
+        "type": "Group",
+        "role": "AXGroup",
+        "AXLabel": "Scout Test App",
+        "AXUniqueId": "card:com.example.scoutTestApp:sceneID:com.example.scoutTestApp-default",
+        "frame": {"x": 0, "y": 0, "width": 402, "height": 874},
+        "children": [
+          {
+            "type": "Button",
+            "role": "AXButton",
+            "AXLabel": "Request camera",
+            "frame": {"x": 32, "y": 180, "width": 160, "height": 40},
+            "enabled": true,
+            "children": []
+          }
+        ]
+      },
+      {
+        "type": "Group",
+        "role": "AXGroup",
+        "frame": {"x": 0, "y": 0, "width": 402, "height": 874},
+        "children": [
+          {
+            "type": "Sheet",
+            "role": "AXSheet",
+            "AXLabel": "“Scout Test App” would like to access the Camera.",
+            "pid": 12750,
+            "frame": {"x": 41, "y": 301.3, "width": 320, "height": 299.3},
+            "children": [
+              {
+                "type": "StaticText",
+                "role": "AXStaticText",
+                "AXLabel": "“Scout Test App” would like to access the Camera.",
+                "frame": {"x": 71, "y": 416.7, "width": 260, "height": 47},
+                "children": []
+              },
+              {
+                "type": "StaticText",
+                "role": "AXStaticText",
+                "AXLabel": "Scout system-dialog verification requests camera access.",
+                "frame": {"x": 71, "y": 473.7, "width": 260, "height": 42.3},
+                "children": []
+              },
+              {
+                "type": "Slider",
+                "role": "AXSlider",
+                "AXLabel": "Vertical scroll bar, 1 page",
+                "frame": {"x": 328, "y": 301.3, "width": 30, "height": 219.3},
+                "children": []
+              },
+              {
+                "type": "Group",
+                "role": "AXGroup",
+                "frame": {"x": 41, "y": 520.7, "width": 320, "height": 80},
+                "children": [
+                  {
+                    "type": "Button",
+                    "role": "AXButton",
+                    "AXLabel": "Don’t Allow",
+                    "frame": {"x": 57, "y": 536.7, "width": 140, "height": 48},
+                    "enabled": true,
+                    "children": []
+                  },
+                  {
+                    "type": "Button",
+                    "role": "AXButton",
+                    "AXLabel": "Allow",
+                    "frame": {"x": 205, "y": 536.7, "width": 140, "height": 48},
+                    "enabled": true,
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]
