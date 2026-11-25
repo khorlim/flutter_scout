@@ -336,6 +336,12 @@ extension _CliResponse on FlutterScoutCli {
       success: success,
       commandName: commandName,
     );
+    final launchFailure = _launchFailureReport(envelope);
+    if (launchFailure != null) {
+      envelope = {...envelope, ...launchFailure.fields};
+      // One typed stderr record whose `cause` is a human sentence.
+      _writeProgress('launch_failed', {'cause': launchFailure.line});
+    }
     final retainFinal =
         _singleJsonOutput && envelope['messageType'] != 'warning';
     if (_singleJsonOutput) pretty = false;

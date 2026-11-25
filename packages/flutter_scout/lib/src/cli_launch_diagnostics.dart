@@ -143,6 +143,43 @@ String _launchFailureMessage({
   };
 }
 
+/// The cause fields of a failed `launch` or `ensure` response and one short
+/// human sentence for stderr, or null for any other response. Waits that end
+/// in the launch loop already set `failureMode`/`failureCause`; a rejected
+/// precondition or a thrown launch step gets them from its structured error,
+/// so no failed launch ends without a findable cause.
+({Map<String, Object?> fields, String line})? _launchFailureReport(
+  Map<String, Object?> envelope,
+) {
+  if (envelope['ok'] != false ||
+      envelope['messageType'] != 'response' ||
+      !const {'launch', 'ensure'}.contains(envelope['commandName'])) {
+    return null;
+  }
+  final error = envelope['structuredError'];
+  final code = error is Map ? error['code']?.toString() : null;
+  final message = error is Map ? error['message']?.toString() : null;
+  final mode = envelope['failureMode']?.toString() ?? 'launch_error';
+  final cause = envelope['failureCause'] is Map
+      ? Map<String, Object?>.from(envelope['failureCause'] as Map)
+      : <String, Object?>{
+          'cause': code ?? 'launch_failed',
+          'evidence': message ?? 'The launch ended without a recorded reason.',
+          'hint':
+              'Fix this cause before retrying; a blind relaunch repeats it.',
+        };
+  var text = (message ?? '${cause['evidence']}')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (!text.startsWith('Launch failed')) {
+    text = 'Launch failed ($mode, ${cause['cause']}): $text';
+  }
+  return (
+    fields: {'failureMode': mode, 'failureCause': cause},
+    line: text.length > 300 ? '${text.substring(0, 297)}...' : text,
+  );
+}
+
 extension _CliLaunchDiagnostics on FlutterScoutCli {
   /// Fails fast for a shut-down iOS Simulator instead of waiting for Flutter
   /// to report that no device matched.
@@ -202,6 +239,13 @@ extension FlutterScoutCliLaunchDiagnosticsTesting on FlutterScoutCli {
 
   Map<String, Object?>? debugClassifyLaunchFailure(List<String> lines) =>
       _classifyLaunchFailure(lines)?.toJson();
+
+  Map<String, Object?>? debugLaunchFailureReport(
+    Map<String, Object?> envelope,
+  ) {
+    final report = _launchFailureReport(envelope);
+    return report == null ? null : {...report.fields, 'line': report.line};
+  }
 
   String? debugSimulatorState(String simctlJson, String udid) =>
       _simulatorState(simctlJson, udid);

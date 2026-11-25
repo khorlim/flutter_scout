@@ -763,15 +763,30 @@ extension _CliSession on FlutterScoutCli {
         // The app runs but Scout cannot use it yet; ok:true here made agents
         // scrape logs and attach by hand. The session stays owned, so a
         // later `ensure` or `status` re-checks readiness without relaunching.
-        if (!ready.ready)
+        if (!ready.ready) ...{
           'error': <String, Object?>{
             'code': ready.reason,
             'message':
-                'The app launched but the Scout helper was not reachable '
-                'within 20s (${ready.reason}). Run `flutter-scout --app '
-                '<name> status`; if it reports ready, continue. Otherwise '
-                'check that main() calls ${ready.expected}.',
+                'Launch failed (helper_not_ready): the app is running and '
+                'its VM service is up, but the Scout helper did not answer '
+                'within 20s (${ready.reason}). On a loaded machine it may '
+                'still be starting: run `flutter-scout --app '
+                '${instanceName ?? '<name>'} status` before relaunching; '
+                'continue if it reports ready. If it never does, check that '
+                'main() calls ${ready.expected}.',
           },
+          // The run stays owned and reachable; a relaunch rebuilds it.
+          'failureMode': 'helper_not_ready',
+          'failureCause': <String, Object?>{
+            'cause': ready.reason,
+            'evidence':
+                'The VM service answered, but the helper check still '
+                'reported ${ready.reason} after 20s.',
+            'hint':
+                'Run status before launch --replace; the app may only be slow '
+                'to start.',
+          },
+        },
         'device': resolvedDevice.id,
         'deviceName': resolvedDevice.name,
         'deviceCategory': resolvedDevice.category,

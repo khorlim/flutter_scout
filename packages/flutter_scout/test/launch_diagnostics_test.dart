@@ -23,6 +23,52 @@ void main() {
     expect(cli.debugProcessTreeCpuSeconds(ps, 999), isNull);
   });
 
+  test('a failed launch or ensure always names its cause', () {
+    // A thrown launch step carries only its structured error.
+    final rejected = cli.debugLaunchFailureReport({
+      'messageType': 'response',
+      'ok': false,
+      'commandName': 'launch',
+      'structuredError': {
+        'code': 'flutter_runner_pid_not_found',
+        'message': 'Flutter did not confirm its hot-update handlers.',
+      },
+    })!;
+    expect(rejected['failureMode'], 'launch_error');
+    expect(
+      rejected['failureCause'],
+      containsPair('cause', 'flutter_runner_pid_not_found'),
+    );
+    expect(
+      rejected['line'],
+      'Launch failed (launch_error, flutter_runner_pid_not_found): '
+      'Flutter did not confirm its hot-update handlers.',
+    );
+    // A wait that set its own mode and cause keeps them.
+    final waited = cli.debugLaunchFailureReport({
+      'messageType': 'response',
+      'ok': false,
+      'commandName': 'ensure',
+      'failureMode': 'helper_not_ready',
+      'failureCause': {'cause': 'helper_extension_check_timeout'},
+      'structuredError': {
+        'code': 'helper_extension_check_timeout',
+        'message': 'Launch failed (helper_not_ready): run status first.',
+      },
+    })!;
+    expect(waited['failureMode'], 'helper_not_ready');
+    expect(
+      waited['line'],
+      'Launch failed (helper_not_ready): run status first.',
+    );
+    for (final other in [
+      {'messageType': 'response', 'ok': true, 'commandName': 'launch'},
+      {'messageType': 'response', 'ok': false, 'commandName': 'status'},
+    ]) {
+      expect(cli.debugLaunchFailureReport(other), isNull);
+    }
+  });
+
   test('launch failures are classified from the runner log', () {
     Map<String, Object?>? classify(String line) =>
         cli.debugClassifyLaunchFailure([
