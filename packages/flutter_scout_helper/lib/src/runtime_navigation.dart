@@ -14,6 +14,15 @@ int _nodeInstanceCounter = 0;
 // Handle of each control instance in the latest snapshot, for sticky
 // duplicate numbering (see _disambiguateIds).
 final Map<int, String> _previousNodeHandles = <int, String>{};
+// Title evidence of each observed text (see _recordTitleEvidence).
+final Expando<({String? role, double? fontSize, bool inControl})>
+_titleEvidence = Expando<({String? role, double? fontSize, bool inControl})>(
+  'flutter_scout_title',
+);
+// The name each mounted surface instance was given, kept for its lifetime.
+final Map<int, ({String label, String screen, String source, bool titled})>
+_surfaceNames =
+    <int, ({String label, String screen, String source, bool titled})>{};
 
 final Expando<_NavigationState> _navigationStateByRuntime =
     Expando<_NavigationState>('flutter_scout_navigation');

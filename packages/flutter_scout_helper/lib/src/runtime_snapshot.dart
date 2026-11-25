@@ -872,13 +872,17 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       visibleText: visibleText,
       textTargets: textTargets,
       logicalSize: logicalSize,
+      fallbackType: modalScreenName,
     );
     // The surface's label and screen name are guessed from its text, which
     // may be a display the user is typing into; its instance number says
     // whether it is still the same mounted dialog or sheet.
     if (activeSurface != null && viewportOverlays.isNotEmpty) {
       final instance = viewportOverlays.last['instance'];
-      if (instance is int) activeSurface['instance'] = instance;
+      if (instance is int) {
+        activeSurface['instance'] = instance;
+        _keepSurfaceName(instance, activeSurface);
+      }
     }
     // No *Screen/*Page widget (common for bottom sheets, dialogs, and
     // custom-named order/checkout surfaces) would otherwise leave `screen`
@@ -1571,6 +1575,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     required Set<String> visibleText,
     required List<ScoutNode> textTargets,
     required Size logicalSize,
+    String? fallbackType,
   }) {
     if (!modalActive || (textTargets.isEmpty && visibleText.isEmpty)) {
       return null;
@@ -1579,9 +1584,37 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       overlays: overlays,
       textTargets: textTargets,
       logicalSize: logicalSize,
+      fallbackType: fallbackType,
     );
     if (overlaySurface != null) return overlaySurface;
     final contentStartOrdinal = _modalContentStartOrdinal(overlays);
+    final surfaceTexts = [
+      for (final node in textTargets)
+        if (node.hitTestable &&
+            (contentStartOrdinal == null ||
+                (node._treeOrdinal ?? -1) >= contentStartOrdinal))
+          node,
+    ];
+    final titled = _structuralSurfaceTitle(surfaceTexts);
+    final typeName = _usableSurfaceType(fallbackType);
+    if (titled != null || typeName != null) {
+      final anchor = titled?.node;
+      // A stated title is shown as written.
+      final label = titled == null ? typeName! : anchor!.label!.trim();
+      return {
+        'kind': 'modal',
+        'label': label,
+        'screen': titled == null
+            ? typeName!
+            : '${_pascalCaseSurfaceName(label, stated: true)}Surface',
+        if (anchor?._treeOrdinal != null) 'anchorOrdinal': anchor!._treeOrdinal,
+        if (anchor?.rect case final rect?)
+          'anchorRect': [rect.left, rect.top, rect.width, rect.height],
+        'source': titled?.source ?? 'widgetType',
+        'heuristicScore': titled == null ? 0.7 : 0.95,
+        'scoreKind': 'uncalibrated_heuristic',
+      };
+    }
     final candidates = [
       for (final node in textTargets)
         if (node.rect case final rect?)
@@ -1675,6 +1708,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     required List<Map<String, Object?>> overlays,
     required List<ScoutNode> textTargets,
     required Size logicalSize,
+    String? fallbackType,
   }) {
     for (final overlay in overlays.reversed) {
       if (overlay['kind'] == 'modalBarrier') continue;
@@ -1691,10 +1725,17 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
         region: rect,
         fallbackLabel: overlay['label']?.toString(),
         logicalSize: logicalSize,
+        fallbackType: fallbackType,
       );
       final label = title?.label.trim();
       if (label == null || label.isEmpty) continue;
-      final displayLabel = _surfaceDisplayLabel(label);
+      final typed = title?.source == 'widgetType';
+      // A stated title or a type is shown as written; only a guess from the
+      // surface's text drops filler words.
+      final displayLabel =
+          typed || _titledSurfaceSources.contains(title?.source)
+          ? label
+          : _surfaceDisplayLabel(label);
       final anchors =
           [
             for (final node in surfaceTextTargets)
@@ -1708,7 +1749,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       return {
         'kind': 'modal',
         'label': displayLabel,
-        'screen': '${_pascalCaseSurfaceName(displayLabel)}Surface',
+        'screen': typed
+            ? displayLabel
+            : '${_pascalCaseSurfaceName(displayLabel, stated: _titledSurfaceSources.contains(title?.source))}Surface',
         if (anchor?._treeOrdinal != null) 'anchorOrdinal': anchor!._treeOrdinal,
         if (anchor?.rect case final rect?)
           'anchorRect': [rect.left, rect.top, rect.width, rect.height],
@@ -1735,7 +1778,30 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     required Rect? region,
     required String? fallbackLabel,
     required Size logicalSize,
+    String? fallbackType,
   }) {
+    final titled = _structuralSurfaceTitle([
+      for (final node in textTargets)
+        if (node.rect case final rect?)
+          if ((region != null || node.hitTestable) &&
+              (region == null ||
+                  region.contains(rect.center) ||
+                  rect.overlaps(region)))
+            node,
+    ]);
+    if (titled != null) {
+      return (
+        label: titled.node.label!.trim(),
+        source: titled.source,
+        confidence: titled.source == 'heading' ? 0.85 : 0.95,
+      );
+    }
+    // No title: the surface's own widget type names it better than
+    // whichever text happens to come first.
+    final typeName = _usableSurfaceType(fallbackType);
+    if (typeName != null) {
+      return (label: typeName, source: 'widgetType', confidence: 0.7);
+    }
     final fallback = fallbackLabel?.trim();
     if (fallback != null && _surfaceLabelScore(fallback) > 0) {
       return (label: fallback, source: 'overlayLabel', confidence: 0.9);
@@ -1763,6 +1829,108 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final label = candidates.first.label?.trim();
     if (label == null || label.isEmpty) return null;
     return (label: label, source: 'regionTitle', confidence: 0.78);
+  }
+
+  /// The title a surface states structurally (an app bar or dialog title,
+  /// a Semantics header), else its one most prominent heading: text at
+  /// least 16 points and 2 points larger than its common text. Null when
+  /// the surface has neither, such as a sheet whose app bar holds only a
+  /// segmented control.
+  ({ScoutNode node, String source})? _structuralSurfaceTitle(
+    List<ScoutNode> texts,
+  ) {
+    final candidates = [
+      for (final node in texts)
+        if (node.rect != null &&
+            node.visibleFraction > 0 &&
+            _surfaceLabelScore(node.label ?? '') > 0 &&
+            node._renderObject != null &&
+            _titleEvidence[node._renderObject] != null)
+          node,
+    ];
+    if (candidates.isEmpty) return null;
+    int byTop(ScoutNode a, ScoutNode b) => a.rect!.top.compareTo(b.rect!.top);
+    final roles = [
+      for (final node in candidates)
+        if (_titleEvidence[node._renderObject!]!.role != null) node,
+    ]..sort(byTop);
+    if (roles.isNotEmpty) {
+      return (
+        node: roles.first,
+        source: _titleEvidence[roles.first._renderObject!]!.role!,
+      );
+    }
+    // A control's label (a segment pill in the app bar) is not a heading.
+    double? size(ScoutNode node) {
+      final evidence = _titleEvidence[node._renderObject!]!;
+      return evidence.inControl ? null : evidence.fontSize;
+    }
+
+    final counts = <double, int>{};
+    for (final node in candidates) {
+      final value = size(node);
+      if (value != null) counts.update(value, (n) => n + 1, ifAbsent: () => 1);
+    }
+    if (counts.length < 2) return null;
+    final body = counts.entries.reduce((a, b) => b.value > a.value ? b : a).key;
+    final largest = counts.keys.reduce((a, b) => a > b ? a : b);
+    if (largest < 16 || largest < body + 2) return null;
+    final letters = RegExp(r'\p{L}', unicode: true);
+    final digits = RegExp(r'\d');
+    final headings = [
+      for (final node in candidates)
+        if (size(node) == largest &&
+            letters.allMatches(node.label!).length >=
+                digits.allMatches(node.label!).length)
+          node,
+    ]..sort(byTop);
+    return headings.isEmpty ? null : (node: headings.first, source: 'heading');
+  }
+
+  /// A content widget type that names a surface with no title, such as
+  /// `MemberListScreen`; generic surface kinds do not.
+  String? _usableSurfaceType(String? type) {
+    if (type == null || type.isEmpty) return null;
+    if (_genericModalSurfaceNames.contains(type) || type == 'RootWidget') {
+      return null;
+    }
+    return type;
+  }
+
+  static const Set<String> _titledSurfaceSources = {
+    'appBarTitle',
+    'dialogTitle',
+    'header',
+    'heading',
+  };
+
+  /// A surface keeps the name it was first given while it stays mounted, so
+  /// a picker does not turn from "Car" into "Zern Yet" as its list loads.
+  /// A guessed name (widget type, first text) is replaced once, when the
+  /// surface's title appears.
+  void _keepSurfaceName(int instance, Map<String, Object?> surface) {
+    final titled = _titledSurfaceSources.contains(surface['source']);
+    final kept = _surfaceNames[instance];
+    if (kept != null && (kept.titled || !titled)) {
+      surface
+        ..['label'] = kept.label
+        ..['screen'] = kept.screen
+        ..['source'] = kept.source;
+      return;
+    }
+    final label = surface['label'];
+    final screen = surface['screen'];
+    final source = surface['source'];
+    if (label is! String || screen is! String || source is! String) return;
+    _surfaceNames[instance] = (
+      label: label,
+      screen: screen,
+      source: source,
+      titled: titled,
+    );
+    if (_surfaceNames.length > 32) {
+      _surfaceNames.remove(_surfaceNames.keys.first);
+    }
   }
 
   static const Set<String> _genericModalSurfaceNames = {
@@ -1849,7 +2017,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     }.contains(slug);
   }
 
-  String _pascalCaseSurfaceName(String label) {
+  String _pascalCaseSurfaceName(String label, {bool stated = false}) {
     final slug = _scoutSlug(label.replaceAll(RegExp(r'\([^)]*\)'), ''));
     final parts = slug
         .split('_')
@@ -1857,7 +2025,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           (part) =>
               part.isNotEmpty &&
               !RegExp(r'^\d+$').hasMatch(part) &&
-              !_surfaceNameStopWords.contains(part),
+              (stated || !_surfaceNameStopWords.contains(part)),
         );
     final buffer = StringBuffer();
     for (final part in parts) {

@@ -1,5 +1,17 @@
 ## Unreleased
 
+* A dialog, sheet or modal page is named from its stated title: an AppBar,
+  SliverAppBar or Cupertino navigation bar title, a dialog or action sheet
+  title, or a `Semantics(header: true)` (`source: appBarTitle`,
+  `dialogTitle`, `header`), shown as written; else from its one prominent
+  heading (16 pt or more and 2 pt above its common text, `source:
+  heading`); else from its content widget type (`MemberListScreen`,
+  `source: widgetType`). Only then do the old first-text guesses apply.
+  Text inside a control (a segment pill in an app bar) is never a title. A
+  surface keeps its name while it stays mounted (`instance`); a guessed name
+  is replaced once, when a title appears. Before: a member profile was
+  "OutstandingSurface", an item sheet "QuantitySurface", a member picker
+  "CarSurface" then "ZernYetSurface".
 * Duplicate handle numbering is sticky. A control that held `btn.x` or
   `btn.x_2` in the previous snapshot keeps it while it stays mounted; only
   newcomers take the lowest free number in screen order. Adding a cart row

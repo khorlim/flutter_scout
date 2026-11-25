@@ -267,6 +267,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final controlState = kind == 'text'
         ? const <String, bool>{}
         : _controlStateFor(element, widget);
+    if (kind == 'text') _recordTitleEvidence(element);
     return ScoutNode(
       id: baseId,
       baseId: baseId,
@@ -310,6 +311,62 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       textColor: kind == 'btn' || kind == 'tap'
           ? _effectiveTextColor(element)
           : null,
+    );
+  }
+
+  /// Whether a text is a surface's title, and how prominent it is: the title
+  /// slot of an AppBar, SliverAppBar, Cupertino navigation bar, dialog or
+  /// action sheet, or a `Semantics(header: true)` just above it. A text
+  /// inside a control in that slot (a segment pill used as a title) is not a
+  /// title. Kept beside the text's render object for surface naming.
+  void _recordTitleEvidence(Element element) {
+    final paragraph = element.renderObject;
+    if (paragraph is! RenderParagraph) return;
+    final path = <Widget>[element.widget];
+    String? role;
+    var inControl = false;
+    var depth = 0;
+    element.visitAncestorElements((ancestor) {
+      final widget = ancestor.widget;
+      if (_isPressableControlWidget(widget)) {
+        inControl = true;
+        return false;
+      }
+      // AppBar marks its title a header too; keep walking to credit the bar.
+      if (widget is Semantics &&
+          widget.properties.header == true &&
+          depth < 4) {
+        role ??= 'header';
+      }
+      final (Widget? slot, String? kind) = switch (widget) {
+        AppBar(:final title) => (title, 'appBarTitle'),
+        SliverAppBar(:final title) => (title, 'appBarTitle'),
+        CupertinoNavigationBar(:final middle) => (middle, 'appBarTitle'),
+        CupertinoSliverNavigationBar(:final largeTitle) => (
+          largeTitle,
+          'appBarTitle',
+        ),
+        AlertDialog(:final title) => (title, 'dialogTitle'),
+        SimpleDialog(:final title) => (title, 'dialogTitle'),
+        CupertinoAlertDialog(:final title) => (title, 'dialogTitle'),
+        CupertinoActionSheet(:final title) => (title, 'dialogTitle'),
+        _ => (null, null),
+      };
+      if (kind != null) {
+        if (slot != null && path.any((seen) => identical(seen, slot))) {
+          role = kind;
+        }
+        return false;
+      }
+      if (widget is Overlay || widget is Navigator) return false;
+      path.add(widget);
+      return ++depth < 40;
+    });
+    final style = paragraph.text.style;
+    _titleEvidence[paragraph] = (
+      role: role,
+      fontSize: style?.fontSize,
+      inControl: inControl,
     );
   }
 
