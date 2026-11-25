@@ -119,6 +119,14 @@ intervening alert in `events` and only count plain view updates
 `enabled:false` when Flutter knows it is off (null onPressed/onTap/onChanged,
 `Semantics(enabled: false)`, a read-only field); a button whose handler is set
 but ignores taps (app-side validation) still reports `enabled:true`.
+State Flutter knows is on the control too: `selected` (tab, chip, segment,
+navigation destination, list tile, or the umbrella "on" fact), `checked`
+(checkbox, radio), `toggled` (switch) and `expanded` (expansion tile), from
+the widget or its `Semantics`. A state the app only paints (a coloured
+border around a "points" chip, a segment thumb drawn by a custom pill bar)
+has no such field: read it from a screenshot or crop, and suggest the app
+add `Semantics(selected: ...)` to that control. `instance` is a number per
+mounted control; it only tells two controls with one handle apart.
 
 After every input that dispatched, act waits until the passive eyes see
 no view change for two samples (at most 3 s) before taking the returned
@@ -212,8 +220,22 @@ Prefer exact observed handles, then unique visible text. Ambiguity requires
 focused discovery, not another guess. When duplicates match but only one can
 take input (the others sit behind the open sheet or dialog, or are off
 screen), that one is used and the resolution's `reason` says so.
-Icon-only controls are named from their icon (`btn.cart`): Material/Cupertino
-glyphs, and bundled PNG or SVG asset file names. For forms, `fill` takes an observed
+A control is named from its own visible text, however deep the app draws
+it (`btn.thai_yoga`, `btn.advanced_edit`), or its `Semantics` label; a
+switch or checkbox from its list tile title or the caption stacked above
+it (`btn.roundup`). Symbols that change meaning stay in the handle
+(`<180 days` is `tap.lt_180_days`, `>180 days` is `tap.gt_180_days`). Only
+an app-chosen string key replaces the name (`ValueKey('save_button')` is
+`btn.save_button`); GlobalKeys and numeric keys never do. Icon-only
+controls are named from their icon (`btn.cart`): Material/Cupertino
+glyphs, and bundled PNG or SVG asset file names.
+Equal names are numbered in screen order (`btn.save`, `btn.save_2`), and a
+number stays with its control while that control is mounted: a cart row
+that appears above a grid tile of the same name becomes `btn.thai_yoga_2`
+and the tile keeps `btn.thai_yoga`. When a handle you decided on now names
+another control (the old one was replaced), the input is refused as stale
+(`target <id> changed`, `staleChanges` shows the `instance` change) instead
+of landing on the new one; observe and decide again. For forms, `fill` takes an observed
 field-to-value map: `{method:'fill', params:{json:{[fieldHandle]:value}}}`.
 For one field, use `{method:'input', args:[value], params:{target:fieldHandle}}`.
 The input target belongs in `params.target`, not in `args`. Omitting it types
@@ -242,7 +264,11 @@ observed handle, or scroll/swipe with `params.target`) can add
 `"allowUnrelatedChanges": true` beside `method`. It still dispatches only if
 every target is unchanged, enabled and hit-testable on the same surface; the
 app's hit test then checks nothing covers it. A rejection names the cause in
-`details.staleReason`. Use it only for changes you have judged unrelated.
+`details.staleReason` and lists each changed field with its observed and
+current value in `details.staleChanges` (for example
+`{field:'rendering.lifecycle', before:'resumed', after:'hidden'}`, or the
+texts and controls that `appeared` and `disappeared`). Use it only for
+changes you have judged unrelated.
 Keypads, PIN pads and steppers: send the keys in one `taps` call (bridge
 `taps {viewRevision, targets, allowUnrelatedChanges}`, client
 `scout.taps(revision, targets, {allowUnrelatedChanges: true})`, 1 to 32

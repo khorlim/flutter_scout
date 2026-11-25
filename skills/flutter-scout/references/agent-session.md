@@ -291,8 +291,13 @@ accepted too (a sync toast, a live list, a keypad display the previous key
 press updated, a suggestion sliding in), as long as run, screen, surface,
 rendering, errors and field values are unchanged and every target is
 identical, enabled and hit-testable. A dialog or sheet is the same surface
-while it stays mounted (`activeSurface.instance`), even when its guessed name
-follows the text typed into it. Whether something now covers a target is
+while it stays mounted (`activeSurface.instance`) and keeps its name for
+that time. It is named from its stated title (an app bar, navigation bar or
+dialog title, a `Semantics` header; `source` `appBarTitle`, `dialogTitle`,
+`header`), else its one prominent heading (`heading`), else its content
+widget type (`widgetType`, such as `MemberListScreen`), and only then from
+its first text. A control's `instance` works the same way: a handle whose
+`instance` changed names another control, so a decision on it is stale. Whether something now covers a target is
 decided by the app's hit test at dispatch. Text-target, coordinate,
 navigation and deeplink actions need the exact revision. A rejection names
 its cause in `details.staleReason`. Fresh CLI preflight verifies
