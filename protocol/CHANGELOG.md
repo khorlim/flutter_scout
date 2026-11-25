@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Additive values, helper wire protocol unchanged at 15: the client's
+  `settle.status` adds `unchanged` (the input changed nothing within one
+  eyes interval); a mutation's `stability.stoppingReason` can be
+  `late_change_observed` (state `transient`, not `expectationMet`) when a
+  late-wait round stops on the change; `tap-text` receipts carry the
+  helper's `timings.phases` and `helperTotalMs` like `tap`.
 - Additive helper fields (helper wire protocol unchanged at 15): interactables
   may carry `checked`, `toggled` and `expanded` beside `selected`, and an
   `instance` number per mounted control; `delta.controlStateChanges` includes
