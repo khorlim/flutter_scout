@@ -62,8 +62,8 @@ accessible because all parts share one library).
 | `runtime_internals.dart` | Low-level pointer dispatch, tree walk, factual before/after delta, and `_ok`/`_fail` routing. |
 | `runtime_privacy.dart` | Earliest-source sensitive-field classification, value tokens, recursive response redaction, and recorder/action echo protection. |
 | `runtime_recorder.dart` | In-app flow capture plus private, atomic, lock-serialized helper persistence with safe CLI delegation. |
-| `driving_overlay.dart` | **"Scout is driving" overlay** for people watching an agent: presence lease (`ext.flutter_scout.agentOverlay`), one OverlayEntry with a CustomPainter in a RepaintBoundary, one Ticker (muted while a mutation runs and subtracted from stability signals via `_appTransientCallbackCount`), capture hiding, and the input hooks called from the dispatch paths. Pruned from every Scout walk by its `_FlutterScout` name. |
-| `annotation_overlay.dart` | Overlay widgets: toggle pill, comment panel, pin popup, animated pin reticles, target painter. |
+| `driving_overlay.dart` | **"Scout is driving" overlay** for people watching an agent: presence lease (`ext.flutter_scout.agentOverlay`), one OverlayEntry with a CustomPainter in a RepaintBoundary, one Ticker (muted while a mutation runs and subtracted from stability signals via `_appTransientCallbackCount`), debug-only rebuild/paint hooks that let the idle snapshot cache survive overlay-only frames, capture hiding, and the input hooks called from the dispatch paths. Pruned from every Scout walk by its `_FlutterScout` name. |
+| `annotation_overlay.dart` | Overlay widgets: session label (also the agent's controlling/observing indicator), toggle pill, comment panel, pin popup, animated pin reticles, target painter. |
 | `scout_design.dart` | The **"Recon HUD" design system** — tokens (`ScoutColors`/`Space`/`Radius`/`Type`/`Motion`) + primitives (`ScoutPanel`/`Button`/`Pill`/`Field`). Use it, not Material, for Scout chrome. See `docs/scout-design-system.md`. |
 | `models.dart` | Data types: `ScoutSnapshot`, `ScoutNode`, `ScoutAnnotation`, `ScoutAnnotationTarget`, `_CaptureResult`, … |
 
