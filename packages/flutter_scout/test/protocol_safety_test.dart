@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_scout/flutter_scout.dart';
 import 'package:crypto/crypto.dart' as crypto;
@@ -726,7 +727,8 @@ void main() {
           final receipt =
               (registry['records'] as Map<String, dynamic>).values.single
                   as Map<String, dynamic>;
-          expect(receipt['phase'], 'outcome_unknown');
+          expect(receipt['phase'], 'committed_nonreplayable');
+          expect(receipt['dispatch'], 'dispatched');
           expect(
             receipt['outcomeUnavailableReason'],
             'bounded_outcome_storage_limit',
@@ -762,6 +764,199 @@ void main() {
       expect(localDispatches, 1);
       expect(fake.dispatchCount, 0);
     });
+
+    test(
+      'a long session of large known outcomes keeps accepting input',
+      () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        var localDispatches = 0;
+
+        await _withProtocolSession(fake.uri, () async {
+          for (var index = 0; index < 2000; index++) {
+            final result = await _largeLocalMutation(
+              'long-session-$index',
+              onDispatch: () => localDispatches += 1,
+            );
+            expect(result['ok'], isTrue, reason: 'index=$index $result');
+            expect(result['dispatch'], 'dispatched', reason: 'index=$index');
+          }
+          final records = _readIdempotencyRecords();
+          expect(records.length, lessThanOrEqualTo(512));
+          expect(
+            records.values.map((receipt) => (receipt as Map)['phase']).toSet(),
+            {'committed_nonreplayable'},
+          );
+        });
+
+        expect(localDispatches, 2000);
+      },
+      timeout: const Timeout(Duration(minutes: 5)),
+    );
+
+    test(
+      'a retried known-dispatch key is refused, never redispatched',
+      () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        var localDispatches = 0;
+
+        await _withProtocolSession(fake.uri, () async {
+          for (var index = 0; index < 600; index++) {
+            await _largeLocalMutation(
+              'retry-$index',
+              onDispatch: () => localDispatches += 1,
+            );
+          }
+          final records = _readIdempotencyRecords();
+          expect(records, isNot(contains(_keyDigest('retry-0'))));
+          expect(records, contains(_keyDigest('retry-599')));
+
+          // Compacted into the tombstone filter: refused, outcome unknown.
+          final compacted = await _largeLocalMutation(
+            'retry-0',
+            onDispatch: () => localDispatches += 1,
+          );
+          expect(compacted['ok'], isFalse);
+          expect(
+            (compacted['error'] as Map)['code'],
+            'idempotency_outcome_pruned',
+          );
+          expect(compacted['dispatch'], 'dispatch_outcome_unknown');
+
+          // Still stored without its outcome: already dispatched, not replayed.
+          final retained = await _largeLocalMutation(
+            'retry-599',
+            onDispatch: () => localDispatches += 1,
+          );
+          expect(retained['ok'], isFalse);
+          expect(
+            (retained['error'] as Map)['code'],
+            'idempotency_outcome_not_stored',
+          );
+          expect(retained['dispatch'], 'dispatched');
+          expect(
+            (retained['idempotency'] as Map)['status'],
+            'committed_nonreplayable',
+          );
+
+          // A registry written by an older CLI keeps a 2^16-bit filter; a key it
+          // remembers must still be refused after the filter is upscaled.
+          const legacyKey = 'legacy-filter-key';
+          final legacy = Uint8List(65536 ~/ 8);
+          final hash = crypto.sha256
+              .convert(utf8.encode(_keyDigest(legacyKey)))
+              .bytes;
+          for (var offset = 0; offset < 16; offset += 4) {
+            final value =
+                (hash[offset] << 24) |
+                (hash[offset + 1] << 16) |
+                (hash[offset + 2] << 8) |
+                hash[offset + 3];
+            final position = value & 0xffff;
+            legacy[position ~/ 8] |= 1 << (position % 8);
+          }
+          final registryFile = File(_idempotencyRegistryPath);
+          final registry =
+              jsonDecode(registryFile.readAsStringSync())
+                  as Map<String, dynamic>;
+          registry['tombstoneFilter'] = base64UrlEncode(legacy);
+          registryFile.writeAsStringSync(jsonEncode(registry));
+          final legacyRetry = await _largeLocalMutation(
+            legacyKey,
+            onDispatch: () => localDispatches += 1,
+          );
+          expect(
+            (legacyRetry['error'] as Map)['code'],
+            'idempotency_outcome_pruned',
+          );
+        });
+
+        expect(localDispatches, 600);
+      },
+    );
+
+    test(
+      'an unknown-dispatch receipt is never evicted to make room',
+      () async {
+        final fake = await _FakeVmService.start();
+        addTearDown(fake.close);
+        var unknownDispatches = 0;
+
+        await _withProtocolSession(fake.uri, () async {
+          Future<Map<String, dynamic>> unknown(String key) =>
+              FlutterScoutCli().debugDurableLocalMutation(
+                idempotencyKey: key,
+                method: 'process.simctl.openurl',
+                businessParams: const <String, String>{
+                  'url': 'example://unknown',
+                },
+                dispatch: () async {
+                  unknownDispatches += 1;
+                  throw const FileSystemException('transport lost');
+                },
+              );
+
+          expect(
+            (await unknown('unknown-0'))['dispatch'],
+            'dispatch_outcome_unknown',
+          );
+          // Fill the rest of the registry the way older CLIs did: known
+          // dispatches stored as `outcome_unknown` with the storage reason.
+          final registryFile = File(_idempotencyRegistryPath);
+          final registry =
+              jsonDecode(registryFile.readAsStringSync())
+                  as Map<String, dynamic>;
+          final records = registry['records'] as Map<String, dynamic>;
+          for (var index = 0; index < 511; index++) {
+            records[_keyDigest('legacy-known-$index')] = <String, Object?>{
+              'phase': 'outcome_unknown',
+              'outcomeUnavailableReason': 'bounded_outcome_storage_limit',
+              'updatedAt': '2000-01-01T00:00:00.000Z',
+              'businessFingerprint': _keyDigest('legacy-request-$index'),
+            };
+          }
+          registryFile.writeAsStringSync(jsonEncode(registry));
+
+          for (var index = 0; index < 600; index++) {
+            final result = await _largeLocalMutation('after-unknown-$index');
+            expect(result['ok'], isTrue, reason: 'index=$index $result');
+          }
+          final after = _readIdempotencyRecords();
+          expect(
+            (after[_keyDigest('unknown-0')] as Map)['phase'],
+            'outcome_unknown',
+          );
+          final retry = await unknown('unknown-0');
+          expect(retry['dispatch'], 'dispatch_outcome_unknown');
+
+          // Only unknown receipts left: refuse new input with a next step.
+          final full = <String, Object?>{
+            for (var index = 0; index < 512; index++)
+              _keyDigest('stuck-$index'): <String, Object?>{
+                'phase': 'reserved',
+                'businessFingerprint': _keyDigest('stuck-request-$index'),
+              },
+          };
+          registryFile.writeAsStringSync(
+            jsonEncode(<String, Object?>{'schemaVersion': 1, 'records': full}),
+          );
+          final refused = await _largeLocalMutation('one-more');
+          expect(refused['dispatch'], 'not_dispatched');
+          expect(
+            refused['error'],
+            allOf(
+              containsPair('code', 'idempotency_registry_capacity_reached'),
+              containsPair('message', contains('stop --clear-session')),
+            ),
+          );
+          expect(_readIdempotencyRecords().keys, unorderedEquals(full.keys));
+        });
+
+        expect(unknownDispatches, 1);
+      },
+      timeout: const Timeout(Duration(minutes: 3)),
+    );
 
     test(
       'uncertain process retry reconciles the same helper mutation once',
@@ -996,7 +1191,7 @@ void main() {
           expect(registry, isNot(contains(key)));
           expect(registry, isNot(contains(target)));
           expect(registry, isNot(contains(secret)));
-          expect(registry, contains('"businessParametersPersisted": false'));
+          expect(registry, contains('"businessParametersPersisted":false'));
           expect(registry, contains('BUSINESS_VALUE:'));
           for (final entity in Directory(
             '.flutter_scout',
@@ -1313,6 +1508,36 @@ Future<Map<String, dynamic>> _nextAgentMessage(
       'error': envelope['structuredError'],
   };
 }
+
+String get _idempotencyRegistryPath =>
+    p.join('.flutter_scout', 'idempotency', 'registry.json');
+
+Map<String, dynamic> _readIdempotencyRecords() =>
+    (jsonDecode(File(_idempotencyRegistryPath).readAsStringSync())
+            as Map<String, dynamic>)['records']
+        as Map<String, dynamic>;
+
+String _keyDigest(String value) =>
+    crypto.sha256.convert(utf8.encode(value)).toString();
+
+/// A known-dispatched local mutation whose outcome exceeds the 128 KiB
+/// stored-outcome bound, like an agent receipt for a large screen.
+Future<Map<String, dynamic>> _largeLocalMutation(
+  String key, {
+  void Function()? onDispatch,
+}) => FlutterScoutCli().debugDurableLocalMutation(
+  idempotencyKey: key,
+  method: 'process.flutter.reload',
+  businessParams: const <String, String>{'action': 'reload'},
+  dispatch: () async {
+    onDispatch?.call();
+    return <String, dynamic>{
+      'ok': true,
+      'dispatch': 'dispatched',
+      'evidence': 'x' * (129 * 1024),
+    };
+  },
+);
 
 Future<void> _withProtocolSession(
   Uri vmUri,

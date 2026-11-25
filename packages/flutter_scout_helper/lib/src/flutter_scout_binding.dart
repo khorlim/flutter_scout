@@ -5,6 +5,7 @@ import 'dart:developer' as developer;
 import 'dart:ffi' as ffi;
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data' show Uint32List;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';

@@ -7,6 +7,24 @@
   Nothing was attached or persisted. `attach` and `ensure` responses add
   `runIdentityProof` (`session_record` or `expected_run_id`) beside
   `runIdentityRecovered`. Helper wire protocol is unchanged.
+- Long sessions no longer stop accepting input after about 512 acts with
+  `idempotency_registry_capacity_reached`. A receipt whose outcome is too
+  large to store but whose dispatch is known now has the CLI receipt phase
+  `committed_nonreplayable` (it was `outcome_unknown`) and is compacted
+  oldest first into the tombstone filter like any closed receipt. A
+  same-key retry is never sent again: while the receipt is kept it fails with
+  the new stable error `idempotency_outcome_not_stored` (`dispatch` is the
+  original one), and after compaction with `idempotency_outcome_pruned`.
+  Receipts whose dispatch is unknown are still never evicted, and receipts
+  written by older CLIs are read the same way. The capacity error, now only
+  reachable when every receipt is unresolved, names the next step. The CLI and
+  helper tombstone filters grow from 2^16 to 2^20 bits (an existing CLI filter
+  is upscaled without losing a key), so fresh keys are not refused by filter
+  collisions in long sessions. The CLI registry is written as compact JSON.
+- Agent JSONL: request ids of the form `q<n>` (the shipped client's) must
+  increase and have no per-connection count limit; other ids stay limited to
+  10,000 unique ids per connection. The client no longer stops at 10,000
+  requests.
 
 - Add stable error `swipe_no_effect`: a swipe was dispatched but nothing on
   screen moved. It is a known dispatched outcome (observe, then reconcile).

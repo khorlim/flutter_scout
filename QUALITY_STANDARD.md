@@ -224,7 +224,10 @@ Batch and replay steps MUST derive stable per-step keys from one scope key.
 Both durable receipts and helper memory MUST be bounded. Pruning MUST leave a
 fail-safe tombstone (exact or no-false-negative probabilistic); reaching a
 bound MUST reject new mutation identities rather than forget old ones and risk
-a duplicate.
+a duplicate. Only receipts whose dispatch status is known MAY be pruned; a
+reserved or unknown-dispatch receipt MUST stay until reconciled. A retried key
+whose exact receipt records a known dispatch but no stored outcome MUST report
+that dispatch without replay or redispatch (`idempotency_outcome_not_stored`).
 
 The helper business fingerprint MUST exclude volatile retry fields such as
 command/deadline/error cursor/state preconditions while retaining extension,

@@ -8,6 +8,13 @@
   when the helper reports exactly that ID; otherwise fail with
   `expected_run_id_mismatch` and change nothing. `ensure --expect-run-id`
   never builds. An unproven helper run is still refused with `run_mismatch`.
+- Fix agent sessions refusing every input after about 512 acts with
+  `idempotency_registry_capacity_reached`: receipts too large to replay but
+  known to have dispatched are compacted like other closed receipts, and a
+  retried key answers `idempotency_outcome_not_stored` instead of running
+  again. Unknown-dispatch receipts are still kept. Larger tombstone filter,
+  compact registry JSON, and no request-count limit for the shipped client's
+  agent connection.
 - Preserve the agent lease inode during session cleanup, recognizing it as a
   serialization control rather than unknown residue. Never unlink a live lock.
 - Add explicit macOS `foreground()` on the persistent agent connection. Activate

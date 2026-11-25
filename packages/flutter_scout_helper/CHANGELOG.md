@@ -1,5 +1,9 @@
 ## Unreleased
 
+* The runtime tombstone filter for pruned mutation keys grows from 2^16 to
+  2^20 bits, so long app runs no longer refuse fresh keys as
+  `idempotency_outcome_pruned` filter collisions (about 1 in 25 after 10,000
+  mutations before).
 * Opt-in headless drive (`headlessDriveV1`): a request with
   `headlessDrive=true` keeps a hidden debug app rendering with Scout-driven
   frames (one per request plus at most 20 fps while app work is pending),

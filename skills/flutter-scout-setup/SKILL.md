@@ -235,6 +235,14 @@ session when no default session exists. If multiple names are current, pass
 - `mutation_dispatch_outcome_unknown`: transport was lost after dispatch may
   have occurred. Inspect the current state and original postcondition; do not
   retry with a new idempotency key.
+- `idempotency_outcome_not_stored` or `idempotency_outcome_pruned` on a
+  retried `--idempotency-key`: that key already ran and Scout did not send it
+  again; its outcome was too large to keep, or was pruned. Observe the app for
+  the result. Use a new key only for a new, deliberate input.
+- `idempotency_registry_capacity_reached`: every durable receipt in the
+  session is an input whose dispatch is still unknown. Check the app for their
+  effect, then `stop --clear-session` and launch again; do not repeat an input
+  whose effect you have not checked.
 - `logs` returns `source:"attach_only_session"` and `available:false`: Scout is attached to a VS Code/Cursor/terminal-owned Flutter run. Scout can inspect and act, but cannot read the owner console logs. Use the owning console, run `flutter logs` separately, or start through `flutter-scout ensure`/`launch` when Scout should own log capture.
 - `logs --contains` returns `matched:0`: Scout read a non-empty Scout-owned log, but no line matched the filter. Use a broader filter or add app-side logging for the event you need.
 - `staleRefreshed:true`: the saved VM service URL was stale, but Scout discovered and saved the current URI; continue through the persistent agent connection.

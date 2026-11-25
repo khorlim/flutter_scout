@@ -14,10 +14,21 @@ const int _maxIdempotencyReceipts = 512;
 const int _maxReplayableIdempotencyOutcomes = 64;
 const int _maxIdempotencyRegistryBytes = 16 * 1024 * 1024;
 const int _maxStoredIdempotencyOutcomeBytes = 128 * 1024;
-const int _idempotencyTombstoneFilterBitCount = 65536;
+// 2^20 bits keeps a long session's false-positive refusals negligible: about
+// one in 40,000 fresh keys after 20,000 compacted receipts. The original
+// 2^16-bit filter refused about one fresh key in 300 after 5,000 receipts, and
+// a refused fresh key halts an agent hand as an unknown outcome.
+const int _idempotencyTombstoneFilterBitCount = 1 << 20;
+const int _legacyIdempotencyTombstoneFilterBitCount = 1 << 16;
 const int _idempotencyTombstoneFilterHashCount = 4;
 const int _idempotencyTombstoneFilterByteCount =
     _idempotencyTombstoneFilterBitCount ~/ 8;
+
+/// Receipt phase for a closed mutation whose dispatch status is known but
+/// whose outcome exceeded the stored-outcome bound. It is never replayed or
+/// redispatched, and it is safe to compact into the tombstone filter.
+const String _nonreplayableReceiptPhase = 'committed_nonreplayable';
+const String _outcomeStorageLimitReason = 'bounded_outcome_storage_limit';
 
 final Expando<_CliIdempotencyContext> _cliIdempotencyContexts =
     Expando<_CliIdempotencyContext>('flutter_scout_cli_idempotency');
@@ -113,6 +124,18 @@ class _IdempotencyTombstoneFilter {
 
   String encode() => base64UrlEncode(_bytes);
 
+  /// A position is the same 32-bit hash value masked to the bit count, so a
+  /// key's large-filter position is congruent to its legacy position modulo
+  /// the legacy size. Copying the legacy bits into every congruent slot keeps
+  /// every remembered key (no false negative) when an older registry is read.
+  static Uint8List _upscaleLegacyFilter(Uint8List legacy) {
+    final upscaled = Uint8List(_idempotencyTombstoneFilterByteCount);
+    for (var offset = 0; offset < upscaled.length; offset += legacy.length) {
+      upscaled.setRange(offset, offset + legacy.length, legacy);
+    }
+    return upscaled;
+  }
+
   static _IdempotencyTombstoneFilter decode(Object? encoded) {
     if (encoded == null) return _IdempotencyTombstoneFilter();
     if (encoded is! String || encoded.isEmpty) {
@@ -123,7 +146,11 @@ class _IdempotencyTombstoneFilter {
       );
     }
     try {
-      return _IdempotencyTombstoneFilter(base64Url.decode(encoded));
+      final bytes = base64Url.decode(encoded);
+      if (bytes.length == _legacyIdempotencyTombstoneFilterBitCount ~/ 8) {
+        return _IdempotencyTombstoneFilter(_upscaleLegacyFilter(bytes));
+      }
+      return _IdempotencyTombstoneFilter(bytes);
     } on FormatException {
       throw const ScoutCliException(
         'idempotency_registry_corrupt',
@@ -371,6 +398,22 @@ extension _CliIdempotency on FlutterScoutCli {
               },
             );
           }
+          if (_receiptDispatchKnownWithoutOutcome(receipt)) {
+            return _PreTransportIdempotencyDecision(
+              immediate: _idempotencyOutcomeNotStored(
+                receipt,
+                invocation: stored,
+                method: method,
+                runId: runId,
+                idempotencyKey: key,
+                idempotencyKeyDigest: keyDigest,
+                businessFingerprint: fingerprint,
+                keySource: _activeIdempotencyKeyWasGenerated
+                    ? 'generated'
+                    : 'caller',
+              ),
+            );
+          }
           if (phase == 'reserved' || phase == 'outcome_unknown') {
             return stored == null
                 ? _PreTransportIdempotencyDecision(
@@ -559,12 +602,15 @@ extension _CliIdempotency on FlutterScoutCli {
   ) => _IdempotencyTombstoneFilter.decode(registry['tombstoneFilter']);
 
   void _writeIdempotencyRegistry(Map<String, Object?> registry) {
-    final encoded = const JsonEncoder.withIndent(' ').convert(registry);
+    // Compact JSON: the bound then holds by construction, since stored
+    // outcomes are measured with the same encoding and at most
+    // 64 of them keep their outcome.
+    final encoded = jsonEncode(registry);
     if (utf8.encode(encoded).length > _maxIdempotencyRegistryBytes) {
-      throw const ScoutCliException(
+      throw ScoutCliException(
         'idempotency_registry_capacity_reached',
         'The durable idempotency registry reached its hard byte bound. Scout '
-            'will not dispatch a new mutation until the session is cleared.',
+            'will not dispatch a new mutation. $_idempotencyCapacityNextStep',
       );
     }
     _atomicWritePrivateString(
@@ -689,6 +735,22 @@ extension _CliIdempotency on FlutterScoutCli {
               ),
             );
           }
+          if (_receiptDispatchKnownWithoutOutcome(existing)) {
+            return _DurableInvocationDecision(
+              failure: _idempotencyOutcomeNotStored(
+                existing,
+                invocation: stored,
+                method: method,
+                runId: proposed.runId,
+                idempotencyKey: proposed.idempotencyKey,
+                idempotencyKeyDigest: proposed.idempotencyKeyDigest,
+                businessFingerprint: proposed.businessFingerprint,
+                keySource: proposed.callerSuppliedIdempotencyKey
+                    ? 'caller'
+                    : 'generated',
+              ),
+            );
+          }
           if (stored.runtimeInstanceId != proposed.runtimeInstanceId) {
             return _DurableInvocationDecision(
               failure: _unknownDispatchProtocolFailure(
@@ -730,13 +792,33 @@ extension _CliIdempotency on FlutterScoutCli {
           }
         }
         if (records.length >= _maxIdempotencyReceipts) {
+          // Only receipts whose dispatch is still unknown remain: forgetting
+          // one could let its retry dispatch the same input twice.
           return _DurableInvocationDecision(
             failure: _notDispatchedProtocolFailure(
               code: 'idempotency_registry_capacity_reached',
               message:
-                  'The bounded idempotency registry is full of active or uncertain receipts. Scout fails closed instead of evicting a receipt that could permit a duplicate mutation.',
+                  'Nothing was dispatched. All $_maxIdempotencyReceipts '
+                  'durable receipts in this session are inputs whose dispatch '
+                  'outcome is still unknown, and Scout will not forget one '
+                  'because its retry could dispatch the same input twice. '
+                  '$_idempotencyCapacityNextStep',
               method: method,
               runId: proposed.runId,
+              details: <String, Object?>{
+                'receipts': records.length,
+                'maxReceipts': _maxIdempotencyReceipts,
+                'unresolvedReceipts': records.values
+                    .where(
+                      (receipt) =>
+                          receipt is Map &&
+                          !_receiptIsCompactable(
+                            Map<String, Object?>.from(receipt),
+                          ),
+                    )
+                    .length,
+                'nextStep': _idempotencyCapacityNextStep,
+              },
             ),
           );
         }
@@ -767,9 +849,8 @@ extension _CliIdempotency on FlutterScoutCli {
     final compactable =
         records.entries.where((entry) {
           final receipt = entry.value;
-          if (receipt is! Map) return false;
-          final phase = receipt['phase'];
-          return phase == 'completed' || phase == 'tombstone';
+          return receipt is Map &&
+              _receiptIsCompactable(Map<String, Object?>.from(receipt));
         }).toList()..sort((first, second) {
           String timestamp(Map<String, Object?> entry) =>
               (entry['updatedAt'] ?? entry['createdAt'] ?? '').toString();
@@ -787,6 +868,108 @@ extension _CliIdempotency on FlutterScoutCli {
       compacted = true;
     }
     return compacted;
+  }
+
+  /// A closed receipt whose dispatch status is known can be compacted into
+  /// the tombstone filter: a late retry of its key is still refused. A
+  /// reserved or genuinely unknown receipt stays until it is reconciled.
+  bool _receiptIsCompactable(Map<String, Object?> receipt) {
+    final phase = receipt['phase'];
+    return phase == 'completed' ||
+        phase == 'tombstone' ||
+        _receiptDispatchKnownWithoutOutcome(receipt);
+  }
+
+  /// Also reads receipts written before [_nonreplayableReceiptPhase] existed:
+  /// they used `outcome_unknown` with the storage-limit reason even though
+  /// their dispatch was known.
+  bool _receiptDispatchKnownWithoutOutcome(Map<String, Object?> receipt) {
+    final phase = receipt['phase'];
+    return phase == _nonreplayableReceiptPhase ||
+        (phase == 'outcome_unknown' &&
+            receipt['outcomeUnavailableReason'] == _outcomeStorageLimitReason);
+  }
+
+  String get _idempotencyCapacityNextStep {
+    final name = _readSessionMeta()?['name']?.toString();
+    final app = name == null || name.isEmpty ? '<name>' : name;
+    return 'Check the app for the effect of the unresolved inputs, then run '
+        '`flutter-scout --app $app stop --clear-session` and launch again; '
+        'clearing forgets those receipts, so do not repeat an input whose '
+        'effect you have not checked.';
+  }
+
+  /// The answer to a retried key whose earlier dispatch is known but whose
+  /// outcome was too large to store: nothing is sent again.
+  Map<String, dynamic> _idempotencyOutcomeNotStored(
+    Map<String, Object?> receipt, {
+    required _MutationInvocation? invocation,
+    required String method,
+    required String runId,
+    required String idempotencyKey,
+    required String idempotencyKeyDigest,
+    required String businessFingerprint,
+    required String keySource,
+  }) {
+    const nextStep =
+        'Observe the app to learn the result of the original input. Use a new '
+        'idempotency key only for a new, deliberate input.';
+    final storedDispatch = receipt['dispatch'];
+    final dispatch =
+        storedDispatch == 'dispatched' || storedDispatch == 'not_dispatched'
+        ? storedDispatch as String
+        // Receipts from before the dispatch field had a known, non-unknown
+        // dispatch; `dispatched` is the conservative reading.
+        : 'dispatched';
+    final message =
+        'This idempotency key already ran (dispatch: $dispatch). Its outcome '
+        'was too large to store, so Scout cannot replay it and did not send '
+        'the input again. $nextStep';
+    final details = <String, Object?>{
+      'originalDispatch': dispatch,
+      'outcomeDigest': receipt['outcomeDigest'],
+      'outcomeBytes': receipt['outcomeBytes'],
+      'completedAt': receipt['completedAt'],
+      'replayUnavailableReason': _outcomeStorageLimitReason,
+      'nextStep': nextStep,
+    };
+    final base = invocation == null
+        ? _idempotencyUnknownWithoutInvocation(
+            code: 'idempotency_outcome_not_stored',
+            message: message,
+            method: method,
+            runId: runId,
+            idempotencyKey: idempotencyKey,
+            idempotencyKeyDigest: idempotencyKeyDigest,
+            keySource: keySource,
+            details: details,
+          )
+        : _unknownDispatchProtocolFailure(
+            code: 'idempotency_outcome_not_stored',
+            message: message,
+            invocation: invocation,
+            transport: 'ok',
+            details: details,
+          );
+    final identity = receipt['invocation'];
+    return <String, dynamic>{
+      ...base,
+      'transport': 'ok',
+      'dispatch': dispatch,
+      'method': method,
+      'idempotencyKey': idempotencyKey,
+      'idempotencyKeyDigest': idempotencyKeyDigest,
+      'idempotency': <String, Object?>{
+        'status': 'committed_nonreplayable',
+        'durability': 'cross_process_receipt',
+        'replayability': 'unavailable',
+        'replayUnavailableReason': _outcomeStorageLimitReason,
+        'keySource': keySource,
+        'businessFingerprint': businessFingerprint,
+        'idempotencyKeyDigest': idempotencyKeyDigest,
+        if (identity is Map) 'originalCommandId': identity['commandId'],
+      },
+    };
   }
 
   Map<String, Object?> _invocationIdentityForReceipt(
@@ -1229,7 +1412,11 @@ extension _CliIdempotency on FlutterScoutCli {
           }
           final now = DateTime.now().toUtc().toIso8601String();
           receipt
-            ..['phase'] = replayable ? 'completed' : 'outcome_unknown'
+            ..['phase'] = replayable
+                ? 'completed'
+                : dispatchOutcomeUnknown
+                ? 'outcome_unknown'
+                : _nonreplayableReceiptPhase
             ..['updatedAt'] = now
             ..['completedAt'] = now
             ..['outcomeDigest'] = outcomeDigest
@@ -1240,7 +1427,10 @@ extension _CliIdempotency on FlutterScoutCli {
             receipt.remove('outcome');
             receipt['outcomeUnavailableReason'] = dispatchOutcomeUnknown
                 ? 'dispatch_outcome_unknown'
-                : 'bounded_outcome_storage_limit';
+                : _outcomeStorageLimitReason;
+            if (!dispatchOutcomeUnknown) {
+              receipt['dispatch'] = rawOutcome['dispatch']?.toString();
+            }
           }
           records[invocation.idempotencyKeyDigest] = receipt;
           _pruneReplayableOutcomes(
@@ -1272,7 +1462,7 @@ extension _CliIdempotency on FlutterScoutCli {
             if (!replayable)
               'replayUnavailableReason': dispatchOutcomeUnknown
                   ? 'dispatch_outcome_unknown'
-                  : 'bounded_outcome_storage_limit',
+                  : _outcomeStorageLimitReason,
             'keySource': invocation.callerSuppliedIdempotencyKey
                 ? 'caller'
                 : 'generated',

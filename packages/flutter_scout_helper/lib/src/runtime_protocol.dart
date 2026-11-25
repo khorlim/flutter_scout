@@ -162,9 +162,12 @@ const int _maxExactMutationTombstones = 2048;
 /// fingerprint tombstone aged out. False positives are safe: they abstain
 /// instead of dispatching. The filter is never cleared during a runtime.
 class _MutationTombstoneFilter {
-  static const int _bitCount = 65536;
+  // 2^20 bits (128 KiB) keeps false-positive refusals of fresh keys
+  // negligible for tens of thousands of mutations in one runtime; 2^16 bits
+  // refused about one fresh key in 25 after 10,000 mutations.
+  static const int _bitCount = 1 << 20;
   static const int _wordBits = 32;
-  final List<int> _words = List<int>.filled(_bitCount ~/ _wordBits, 0);
+  final Uint32List _words = Uint32List(_bitCount ~/ _wordBits);
 
   Iterable<int> _positions(String key) sync* {
     final digest = crypto.sha256.convert(utf8.encode(key)).bytes;

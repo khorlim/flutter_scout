@@ -452,6 +452,10 @@
       "meaning": "The idempotency outcome data is corrupt and cannot be trusted.",
       "family": "execution_or_reconciliation"
     },
+    "idempotency_outcome_not_stored": {
+      "meaning": "The idempotency key already ran with a known dispatch, but its outcome was too large to store, so it was neither replayed nor sent again.",
+      "family": "execution_or_reconciliation"
+    },
     "idempotency_outcome_pruned": {
       "meaning": "The original idempotent outcome is no longer retained, so safe replay cannot be proven.",
       "family": "execution_or_reconciliation"
