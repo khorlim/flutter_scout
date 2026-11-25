@@ -321,6 +321,31 @@ For an authorized time-sensitive response, react can issue one exact observed
 tap or stop future input, bounded to 30 seconds. It cannot invent targets,
 retry, cross surfaces, or cancel an already-started app operation.
 
+## What a person watching sees
+
+While the agent connection is attached, the app shows an "AI is driving"
+overlay for people watching: a calm edge glow and a "Scout is controlling"
+(or, when idle, "Scout is observing") pill, a cursor on desktop or a touch
+dot on iOS/Android that glides to each target, a ripple at the hit point
+(two for a double tap, a square one plus a "Right click" chip for a
+secondary click), a filling ring for a long press, a trail for drags and
+scrolls with a direction chevron, the typed field highlighted with the text
+arriving (credential fields show dots only, never the value or its
+length), and short back/dismiss cues. The session label in the lower-left
+corner turns its dot cyan while an agent is attached. Visuals play once an
+act has answered, so they trail the app by the act's duration.
+
+It never affects you: it takes no hits, is absent from `view` (text,
+interactables, fields, screen, surface) and from semantics, never delays or
+moves input, and is not counted as app activity by settle or stability.
+Scout screenshots and crops leave it out; add `--with-overlay` to keep it.
+Turn it off with `flutter-scout agent --no-overlay`, `ScoutAgent.connect({
+overlay: false})`, `serve --no-overlay`, or `FLUTTER_SCOUT_OVERLAY=0` in
+the environment that starts the client (`=reduced` for reduced motion; the
+platform's reduce-motion setting is also respected). For scripted bursts of
+back-to-back acts where speed matters, turn it off: its frames can make the
+next act's snapshots fresh tree walks.
+
 ## Changes, images, and handoff
 
 Close the agent connection before reload/restart, then reconnect (bridge:

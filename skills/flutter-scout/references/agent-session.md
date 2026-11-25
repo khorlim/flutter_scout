@@ -127,6 +127,17 @@ events, viewEvents}` with the scene under `scene` and the same top-level
 or stop; plain view updates are only counted in `viewEvents`.
 Visible strings live in `view.visibleText` (or `scene.view.visibleText`).
 
+## Driving overlay
+
+`ScoutAgent.connect({app, overlay})` (default `true`) and `serve
+--no-overlay` choose whether the app draws the in-app "AI is driving"
+overlay for people watching; the CLI flag is `agent --[no-]overlay` and
+`FLUTTER_SCOUT_OVERLAY=0|reduced` in the client's environment also applies.
+The agent attaches it with a lease it renews while connected and detaches it
+on close; a lost agent's overlay fades within the lease (at least 6 s). An
+older helper without it is skipped silently. It is never part of a scene,
+receipt, settle or stability signal.
+
 ## Three independent outcomes
 
 1. `start(viewRevision, {method,args,params})` accepts one action and returns a

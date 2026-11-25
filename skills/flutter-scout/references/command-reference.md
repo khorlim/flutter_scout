@@ -59,7 +59,8 @@ not establish absence. Already-visible text does not prove a new operation.
 
 Lifecycle: devices, doctor, ensure, launch, attach, status, apps, reload,
 restart, stop, version. Annotation management: annotations. Manual evidence:
-screenshot, crop, logs, health, evidence.
+screenshot, crop, logs, health, evidence. screenshot and crop take
+`--with-overlay` to keep the in-app driving overlay (left out by default).
 
 Logs: `logs --summary`, `logs --last <n>` (default 20, max 1000) and
 `logs --contains <text>`. Use these instead of reading log files directly;

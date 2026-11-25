@@ -121,3 +121,12 @@ agent view immediately before dispatch. Unknown dispatch remains unknown.
 Annotated screenshots return a mark legend. Dense overlaps can be omitted from
 the rendered marks and legend. Geometry and semantics are factual signals, not
 proof of visual quality—inspect the produced image.
+
+## The driving overlay in images
+
+Scout screenshots and crops (in-app and `--native`) hide the in-app driving
+overlay, so images show only the app. `flutter-scout --app <name> screenshot
+--with-overlay` (or `crop --with-overlay`) keeps it, for showing a person
+what the agent did. In-app captures also omit Scout's session label; a
+`--native --with-overlay` screenshot shows both.
+
