@@ -184,6 +184,115 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     }
   }
 
+  // ---- app-work tracking ------------------------------------------------
+  // Scout reuses its last observation snapshot while the app's trees cannot
+  // have changed. Without the overlay that means "no frame since and none
+  // scheduled"; the overlay's own frames would break that on every tick.
+  // While it is installed, debug-only framework hooks tell app work from
+  // overlay-only repaints: any app element rebuild, or any painted render
+  // object other than the overlay's own CustomPaint (every layout marks
+  // paint), advances [appWorkSeq], and so does a frame that ends with app
+  // tickers still running. A pending frame counts as overlay-only only when
+  // both hooks are still Scout's, no app build is scheduled and no app ticker
+  // runs; otherwise the plain frame rules apply.
+  final GlobalKey _paintKey = GlobalKey();
+  bool _tracking = false;
+  bool _buildPending = false;
+  int appWorkSeq = 0;
+  RebuildDirtyWidgetCallback? _previousRebuildHook;
+  ProfilePaintCallback? _previousPaintHook;
+  VoidCallback? _previousBuildScheduled;
+  // Stored once so the identity checks in [_hooksIntact] hold.
+  late final RebuildDirtyWidgetCallback _rebuildHook = _onAppRebuild;
+  late final ProfilePaintCallback _paintHook = _onPaint;
+  late final VoidCallback _buildScheduledHook = _onBuildScheduled;
+
+  void _onAppRebuild(Element element, bool builtOnce) {
+    appWorkSeq += 1;
+    _previousRebuildHook?.call(element, builtOnce);
+  }
+
+  void _onPaint(RenderObject renderObject) {
+    if (!identical(
+      renderObject,
+      _paintKey.currentContext?.findRenderObject(),
+    )) {
+      appWorkSeq += 1;
+    }
+    _previousPaintHook?.call(renderObject);
+  }
+
+  void _onBuildScheduled() {
+    _buildPending = true;
+    appWorkSeq += 1;
+    _previousBuildScheduled?.call();
+  }
+
+  bool _frameProbeInstalled = false;
+
+  bool get tracksAppWork => _tracking && _hooksIntact;
+
+  bool get _hooksIntact =>
+      identical(debugOnRebuildDirtyWidget, _rebuildHook) &&
+      identical(debugOnProfilePaint, _paintHook) &&
+      identical(
+        WidgetsBinding.instance.buildOwner?.onBuildScheduled,
+        _buildScheduledHook,
+      );
+
+  int get _appTransientCallbacks {
+    final count = WidgetsBinding.instance.transientCallbackCount;
+    return tickScheduled ? math.max(0, count - 1) : count;
+  }
+
+  /// Whether the frame now scheduled (if any) can only be the overlay's.
+  bool get onlyOverlayPending =>
+      tracksAppWork &&
+      !_buildPending &&
+      _appTransientCallbacks == 0 &&
+      WidgetsBinding.instance.schedulerPhase == SchedulerPhase.idle;
+
+  void _startAppWorkTracking() {
+    if (_tracking || !kDebugMode) return;
+    final owner = WidgetsBinding.instance.buildOwner;
+    if (owner == null) return;
+    _previousRebuildHook = debugOnRebuildDirtyWidget;
+    _previousPaintHook = debugOnProfilePaint;
+    _previousBuildScheduled = owner.onBuildScheduled;
+    debugOnRebuildDirtyWidget = _rebuildHook;
+    debugOnProfilePaint = _paintHook;
+    owner.onBuildScheduled = _buildScheduledHook;
+    _tracking = true;
+    // Builds run inside drawFrame; this callback runs after it, so a build
+    // scheduled from here on belongs to a later frame.
+    if (!_frameProbeInstalled) {
+      _frameProbeInstalled = true;
+      WidgetsBinding.instance.addPersistentFrameCallback((_) {
+        if (!_tracking) return;
+        _buildPending = false;
+        if (_appTransientCallbacks > 0) appWorkSeq += 1;
+      });
+    }
+  }
+
+  void _stopAppWorkTracking() {
+    if (!_tracking) return;
+    _tracking = false;
+    appWorkSeq += 1;
+    // Restore only hooks that are still ours; someone else's stays.
+    if (identical(debugOnRebuildDirtyWidget, _rebuildHook)) {
+      debugOnRebuildDirtyWidget = _previousRebuildHook;
+    }
+    if (identical(debugOnProfilePaint, _paintHook)) {
+      debugOnProfilePaint = _previousPaintHook;
+    }
+    final owner = WidgetsBinding.instance.buildOwner;
+    if (owner != null &&
+        identical(owner.onBuildScheduled, _buildScheduledHook)) {
+      owner.onBuildScheduled = _previousBuildScheduled;
+    }
+  }
+
   // ---- clock ------------------------------------------------------------
   _DrivingTicker? _ticker;
   double _clockBase = 0;
@@ -360,6 +469,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     _entry = entry;
     _host = overlay;
     overlay.insert(entry);
+    _startAppWorkTracking();
     _kick();
   }
 
@@ -378,6 +488,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   }
 
   void _teardown() {
+    _stopAppWorkTracking();
     _ticker?.dispose();
     _ticker = null;
     for (final effect in effects) {
@@ -757,6 +868,7 @@ class _FlutterScoutDrivingOverlay extends StatelessWidget {
     child: ExcludeSemantics(
       child: RepaintBoundary(
         child: CustomPaint(
+          key: controller._paintKey,
           painter: _ScoutDrivingPainter(controller),
           size: Size.infinite,
         ),

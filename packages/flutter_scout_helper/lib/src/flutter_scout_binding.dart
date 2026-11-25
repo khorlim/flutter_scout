@@ -114,6 +114,8 @@ class FlutterScoutRuntime {
   /// The last snapshot built while no frame was scheduled, and what it was
   /// built from. See `_reusableSnapshot` in runtime_snapshot.dart.
   ScoutSnapshot? _idleSnapshot;
+  // The scrollables the last snapshot read; see `_scrollFingerprint`.
+  List<ScrollableState> _snapshotScrollStates = const <ScrollableState>[];
   Object? _idleSnapshotInputs;
   bool _renderingProbeInstalled = false;
   final LinkedHashMap<String, _MutationRecord> _mutationRecords =

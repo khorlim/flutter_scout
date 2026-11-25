@@ -436,7 +436,12 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
 
   /// What a snapshot is built from besides the widget and render trees.
   Object _snapshotInputs() => (
-    frames: _completedFrameworkFrames,
+    // While the driving overlay is installed, frames that only repainted the
+    // overlay do not count; app builds and paints do (see driving_overlay).
+    frames: _drivingOverlay.tracksAppWork
+        ? 'app:${_drivingOverlay.appWorkSeq}'
+        : 'frames:$_completedFrameworkFrames',
+    scroll: _scrollFingerprint(),
     errors: _errorCursor,
     annotations: _annotationRevision.value,
     secrets: _knownSensitiveValues.length,
@@ -446,13 +451,40 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     captureProbe: debugCaptureBackendProbe,
   );
 
+  /// No frame is scheduled, or the only one is the driving overlay's.
+  bool get _treesSettled =>
+      !WidgetsBinding.instance.hasScheduledFrame ||
+      _drivingOverlay.onlyOverlayPending;
+
+  /// The scroll offsets the last snapshot read. A scroll moves pixels at
+  /// once and only relayouts on the next frame, so a snapshot reused before
+  /// that frame must still see the offsets it was built from.
+  String _scrollFingerprint() {
+    final positions = _snapshotScrollStates;
+    if (positions.isEmpty) return '';
+    final buffer = StringBuffer();
+    for (final state in positions) {
+      try {
+        final position = state.position;
+        buffer
+          ..write(identityHashCode(position))
+          ..write(':')
+          ..write(position.hasPixels ? position.pixels : 'none')
+          ..write(';');
+      } catch (_) {
+        buffer.write('gone;');
+      }
+    }
+    return buffer.toString();
+  }
+
   /// Keeps a snapshot taken while no frame was scheduled: until the next
   /// frame the trees it read cannot change (a build, layout, scroll or text
   /// edit needs a frame, and schedules one).
   void _rememberIdleSnapshot(ScoutSnapshot snapshot) {
     final idle =
         _renderingProbeInstalled &&
-        !WidgetsBinding.instance.hasScheduledFrame &&
+        _treesSettled &&
         !FlutterScoutRuntime.debugDisableIdleSnapshotReuse;
     _idleSnapshot = idle ? snapshot : null;
     _idleSnapshotInputs = idle ? _snapshotInputs() : null;
@@ -467,7 +499,7 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     final cached = _idleSnapshot;
     if (cached == null ||
         FlutterScoutRuntime.debugDisableIdleSnapshotReuse ||
-        WidgetsBinding.instance.hasScheduledFrame ||
+        !_treesSettled ||
         _idleSnapshotInputs != _snapshotInputs()) {
       return null;
     }
@@ -676,6 +708,9 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
     }
 
     _linkSnapshotScrollScopes(rawScrollables);
+    _snapshotScrollStates = [
+      for (final region in rawScrollables) ?region.state,
+    ];
     scrollables.addAll(rawScrollables.map((region) => region.toJson()));
     final captureBackend = _captureBackendEvidence();
     if (captureBackend['status'] != 'available') {

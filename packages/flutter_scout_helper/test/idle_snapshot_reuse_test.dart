@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -58,4 +59,89 @@ void main() {
       contains(contains('injected error')),
     );
   });
+
+  testWidgets(
+    'frames that only repaint the driving overlay keep the snapshot; app '
+    'builds and scrolls still force a fresh one',
+    (tester) async {
+      FlutterScoutHelper.ensureRegistered();
+      final runtime = FlutterScoutHelper.debugRuntime;
+      final label = ValueNotifier<String>('Count 0');
+      final scroll = ScrollController();
+      addTearDown(label.dispose);
+      addTearDown(scroll.dispose);
+      Future<void> frames(int ms) async {
+        for (var elapsed = 0; elapsed < ms; elapsed += 16) {
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Column(
+              children: [
+                // No ink, no setState: tapping it changes nothing in the app.
+                GestureDetector(onTap: () {}, child: const Text('Ping')),
+                ValueListenableBuilder<String>(
+                  valueListenable: label,
+                  builder: (_, value, _) => Text(value),
+                ),
+                Expanded(
+                  child: ListView.builder(
+                    controller: scroll,
+                    itemCount: 50,
+                    itemBuilder: (_, index) => Text('Row $index'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await runtime.debugAgentOverlay('attach');
+      await tester.pump();
+      await tester.pump();
+      await frames(700);
+
+      // The overlay animates a press: its ticker keeps a frame scheduled.
+      await tester.runAsync(() => runtime.debugTapTarget('tap.ping'));
+      await frames(48);
+      expect(tester.binding.hasScheduledFrame, isTrue);
+      final first = runtime.debugSnapshot();
+      await frames(48);
+      expect(tester.binding.hasScheduledFrame, isTrue);
+      final again = runtime.debugSnapshot();
+      expect(
+        identical(again.interactables, first.interactables),
+        isTrue,
+        reason: 'only the overlay repainted: the same snapshot',
+      );
+
+      // An app build is never answered from the old snapshot.
+      label.value = 'Count 1';
+      expect(
+        identical(runtime.debugSnapshot().interactables, first.interactables),
+        isFalse,
+      );
+      await frames(32);
+      expect(runtime.debugSnapshot().visibleText, contains('Count 1'));
+
+      // A scroll moves pixels before any frame: a fresh snapshot sees it.
+      final settled = runtime.debugSnapshot();
+      scroll.jumpTo(120);
+      final scrolled = runtime.debugSnapshot();
+      expect(identical(scrolled.interactables, settled.interactables), isFalse);
+      await frames(32);
+      final afterFrame = runtime.debugSnapshot();
+      expect(afterFrame.visibleText, isNot(contains('Row 0')));
+
+      // Detaching restores the framework's hooks.
+      await runtime.debugAgentOverlay('detach');
+      await frames(600);
+      expect(debugOnProfilePaint, isNull);
+      expect(runtime.debugDrivingOverlayStatus['installed'], isFalse);
+    },
+  );
 }
