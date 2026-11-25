@@ -2144,7 +2144,10 @@ class FlutterScoutRuntime {
       if (node.enclosingTarget != null) 'enclosingTarget': node.enclosingTarget,
       if (withPositionHint && node.rect != null)
         'at': _positionHint(node.rect!),
-      if (!node.enabled) 'enabled': false,
+      // Always present, so a brief read never needs a screenshot to tell a
+      // disabled control: false when Flutter knows it is off (a null
+      // onPressed/onTap/onChanged, Semantics enabled:false, a read-only field).
+      'enabled': node.enabled,
       if (!node.hitTestable) 'hitTestable': false,
       if (node.visibleFraction == 0) 'offscreen': true,
     };

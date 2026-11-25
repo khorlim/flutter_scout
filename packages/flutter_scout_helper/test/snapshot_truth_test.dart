@@ -84,6 +84,32 @@ void main() {
     );
   });
 
+  testWidgets('brief interactables always say whether they are enabled', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              ElevatedButton(onPressed: () {}, child: const Text('Save')),
+              const ElevatedButton(onPressed: null, child: Text('Submit')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final brief = FlutterScoutRuntime().debugInspectPayload(brief: true);
+    final byLabel = {
+      for (final node in (brief['interactables']! as List).cast<Map>())
+        node['label']: node['enabled'],
+    };
+    expect(byLabel['Save'], isTrue);
+    expect(byLabel['Submit'], isFalse);
+  });
+
   testWidgets('landscape viewport preserves asymmetric insets and scaling', (
     tester,
   ) async {
