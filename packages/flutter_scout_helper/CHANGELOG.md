@@ -1,5 +1,10 @@
 ## Unreleased
 
+* After an input with no immediate change, each late-change round now ends
+  as soon as a lasting change lands (`stoppingReason:
+  late_change_observed`) instead of first waiting out its 250 ms stability
+  window. The late-wait bound is unchanged. A late change can therefore
+  report `stable: false`; the agent client settles a changed view itself.
 * The session label no longer blinks during in-app captures. It stays
   mounted and visible for `overlay: include` captures (`--with-overlay`),
   so those images show it, and other captures hide it, by opacity, only

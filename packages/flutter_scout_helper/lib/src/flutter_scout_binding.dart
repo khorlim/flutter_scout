@@ -493,7 +493,7 @@ class FlutterScoutRuntime {
     final observation = await _waitStable(
       frameAdvancePolicy: _FrameAdvancePolicy.observeOnly,
       timeout: Duration(milliseconds: timeoutMs),
-      stopWhen: stopWhen,
+      stopWhen: stopWhen == null ? null : (_) => stopWhen(),
     );
     return <String, Object?>{
       'stable': observation.stable,

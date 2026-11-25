@@ -2290,7 +2290,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
   Future<_StabilityObservation> _waitStable({
     required _FrameAdvancePolicy frameAdvancePolicy,
     Duration timeout = const Duration(seconds: 3),
-    bool Function()? stopWhen,
+    bool Function(ScoutSnapshot current)? stopWhen,
+    String stopReason = 'expectation_met',
     ScoutSnapshot? initialSnapshot,
   }) => _inRequestPhaseAsync(
     'settle',
@@ -2298,6 +2299,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       frameAdvancePolicy: frameAdvancePolicy,
       timeout: timeout,
       stopWhen: stopWhen,
+      stopReason: stopReason,
       initialSnapshot: initialSnapshot,
     ),
   );
@@ -2305,7 +2307,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
   Future<_StabilityObservation> _waitStableWithoutPhaseTiming({
     required _FrameAdvancePolicy frameAdvancePolicy,
     Duration timeout = const Duration(seconds: 3),
-    bool Function()? stopWhen,
+    bool Function(ScoutSnapshot current)? stopWhen,
+    String stopReason = 'expectation_met',
     ScoutSnapshot? initialSnapshot,
   }) async {
     const quietWindow = Duration(milliseconds: 120);
@@ -2483,11 +2486,13 @@ extension _RuntimeActions on FlutterScoutRuntime {
         0,
         stopwatch.elapsedMilliseconds - lastSemanticChangeMs,
       );
-      if (stopWhen?.call() == true) {
+      // [stopWhen] gets the sample just taken, so a caller watching for a
+      // change does not take a second snapshot per sample.
+      if (stopWhen?.call(current) == true) {
         return _closedStabilityObservation(
           state: _StabilityState.transient,
           actionable: false,
-          stoppingReason: 'expectation_met',
+          stoppingReason: stopReason,
           stopwatch: stopwatch,
           budgetMs: budgetMs,
           deadlineEpochMs: deadlineEpochMs,
@@ -2505,7 +2510,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
           lastSchedulerPhase: lastSchedulerPhase,
           initial: initial,
           finalSnapshot: finalSnapshot,
-          expectationMet: true,
+          expectationMet: stopReason == 'expectation_met',
           boundedByRequestDeadline: boundedByRequestDeadline,
         );
       }
@@ -2655,7 +2660,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
 
   Future<_StabilityObservation> _waitStableForAction(
     Map<String, String> params, {
-    bool Function()? stopWhen,
+    bool Function(ScoutSnapshot current)? stopWhen,
     ScoutSnapshot? initialSnapshot,
   }) {
     final waitMs = int.tryParse(params['waitMs'] ?? '') ?? 1500;
@@ -2777,7 +2782,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     if (expectationSnapshot case final expected?) {
       final expectationStability = await _waitStableForAction(
         params,
-        stopWhen: () => true,
+        stopWhen: (_) => true,
         initialSnapshot: before,
       );
       return _ActionSnapshotResult(
@@ -2793,7 +2798,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     );
     var stability = await _waitStableForAction(
       params,
-      stopWhen: () => expectationSnapshot != null,
+      stopWhen: (_) => expectationSnapshot != null,
       initialSnapshot: before,
     );
     await sample();
@@ -2842,7 +2847,10 @@ extension _RuntimeActions on FlutterScoutRuntime {
     final settleDeadline = _settleDeadlineEpochMs;
     final lateDeadline = DateTime.now().add(Duration(milliseconds: lateWaitMs));
     // Each round waits up to ~330 ms and re-snapshots: stop once another
-    // round could not finish before the request's settle deadline.
+    // round could not finish before the request's settle deadline. A round
+    // ends as soon as a lasting change lands instead of waiting out its
+    // stability window first; whoever needs the settled result watches for
+    // it (the agent client settles after a changed view).
     bool lateRoundFits() {
       final now = DateTime.now();
       if (!now.isBefore(lateDeadline)) return false;
@@ -2852,12 +2860,23 @@ extension _RuntimeActions on FlutterScoutRuntime {
 
     while (lateRoundFits()) {
       await Future<void>.delayed(const Duration(milliseconds: 80));
+      ScoutSnapshot? landed;
       stability = await _waitStable(
         frameAdvancePolicy: _FrameAdvancePolicy.mutationSettling,
         timeout: const Duration(milliseconds: 250),
         initialSnapshot: after,
+        stopReason: 'late_change_observed',
+        stopWhen: (current) {
+          if (!_changed(before, current)) return false;
+          if (!completesExpectation(current) &&
+              _looksTransientActionState(before, current)) {
+            return false;
+          }
+          landed = current;
+          return true;
+        },
       );
-      after = _snapshot();
+      after = landed ?? _snapshot();
       if (_changed(before, after)) {
         activityObserved = true;
         if (completesExpectation(after) ||
