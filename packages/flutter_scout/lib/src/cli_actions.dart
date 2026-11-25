@@ -926,6 +926,7 @@ extension _CliActions on FlutterScoutCli {
   Future<int> _dragStatus(List<String> args) => _callAndPrint(
     'ext.flutter_scout.dragStatus',
     compact: !args.contains('--verbose'),
+    readOnly: true,
   );
 
   Map<String, String> _heldDragPointParams(ArgResults parsed) => {

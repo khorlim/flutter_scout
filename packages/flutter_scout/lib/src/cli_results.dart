@@ -16,6 +16,7 @@ extension _CliResults on FlutterScoutCli {
     String? expectLog,
     String? rejectLog,
     Duration logExpectationTimeout = const Duration(seconds: 5),
+    bool readOnly = false,
   }) async {
     final totalStopwatch = Stopwatch()..start();
     final logCursor = _currentLogCursor();
@@ -49,9 +50,12 @@ extension _CliResults on FlutterScoutCli {
     vmStopwatch.stop();
     result = _materializeActionCapture(result, captureOutput);
     final logStopwatch = Stopwatch()..start();
+    // A read-only query dispatches nothing, so there are no log lines it
+    // caused to wait for; it still reports what is already logged.
     var enrichedResult = await _withRecentLogSignals(
       result,
       sinceCursor: logCursor,
+      settleDelay: readOnly ? Duration.zero : const Duration(milliseconds: 150),
     );
     enrichedResult = await _applyLogExpectations(
       enrichedResult,
@@ -69,8 +73,9 @@ extension _CliResults on FlutterScoutCli {
       enrichedResult,
       phase: 'logs',
       elapsedMs: logStopwatch.elapsedMilliseconds,
-      scope:
-          'bounded log-cursor collection, log-settle window, and expectation checks',
+      scope: readOnly
+          ? 'bounded log-cursor collection for a read-only query, no log-settle window'
+          : 'bounded log-cursor collection, log-settle window, and expectation checks',
       facts: <String, Object?>{
         'sinceCursor': logCursor,
         'expectationRequested': expectLog != null || rejectLog != null,

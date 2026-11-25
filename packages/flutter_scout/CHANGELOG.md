@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Read-only queries (`where`, `locate`, `drag-status`) no longer wait out
+  the 150 ms log-settle window meant for inputs. They dispatch nothing, so
+  they report the logs already written and return; a `locate` with a run
+  log took about 160 ms of logs phase before, now under 30 ms.
 - `tap-text` receipts keep the helper's phase timings (snapshot, match,
   dispatch, settle, delta) and measure `logs`, as `tap` does. They used to
   replace them with `vmCallMs`/`totalMs` only, so every phase but connect

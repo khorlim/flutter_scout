@@ -38,6 +38,7 @@ extension _CliNavigation on FlutterScoutCli {
       assertNoErrors: false,
       outputTransform: parsed.flag('verbose') ? null : _compactWhere,
       prettyOutput: parsed.flag('verbose'),
+      readOnly: true,
     );
   }
 
@@ -114,6 +115,7 @@ extension _CliNavigation on FlutterScoutCli {
         'maxResponseBytes': '$maxResponseBytes',
       },
       assertNoErrors: false,
+      readOnly: true,
     );
   }
 

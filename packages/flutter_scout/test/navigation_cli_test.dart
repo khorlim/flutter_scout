@@ -162,6 +162,35 @@ void main() {
       },
     );
 
+    test('read-only queries skip the log-settle window', () async {
+      final fake = await _NavigationFakeVm.start();
+      addTearDown(fake.close);
+
+      late final Map<String, dynamic> located;
+      await _withNavigationSession(fake.uri, () async {
+        // A run log exists, so an input would wait about 150 ms for the
+        // lines it caused. A query dispatches nothing and waits for none.
+        File(p.join('.flutter_scout', 'logs.txt')).writeAsStringSync('');
+        final out = _CapturedStdout();
+        late final int exitCode;
+        await IOOverrides.runZoned(() async {
+          exitCode = await FlutterScoutCli().debugRunHandler([
+            'locate',
+            '--text',
+            'Hair Recovery',
+          ]);
+        }, stdout: () => out);
+        expect(exitCode, 0, reason: out.text);
+        located = jsonDecode(out.text) as Map<String, dynamic>;
+      });
+
+      final logs =
+          ((located['timings'] as Map)['phases'] as Map)['logs'] as Map;
+      expect(logs['status'], 'measured');
+      expect(logs['elapsedMs'] as int, lessThan(30));
+      expect(fake.mutations, isEmpty);
+    });
+
     test('bounds uses one uniquely scoped geometry observation', () async {
       final fake = await _NavigationFakeVm.start();
       addTearDown(fake.close);
@@ -531,4 +560,36 @@ void _expectAdvertisedPhaseTimings(Map<String, Object?> result) {
       expect((record['reason'] as String).trim(), isNotEmpty);
     }
   }
+}
+
+class _CapturedStdout implements Stdout {
+  final StringBuffer _buffer = StringBuffer();
+
+  String get text => _buffer.toString();
+
+  @override
+  void write(Object? object) => _buffer.write(object);
+
+  @override
+  void writeln([Object? object = '']) => _buffer.writeln(object);
+
+  @override
+  void writeAll(Iterable<dynamic> objects, [String separator = '']) =>
+      _buffer.writeAll(objects, separator);
+
+  @override
+  void writeCharCode(int charCode) => _buffer.writeCharCode(charCode);
+
+  @override
+  void add(List<int> data) =>
+      _buffer.write(utf8.decode(data, allowMalformed: true));
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  Future<void> flush() async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }
