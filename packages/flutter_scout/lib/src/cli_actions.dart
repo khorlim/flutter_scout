@@ -532,29 +532,43 @@ extension _CliActions on FlutterScoutCli {
     vmStopwatch.stop();
     result = _withProtocolDiagnostics('ext.flutter_scout.tapText', result);
     result = _materializeActionCapture(result, parsed.option('capture'));
+    final logStopwatch = Stopwatch()..start();
+    final expectLog = parsed.option('expect-log');
+    final rejectLog = parsed.option('reject-log');
     result = await _withRecentLogSignals(result, sinceCursor: actionLogCursor);
     result = await _applyLogExpectations(
       result,
       sinceCursor: actionLogCursor,
-      expectLog: parsed.option('expect-log'),
-      rejectLog: parsed.option('reject-log'),
+      expectLog: expectLog,
+      rejectLog: rejectLog,
       timeout: Duration(
         milliseconds:
             int.tryParse(parsed.option('expect-timeout') ?? '') ?? 5000,
       ),
     );
+    logStopwatch.stop();
     result = _assertActionHasNoErrors(
       result,
       enabled: !parsed.flag('allow-errors'),
     );
-    totalStopwatch.stop();
-    result = {
-      ...result,
-      'timings': {
-        'vmCallMs': vmStopwatch.elapsedMilliseconds,
-        'totalMs': totalStopwatch.elapsedMilliseconds,
+    result = _withMeasuredCliPhase(
+      result,
+      phase: 'logs',
+      elapsedMs: logStopwatch.elapsedMilliseconds,
+      scope:
+          'bounded log-cursor collection, log-settle window, and expectation checks',
+      facts: <String, Object?>{
+        'sinceCursor': actionLogCursor,
+        'expectationRequested': expectLog != null || rejectLog != null,
       },
-    };
+    );
+    totalStopwatch.stop();
+    result = _withCallTimings(
+      result,
+      vmCallMs: vmStopwatch.elapsedMilliseconds,
+      logMs: logStopwatch.elapsedMilliseconds,
+      totalMs: totalStopwatch.elapsedMilliseconds,
+    );
     final actionSucceeded = result['ok'] == true;
     result = _commitActionEvidence(
       method: 'ext.flutter_scout.tapText',

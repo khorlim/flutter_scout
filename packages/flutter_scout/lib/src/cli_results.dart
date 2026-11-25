@@ -77,21 +77,12 @@ extension _CliResults on FlutterScoutCli {
       },
     );
     totalStopwatch.stop();
-    final helperTimings = enrichedResult['timings'];
-    enrichedResult = {
-      ...enrichedResult,
-      'timings': <String, Object?>{
-        if (helperTimings is Map)
-          for (final entry in helperTimings.entries)
-            if (entry.key.toString() != 'totalMs')
-              entry.key.toString(): entry.value,
-        if (helperTimings is Map && helperTimings['totalMs'] is num)
-          'helperTotalMs': helperTimings['totalMs'],
-        'vmCallMs': vmStopwatch.elapsedMilliseconds,
-        'logSettleAndExpectationMs': logStopwatch.elapsedMilliseconds,
-        'totalMs': totalStopwatch.elapsedMilliseconds,
-      },
-    };
+    enrichedResult = _withCallTimings(
+      enrichedResult,
+      vmCallMs: vmStopwatch.elapsedMilliseconds,
+      logMs: logStopwatch.elapsedMilliseconds,
+      totalMs: totalStopwatch.elapsedMilliseconds,
+    );
     final actionSucceeded = enrichedResult['ok'] == true;
     enrichedResult = _commitActionEvidence(
       method: method,
@@ -106,6 +97,31 @@ extension _CliResults on FlutterScoutCli {
     _emitActionOutput(output, pretty: prettyOutput && !compact);
     if (record != null && actionSucceeded && enrichedResult['ok'] == true) {}
     return enrichedResult['ok'] == false ? 1 : 0;
+  }
+
+  /// Adds the CLI's own call timings to the helper's, keeping the helper's
+  /// phases and renaming its `totalMs` to `helperTotalMs`.
+  Map<String, dynamic> _withCallTimings(
+    Map<String, dynamic> result, {
+    required int vmCallMs,
+    required int logMs,
+    required int totalMs,
+  }) {
+    final helperTimings = result['timings'];
+    return {
+      ...result,
+      'timings': <String, Object?>{
+        if (helperTimings is Map)
+          for (final entry in helperTimings.entries)
+            if (entry.key.toString() != 'totalMs')
+              entry.key.toString(): entry.value,
+        if (helperTimings is Map && helperTimings['totalMs'] is num)
+          'helperTotalMs': helperTimings['totalMs'],
+        'vmCallMs': vmCallMs,
+        'logSettleAndExpectationMs': logMs,
+        'totalMs': totalMs,
+      },
+    };
   }
 
   /// Commits the replay journal and action-result event before any success is

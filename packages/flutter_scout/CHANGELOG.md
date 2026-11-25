@@ -1,5 +1,9 @@
 ## Unreleased
 
+- `tap-text` receipts keep the helper's phase timings (snapshot, match,
+  dispatch, settle, delta) and measure `logs`, as `tap` does. They used to
+  replace them with `vmCallMs`/`totalMs` only, so every phase but connect
+  read `helper_phase_missing_from_response`.
 - The agent scene no longer cuts brief scrollables to 3 and structured rows
   to 4 after the helper bounded them; it keeps the helper's bounds (at most
   8 lists, 6 rows) and adds anything it still cuts to `omitted`.
