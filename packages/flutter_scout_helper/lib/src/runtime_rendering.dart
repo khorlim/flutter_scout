@@ -16,10 +16,19 @@ extension _RuntimeRendering on FlutterScoutRuntime {
   Map<String, Object?> _renderingState() {
     final binding = WidgetsBinding.instance;
     final enabled = binding.framesEnabled;
+    final lifecycle = binding.lifecycleState?.name ?? 'unknown';
+    // Driven only for a request whose session opted into headless drive;
+    // without it, suspended rendering is reported (and refused) as before.
+    final headless = _headlessRequested;
+    final driven = headless && !enabled;
     return {
-      'status': enabled ? 'active' : 'suspended',
+      'status': enabled
+          ? 'active'
+          : driven
+          ? 'driven'
+          : 'suspended',
       'framesEnabled': enabled,
-      'lifecycle': binding.lifecycleState?.name ?? 'unknown',
+      'lifecycle': lifecycle,
       'schedulerPhase': binding.schedulerPhase.name,
       'hasScheduledFrame': binding.hasScheduledFrame,
       'completedFrameworkFrames': _completedFrameworkFrames,
@@ -28,15 +37,24 @@ extension _RuntimeRendering on FlutterScoutRuntime {
           : _renderingClock.elapsedMilliseconds - _lastFrameworkFrameAt!,
       'observedAt': DateTime.now().toUtc().toIso8601String(),
       'source': 'flutter_scheduler_and_framework_frame_callback',
-      'pixelFreshness': 'not_observed',
-      'scoutSchedulesFrames': false,
-      'nextAction': enabled
+      'pixelFreshness': driven ? 'scout_driven_frame' : 'not_observed',
+      'scoutSchedulesFrames': driven,
+      if (headless)
+        'headlessDrive': _headlessDriveState(
+          framesEnabled: enabled,
+          lifecycle: lifecycle,
+        ),
+      'nextAction': enabled || driven
           ? 'inspect_changes'
           : 'make_app_visible_then_observe_again',
       'limitations': [
         'An old frame can be a genuinely idle screen; age alone is not staleness.',
         'Completed framework frames do not prove compositor or platform-view pixels.',
-        if (!enabled)
+        if (driven)
+          'Frames are driven by Scout while the app is not visible; native '
+              'window pixels, platform views and vsync-timed behavior are not '
+              'what a visible app would show.',
+        if (!enabled && !driven)
           'Deferred widget builds may not reflect timer or network changes until rendering resumes.',
       ],
     };

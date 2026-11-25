@@ -53,6 +53,7 @@
         "deadlineEpochMs": {"type": "string", "pattern": "^[0-9]+$"},
         "errorCursor": {"type": "string", "pattern": "^[0-9]+$"},
         "requireLiveRendering": {"type": "string", "enum": ["true", "false"], "description": "Optional liveRenderingGuardV1 capability-gated requirement checked immediately before dispatch."},
+        "headlessDrive": {"type": "string", "enum": ["true", "false"], "description": "Optional headlessDriveV1 opt-in from a session started with --headless-drive. When true and Flutter has stopped frames because the app is not visible, the helper advances frames itself, reports rendering status driven and lets requireLiveRendering pass."},
         "freshTargets": {"type": "string", "maxLength": 2048, "description": "Optional targetFreshnessV1 JSON list of exact handles. A newer state generation is accepted only when the retained expected-generation snapshot and the current one have the same surface, field values and identical target nodes."}
       },
       "additionalProperties": {"type": "string"}

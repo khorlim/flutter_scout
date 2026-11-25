@@ -24,6 +24,7 @@ const Map<String, bool> _scoutProtocolCapabilities = <String, bool>{
   'observationNonInterferenceV1': true,
   'renderingStateV1': true,
   'liveRenderingGuardV1': true,
+  'headlessDriveV1': true,
   'targetFreshnessV1': true,
   'overlayExplicitOptInV1': true,
   'strictTypedParametersV1': true,
@@ -71,6 +72,7 @@ const Map<String, int> _protocolParameterByteLimits = <String, int>{
   'expectedStateGeneration': 32,
   'deadlineEpochMs': 32,
   'requireLiveRendering': 5,
+  'headlessDrive': 5,
   'freshTargets': 2048,
 };
 
@@ -90,6 +92,9 @@ const Set<String> _commonProtocolParameters = <String>{
   // Protocol-15 migration alias, documented in protocol/README.md.
   'errorsSinceCursor',
   'requireLiveRendering',
+  // headlessDriveV1: the caller's session opted into driving frames while
+  // the app is hidden. Absent or false keeps suspended rendering refused.
+  'headlessDrive',
   // targetFreshnessV1: exact handles whose unchanged nodes let a mutation
   // pass a newer state generation (background churn after preflight).
   'freshTargets',
@@ -304,6 +309,7 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
         _boundRunId = attachRunId;
       }
       return runZoned(() {
+        if (_headlessRequested) _beginHeadlessRequest();
         context.handlerEntered = true;
         return callback(method, params);
       }, zoneValues: zoneValues);
@@ -312,6 +318,7 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
     // take UI-thread time from the snapshots and settle the act waits on.
     // Inputs drawn meanwhile are queued and play once the act has answered.
     return runZoned(() async {
+      if (_headlessRequested) _beginHeadlessRequest();
       _drivingOverlay.hold();
       try {
         return await _dispatchMutation(context, callback);
@@ -610,6 +617,14 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
 
   ({String code, String message, Map<String, Object?> details})?
   _typedParameterValueIssue(Map<String, String> params) {
+    if (params.containsKey('headlessDrive') &&
+        !const {'true', 'false'}.contains(params['headlessDrive'])) {
+      return (
+        code: 'invalid_headless_drive',
+        message: 'headlessDrive must be true or false.',
+        details: const <String, Object?>{},
+      );
+    }
     final idempotencyKey = params['idempotencyKey'];
     if (idempotencyKey != null &&
         (idempotencyKey.codeUnits.length > 128 ||
@@ -736,7 +751,8 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
   _validateMutationImmediatelyBeforeDispatch(_RequestContext context) {
     final params = context.params;
     if (params['requireLiveRendering'] == 'true' &&
-        !WidgetsBinding.instance.framesEnabled) {
+        !WidgetsBinding.instance.framesEnabled &&
+        !_headlessDriving) {
       return _fail(
         'agent_live_view_unavailable',
         'Rendering is suspended; restore visibility and observe again.',

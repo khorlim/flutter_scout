@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:developer' as developer;
+import 'dart:ffi' as ffi;
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -25,6 +26,7 @@ part 'runtime_actions.dart';
 part 'runtime_privacy.dart';
 part 'runtime_timings.dart';
 part 'runtime_rendering.dart';
+part 'runtime_headless.dart';
 part 'runtime_typed_methods.dart';
 part 'runtime_protocol.dart';
 part 'runtime_resolution.dart';
@@ -118,6 +120,11 @@ class FlutterScoutRuntime {
   List<ScrollableState> _snapshotScrollStates = const <ScrollableState>[];
   Object? _idleSnapshotInputs;
   bool _renderingProbeInstalled = false;
+  final _HeadlessDrive _headless = _HeadlessDrive();
+
+  /// Replaces the macOS lock/display-sleep probe in tests.
+  @visibleForTesting
+  ({bool? locked, bool? asleep})? debugHeadlessHostFacts;
   final LinkedHashMap<String, _MutationRecord> _mutationRecords =
       LinkedHashMap<String, _MutationRecord>();
   Future<void> _mutationTail = Future<void>.value();
@@ -389,6 +396,36 @@ class FlutterScoutRuntime {
   @visibleForTesting
   int get debugManualMutationFrameAdvanceCount =>
       _manualMutationFrameAdvanceCount;
+
+  /// Headless-drive loop facts: `loop`, `stoppedReason`, frame counters.
+  @visibleForTesting
+  Map<String, Object?> get debugHeadlessDrive => {
+    'leaseActive': _headlessLeaseActive,
+    'loop': _headless.loop,
+    'stoppedReason': _headless.stoppedReason,
+    'requestFrames': _headless.requestFrames,
+    'loopFrames': _headless.loopFrames,
+    'frameScheduled': _headless.frameTimer != null,
+  };
+
+  /// Ends the headless-drive lease now, as its expiry timer would.
+  @visibleForTesting
+  void debugExpireHeadlessDrive() => _endHeadlessDrive('lease_expired');
+
+  /// A protocol-gated inspect, as the CLI's agent eyes send it.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugProtocolInspect(
+    Map<String, String> params,
+  ) async {
+    const method = 'ext.flutter_scout.inspect';
+    final response = await _dispatchProtocolRequest(
+      extensionName: method,
+      method: method,
+      params: params,
+      callback: _handleNavigationInspect,
+    );
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
 
   @visibleForTesting
   List<ScoutAnnotationTarget> debugVisibleAnnotationTargets() =>

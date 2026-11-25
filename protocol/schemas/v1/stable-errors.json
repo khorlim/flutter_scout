@@ -612,6 +612,10 @@
       "meaning": "The requested live action is unsupported or has invalid fields; no action was dispatched.",
       "family": "request_rejected"
     },
+    "invalid_headless_drive": {
+      "meaning": "The optional headlessDrive request flag was not a strict boolean string; nothing was dispatched.",
+      "family": "request_rejected"
+    },
     "invalid_live_rendering_guard": {
       "meaning": "The optional requireLiveRendering mutation guard was not a strict boolean string; nothing was dispatched.",
       "family": "request_rejected"

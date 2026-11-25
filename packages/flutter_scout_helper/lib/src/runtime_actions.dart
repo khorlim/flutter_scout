@@ -2185,9 +2185,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
         ? 'read_only_observation'
         : 'post_mutation_settling',
     if (frameAdvancePolicy == _FrameAdvancePolicy.observeOnly)
-      'scoutSchedulesFrames': false
+      // Headless drive advances one frame before a hidden app is observed.
+      'scoutSchedulesFrames': _headlessDriving
     else
       'scoutMayScheduleFrames': true,
+    if (_headlessDriving) 'headlessDriveFrameBeforeObservation': true,
     'scoutMayAdvanceDisabledFrames':
         frameAdvancePolicy == _FrameAdvancePolicy.mutationSettling,
     'phasePointerDispatch': false,

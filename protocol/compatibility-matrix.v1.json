@@ -49,6 +49,7 @@
       "boundedHelperRequestsV1",
       "boundedNavigation",
       "changedRegionCaptureV1",
+      "headlessDriveV1",
       "heldDragExclusion",
       "idempotencyTombstonesV1",
       "idempotentMutations",

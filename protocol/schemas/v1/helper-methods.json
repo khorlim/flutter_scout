@@ -35,6 +35,7 @@
     "errorsSinceCursor",
     "expectedStateGeneration",
     "freshTargets",
+    "headlessDrive",
     "idempotencyKey",
     "requireLiveRendering",
     "runId",

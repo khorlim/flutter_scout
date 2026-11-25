@@ -6,6 +6,14 @@
   screen moved. It is a known dispatched outcome (observe, then reconcile).
   Scroll keeps `ok` with `result: unchanged` at the end of its content.
 
+- Add optional helper `headlessDrive` request metadata and the
+  `headlessDriveV1` capability. A session opted in with `--headless-drive`
+  sends it on agent reads, mutations and captures; while Flutter has stopped
+  frames because the app is not visible, the helper advances bounded frames
+  itself, reports rendering status `driven` with a `headlessDrive` block
+  (reason, loop state, App Nap) and lets `requireLiveRendering` pass. Without
+  it, suspended rendering is reported and refused exactly as before.
+
 - Add optional helper `freshTargets` mutation metadata and the
   `targetFreshnessV1` capability: an exact-target mutation survives a state
   generation change after preflight only when its target nodes, surface and
