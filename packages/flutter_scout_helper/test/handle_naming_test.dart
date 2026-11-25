@@ -88,6 +88,13 @@ void main() {
                   ),
                 ),
               ),
+              // Adjacent chips, each with its own text.
+              Row(
+                children: [
+                  for (final chip in ['Points', 'Credit'])
+                    GestureDetector(onTap: () {}, child: Text(chip)),
+                ],
+              ),
               // Filter segments whose labels differ only by a symbol.
               GestureDetector(onTap: () {}, child: const Text('<180 days')),
               GestureDetector(onTap: () {}, child: const Text('>180 days')),
@@ -132,6 +139,9 @@ void main() {
       ]),
     );
     expect(ids.where((id) => id.contains('globalkey')), isEmpty);
+    // A chip is not also named after the chip next to it.
+    final points = controls.singleWhere((node) => node.id == 'tap.points');
+    expect(points.altIds, isNot(contains('tap.credit')));
     final keyed = controls.singleWhere((node) => node.id == 'btn.menu_button');
     expect(keyed.label, 'Default');
     final menu = controls.singleWhere((node) => node.id == 'btn.custom_menu');

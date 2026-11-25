@@ -1,5 +1,8 @@
 ## Unreleased
 
+* A small control that shows its own text no longer borrows the next
+  control's text as an alias (a "Points" chip also answering to
+  `tap.credit`); nearby-text aliases stay for icon-only controls.
 * A dialog, sheet or modal page is named from its stated title: an AppBar,
   SliverAppBar or Cupertino navigation bar title, a dialog or action sheet
   title, or a `Semantics(header: true)` (`source: appBarTitle`,

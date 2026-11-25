@@ -1505,7 +1505,16 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           node.key != null ||
           rect.width > 96 ||
           rect.height > 96 ||
-          node.id.contains('gesturedetector')) {
+          node.id.contains('gesturedetector') ||
+          // A control that shows its own text is named; a neighbour's text
+          // (the next chip in a row) is not another name for it.
+          textNodes.any(
+            (text) =>
+                text.widgetType != 'RichText' &&
+                text.label == node.label &&
+                text.rect != null &&
+                _contains(rect, text.rect!),
+          )) {
         continue;
       }
       final candidates = [

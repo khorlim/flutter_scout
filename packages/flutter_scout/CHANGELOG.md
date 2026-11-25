@@ -1,5 +1,8 @@
 ## Unreleased
 
+- The agent scene no longer cuts brief scrollables to 3 and structured rows
+  to 4 after the helper bounded them; it keeps the helper's bounds (at most
+  8 lists, 6 rows) and adds anything it still cuts to `omitted`.
 - `inspect` accepts `maxItems` up to 500 (was 100, which made a larger
   query fail); it bounds only brief lists, and named sections are never cut.
 - `act` and `taps` (shipped client and bridge) now settle after every input

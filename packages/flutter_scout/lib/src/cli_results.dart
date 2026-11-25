@@ -1052,6 +1052,31 @@ extension _CliResults on FlutterScoutCli {
     return compact;
   }
 
+  static const _briefRowLimit = 6;
+  static const _briefScrollableLimit = 8;
+
+  /// The helper's `omitted` counts plus any rows or lists cut above.
+  Object? _briefOmitted(Map payload) {
+    final omitted = payload['omitted'];
+    int extra(String key, int limit) {
+      final list = payload[key];
+      return list is List && list.length > limit ? list.length - limit : 0;
+    }
+
+    final rows = extra('structuredRows', _briefRowLimit);
+    final scrollables = extra('scrollables', _briefScrollableLimit);
+    if (rows == 0 && scrollables == 0) return omitted;
+    final merged = <String, Object?>{
+      if (omitted is Map) ...omitted.cast<String, Object?>(),
+    };
+    int count(String key) => (merged[key] as num?)?.toInt() ?? 0;
+    if (rows > 0) merged['structuredRows'] = count('structuredRows') + rows;
+    if (scrollables > 0) {
+      merged['scrollables'] = count('scrollables') + scrollables;
+    }
+    return merged;
+  }
+
   Map<String, dynamic> _compactBriefInspect(Map<String, dynamic> result) {
     final payload = _observationPayload(result);
     final visible = payload['visibleText'];
@@ -1118,16 +1143,23 @@ extension _CliResults on FlutterScoutCli {
         'interactablesOmitted': payload['interactablesOmitted'],
       if (_isNonEmptyList(payload['inspectWarnings']))
         'inspectWarnings': payload['inspectWarnings'],
+      // The helper bounds these lists (at most 6 rows and 8 lists) and counts
+      // what it cut in `omitted`. The same bounds hold an older helper's
+      // payload, and anything cut here is counted there too.
       if (_isNonEmptyList(payload['structuredRows']))
-        'structuredRows': (payload['structuredRows'] as List).take(4).toList(),
+        'structuredRows': (payload['structuredRows'] as List)
+            .take(_briefRowLimit)
+            .toList(),
       if (_isNonEmptyList(payload['scrollables']))
         'scrollables': <Object?>[
-          for (final item in (payload['scrollables'] as List).take(3))
+          for (final item in (payload['scrollables'] as List).take(
+            _briefScrollableLimit,
+          ))
             if (item is Map) _compactBriefObservationScrollRegion(item),
         ],
       if (payload['omittedSections'] != null)
         'omittedSections': payload['omittedSections'],
-      if (payload['omitted'] != null) 'omitted': payload['omitted'],
+      'omitted': ?_briefOmitted(payload),
       if (payload['fieldValues'] is Map &&
           (payload['fieldValues'] as Map).isNotEmpty)
         'fieldValues': payload['fieldValues'],

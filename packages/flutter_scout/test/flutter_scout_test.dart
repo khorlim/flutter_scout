@@ -1938,8 +1938,9 @@ void main() {
       'custom_paint_pixels_unobserved',
     ]);
     expect(perception.containsKey('limitations'), isFalse);
-    expect((payload['scrollables']! as List), hasLength(3));
-    expect(jsonEncode(result).length, lessThan(5000));
+    expect((payload['scrollables']! as List), hasLength(8));
+    expect((payload['omitted']! as Map)['scrollables'], 2);
+    expect(jsonEncode(result).length, lessThan(8000));
   });
 
   test('where projection bounds geometry and preserves orientation facts', () {
