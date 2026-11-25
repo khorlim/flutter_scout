@@ -229,10 +229,15 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     _previousPaintHook?.call(renderObject);
   }
 
+  /// Told about every app build scheduled while this tracks app work
+  /// (headless drive builds it when Flutter has stopped frames).
+  VoidCallback? onAppBuildScheduled;
+
   void _onBuildScheduled() {
     _buildPending = true;
     appWorkSeq += 1;
     _previousBuildScheduled?.call();
+    onAppBuildScheduled?.call();
   }
 
   bool _frameProbeInstalled = false;

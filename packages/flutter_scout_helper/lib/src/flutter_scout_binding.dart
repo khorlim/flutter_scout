@@ -886,6 +886,11 @@ class FlutterScoutRuntime {
   @visibleForTesting
   int get debugAppTransientCallbackCount => _appTransientCallbackCount;
 
+  /// Test-only: whether the driving overlay still tracks app work (its
+  /// build/paint hooks are intact).
+  @visibleForTesting
+  bool get debugOverlayTracksAppWork => _drivingOverlay.tracksAppWork;
+
   /// Test-only error injection for privacy and runtime-signal coverage.
   @visibleForTesting
   void debugRecordError(String message) {

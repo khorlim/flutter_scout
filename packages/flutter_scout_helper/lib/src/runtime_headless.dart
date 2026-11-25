@@ -21,7 +21,8 @@ class _HeadlessDrive {
   Timer? leaseTimer;
   Timer? frameTimer;
   bool buildPending = false;
-  bool buildHookInstalled = false;
+  VoidCallback? buildHook;
+  VoidCallback? previousBuildScheduled;
 
   /// Frames Scout drove for requests (observation, preflight, capture).
   int requestFrames = 0;
@@ -111,7 +112,9 @@ extension _RuntimeHeadless on FlutterScoutRuntime {
 
   bool get _headlessNeedsFrame =>
       _headless.buildPending ||
-      WidgetsBinding.instance.transientCallbackCount > 0;
+      // The driving overlay's own ticker is not app work: nobody sees it
+      // while the app is hidden, so it never keeps the loop running.
+      _appTransientCallbackCount > 0;
 
   /// Schedules the next self-driven frame when the drive is attached, Flutter
   /// has stopped frames and a build or animation is pending.
@@ -168,22 +171,31 @@ extension _RuntimeHeadless on FlutterScoutRuntime {
     if (drive.appNapStatus == 'prevented') drive.appNapStatus = 'released';
   }
 
-  /// A setState while frames are stopped schedules no engine frame; this
-  /// hook notices it so the loop can build it. Installed once, on first use.
+  /// A setState while frames are stopped schedules no engine frame; the
+  /// build hook notices it so the loop can build it.
+  void _noteHeadlessBuildScheduled() {
+    if (_headlessLeaseActive && !WidgetsBinding.instance.framesEnabled) {
+      _headless.buildPending = true;
+      _scheduleHeadlessFrame();
+    }
+  }
+
+  /// While the driving overlay tracks app work it owns `onBuildScheduled`
+  /// (it checks that the hook is still its own) and forwards app builds
+  /// here; otherwise headless drive chains its own hook.
   void _installHeadlessBuildHook() {
     final drive = _headless;
-    if (drive.buildHookInstalled) return;
+    _drivingOverlay.onAppBuildScheduled ??= _noteHeadlessBuildScheduled;
+    if (_drivingOverlay.tracksAppWork) return;
     final owner = WidgetsBinding.instance.buildOwner;
     if (owner == null) return;
-    drive.buildHookInstalled = true;
-    final previous = owner.onBuildScheduled;
-    owner.onBuildScheduled = () {
-      previous?.call();
-      if (_headlessLeaseActive && !WidgetsBinding.instance.framesEnabled) {
-        drive.buildPending = true;
-        _scheduleHeadlessFrame();
-      }
+    final hook = drive.buildHook ??= () {
+      drive.previousBuildScheduled?.call();
+      _noteHeadlessBuildScheduled();
     };
+    if (identical(owner.onBuildScheduled, hook)) return;
+    drive.previousBuildScheduled = owner.onBuildScheduled;
+    owner.onBuildScheduled = hook;
   }
 
   /// Why Flutter stopped frames, most specific first. Lock and display

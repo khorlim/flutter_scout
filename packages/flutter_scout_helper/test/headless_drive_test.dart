@@ -235,4 +235,44 @@ void main() {
     expect((active['headlessDrive'] as Map)['driving'], false);
     finish(tester);
   });
+
+  testWidgets('the driving overlay keeps working and drives no frames itself', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    runtime = FlutterScoutHelper.debugRuntime;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: _Counter(key: counter)),
+      ),
+    );
+    await runtime.debugAgentOverlay('attach');
+    await tester.pump();
+    await tester.pump();
+    expect(runtime.debugOverlayTracksAppWork, true);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+
+    await inspect(tester, headless: true);
+    // Headless drive left the overlay's build hook in place.
+    expect(runtime.debugOverlayTracksAppWork, true);
+    // The overlay's own ticker is not app work: the loop stays idle.
+    expect(runtime.debugAppTransientCallbackCount, 0);
+    expect(runtime.debugHeadlessDrive['loop'], 'idle');
+
+    // An app build still reaches the loop through the overlay's hook.
+    final before = loopFrames();
+    await tester.runAsync(() async {
+      counter.currentState!.increment();
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    expect(loopFrames() - before, greaterThanOrEqualTo(1));
+    expect(runtime.debugHeadlessDrive['loop'], 'idle');
+    expect(find.text('Count 1'), findsOneWidget);
+
+    finish(tester);
+    await runtime.debugAgentOverlay('detach');
+    for (var i = 0; i < 40; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+  });
 }
