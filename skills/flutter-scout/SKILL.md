@@ -24,9 +24,14 @@ flutter-scout --single-json ensure --device macos --project <app> --name <task>
 ```
 
 A cold build may be silent for minutes; Scout keeps waiting while the build
-uses CPU. If a launch fails, read `error.message`, `failureMode` and
-`failureCause` before retrying, and raise `--launch-idle-timeout <s>` or
-`--launch-timeout <s>` only when they say a limit ended a live build.
+uses CPU. Every failed launch or ensure carries `error.message`, `failureMode`
+and `failureCause` in its final envelope, and stderr gets one
+`stage:'launch_failed'` record whose `cause` is a one-line summary. Read them
+before retrying. Raise `--launch-idle-timeout <s>` or `--launch-timeout <s>`
+only when they say a limit ended a live build. `failureMode:
+'helper_not_ready'` means the app is running but its helper did not answer in
+20 s (a loaded machine): run `status` first, and do not `launch --replace`
+while it may still become ready.
 
 Keep the launch process attached until its final envelope. Progress belongs
 on stderr; do not merge it into JSON stdout. While heartbeats continue, do
@@ -77,6 +82,7 @@ tool calls.
 node <client> serve --app task
 node <client> call --app task --brief observe
 node <client> call --app task --brief act '{"viewRevision":7,"action":{"method":"tap","args":["btn.save"]}}'
+node <client> call --app task --brief taps '{"viewRevision":7,"targets":["btn.6","btn.0","btn.1","btn.5"],"allowUnrelatedChanges":true}'
 node <client> call --app task --brief query '{"method":"locate","params":{"text":"Save"}}'
 node <client> call --app task --brief act '{"viewRevision":8,"action":{"method":"input","args":["AI Smoke"],"params":{"target":"field.customer_name"}}}'
 node <client> call --app task --brief act - <<'JSON'
@@ -101,6 +107,26 @@ in-flight input is never resent. A bridge idle for 30 minutes stops itself.
 
 act performs one input, consumes its canonical receipt, acknowledges success,
 and returns the latest scene. Eyes continue independently while the hand runs.
+
+Response shape: observe, watch, act and taps all carry the revision for your
+next decision at the top level as `viewRevision`. The screen is `view` on
+observe and watch, and `scene.view` on act, taps and rejected hand requests
+(`scene.viewRevision` equals the top-level one). act and taps keep every
+intervening alert in `events` and only count plain view updates
+(`viewEvents`). Visible strings are in
+`view.visibleText`, controls in `view.interactables` (each with `id`, `kind`,
+`label` and `enabled`), typed values in `view.fieldValues`. A control reports
+`enabled:false` when Flutter knows it is off (null onPressed/onTap/onChanged,
+`Semantics(enabled: false)`, a read-only field); a button whose handler is set
+but ignores taps (app-side validation) still reports `enabled:true`.
+
+When an input changed the screen, route or surface (opening a list that
+still loads), act waits until the passive eyes see no view change for two
+samples (at most 3 s) before taking the returned scene, and reports
+`settle: {status, waitedMs, viewChanges}`. `settled` means that revision is
+current for your next act; `still_changing` means the screen kept changing
+(observe again or watch for the content you need). Nothing is pumped or
+retried.
 It never retries or waits for business completion. A start acceptance ticket
 is not dispatch or success. Use start/next/acknowledge directly when you need
 fine-grained concurrent control. Only one event consumer is allowed.
@@ -188,9 +214,16 @@ observed handle, or scroll/swipe with `params.target`) can add
 every target is unchanged, enabled and hit-testable on the same surface; the
 app's hit test then checks nothing covers it. A rejection names the cause in
 `details.staleReason`. Use it only for changes you have judged unrelated.
-On a number keypad, observe once and tap each key with that revision and the
-flag: the display the previous key updated does not invalidate the next key.
-Read the typed value afterwards.
+Keypads, PIN pads and steppers: send the keys in one `taps` call (bridge
+`taps {viewRevision, targets, allowUnrelatedChanges}`, client
+`scout.taps(revision, targets, {allowUnrelatedChanges: true})`, 1 to 32
+observed handles). Each key is an ordinary exact-handle tap decided from that
+revision, with its own canonical receipt; the flag lets the display the
+previous key updated not invalidate the next key. It stops at the first tap
+that fails or is rejected and never retries or skips: read `completed`,
+`taps[]` (`target`, `ok`, `actionId`, `dispatch`; the last attempted tap keeps
+its full `result`), `error`, then one final `scene`. A tap that navigates
+makes the rest fail as stale, by design. Read the typed value afterwards.
 
 Scroll both ways: `args: ['up'|'down'|'left'|'right']` sets the direction
 (default down) and a negative `distance` reverses it:

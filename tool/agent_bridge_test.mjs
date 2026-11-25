@@ -178,3 +178,18 @@ test('serve fails cleanly with the CLI cause and leaves no server', async () => 
   assert.equal(served.json.error.exitCode, 1);
   assert.equal(existsSync(b.socket), false);
 });
+
+test('taps and act carry the next revision at the top level, like observe', async () => {
+  const b = bridge('taps');
+  assert.equal((await b.serve()).code, 0);
+  const scene = await b.call('observe');
+  const taps = await b.call('taps', JSON.stringify({ viewRevision: scene.json.viewRevision, targets: ['btn.save'] }));
+  assert.equal(taps.code, 0, JSON.stringify(taps.json));
+  assert.equal(taps.json.completed, 1);
+  assert.equal(taps.json.taps[0].result.dispatch, 'dispatched');
+  assert.equal(taps.json.viewRevision, taps.json.scene.viewRevision);
+  const act = await b.call('act', JSON.stringify({ viewRevision: taps.json.viewRevision,
+    action: { method: 'tap', args: ['btn.save'] } }));
+  assert.equal(act.json.viewRevision, act.json.scene.viewRevision);
+  assert.deepEqual(b.requests().filter(r => r.method === 'start').map(r => r.args), [['btn.save'], ['btn.save']]);
+});

@@ -58,6 +58,10 @@ const outcome = await agent.act(scene.viewRevision, {
   method: 'tap', args: [observedTarget],
 });
 // Check outcome.ok, outcome.result and outcome.scene before another action.
+// outcome.viewRevision === outcome.scene.viewRevision, like observe's top level.
+// Several observed keys in order, one receipt each, one final scene:
+const keyed = await agent.taps(scene.viewRevision, ['btn.6', 'btn.0'],
+  {allowUnrelatedChanges: true});
 // When ok is false, outcome.error and outcome.dispatch carry the receipt's
 // reason (or the follow-up observation's), never null.
 // Low-level alternative for fine-grained concurrent control:
@@ -87,7 +91,8 @@ connect error, and reuses a live bridge for the same app. `call --app <name>
 (capabilities, timings, protocol versions, command/run ids, coordinate-frame
 and physical-pixel duplicates) and nothing else: outcomes, errors, dispatch,
 omissions and safety fields stay. Methods mirror the client with named fields: `act {viewRevision,
-action, timeoutMs}`, `start`, `acknowledge {actionId}`, `reconcile {actionId,
+action, timeoutMs}`, `taps {viewRevision, targets, allowUnrelatedChanges,
+timeoutMs}`, `start`, `acknowledge {actionId}`, `reconcile {actionId,
 viewRevision}`, `next {timeoutMs}`, `watch {condition, timeoutMs, wait}`, `react`,
 `cancel {scope, conditionId}`, `query {method, params, args}`, `observe`,
 `status`, `foreground`, plus `bridge` (bridge status), `disconnect` (close
@@ -113,6 +118,14 @@ while an input is running. An idle bridge stops after 30 minutes.
 `actionId`/`conditionId`; do not discard unrelated alerts while waiting for one
 receipt. New observations reach the agent through awaited tool results. This
 does not by itself wake or interrupt a model that is still reasoning.
+
+Shapes: `observe`, `status` and `watch` (with `wait`) return the scene at the
+top level (`viewRevision`, `view`, `actionable`, `hand`); `act` and `taps`
+return `{ok, viewRevision, error?, dispatch?, result | taps, settle?, scene,
+events, viewEvents}` with the scene under `scene` and the same top-level
+`viewRevision`. `events` holds every intervening receipt, condition, reaction
+or stop; plain view updates are only counted in `viewEvents`.
+Visible strings live in `view.visibleText` (or `scene.view.visibleText`).
 
 ## Three independent outcomes
 

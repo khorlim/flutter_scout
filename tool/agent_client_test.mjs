@@ -113,6 +113,79 @@ test('act acknowledges a successful receipt before refreshing the scene', async 
   client.abort();
 });
 
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+test('taps sends observed handles in order, stops at the first failure, then one scene', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const result = client.taps(1, ['btn.1', 'btn.2', 'btn.3'], { allowUnrelatedChanges: true });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await tick();
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched' } } });
+  await tick();
+  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
+  await tick();
+  send({ id: requests[3].id, actionId: 'a2', phase: 'accepted' });
+  await tick();
+  send({ id: requests[4].id, event: { type: 'action', actionId: 'a2',
+    result: { ok: false, dispatch: 'dispatched', error: { code: 'target_occluded' } } } });
+  await tick();
+  send({ id: requests[5].id, ok: true, viewRevision: 4, view: { screen: 'Contact' } });
+  const outcome = await result;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.completed, 1);
+  assert.deepEqual(outcome.error, { code: 'target_occluded' });
+  assert.deepEqual(outcome.taps.map(tap => [tap.target, tap.ok]), [['btn.1', true], ['btn.2', false]]);
+  assert.equal(outcome.taps[1].result.error.code, 'target_occluded');
+  // Same decision revision and explicit authority for every tap; btn.3 is never sent.
+  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'acknowledge', 'start', 'next', 'observe']);
+  for (const start of requests.filter(r => r.method === 'start')) {
+    assert.equal(start.viewRevision, 1);
+    assert.equal(start.action.allowUnrelatedChanges, true);
+  }
+  assert.deepEqual(requests.filter(r => r.method === 'start').map(r => r.action.args[0]), ['btn.1', 'btn.2']);
+  assert.equal(outcome.viewRevision, 4);
+  assert.equal(outcome.scene.viewRevision, 4);
+  await assert.rejects(client.taps(4, []), /1..32 observed handles/);
+  client.abort();
+});
+
+test('act returns a settled scene after it changed the screen', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const result = client.act(1, { method: 'tap', args: ['btn.members'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await tick();
+  // A view update before the receipt is counted, not returned in full.
+  send({ id: requests[1].id, event: { type: 'view', viewRevision: 2, view: { screen: 'Home' } } });
+  await tick();
+  send({ id: requests[2].id, event: { type: 'action', actionId: 'a1',
+    result: { ok: true, dispatch: 'dispatched', delta: { screenChanged: true } } } });
+  await tick();
+  send({ id: requests[3].id, ok: true, hand: { unacknowledgedAction: null } });
+  await tick();
+  send({ id: requests[4].id, ok: true, viewRevision: 3, view: { screen: 'Members' } });
+  await tick();
+  // The list loads (one view change), then a full quiet window passes.
+  send({ id: requests[5].id, event: { type: 'view', viewRevision: 4, view: { screen: 'Members' } } });
+  await tick();
+  send({ id: requests[6].id, event: { type: 'timeout' } });
+  await tick();
+  send({ id: requests[7].id, ok: true, viewRevision: 4, view: { screen: 'Members', visibleText: ['Ali'] } });
+  const outcome = await result;
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.settle.status, 'settled');
+  assert.equal(outcome.settle.viewChanges, 1);
+  assert.equal(outcome.viewRevision, 4);
+  assert.equal(outcome.scene.viewRevision, 4);
+  assert.deepEqual(outcome.events, []);
+  assert.equal(outcome.viewEvents, 1);
+  assert.deepEqual(requests.map(r => r.method),
+    ['start', 'next', 'next', 'acknowledge', 'observe', 'next', 'next', 'observe']);
+  assert.equal(requests[6].timeoutMs, 500);
+  client.abort();
+});
+
 test('transport loss rejects the action as unknown without retry', async () => {
   const { client, requests, child } = fixture();
   await client.ready;

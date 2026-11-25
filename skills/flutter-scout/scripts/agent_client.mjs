@@ -20,6 +20,17 @@ function agentError(code, message, extra = {}) {
   return Object.assign(new Error(message), { code, dispatch: 'not_dispatched', ...extra });
 }
 
+// Bounds for taps() and for the settled scene after a navigating input.
+const maxTaps = 32;
+const settleBudgetMs = 3000;
+
+/** Every input outcome carries the next decision's revision at the top
+ * level, as observe does; the screen itself stays in `scene.view`. */
+function withRevision(outcome) {
+  const revision = outcome.scene?.viewRevision;
+  return Number.isInteger(revision) && outcome.viewRevision === undefined ? { ...outcome, viewRevision: revision } : outcome;
+}
+
 /** Why an input or its follow-up observation failed, from the canonical
  * receipt first, then the scene. */
 function inputFailure(result, scene) {
@@ -39,6 +50,7 @@ export class ScoutAgent {
     const child = spawn(binary, ['--app', app, 'agent', '--interval-ms', String(intervalMs),
       '--max-items', String(maxItems)], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     const client = new ScoutAgent(child);
+    client.intervalMs = intervalMs;
     let ready;
     try { ready = await client.ready; } catch (error) { throw await client.settle(error); }
     if (ready.agentProtocol !== 2) {
@@ -65,6 +77,7 @@ export class ScoutAgent {
     this.pending = new Map();
     this.serial = 0;
     this.latest = null;
+    this.intervalMs = 250;
     this.closed = false;
     this.closing = false;
     this.failure = null;
@@ -269,49 +282,152 @@ export class ScoutAgent {
   reconcile(actionId, viewRevision) { return this.request('reconcile', { actionId, viewRevision }); }
 
   /** One input, with independent eyes throughout; never retries or waits for
-   * business completion. Returns all intervening events, including failures.
+   * business completion. Returns all intervening events, including failures;
+   * plain view updates are only counted (`viewEvents`), as the returned
+   * scene is newer.
+   * After an input that changed the screen or surface, the returned scene is
+   * taken once the eyes saw the view settle (see settledScene).
    * Do not run another next()/act() consumer concurrently. */
   async act(viewRevision, action, timeoutMs = 45000) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new TypeError('act timeout must be 1..120000 ms');
     if (this.acting || this.consuming) throw new Error('Only one act/event consumer at a time');
     this.acting = true;
-    const events = [];
+    const log = { events: [], viewEvents: 0 };
     const deadline = Date.now() + timeoutMs;
+    const before = this.latest?.view;
     try {
-      const ticket = await this.start(viewRevision, action);
-      if (!ticket.ok) return { ...ticket, events };
-      for (;;) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0 || events.length > 80) {
-          this.abort();
-          throw Object.assign(new Error('Input receipt unavailable within the bounded action budget; reconcile before further input'),
-            { code: 'scout_agent_receipt_unavailable', dispatch: 'dispatch_outcome_unknown' });
-        }
-        const response = await this.next(Math.min(10000, remaining));
-        if (!response.ok) return { ...response, actionId: ticket.actionId, events };
-        const event = response.event;
-        if (event?.type === 'timeout') continue;
-        if (event?.type !== 'action' || event.actionId !== ticket.actionId) events.push(event);
-        if (event?.type === 'closed') {
-          throw agentError('scout_agent_closed_before_receipt',
-            'Scout closed before delivering the input receipt; reconcile before further input',
-            { dispatch: 'dispatch_outcome_unknown' });
-        }
-        if (event?.type !== 'action' || event.actionId !== ticket.actionId) continue;
-        if (event.result?.ok === true) {
-          const acknowledged = await this.acknowledge(ticket.actionId);
-          if (!acknowledged.ok) return { ...acknowledged, actionId: ticket.actionId, result: event.result, events };
-        }
-        const scene = await this.observe();
-        const ok = event.result?.ok === true && scene.ok === true;
-        // A failed input keeps its reason in the receipt; lift it so a caller
-        // reading only the top level never sees ok:false with no error.
-        const failure = ok ? null : inputFailure(event.result, scene);
-        return { ok, actionId: ticket.actionId,
-          ...(failure ? { error: failure.error, dispatch: failure.dispatch } : {}),
-          result: event.result, scene, events };
-      }
+      const step = await this.inputOnce(viewRevision, action, deadline, log);
+      if (step.stopped) return withRevision(step.stopped);
+      const { scene, settle } = await this.settledScene(step.result, before, deadline, log);
+      const ok = step.result?.ok === true && scene.ok === true;
+      // A failed input keeps its reason in the receipt; lift it so a caller
+      // reading only the top level never sees ok:false with no error.
+      const failure = ok ? null : inputFailure(step.result, scene);
+      return withRevision({ ok, actionId: step.actionId,
+        ...(failure ? { error: failure.error, dispatch: failure.dispatch } : {}),
+        result: step.result, ...(settle ? { settle } : {}), scene, ...log });
     } finally { this.acting = false; }
+  }
+
+  /** Taps observed exact handles in order (a keypad, PIN pad or stepper),
+   * all decided from `viewRevision`, one canonical receipt each, then one
+   * scene. Stops at the first tap that fails or is rejected; never retries
+   * or skips. Each tap is an ordinary act: the staleness guard, hit test and
+   * receipt rules are unchanged, so a tap that navigates makes the next one
+   * fail as stale. A keypad display that updates between keys needs
+   * `allowUnrelatedChanges`. */
+  async taps(viewRevision, targets, { allowUnrelatedChanges = false, timeoutMs = 45000 } = {}) {
+    if (!Array.isArray(targets) || targets.length < 1 || targets.length > maxTaps ||
+        targets.some(target => typeof target !== 'string' || !target)) {
+      throw new TypeError(`taps needs 1..${maxTaps} observed handles`);
+    }
+    if (typeof allowUnrelatedChanges !== 'boolean') throw new TypeError('allowUnrelatedChanges must be true or false');
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new TypeError('taps timeout must be 1..120000 ms');
+    if (this.acting || this.consuming) throw new Error('Only one act/event consumer at a time');
+    this.acting = true;
+    const log = { events: [], viewEvents: 0 };
+    const receipts = [];
+    const deadline = Date.now() + timeoutMs;
+    const before = this.latest?.view;
+    try {
+      let last = null;
+      for (const target of targets) {
+        const action = { method: 'tap', args: [target], ...(allowUnrelatedChanges ? { allowUnrelatedChanges } : {}) };
+        const step = await this.inputOnce(viewRevision, action, deadline, log);
+        if (step.stopped) {
+          const { scene, events: _events, viewEvents: _views, ...rest } = step.stopped;
+          receipts.push({ target, ...rest });
+          return withRevision({ ok: false, completed: receipts.length - 1, requested: targets.length,
+            error: rest.error ?? { code: 'tap_rejected', message: `Tap ${target} was not accepted; nothing more was sent.` },
+            dispatch: rest.dispatch ?? 'not_dispatched', taps: receipts,
+            ...(scene ? { scene } : {}), ...log });
+        }
+        const result = step.result;
+        receipts.push({ target, ok: result?.ok === true, actionId: step.actionId, dispatch: result?.dispatch ?? null,
+          ...(result?.warnings ? { warnings: result.warnings } : {}), ...(result?.error ? { error: result.error } : {}) });
+        last = step.result;
+        if (result?.ok !== true) break;
+      }
+      // The last attempted tap keeps its whole canonical receipt; every
+      // receipt stays in the private journal.
+      receipts[receipts.length - 1].result = last;
+      const { scene, settle } = await this.settledScene(last, before, deadline, log);
+      const failed = receipts.find(receipt => !receipt.ok);
+      const ok = !failed && scene.ok === true;
+      const failure = ok ? null : inputFailure(last, scene);
+      return withRevision({ ok, completed: receipts.filter(receipt => receipt.ok).length, requested: targets.length,
+        ...(failure ? { error: failure.error, dispatch: failure.dispatch } : {}),
+        taps: receipts, ...(settle ? { settle } : {}), scene, ...log });
+    } finally { this.acting = false; }
+  }
+
+  /** start() one input and consume its receipt; acknowledges success.
+   * Returns {actionId, result}, or {stopped} with the response to return. */
+  async inputOnce(viewRevision, action, deadline, log) {
+    const ticket = await this.start(viewRevision, action);
+    if (!ticket.ok) return { stopped: { ...ticket, ...log } };
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0 || log.events.length + log.viewEvents > 80) {
+        this.abort();
+        throw Object.assign(new Error('Input receipt unavailable within the bounded action budget; reconcile before further input'),
+          { code: 'scout_agent_receipt_unavailable', dispatch: 'dispatch_outcome_unknown' });
+      }
+      const response = await this.next(Math.min(10000, remaining));
+      if (!response.ok) return { stopped: { ...response, actionId: ticket.actionId, ...log } };
+      const event = response.event;
+      if (event?.type === 'timeout') continue;
+      // Plain view updates are only counted: the returned scene is newer.
+      if (event?.type === 'view') { log.viewEvents += 1; continue; }
+      if (event?.type !== 'action' || event.actionId !== ticket.actionId) log.events.push(event);
+      if (event?.type === 'closed') {
+        throw agentError('scout_agent_closed_before_receipt',
+          'Scout closed before delivering the input receipt; reconcile before further input',
+          { dispatch: 'dispatch_outcome_unknown' });
+      }
+      if (event?.type !== 'action' || event.actionId !== ticket.actionId) continue;
+      if (event.result?.ok === true) {
+        const acknowledged = await this.acknowledge(ticket.actionId);
+        if (!acknowledged.ok) return { stopped: { ...acknowledged, actionId: ticket.actionId, result: event.result, ...log } };
+      }
+      return { actionId: ticket.actionId, result: event.result };
+    }
+  }
+
+  /** The scene after an input. When the receipt or the scene shows a new
+   * screen, route or surface (a page still loading its list), it waits until
+   * the passive eyes report no view change for two consecutive samples, at
+   * most settleBudgetMs, then observes, so the returned revision is usable
+   * for the next decision. No frames are pumped and nothing is retried;
+   * `settle` reports what happened. */
+  async settledScene(result, before, deadline, log) {
+    let scene = await this.observe();
+    const delta = result?.ok === true ? result.delta : null;
+    const moved = delta?.screenChanged === true || delta?.route?.changed === true ||
+      delta?.activeSurface?.changed === true ||
+      (typeof before?.screen === 'string' && typeof scene.view?.screen === 'string' && before.screen !== scene.view.screen);
+    if (!moved || scene.ok !== true) return { scene };
+    const quietMs = Math.max(500, 2 * this.intervalMs);
+    const started = Date.now();
+    const budget = Math.min(settleBudgetMs, deadline - started);
+    let viewChanges = 0;
+    let status = 'still_changing';
+    while (Date.now() - started < budget) {
+      const wait = Math.min(quietMs, budget - (Date.now() - started));
+      const response = await this.next(wait);
+      if (!response.ok) { status = 'unavailable'; break; }
+      const event = response.event;
+      if (event?.type === 'timeout') {
+        // A full quiet window with no view event: two samples saw one state.
+        if (wait === quietMs) status = 'settled';
+        break;
+      }
+      if (event?.type === 'view') { viewChanges += 1; continue; }
+      log.events.push(event);
+      if (event?.type === 'closed') { status = 'unavailable'; break; }
+    }
+    scene = await this.observe();
+    return { scene, settle: { status, waitedMs: Date.now() - started, viewChanges } };
   }
   watch(condition, timeoutMs = 5000) { return this.request('watch', { condition, timeoutMs }); }
 
@@ -393,6 +509,7 @@ export class ScoutAgent {
 const bridgeParams = {
   observe: [], status: [], foreground: [], bridge: [], disconnect: [], close: [],
   act: ['viewRevision', 'action', 'timeoutMs', 'argv'],
+  taps: ['viewRevision', 'targets', 'allowUnrelatedChanges', 'timeoutMs'],
   start: ['viewRevision', 'action', 'argv'],
   acknowledge: ['actionId'],
   reconcile: ['actionId', 'viewRevision'],
@@ -573,6 +690,10 @@ export class ScoutBridge {
       case 'status': result = await agent.status(); break;
       case 'foreground': result = await agent.foreground(); break;
       case 'act': result = await agent.act(p.viewRevision, p.action, p.timeoutMs ?? 45000); break;
+      case 'taps':
+        result = await agent.taps(p.viewRevision, p.targets,
+          { allowUnrelatedChanges: p.allowUnrelatedChanges ?? false, timeoutMs: p.timeoutMs ?? 45000 });
+        break;
       case 'start': result = await agent.start(p.viewRevision, p.action); break;
       case 'acknowledge': result = await agent.acknowledge(p.actionId); break;
       case 'reconcile': result = await agent.reconcile(p.actionId, p.viewRevision); break;
@@ -763,7 +884,7 @@ async function callBridge(command, options, paths, method, json) {
         `No Scout bridge for ${options.app}. Start one: node agent_client.mjs serve --app ${options.app}`)));
       return 1;
     }
-    const unknown = error.code === 'bridge_call_timeout' && ['act', 'start', 'react'].includes(request.method);
+    const unknown = error.code === 'bridge_call_timeout' && ['act', 'taps', 'start', 'react'].includes(request.method);
     print(errorResponse(Object.assign(error, unknown ? { dispatch: 'dispatch_outcome_unknown' } : {})));
     return 1;
   }
