@@ -35,14 +35,17 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     if (sensitive) {
       _rememberSensitiveValue(value);
     }
-    _drawInput((overlay) {
+    if (_drivingOverlay.attached) {
       final box = state.context.findRenderObject();
-      if (box is! RenderBox || !box.hasSize) return;
-      final rect = box.localToGlobal(Offset.zero) & box.size;
-      // A credential never reaches the overlay: no value, no length.
-      final secret = sensitive || _knownSensitiveValues.contains(value);
-      overlay.typing(rect, secret ? null : value);
-    });
+      if (box is RenderBox && box.hasSize) {
+        final rect = box.localToGlobal(Offset.zero) & box.size;
+        // A credential never reaches the overlay: no value, no length.
+        final shown = sensitive || _knownSensitiveValues.contains(value)
+            ? null
+            : value;
+        _drawInput((overlay) => overlay.typing(rect, shown));
+      }
+    }
     state.requestKeyboard();
     state.userUpdateTextEditingValue(
       TextEditingValue(
@@ -428,7 +431,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
       );
       return state;
     } finally {
-      _drivingOverlay.heldDragEnd();
+      _drivingOverlay.drawWhenFree(_drivingOverlay.heldDragEnd);
       _heldDragExpiry?.cancel();
       _heldDragExpiry = null;
       _heldDrag = null;

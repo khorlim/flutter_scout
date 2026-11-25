@@ -308,10 +308,17 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
         return callback(method, params);
       }, zoneValues: zoneValues);
     }
-    return runZoned(
-      () => _dispatchMutation(context, callback),
-      zoneValues: zoneValues,
-    );
+    // The driving overlay holds still while a mutation runs: its frames would
+    // take UI-thread time from the snapshots and settle the act waits on.
+    // Inputs drawn meanwhile are queued and play once the act has answered.
+    return runZoned(() async {
+      _drivingOverlay.hold();
+      try {
+        return await _dispatchMutation(context, callback);
+      } finally {
+        _drivingOverlay.release();
+      }
+    }, zoneValues: zoneValues);
   }
 
   bool _isMutatingRequest(String extensionName, Map<String, String> params) {

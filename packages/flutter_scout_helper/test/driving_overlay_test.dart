@@ -234,4 +234,43 @@ void main() {
     expect(status['effects'], 0);
     expect(tester.binding.transientCallbackCount, 0);
   });
+
+  testWidgets('a running mutation holds the overlay still, then plays it', (
+    tester,
+  ) async {
+    final runtime = await attached(tester);
+    await frames(tester, 700);
+    Map<String, Object?>? during;
+    var transientDuring = -1;
+    final response = await tester.runAsync(
+      () => runtime.debugProtocolMutation(
+        <String, String>{
+          'schemaVersion': '1',
+          'clientProtocolMin': '15',
+          'clientProtocolMax': '15',
+          'commandId': 'overlay-hold',
+          'idempotencyKey': 'overlay-hold',
+          'runId': 'run-a',
+          'runtimeInstanceId': runtime.debugRuntimeInstanceId,
+          'expectedStateGeneration':
+              '${runtime.debugSnapshot().stateGeneration}',
+          'deadlineEpochMs':
+              '${DateTime.now().add(const Duration(minutes: 1)).millisecondsSinceEpoch}',
+        },
+        () async {
+          await runtime.debugTapTarget('tap.save');
+          during = runtime.debugDrivingOverlayStatus;
+          transientDuring = WidgetsBinding.instance.transientCallbackCount;
+          return <String, Object?>{'tapped': true};
+        },
+      ),
+    );
+    expect(response!['ok'], isTrue, reason: '$response');
+    expect(saves, 1, reason: 'the input itself is never held');
+    expect(during!['effects'], 0, reason: 'drawing waits for the answer');
+    expect(transientDuring, 0, reason: 'no overlay frames during the act');
+    expect(runtime.debugDrivingOverlayStatus['effects'], greaterThan(0));
+    await frames(tester, 900);
+    await detach(tester, runtime);
+  });
 }

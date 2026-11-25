@@ -143,6 +143,46 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   BuildContext? _entryContext;
   bool _installScheduled = false;
 
+  // ---- hold -------------------------------------------------------------
+  // While Scout runs a mutation the overlay schedules no frames: the ticker
+  // is muted and new inputs wait here, then play when the act has answered.
+  int _holdDepth = 0;
+  final List<VoidCallback> _held = <VoidCallback>[];
+  bool _rebase = false;
+
+  bool get holding => _holdDepth > 0;
+
+  void hold() {
+    _holdDepth += 1;
+    _ticker?.muted = true;
+  }
+
+  void release() {
+    if (_holdDepth == 0 || --_holdDepth > 0) return;
+    // Time spent held is dropped from the overlay clock, so a running
+    // animation resumes where it paused instead of jumping ahead.
+    _rebase = true;
+    _ticker?.muted = false;
+    final queued = List<VoidCallback>.of(_held);
+    _held.clear();
+    for (final draw in queued) {
+      try {
+        draw();
+      } catch (_) {
+        // Purely visual.
+      }
+    }
+  }
+
+  /// Runs [draw] now, or after the current mutation when held.
+  void drawWhenFree(VoidCallback draw) {
+    if (!holding) {
+      draw();
+    } else if (_held.length < 64) {
+      _held.add(draw);
+    }
+  }
+
   // ---- clock ------------------------------------------------------------
   _DrivingTicker? _ticker;
   double _clockBase = 0;
@@ -348,12 +388,20 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   void _kick() {
     if (_entry == null) return;
     final ticker = _ticker ??= _DrivingTicker(_tick);
+    ticker.muted = holding;
     if (!ticker.isActive) ticker.start();
     notifyListeners();
   }
 
   void _tick(Duration elapsed) {
-    now = _clockBase + elapsed.inMicroseconds / 1000.0;
+    var time = _clockBase + elapsed.inMicroseconds / 1000.0;
+    if (_rebase) {
+      _rebase = false;
+      final resumed = now + 16;
+      _clockBase += resumed - time;
+      time = resumed;
+    }
+    now = time;
     for (var i = effects.length - 1; i >= 0; i--) {
       final effect = effects[i];
       if (effect.open || now < effect.end) continue;
@@ -1275,11 +1323,13 @@ extension _RuntimeDrivingOverlay on FlutterScoutRuntime {
   void _drawInput(void Function(_ScoutDrivingOverlay overlay) draw) {
     final overlay = _drivingOverlay;
     if (!overlay._live) return;
-    try {
-      draw(overlay);
-    } catch (_) {
-      // Purely visual; the input itself is unaffected.
-    }
+    overlay.drawWhenFree(() {
+      try {
+        draw(overlay);
+      } catch (_) {
+        // Purely visual; the input itself is unaffected.
+      }
+    });
   }
 
   /// The app's own pending frame callbacks: the binding's count minus the
