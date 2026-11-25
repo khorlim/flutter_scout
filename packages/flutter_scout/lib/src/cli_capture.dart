@@ -3,6 +3,32 @@ part of 'flutter_scout_cli.dart';
 // part: screenshot/crop commands, in-app capture call, and PNG cropping.
 
 extension _CliCapture on FlutterScoutCli {
+  /// A native screenshot sees every pixel, so the driving overlay is hidden
+  /// around it unless `--with-overlay` asked for it. Best effort: a helper
+  /// without the overlay has nothing to hide.
+  Future<Map<String, Object?>> _nativeScreenshotWithoutOverlay(
+    String output,
+  ) async {
+    var hidden = false;
+    if (!_captureWithOverlay) {
+      try {
+        final response = await _call('ext.flutter_scout.agentOverlay', {
+          'action': 'hide',
+        });
+        hidden = response['ok'] == true;
+      } catch (_) {}
+    }
+    try {
+      return await _captureScreenshot(output);
+    } finally {
+      if (hidden) {
+        try {
+          await _call('ext.flutter_scout.agentOverlay', {'action': 'show'});
+        } catch (_) {}
+      }
+    }
+  }
+
   Future<int> _screenshot(List<String> args) async {
     final parser = ArgParser()
       ..addOption('output', abbr: 'o')
@@ -19,9 +45,17 @@ extension _CliCapture on FlutterScoutCli {
             'Set-of-marks capture: draw numbered marks over every visible '
             'interactable and print the number -> handle legend.',
       )
-      ..addFlag('native', defaultsTo: false);
+      ..addFlag('native', defaultsTo: false)
+      ..addFlag(
+        'with-overlay',
+        defaultsTo: false,
+        help:
+            'Keep the in-app "Scout is driving" overlay in the image. By '
+            'default Scout images show only the app.',
+      );
     final parsed = parser.parse(args);
     final native = parsed.flag('native');
+    _captureWithOverlay = parsed.flag('with-overlay');
     final annotated = parsed.flag('annotated');
     final retention = _retentionOption(parsed);
     final privacy = _privateArtifactMetadata(retention);
@@ -37,6 +71,7 @@ extension _CliCapture on FlutterScoutCli {
         '--retention',
         retention,
         if (native) '--native',
+        if (_captureWithOverlay) '--with-overlay',
       ]);
     }
     _ensureSessionDir();
@@ -71,7 +106,7 @@ extension _CliCapture on FlutterScoutCli {
             'unavailable for this session (platform view or capture failure).',
       );
     }
-    final capture = await _captureScreenshot(output);
+    final capture = await _nativeScreenshotWithoutOverlay(output);
     _writePrivateArtifactMetadata(output, retention);
     _printJson({
       'ok': true,
@@ -121,9 +156,17 @@ extension _CliCapture on FlutterScoutCli {
             'Draw numbered marks over interactables inside the region and '
             'print the number -> handle legend.',
       )
-      ..addFlag('native', defaultsTo: false);
+      ..addFlag('native', defaultsTo: false)
+      ..addFlag(
+        'with-overlay',
+        defaultsTo: false,
+        help:
+            'Keep the in-app "Scout is driving" overlay in the image. By '
+            'default Scout images show only the app.',
+      );
     final parsed = parser.parse(args);
     final native = parsed.flag('native');
+    _captureWithOverlay = parsed.flag('with-overlay');
     final annotated = parsed.flag('annotated');
     final retention = _retentionOption(parsed);
     final privacy = _privateArtifactMetadata(retention);
@@ -322,7 +365,7 @@ extension _CliCapture on FlutterScoutCli {
         additional: <String, Object?>{'scope': targetScope},
       );
     }
-    final nativeCapture = await _captureScreenshot(shotPath);
+    final nativeCapture = await _nativeScreenshotWithoutOverlay(shotPath);
     _writePrivateArtifactMetadata(shotPath, retention);
     final source = img.decodeImage(File(shotPath).readAsBytesSync());
     if (source == null) {
@@ -917,6 +960,8 @@ extension _CliCapture on FlutterScoutCli {
         params['annotate'] = 'true';
         params['annotateFilter'] = annotateFilter;
       }
+      // Sent only when asked: helpers without the overlay reject the name.
+      if (_captureWithOverlay) params['overlay'] = 'include';
       final res = await _call('ext.flutter_scout.capture', params);
       if (res['ok'] == false) {
         if (!failClosed) return null;

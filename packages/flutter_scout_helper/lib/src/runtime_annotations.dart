@@ -364,6 +364,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     double padding = 12,
     double? pixelRatio,
     List<({int n, Rect rect})>? marks,
+    bool includeDrivingOverlay = false,
   }) async {
     final renderView = _primaryRenderView();
     if (renderView == null) {
@@ -407,8 +408,13 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       _captureClearRects.add(bounds);
       _bumpAnnotationRevision();
     }
+    // The driving overlay is for people watching, not for Scout's own
+    // images: hide it for the capture unless the caller asked for it.
+    final hideDrivingOverlay =
+        !includeDrivingOverlay && _drivingOverlay.installed;
+    if (hideDrivingOverlay) _drivingOverlay.beginCaptureHide();
     try {
-      if (clearScoutChrome) {
+      if (clearScoutChrome || hideDrivingOverlay) {
         // Wait two frames, not one: `endOfFrame` can resolve against a frame
         // that was already in flight when we added the clear rect. The first
         // await drains that frame; the second guarantees a frame built with
@@ -420,9 +426,12 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
     } catch (_) {
       // image stays null; handled below.
     } finally {
+      if (hideDrivingOverlay) _drivingOverlay.endCaptureHide();
       if (clearScoutChrome) {
         _captureClearRects.remove(bounds);
         _bumpAnnotationRevision();
+      }
+      if (clearScoutChrome || hideDrivingOverlay) {
         // Restore the Scout overlay before the caller takes its mandatory
         // post-raster identity snapshot. Otherwise Scout's own scheduled
         // restoration frame changes `idle` and creates a false app-state race.
@@ -602,6 +611,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
         padding: padding,
         pixelRatio: pixelRatio,
         marks: marks,
+        includeDrivingOverlay: params['overlay'] == 'include',
       );
       final boundsJson = result.bounds == null
           ? null

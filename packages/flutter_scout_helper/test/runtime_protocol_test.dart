@@ -506,6 +506,7 @@ void main() {
       'waitStable',
       'waitFor',
       'dragStatus',
+      'agentOverlay',
     ]) {
       expect(
         runtime.debugIsMutationRequest('ext.flutter_scout.$read', const {}),

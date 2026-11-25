@@ -73,6 +73,7 @@ void main() {
     await tester.pump();
 
     const reads = <String>{
+      'agentOverlay',
       'inspect',
       'capture',
       'dragStatus',

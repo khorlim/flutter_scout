@@ -136,7 +136,8 @@ extension _CliProtocol on FlutterScoutCli {
         command == 'capture' ||
         command == 'waitStable' ||
         command == 'waitFor' ||
-        command == 'dragStatus') {
+        command == 'dragStatus' ||
+        command == 'agentOverlay') {
       return false;
     }
     if (command == 'annotations') {

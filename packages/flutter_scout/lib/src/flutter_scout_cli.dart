@@ -639,6 +639,9 @@ class FlutterScoutCli {
   // Neither argv nor a typed request can grant this authority.
   bool _agentLane = false;
 
+  /// Whether this screenshot/crop keeps the in-app driving overlay.
+  bool _captureWithOverlay = false;
+
   /// Unit-test seam for the shared handlers beneath the agent transport.
   /// This is not a command/flag and is never used by a deployed client.
   Future<int> debugRunHandler(List<String> args) async {
@@ -2909,7 +2912,7 @@ print(String(data: data, encoding: .utf8)!)
 
 Lifecycle: ensure, launch, attach, status, doctor, devices, apps, reload, restart, stop
 Manual evidence: screenshot, crop, logs, health, evidence, annotations
-Interaction: flutter-scout --app <name> agent [--interval-ms 250] [--max-items 60]
+Interaction: flutter-scout --app <name> agent [--interval-ms 250] [--max-items 60] [--no-overlay]
 
 Use the shipped scripts/agent_client.mjs in one persistent Node session, or
 its serve/call bridge from a shell-only agent.
@@ -3249,12 +3252,16 @@ const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
     summary: 'Capture a manual full-screen image.',
     synopsis: <String>[
       'screenshot [-o <path>] [--target <target>] [--annotated] [--native] '
-          '[--retention <policy>]',
+          '[--with-overlay] [--retention <policy>]',
     ],
     options: <(String, String)>[
       ('-o, --output <path>', 'Image path (default: session screenshots).'),
       ('--target <target>', 'Crop to this observed target instead.'),
       ('--[no-]annotated', 'Draw numbered marks and return their legend.'),
+      (
+        '--with-overlay',
+        'Keep the in-app driving overlay (hidden from Scout images by default).',
+      ),
       ('--[no-]native', 'Force the native platform backend.'),
       ..._retentionHelpOption,
     ],
@@ -3299,6 +3306,11 @@ const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
     options: <(String, String)>[
       ('--interval-ms <100..10000>', 'Observation interval (default 250).'),
       ('--max-items <1..100>', 'Scene item limit (default 60).'),
+      (
+        '--no-overlay',
+        'Do not draw the in-app "Scout is driving" overlay (also '
+            'FLUTTER_SCOUT_OVERLAY=0; =reduced for reduced motion).',
+      ),
     ],
   ),
   'version': _CommandHelp(

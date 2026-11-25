@@ -222,8 +222,13 @@ function run() {
   Future<int> _agent(List<String> args) async {
     final parser = ArgParser()
       ..addOption('interval-ms', defaultsTo: '250')
-      ..addOption('max-items', defaultsTo: '60');
+      ..addOption('max-items', defaultsTo: '60')
+      ..addFlag('overlay', defaultsTo: true);
     final parsed = parser.parse(args);
+    final overlay = _agentOverlayMode(
+      flag: parsed.flag('overlay'),
+      environment: Platform.environment['FLUTTER_SCOUT_OVERLAY'],
+    );
     final interval = int.tryParse(parsed.option('interval-ms') ?? '');
     final maximum = int.tryParse(parsed.option('max-items') ?? '');
     if (parsed.rest.isNotEmpty ||
@@ -235,7 +240,8 @@ function run() {
         maximum > 100) {
       throw const ScoutCliException(
         'usage',
-        'agent accepts --interval-ms 100..10000 and --max-items 1..100.',
+        'agent accepts --interval-ms 100..10000, --max-items 1..100 and '
+            '--[no-]overlay.',
       );
     }
     // A daemon started by an older binary does not participate in the agent
@@ -276,6 +282,35 @@ function run() {
       final requests = <String, Future<void>>{};
       final seenIds = <String>{};
       late final AgentSession session;
+      // The in-app "Scout is driving" layer: attached with a lease that the
+      // eyes renew while this connection lives, so a lost agent never leaves
+      // it behind. Best effort: an old helper without it is simply skipped.
+      final overlayLeaseMs = max(6000, interval * 4);
+      var overlaySupported = overlay != null;
+      var overlayRenewedAt = -overlayLeaseMs;
+      final overlayClock = Stopwatch()..start();
+      Future<void> renewOverlay() async {
+        if (!overlaySupported) return;
+        if (overlayClock.elapsedMilliseconds - overlayRenewedAt <
+            overlayLeaseMs ~/ 3) {
+          return;
+        }
+        overlayRenewedAt = overlayClock.elapsedMilliseconds;
+        try {
+          final response = await observer._call(
+            'ext.flutter_scout.agentOverlay',
+            {
+              'action': 'attach',
+              'leaseMs': '$overlayLeaseMs',
+              'motion': overlay!,
+            },
+          );
+          if (response['ok'] != true) overlaySupported = false;
+        } catch (_) {
+          overlaySupported = false;
+        }
+      }
+
       void printResponse(Map<String, dynamic> value) {
         // Never let action's IOOverrides capture the agent transport response.
         outputZone.run(() {
@@ -303,6 +338,7 @@ function run() {
               'error': {'code': error.code, 'message': error.message},
             };
           }
+          if (raw['ok'] == true) await renewOverlay();
           final capabilities = raw['capabilities'];
           return {
             ...observer._agentObservation(raw),
@@ -586,6 +622,15 @@ function run() {
       } finally {
         await session.close();
         await Future.wait(requests.values.toList());
+        if (overlaySupported && overlayRenewedAt >= 0) {
+          try {
+            await observer._call('ext.flutter_scout.agentOverlay', {
+              'action': 'detach',
+            }, const Duration(seconds: 2));
+          } catch (_) {
+            // The lease expires on its own.
+          }
+        }
         await observer._disposeCachedVmService();
         await hand._disposeCachedVmService();
       }
@@ -597,4 +642,13 @@ function run() {
       }
     }
   }
+}
+
+/// The driving overlay mode for an agent connection: `full`, `reduced`, or
+/// null when off. `--no-overlay` or `FLUTTER_SCOUT_OVERLAY=0|off|false|no`
+/// turns it off; `FLUTTER_SCOUT_OVERLAY=reduced` asks for reduced motion.
+String? _agentOverlayMode({required bool flag, String? environment}) {
+  final value = (environment ?? '').trim().toLowerCase();
+  if (!flag || const {'0', 'off', 'false', 'no'}.contains(value)) return null;
+  return value == 'reduced' ? 'reduced' : 'full';
 }

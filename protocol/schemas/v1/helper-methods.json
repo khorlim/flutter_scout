@@ -52,6 +52,62 @@
     }
   },
   "methods": {
+    "ext.flutter_scout.agentOverlay": {
+      "operation": "read",
+      "parameters": [
+        "action",
+        "leaseMs",
+        "motion"
+      ],
+      "parameterDescriptors": {
+        "action": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "status",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "attach",
+            "detach",
+            "hide",
+            "show",
+            "status"
+          ]
+        },
+        "leaseMs": {
+          "encoding": "string",
+          "semanticType": "integer",
+          "required": false,
+          "default": "6000",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "minimum": 1000,
+          "maximum": 120000
+        },
+        "motion": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "full",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "full",
+            "reduced"
+          ]
+        }
+      },
+      "constraints": {
+        "atLeastOneOf": [],
+        "exactlyOneOf": [],
+        "requiredTogether": [],
+        "mutuallyExclusive": []
+      }
+    },
     "ext.flutter_scout.annotations": {
       "operation": "mixed",
       "parameters": [
@@ -193,6 +249,7 @@
         "annotateFilter",
         "mode",
         "native",
+        "overlay",
         "padding",
         "pixelRatio",
         "rect",
@@ -248,6 +305,19 @@
             "auto",
             "on",
             "off"
+          ]
+        },
+        "overlay": {
+          "encoding": "string",
+          "semanticType": "string",
+          "required": false,
+          "default": "exclude",
+          "minimumLength": 0,
+          "maximumUtf8Bytes": 65536,
+          "secrecy": "public",
+          "enum": [
+            "exclude",
+            "include"
           ]
         },
         "padding": {

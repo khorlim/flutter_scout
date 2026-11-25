@@ -31,9 +31,18 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     EditableTextState state,
     String value,
   ) {
-    if (_isSensitiveEditableState(state)) {
+    final sensitive = _isSensitiveEditableState(state);
+    if (sensitive) {
       _rememberSensitiveValue(value);
     }
+    _drawInput((overlay) {
+      final box = state.context.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) return;
+      final rect = box.localToGlobal(Offset.zero) & box.size;
+      // A credential never reaches the overlay: no value, no length.
+      final secret = sensitive || _knownSensitiveValues.contains(value);
+      overlay.typing(rect, secret ? null : value);
+    });
     state.requestKeyboard();
     state.userUpdateTextEditingValue(
       TextEditingValue(
@@ -49,8 +58,10 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     () => _dispatchTapWithoutPhaseTiming(point),
   );
 
-  Future<void> _dispatchTapWithoutPhaseTiming(Offset point) async =>
-      _dispatchPress(point, hold: const Duration(milliseconds: 30));
+  Future<void> _dispatchTapWithoutPhaseTiming(Offset point) async {
+    _drawInput((overlay) => overlay.press(point));
+    await _dispatchPress(point, hold: const Duration(milliseconds: 30));
+  }
 
   /// Dispatches [taps] (1 or 2) complete taps, down and up each, at one fixed
   /// [point] in this single call, [interval] from the first up to the second
@@ -74,6 +85,14 @@ extension _RuntimeInternals on FlutterScoutRuntime {
       hold: const Duration(milliseconds: 30),
       kind: secondary ? PointerDeviceKind.mouse : PointerDeviceKind.touch,
       buttons: secondary ? kSecondaryMouseButton : kPrimaryButton,
+    );
+    _drawInput(
+      (overlay) => overlay.press(
+        point,
+        taps: taps,
+        interval: interval,
+        secondary: secondary,
+      ),
     );
     if (taps <= 1) {
       await press();
@@ -189,16 +208,21 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     }
   }
 
-  Future<void> _dispatchDrag(Offset start, Offset delta) =>
-      _inRequestPhaseAsync(
-        'dispatch',
-        () => _dispatchDragWithoutPhaseTiming(start, delta),
-      );
+  Future<void> _dispatchDrag(
+    Offset start,
+    Offset delta, {
+    bool scroll = false,
+  }) => _inRequestPhaseAsync(
+    'dispatch',
+    () => _dispatchDragWithoutPhaseTiming(start, delta, scroll: scroll),
+  );
 
   Future<void> _dispatchDragWithoutPhaseTiming(
     Offset start,
-    Offset delta,
-  ) async {
+    Offset delta, {
+    bool scroll = false,
+  }) async {
+    _drawInput((overlay) => overlay.drag(start, delta, scroll: scroll));
     final pointer = _nextSyntheticPointer++;
     final viewId = _primaryViewId;
     _syntheticGestureDepth += 1;
@@ -329,6 +353,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
       );
       _heldDrag = state;
       _resetHeldDragExpiry();
+      _drawInput((overlay) => overlay.heldDragStart(position));
       return state;
     } catch (_) {
       _syntheticGestureDepth -= 1;
@@ -358,6 +383,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     );
     state.position = position;
     _resetHeldDragExpiry();
+    _drawInput((overlay) => overlay.heldDragMove(position));
     WidgetsBinding.instance.scheduleFrame();
     await Future<void>.delayed(const Duration(milliseconds: 20));
   }
@@ -402,6 +428,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
       );
       return state;
     } finally {
+      _drivingOverlay.heldDragEnd();
       _heldDragExpiry?.cancel();
       _heldDragExpiry = null;
       _heldDrag = null;

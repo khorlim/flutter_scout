@@ -18,6 +18,7 @@ import 'icon_names.g.dart';
 
 part 'scout_design.dart';
 part 'annotation_overlay.dart';
+part 'driving_overlay.dart';
 part 'models.dart';
 part 'runtime_annotations.dart';
 part 'runtime_actions.dart';
@@ -210,6 +211,9 @@ class FlutterScoutRuntime {
   _HeldDragState? _heldDrag;
   Timer? _heldDragExpiry;
 
+  /// The "Scout is driving" layer drawn while an agent is attached.
+  late final _ScoutDrivingOverlay _drivingOverlay = _ScoutDrivingOverlay();
+
   /// Whether Scout's overlay chrome should be invisible to hit testing right
   /// now — during annotation-target collection and agent gesture dispatch.
   bool get _scoutChromeHitTransparent =>
@@ -271,6 +275,7 @@ class FlutterScoutRuntime {
     _registerExtension('ext.flutter_scout.waitFor', _handleWaitFor);
     _registerExtension('ext.flutter_scout.dismiss', _handleDismiss);
     _registerExtension('ext.flutter_scout.record', _handleRecord);
+    _registerExtension('ext.flutter_scout.agentOverlay', _handleAgentOverlay);
     _installRecorderRoute();
     _broadcastVmUri();
     _reconcileAnnotationOverlay();
@@ -807,6 +812,39 @@ class FlutterScoutRuntime {
     });
     return jsonDecode(response.result!) as Map<String, Object?>;
   }
+
+  /// Test-only: drive the agent overlay's presence through its extension
+  /// handler (`attach`, `detach`, `hide`, `show`, `status`).
+  @visibleForTesting
+  Future<Map<String, Object?>> debugAgentOverlay(
+    String action, {
+    int leaseMs = 6000,
+    String motion = 'full',
+  }) async {
+    final response = await _handleAgentOverlay('debugAgentOverlay', {
+      'action': action,
+      'leaseMs': '$leaseMs',
+      'motion': motion,
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// Test-only: the driving overlay's state without a VM round trip.
+  @visibleForTesting
+  Map<String, Object?> get debugDrivingOverlayStatus =>
+      _drivingOverlay.status();
+
+  /// Test-only: the text of every chip the overlay is drawing now.
+  @visibleForTesting
+  List<String> get debugDrivingOverlayChips => [
+    for (final effect in _drivingOverlay.effects)
+      if (effect.label != null) effect.label!.plainText,
+  ];
+
+  /// Test-only: the transient frame callbacks stability counts as app
+  /// activity (the binding's count minus the overlay's own ticker).
+  @visibleForTesting
+  int get debugAppTransientCallbackCount => _appTransientCallbackCount;
 
   /// Test-only error injection for privacy and runtime-signal coverage.
   @visibleForTesting

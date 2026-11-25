@@ -327,6 +327,33 @@ final Map<String, _HelperParameterContract> _commonHelperParameterContracts =
 
 final Map<String, _HelperMethodContract> _helperMethodContracts =
     <String, _HelperMethodContract>{
+      'agentOverlay': const _HelperMethodContract(
+        operation: 'read',
+        parameters: <String, _HelperParameterContract>{
+          'action': _HelperParameterContract(
+            kind: _HelperValueKind.string,
+            defaultValue: 'status',
+            allowedValues: <String>[
+              'attach',
+              'detach',
+              'hide',
+              'show',
+              'status',
+            ],
+          ),
+          'leaseMs': _HelperParameterContract(
+            kind: _HelperValueKind.integer,
+            minimum: 1000,
+            maximum: 120000,
+            defaultValue: '6000',
+          ),
+          'motion': _HelperParameterContract(
+            kind: _HelperValueKind.string,
+            defaultValue: 'full',
+            allowedValues: <String>['full', 'reduced'],
+          ),
+        },
+      ),
       'annotations': const _HelperMethodContract(
         operation: 'mixed',
         parameters: <String, _HelperParameterContract>{
@@ -401,6 +428,11 @@ final Map<String, _HelperMethodContract> _helperMethodContracts =
             kind: _HelperValueKind.string,
             defaultValue: 'auto',
             allowedValues: <String>['auto', 'on', 'off'],
+          ),
+          'overlay': _HelperParameterContract(
+            kind: _HelperValueKind.string,
+            defaultValue: 'exclude',
+            allowedValues: <String>['exclude', 'include'],
           ),
           'padding': _HelperParameterContract(
             kind: _HelperValueKind.number,

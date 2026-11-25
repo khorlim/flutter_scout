@@ -512,7 +512,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
         );
       }
 
-      await _dispatchPress(point, hold: Duration(milliseconds: durationMs));
+      final hold = Duration(milliseconds: durationMs);
+      _drawInput((overlay) => overlay.longPress(point!, hold));
+      await _dispatchPress(point, hold: hold);
       final stability = await _waitStableForAction(
         params,
         initialSnapshot: before,
@@ -1069,7 +1071,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
         }
         final delta = _dragDelta(direction, distance, scrollGesture: true);
         gestureEvidence.add(_coordinateEvidence(start, dispatchSnapshot));
-        await _dispatchDrag(start, delta);
+        await _dispatchDrag(start, delta, scroll: true);
         lastStability = await _waitStableForAction(
           params,
           initialSnapshot: dispatchSnapshot,
@@ -1342,6 +1344,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final navigator =
           _findViewportModalNavigator(rootContext) ??
           _findActiveNavigator(rootContext);
+      _drawInput((overlay) => overlay.back());
       final popped = await _inRequestPhaseAsync<bool>(
         'dispatch',
         () async => (await navigator?.maybePop()) ?? false,
@@ -1420,6 +1423,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       if (rootContext == null) {
         return _fail('no_root', 'No root element is attached.');
       }
+      _drawInput((overlay) => overlay.dismiss());
       // A context menu or text-selection toolbar (ContextMenuController) is
       // an overlay over the current route, not a route: close it first, as
       // Escape does, rather than popping the screen beneath it.
@@ -1713,12 +1717,12 @@ extension _RuntimeActions on FlutterScoutRuntime {
       previous = snapshot;
       final binding = WidgetsBinding.instance;
       if (binding.hasScheduledFrame) scheduledFrameSamples += 1;
-      if (binding.transientCallbackCount > 0) {
+      if (_appTransientCallbackCount > 0) {
         transientCallbackSamples += 1;
       }
       maxTransientCallbacks = math.max(
         maxTransientCallbacks,
-        binding.transientCallbackCount,
+        _appTransientCallbackCount,
       );
       if (!binding.framesEnabled) disabledFrameSamples += 1;
 
@@ -1744,7 +1748,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
             maxTransientCallbacks: maxTransientCallbacks,
             disabledFrameSamples: disabledFrameSamples,
             lastHasScheduledFrame: binding.hasScheduledFrame,
-            lastTransientCallbackCount: binding.transientCallbackCount,
+            lastTransientCallbackCount: _appTransientCallbackCount,
             lastSchedulerPhase: binding.schedulerPhase.name,
           );
       if (_waitForConditionsMet(
@@ -2135,7 +2139,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     // window even mid-animation. Active tickers (route transitions, flips)
     // are visible as transient callbacks instead.
     while (!binding.framesEnabled &&
-        (binding.hasScheduledFrame || binding.transientCallbackCount > 0) &&
+        (binding.hasScheduledFrame || _appTransientCallbackCount > 0) &&
         binding.schedulerPhase == SchedulerPhase.idle &&
         stopwatch.elapsed < budget) {
       _manualMutationFrameAdvanceCount += 1;
@@ -2451,7 +2455,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
 
       final binding = WidgetsBinding.instance;
       final scheduled = binding.hasScheduledFrame;
-      final transientCallbacks = binding.transientCallbackCount;
+      final transientCallbacks = _appTransientCallbackCount;
       final schedulerPhase = binding.schedulerPhase.name;
       final frameActive =
           transientCallbacks > 0 ||
@@ -2681,11 +2685,11 @@ extension _RuntimeActions on FlutterScoutRuntime {
       quietWindowMs: 120,
       quietForMs: 0,
       scheduledFrameSamples: binding.hasScheduledFrame ? 1 : 0,
-      transientCallbackSamples: binding.transientCallbackCount > 0 ? 1 : 0,
-      maxTransientCallbacks: binding.transientCallbackCount,
+      transientCallbackSamples: _appTransientCallbackCount > 0 ? 1 : 0,
+      maxTransientCallbacks: _appTransientCallbackCount,
       disabledFrameSamples: binding.framesEnabled ? 0 : 1,
       lastHasScheduledFrame: binding.hasScheduledFrame,
-      lastTransientCallbackCount: binding.transientCallbackCount,
+      lastTransientCallbackCount: _appTransientCallbackCount,
       lastSchedulerPhase: binding.schedulerPhase.name,
       initial: before,
       finalSnapshot: after,
@@ -2968,7 +2972,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
         ? _dragDelta(direction, distance, scrollGesture: scrollGesture)
         : explicitEnd - start;
     final endCoordinateEvidence = _coordinateEvidence(start + delta, before);
-    await _dispatchDrag(start, delta);
+    await _dispatchDrag(start, delta, scroll: scrollGesture);
     final stability = await _waitStableForAction(
       params,
       initialSnapshot: before,
