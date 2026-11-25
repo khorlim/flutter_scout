@@ -3301,6 +3301,10 @@ const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
       ('-o, --output <path>', 'Image path (default: session screenshots).'),
       ('--padding <0..256>', 'Logical padding (default 12).'),
       ('--[no-]annotated', 'Draw numbered marks inside the region.'),
+      (
+        '--with-overlay',
+        'Keep the in-app driving overlay (hidden from Scout images by default).',
+      ),
       ('--[no-]native', 'Force the native platform backend.'),
       ..._retentionHelpOption,
     ],
@@ -3324,8 +3328,8 @@ const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
       ('--interval-ms <100..10000>', 'Observation interval (default 250).'),
       ('--max-items <1..100>', 'Scene item limit (default 60).'),
       (
-        '--no-overlay',
-        'Do not draw the in-app "Scout is driving" overlay (also '
+        '--[no-]overlay',
+        'With --no-overlay, do not draw the in-app "Scout is driving" overlay (also '
             'FLUTTER_SCOUT_OVERLAY=0; =reduced for reduced motion).',
       ),
     ],
