@@ -16,5 +16,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # Swipe fixtures drive the real Slidable a row's delete pane uses.
+  flutter_slidable: ^4.0.3
 
 flutter:

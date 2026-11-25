@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add stable error `swipe_no_effect`: a swipe was dispatched but nothing on
+  screen moved. It is a known dispatched outcome (observe, then reconcile).
+  Scroll keeps `ok` with `result: unchanged` at the end of its content.
+
 - Add optional helper `freshTargets` mutation metadata and the
   `targetFreshnessV1` capability: an exact-target mutation survives a state
   generation change after preflight only when its target nodes, surface and

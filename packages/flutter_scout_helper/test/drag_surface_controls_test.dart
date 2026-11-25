@@ -42,11 +42,19 @@ class _SlidableLikeRowState extends State<_SlidableLikeRow> {
             })
           : null,
       behavior: HitTestBehavior.opaque,
-      child: Semantics(
-        button: true,
-        label: widget.label,
-        onTap: widget.onTap,
-        child: _PressableCard(onTap: widget.onTap, label: widget.label),
+      // Open shows its action pane beside the row, as Slidable does, so the
+      // swipe has a visible result.
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Semantics(
+            button: true,
+            label: widget.label,
+            onTap: widget.onTap,
+            child: _PressableCard(onTap: widget.onTap, label: widget.label),
+          ),
+          if (open) const Text('Delete'),
+        ],
       ),
     );
   }
@@ -114,13 +122,21 @@ void main() {
       expect(tap?['ok'], isTrue, reason: '$tap');
       expect(taps, 1);
 
-      final swipe = await tester.runAsync(
-        () => runtime.debugSwipe({
-          'target': row.id,
-          'direction': 'left',
-          'distance': '200',
-        }),
-      );
+      // Frames keep coming while the swipe runs, as on a device, so its
+      // after snapshot sees the opened row.
+      Map<String, Object?>? swipe;
+      runtime
+          .debugSwipe({
+            'target': row.id,
+            'direction': 'left',
+            'distance': '200',
+            // The production settle; the debug entry defaults to none.
+            'waitMs': '1500',
+          })
+          .then((value) => swipe = value);
+      for (var i = 0; i < 600 && swipe == null; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
       await tester.pumpAndSettle();
       expect(swipe?['ok'], isTrue, reason: '$swipe');
       expect(rowKey.currentState!.open, isTrue);

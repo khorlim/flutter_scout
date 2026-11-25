@@ -2977,7 +2977,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
     final changed = _changed(before, after);
     final actionDelta = _delta(before, after);
     final screenChanged = actionDelta['screenChanged'] == true;
-    return _ok({
+    final payload = <String, Object?>{
       'action': action,
       ..._stabilityResponseFields(stability),
       'result': screenChanged
@@ -2993,6 +2993,35 @@ extension _RuntimeActions on FlutterScoutRuntime {
       'after': after.summaryJson(),
       'delta': actionDelta,
       'recentErrors': _recentErrors(),
-    });
+    };
+    // A swipe is sent to make something move: reveal a row's actions, page,
+    // dismiss. One that moved nothing is not a success, even though the
+    // gesture went out; reporting `ok` let an agent read "no Delete" as the
+    // app's answer. A scroll at the end of its list is a normal answer and
+    // keeps `ok` with `result: unchanged`.
+    if (!scrollGesture && !changed) {
+      return _fail(
+        'swipe_no_effect',
+        'The swipe was dispatched from (${start.dx}, ${start.dy}), but '
+            'nothing on screen moved. The start point may be on a control '
+            'that ignores drags, or covered by one (a floating button over '
+            'the row). Observe again, bring the row fully into view, and '
+            'swipe its own handle.',
+        extra: {
+          ...payload,
+          'activation': const <String, Object?>{
+            'dispatched': true,
+            'observedChange': false,
+          },
+          if (resolution?.node case final node?)
+            'target': {
+              'id': node.id,
+              'widgetType': node.widgetType,
+              'label': node.label,
+            },
+        },
+      );
+    }
+    return _ok(payload);
   }
 }

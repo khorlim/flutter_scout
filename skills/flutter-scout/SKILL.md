@@ -156,6 +156,10 @@ copyable values) is text, so `locate` finds its words.
 A row inside a swipe wrapper (`Slidable`, `Dismissible`) keeps its own
 handle: tap it, or reveal its actions with `{method:'swipe', args:['left'],
 params:{target: handle, distance: 150}}` and tap the action from the next scene.
+A row covered by a floating button has no handle until it is scrolled clear.
+A swipe that moves nothing fails with `swipe_no_effect` (its `target` names
+the widget it landed on): observe, reconcile, bring the row into view and
+swipe the row's own handle.
 
 Context menus: `{method:'long-press', args:[handle]}` presses and holds, and
 `{method:'tap', args:[handle], params:{button:'secondary'}}` is a mouse right

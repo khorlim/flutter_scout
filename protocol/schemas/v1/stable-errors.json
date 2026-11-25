@@ -1244,6 +1244,10 @@
       "meaning": "The swipe operation failed.",
       "family": "operation"
     },
+    "swipe_no_effect": {
+      "meaning": "The swipe was dispatched, but nothing on screen moved; observe again before deciding.",
+      "family": "operation"
+    },
     "tap_failed": {
       "meaning": "The tap operation failed.",
       "family": "operation"

@@ -80,6 +80,13 @@ final List<_Destination> _destinations = [
     builder: (_) => const GesturesScreen(),
   ),
   _Destination(
+    id: 'payment_sheet',
+    title: 'Payment sheet',
+    subtitle: 'Swipe-to-delete row under a floating button',
+    icon: Icons.payments,
+    builder: (_) => const PaymentSheetScreen(),
+  ),
+  _Destination(
     id: 'ambiguity',
     title: 'Ambiguity hell',
     subtitle: 'Many identical labels; mixed keys',

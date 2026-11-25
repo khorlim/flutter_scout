@@ -38,6 +38,10 @@ instead of a target. Scroll distance is `distance`; there is no `amount`.
 A negative scroll distance scrolls the opposite way of the direction.
 An unknown parameter fails with `unknown_parameter` and lists the parameters
 the method accepts.
+A swipe that moves nothing on screen fails with `swipe_no_effect`; the
+gesture was dispatched, so observe and reconcile. Its `target` names the
+widget the swipe landed on. A scroll at the end of its content stays `ok`
+with `result: unchanged`.
 
 After each input, check its canonical receipt. When `act` returns `ok:false`
 for a known dispatch outcome, observe, check the app state, then reconcile

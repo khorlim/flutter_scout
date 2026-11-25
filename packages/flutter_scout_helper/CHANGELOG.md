@@ -1,5 +1,15 @@
 ## Unreleased
 
+* A swipe that moves nothing on screen now fails with `swipe_no_effect`
+  (dispatched, `observation: no_effect`) instead of `ok` with
+  `result: unchanged`, naming the widget it landed on. Scroll is unchanged.
+* A control takes its label from its own text before text it merely covers:
+  a floating "Add Payment" button over a "Cash" payment row was reported as
+  `btn.cash`, so swipes meant for the row went to the button. Of two
+  same-kind controls on one rect, the live one wins, so a `Slidable` row is
+  the enabled drag detector instead of its callback-less auto-close wrapper
+  (which made the row `target_disabled`).
+
 * Let an exact-target agent action through a background state change between
   the CLI's preflight and dispatch when its target nodes, surface and field
   values are unchanged (`targetFreshnessV1`, optional `freshTargets`).

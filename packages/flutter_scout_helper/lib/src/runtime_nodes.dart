@@ -358,6 +358,17 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return result;
   }
 
+  /// Whether [inner] is [outer] or in its render subtree.
+  bool _renderWithin(RenderObject? inner, RenderObject? outer) {
+    if (inner == null || outer == null) return false;
+    RenderObject? current = inner;
+    for (var depth = 0; current != null && depth < 400; depth++) {
+      if (identical(current, outer)) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
   bool _contains(Rect outer, Rect inner) {
     const slop = 2.0;
     return inner.left >= outer.left - slop &&
@@ -1440,7 +1451,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       return node;
     }
 
-    final contained = [
+    var contained = [
       for (final textNode in textNodes)
         if (textNode.rect case final textRect?)
           // A cell/card's own label is frequently NOT hit-testable because the
@@ -1456,6 +1467,17 @@ extension _RuntimeNodes on FlutterScoutRuntime {
             textNode,
     ];
     if (contained.isEmpty) return node;
+    // Text the control draws itself always wins over text it merely covers.
+    // A floating button over a scroll body covers the rows scrolled beneath
+    // it; borrowing a row's "Cash" named the "Add Payment" button `btn.cash`,
+    // so a swipe meant for the row went to the button and did nothing.
+    // Covered text stays a fallback only for a control with no text of its
+    // own (a tappable layered over a card's label).
+    final own = [
+      for (final textNode in contained)
+        if (_renderWithin(textNode._renderObject, node._renderObject)) textNode,
+    ];
+    if (own.isNotEmpty) contained = own;
 
     contained.sort((a, b) {
       final actionRank = _actionLabelRank(
@@ -1732,6 +1754,12 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     }
     if (node.key != null) rank += 10;
     if (node.label != null) rank += 5;
+    // Of two same-kind controls on one rect, the one that reacts is the
+    // control, ahead of whichever happened to take the text label (labels
+    // are inferred again after this pass). A Slidable wraps its drag
+    // detector in an auto-close detector with no callbacks; keeping that one
+    // made the row `target_disabled`, so a swipe on the row was refused.
+    if (node.enabled) rank += 6;
     return rank;
   }
 

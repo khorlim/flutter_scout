@@ -886,6 +886,178 @@ class _SlideRowState extends State<_SlideRow> {
 }
 
 // =============================================================================
+// 7b. Payment sheet — a swipe-to-delete row under a floating button, the way
+// TunaiPro's statement-of-account sheet lays out its payments.
+// =============================================================================
+/// The payment row starts mostly under the floating "Add Payment" button and
+/// scrolls clear of it. The row has no tap of its own, only the swipe, and
+/// is built like `flutter_slidable`: a callback-less auto-close detector
+/// around the drag detector, both on the row's rect.
+class PaymentSheetScreen extends StatefulWidget {
+  const PaymentSheetScreen({super.key});
+
+  @override
+  State<PaymentSheetScreen> createState() => _PaymentSheetScreenState();
+}
+
+class _PaymentSheetScreenState extends State<PaymentSheetScreen> {
+  static const _buttonHeight = 48.0;
+  static const _buttonBottom = 24.0;
+  String _status = 'idle';
+  bool _deleted = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Payment sheet'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(26),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Padding(
+              padding: const EdgeInsets.only(left: 16, bottom: 6),
+              child: Text(
+                'Status: $_status',
+                key: const ValueKey('payment_status'),
+              ),
+            ),
+          ),
+        ),
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // The row's top sits 12 points above the button, so the button
+          // covers nearly all of it until the sheet scrolls.
+          final rowTop =
+              constraints.maxHeight - _buttonBottom - _buttonHeight - 12;
+          return Stack(
+            children: [
+              ListView(
+                key: const ValueKey('payment_scroll'),
+                padding: const EdgeInsets.only(bottom: 160),
+                children: [
+                  SizedBox(
+                    height: rowTop,
+                    child: const Center(child: Text('Outstanding 178.68')),
+                  ),
+                  if (!_deleted)
+                    _PaymentSlideRow(
+                      label: 'Cash',
+                      amount: '10.00',
+                      onDelete: () => setState(() {
+                        _deleted = true;
+                        _status = 'deleted Cash';
+                      }),
+                    ),
+                ],
+              ),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: _buttonBottom,
+                height: _buttonHeight,
+                child: FilledButton(
+                  onPressed: () => setState(() => _status = 'add payment'),
+                  child: const Text('Add Payment'),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _PaymentSlideRow extends StatefulWidget {
+  const _PaymentSlideRow({
+    required this.label,
+    required this.amount,
+    required this.onDelete,
+  });
+
+  final String label;
+  final String amount;
+  final VoidCallback onDelete;
+
+  @override
+  State<_PaymentSlideRow> createState() => _PaymentSlideRowState();
+}
+
+class _PaymentSlideRowState extends State<_PaymentSlideRow> {
+  static const _actionWidth = 88.0;
+  double _offset = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    // Slidable's auto-close barrier: a detector with no callbacks while the
+    // row is closed.
+    return GestureDetector(
+      child: SizedBox(
+        height: 56,
+        child: Stack(
+          children: [
+            if (_offset < 0)
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                width: -_offset,
+                child: Material(
+                  color: Colors.red,
+                  child: InkWell(
+                    onTap: () {
+                      setState(() => _offset = 0);
+                      widget.onDelete();
+                    },
+                    child: const Center(
+                      child: Text(
+                        'Delete',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            Positioned.fill(
+              child: Transform.translate(
+                offset: Offset(_offset, 0),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onHorizontalDragStart: (_) {},
+                  onHorizontalDragUpdate: (details) => setState(() {
+                    _offset = (_offset + details.primaryDelta!).clamp(
+                      -_actionWidth,
+                      0.0,
+                    );
+                  }),
+                  onHorizontalDragEnd: (_) => setState(() {
+                    _offset = _offset < -_actionWidth / 2 ? -_actionWidth : 0;
+                  }),
+                  child: Container(
+                    color: colors.surfaceContainerHighest,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        Text(widget.label),
+                        const Spacer(),
+                        Text(widget.amount),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
 // 8. Ambiguity hell — many near-identical controls; mixed keys + ancestors.
 // =============================================================================
 class AmbiguityScreen extends StatefulWidget {
