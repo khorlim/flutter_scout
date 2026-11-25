@@ -27,7 +27,9 @@ class _ForwardPickerScreenState extends State<ForwardPickerScreen> {
       builder: (_) => const _ForwardDialog(),
     );
     if (picked == null || !mounted) return;
-    setState(() => _lastAction = 'Forwarded "$message" to ${picked.join(', ')}');
+    setState(
+      () => _lastAction = 'Forwarded "$message" to ${picked.join(', ')}',
+    );
   }
 
   @override
