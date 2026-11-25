@@ -228,7 +228,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         : _redactSensitiveText(rawValidationMessage);
     final baseId = key != null && key.isNotEmpty
         ? '$kind.${_slug(key)}'
-        : rowLabel == null && label != null && label.isNotEmpty
+        : label != null && label.isNotEmpty
         ? '$kind.${_slug(label)}'
         : '$kind.${_slug(widgetType)}';
     // Alternate handles from the other label sources, so the node stays
@@ -245,7 +245,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         if (anchorId != baseId) altIds.add(anchorId);
       }
     }
-    // Row context enriches switches without replacing their existing handles.
+    // A keyed switch keeps its key handle and also answers to its row title.
     if (rowLabel != null && label != null) {
       final alias = '$kind.${_slug(label)}';
       if (alias != baseId) altIds.add(alias);
@@ -264,6 +264,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     }
     final visibleRect = _visiblePerceptionRectFor(element, rect);
     final suggestedTapPoint = visibleRect?.center;
+    final controlState = kind == 'text'
+        ? const <String, bool>{}
+        : _controlStateFor(element, widget);
     return ScoutNode(
       id: baseId,
       baseId: baseId,
@@ -286,7 +289,17 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       enabled: _enabledFor(widget) && !(editable?.widget.readOnly ?? false),
       confidence: label == null ? 0.65 : (rowLabel == null ? 0.94 : 0.84),
       coordinateDevicePixelRatio: coordinateDevicePixelRatio,
-      selected: kind == 'text' ? null : _selectedStateFor(element, widget),
+      selected:
+          controlState['selected'] ??
+          controlState['toggled'] ??
+          controlState['checked'],
+      states: {
+        for (final entry in controlState.entries)
+          if (entry.key != 'selected') entry.key: entry.value,
+      },
+      instance: kind == 'text'
+          ? null
+          : _nodeInstances[element] ??= ++_nodeInstanceCounter,
       altIds: altIds.toList(growable: false),
       obscured: kind == 'field' && obscured,
       redacted: redacted,
@@ -718,11 +731,9 @@ extension _RuntimeNodes on FlutterScoutRuntime {
       if (iconText != null) return iconText;
       if (_hasWord(own)) return own.trim();
     }
-    final text = _textBelow(
-      element,
-      maxDepth: deepText ? 18 : 5,
-      wordsOnly: true,
-    );
+    final text = deepText && _labelSearchFitsControl(element)
+        ? _controlTextBelow(element)
+        : _textBelow(element, maxDepth: deepText ? 18 : 5, wordsOnly: true);
     if (text != null &&
         text.isNotEmpty &&
         _hasWord(text) &&
@@ -738,6 +749,65 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final icon = _iconLabelBelow(element);
     if (icon != null && icon.isNotEmpty) return icon;
     return null;
+  }
+
+  /// A pressable's own name is the text it draws, however deep: a
+  /// CupertinoButton adds about 19 elements and a press-effect card 20 more
+  /// before its label. The search is bounded by elements, not depth, never
+  /// enters a nested control, skips hidden and sensitive text, and prefers a
+  /// substantive label over avatar initials or a badge count drawn first.
+  String? _controlTextBelow(Element element) {
+    final outer = _rectFor(element);
+    String? first;
+    String? substantive;
+    var budget = 600;
+    var seen = 0;
+    void visit(Element child) {
+      if (substantive != null || budget-- <= 0 || seen >= 8) return;
+      if (_isHiddenByAncestorWidget(child.widget) ||
+          _isInsideSensitiveEditable(child)) {
+        return;
+      }
+      final own = _ownText(child.widget)?.trim();
+      if (own != null && own.isNotEmpty) {
+        if (_hasWord(own) &&
+            _iconLabelForText(own, fontFamily: _textFontFamily(child.widget)) ==
+                null) {
+          seen += 1;
+          first ??= own;
+          if (_substantiveLabel(own)) substantive = own;
+        }
+        return; // Text builds RichText; do not read the same label twice.
+      }
+      if (_isNestedOtherControl(outer, child)) return;
+      child.visitChildElements(visit);
+    }
+
+    element.visitChildElements(visit);
+    return substantive ?? first;
+  }
+
+  /// Initials ("ZY") and bare counts ("2") are drawn before many names.
+  bool _substantiveLabel(String text) {
+    if (RegExp(r'^[\d\s.,:%+\-]+$').hasMatch(text)) return false;
+    return text.runes.length >= 3 || _nonAsciiWordChar.hasMatch(text);
+  }
+
+  /// A widget that hides its subtree from view without unmounting it.
+  bool _isHiddenByAncestorWidget(Widget widget) =>
+      (widget is Offstage && widget.offstage) ||
+      (widget is Visibility && !widget.visible) ||
+      (widget is Opacity && widget.opacity == 0) ||
+      (widget is AnimatedOpacity && widget.opacity == 0);
+
+  /// Whole-screen wrappers (a tap-to-dismiss-keyboard detector) must not
+  /// take a deep text such as the app bar title as their name.
+  bool _labelSearchFitsControl(Element element) {
+    final rect = _rectFor(element);
+    if (rect == null) return false;
+    final size = _logicalSize();
+    final viewport = size.width * size.height;
+    return viewport <= 0 || rect.width * rect.height / viewport <= 0.45;
   }
 
   String? _textFontFamily(Widget widget) {
@@ -819,6 +889,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   /// descended into (their content describes them, not the ancestor), and an
   /// element budget bounds the cost.
   T? _probeSubtree<T>(Element element, T? Function(Element element) probe) {
+    final outer = _rectFor(element);
     T? result;
     var budget = 400;
     void visit(Element child) {
@@ -830,8 +901,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         result = value;
         return;
       }
-      final kind = _kindFor(child.widget, child);
-      if (kind == 'btn' || kind == 'tap' || kind == 'field') return;
+      if (_isNestedOtherControl(outer, child)) return;
       child.visitChildElements(visit);
     }
 
@@ -839,30 +909,163 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return result;
   }
 
-  /// Selection/toggle state for a node, from the widget itself or (for
-  /// containers like tabs and segments) a state-bearing descendant.
-  bool? _selectedStateFor(Element element, Widget widget) {
-    final own = _widgetSelectedState(widget);
-    if (own != null) return own;
-    return _probeSubtree(
-      element,
-      (child) => _widgetSelectedState(child.widget),
-    );
+  /// Whether [child] is a separate control inside the one at [outer]: a
+  /// field, or a smaller pressable (a row's delete icon). The InkWell a
+  /// TextButton builds, or the GestureDetector an InkWell builds, covers
+  /// the control itself and is its plumbing, not another control.
+  bool _isNestedOtherControl(Rect? outer, Element child) {
+    final kind = _kindFor(child.widget, child);
+    if (kind == 'field') return true;
+    if (kind != 'btn' && kind != 'tap') return false;
+    final inner = _rectFor(child);
+    return outer == null ||
+        inner == null ||
+        _overlapRatio(outer, inner) < 0.9 ||
+        inner.width * inner.height < outer.width * outer.height * 0.8;
   }
 
-  bool? _widgetSelectedState(Widget widget) {
-    if (widget is Switch) return widget.value;
-    if (widget is CupertinoSwitch) return widget.value;
-    if (widget is Checkbox) return widget.value;
-    if (widget is ChoiceChip) return widget.selected;
-    if (widget is FilterChip) return widget.selected;
-    if (widget is InputChip) return widget.selected;
-    if (widget is ListTile) return widget.selected ? true : null;
-    if (widget is Semantics) {
-      final properties = widget.properties;
-      return properties.selected ?? properties.toggled ?? properties.checked;
+  /// Selection/toggle state facts for a control: `selected`, `checked`,
+  /// `toggled` and `expanded`, from the widget itself, else a state-bearing
+  /// descendant (a tab's Semantics, a switch inside its list tile), else a
+  /// Semantics just above it that describes the same semantics node (a
+  /// SegmentedButton segment, a NavigationBar destination). Empty when
+  /// Flutter does not know the state (a chip that shows it only by paint).
+  Map<String, bool> _controlStateFor(Element element, Widget widget) {
+    // A list tile's own Semantics says only `selected: false`; the radio,
+    // checkbox or switch inside it says more, so keep looking past it.
+    Map<String, bool>? weak;
+    final below = _probeSubtree(element, (child) {
+      final state = _widgetControlState(child.widget);
+      if (state != null && state.length == 1 && state['selected'] == false) {
+        weak ??= state;
+        return null;
+      }
+      return state;
+    });
+    final own = _widgetControlState(widget);
+    final state =
+        (own != null && !(own.length == 1 && own['selected'] == false)
+            ? own
+            : null) ??
+        below ??
+        _ancestorSemanticsState(element) ??
+        own ??
+        weak ??
+        const <String, bool>{};
+    final expanded = _expansionHeaderState(element, widget);
+    return expanded == null ? state : {...state, 'expanded': expanded};
+  }
+
+  Map<String, bool>? _widgetControlState(Widget widget) {
+    if (widget is Switch) return {'toggled': widget.value};
+    if (widget is CupertinoSwitch) return {'toggled': widget.value};
+    // A tristate checkbox's mixed value is neither checked nor unchecked.
+    if (widget is Checkbox) {
+      return widget.value == null ? null : {'checked': widget.value!};
     }
+    if (widget is CupertinoCheckbox) {
+      return widget.value == null ? null : {'checked': widget.value!};
+    }
+    if (widget is ChoiceChip) return {'selected': widget.selected};
+    if (widget is FilterChip) return {'selected': widget.selected};
+    if (widget is InputChip) return {'selected': widget.selected};
+    if (widget is ListTile) return widget.selected ? {'selected': true} : null;
+    if (widget is Semantics) return _semanticsState(widget.properties);
     return null;
+  }
+
+  Map<String, bool>? _semanticsState(SemanticsProperties properties) {
+    final state = <String, bool>{
+      'selected': ?properties.selected,
+      'checked': ?properties.checked,
+      'toggled': ?properties.toggled,
+      'expanded': ?properties.expanded,
+    };
+    return state.isEmpty ? null : state;
+  }
+
+  /// State from a Semantics above [element] within the same semantics node:
+  /// the walk stops at a MergeSemantics or container boundary, at another
+  /// control, at a scrollable, or after a few levels, so a selected card's
+  /// state never leaks onto the buttons inside it.
+  Map<String, bool>? _ancestorSemanticsState(Element element) {
+    Map<String, bool>? found;
+    var depth = 0;
+    element.visitAncestorElements((ancestor) {
+      final widget = ancestor.widget;
+      if (widget is Semantics) {
+        final state = _semanticsState(widget.properties);
+        if (state != null) {
+          found = state;
+          return false;
+        }
+        if (widget.container || widget.explicitChildNodes) return false;
+      }
+      if (widget is MergeSemantics ||
+          widget is Scrollable ||
+          widget is Overlay ||
+          _isPressableControlWidget(widget)) {
+        return false;
+      }
+      return ++depth < 12;
+    });
+    return found;
+  }
+
+  /// A framework control that would be a target of its own (cheap check for
+  /// ancestor walks; [_kindFor] needs the element).
+  bool _isPressableControlWidget(Widget widget) =>
+      widget is ButtonStyleButton ||
+      widget is IconButton ||
+      widget is FloatingActionButton ||
+      widget is CupertinoButton ||
+      widget is InkWell ||
+      widget is InkResponse ||
+      widget is ListTile ||
+      widget is Switch ||
+      widget is CupertinoSwitch ||
+      widget is Checkbox ||
+      widget is ChoiceChip ||
+      widget is FilterChip ||
+      widget is InputChip ||
+      widget is ActionChip ||
+      (widget is GestureDetector && _detectorHandlesPress(widget));
+
+  /// Whether an ExpansionTile whose header is this ListTile is expanded.
+  bool? _expansionHeaderState(Element element, Widget widget) {
+    // The tile's node may be the ListTile or the InkWell it builds.
+    var tile = widget is ListTile ? element : null;
+    if (tile == null &&
+        (widget is InkWell ||
+            widget is InkResponse ||
+            widget is GestureDetector)) {
+      var up = 0;
+      element.visitAncestorElements((ancestor) {
+        if (ancestor.widget is ListTile) {
+          tile = ancestor;
+          return false;
+        }
+        return ++up < 16;
+      });
+    }
+    final header = tile;
+    if (header == null) return null;
+    final title = (header.widget as ListTile).title;
+    bool? expanded;
+    var depth = 0;
+    header.visitAncestorElements((ancestor) {
+      final owner = ancestor.widget;
+      if (owner is ExpansionTile) {
+        // The body may hold list tiles too; only the header shows the
+        // tile's own title.
+        if (identical(owner.title, title)) {
+          expanded = ExpansibleController.maybeOf(header)?.isExpanded;
+        }
+        return false;
+      }
+      return ++depth < 16;
+    });
+    return expanded;
   }
 
   // Visible app text is not necessarily Latin. Unicode letters/numbers keep
@@ -1219,9 +1422,13 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     return found;
   }
 
+  /// Only an app-chosen string key names a control. A GlobalKey, UniqueKey
+  /// or ObjectKey prints a per-instance hash (`[GlobalKey#1a2b3]`), and a
+  /// numeric ValueKey is a record id: neither is a name an agent can read,
+  /// and both would outrank the control's visible text.
   String? _keyLabel(Key? key) {
-    if (key is ValueKey) return key.value.toString();
-    return key?.toString();
+    if (key is ValueKey<String>) return key.value;
+    return null;
   }
 
   Rect? _rectFor(Element element) {
@@ -1371,11 +1578,7 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         .toList(growable: false);
     return [
       for (final node in nodes)
-        if (_isStateControlWidgetType(node.widgetType) &&
-            node.widgetType != 'Switch' &&
-            node.widgetType != 'CupertinoSwitch')
-          node.withoutLabel(confidence: 0.65)
-        else if ((node.kind == 'tap' || node.kind == 'btn') &&
+        if ((node.kind == 'tap' || node.kind == 'btn') &&
             !_isStateControlWidgetType(node.widgetType) &&
             (node.label == null ||
                 node.id == '${node.kind}.${_slug(node.widgetType)}'))

@@ -280,6 +280,8 @@ extension _RuntimePrivacy on FlutterScoutRuntime {
       confidence: node.confidence,
       coordinateDevicePixelRatio: node.coordinateDevicePixelRatio,
       selected: node.selected,
+      states: node.states,
+      instance: node.instance,
       altIds: [
         for (final id in node.altIds)
           _redactSensitiveText(id, replacement: 'redacted'),

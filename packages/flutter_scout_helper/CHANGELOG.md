@@ -1,5 +1,32 @@
 ## Unreleased
 
+* Controls report the specific state Flutter knows: `checked` (Checkbox,
+  CupertinoCheckbox, Radio under a RadioGroup, `Semantics(checked:)`),
+  `toggled` (Switch, CupertinoSwitch, `Semantics(toggled:)`) and `expanded`
+  (an ExpansionTile header, `Semantics(expanded:)`), in full and brief
+  output and in deltas. `selected` stays the umbrella "on" fact (selected,
+  else toggled, else checked). It is read from the widget, a state-bearing
+  descendant, or a Semantics just above it in the same semantics node
+  (SegmentedButton segments, NavigationBar destinations), and a list tile's
+  own `selected: false` no longer hides the radio or checkbox inside it. A
+  state shown only by paint (a coloured border) is still not observable.
+* Controls are named after their own text, however deep it is drawn: the
+  label search is bounded by elements instead of depth 18, so a CupertinoButton
+  menu row (about 19 levels of its own) or a press-effect card is no longer
+  named after its icon or asset (`btn.shippingbox_fill` -> `btn.thai_yoga`,
+  `btn.page_sparkle_fill` -> `btn.default`, `btn.male` -> `btn.zern_yet`). It
+  skips hidden text and prefers a real label over avatar initials or a badge
+  count drawn first. Only a string `ValueKey` names a control: a GlobalKey,
+  UniqueKey, ObjectKey or numeric key no longer becomes `btn.globalkey_<hash>`.
+  Slugs keep meaningful symbols (`<180 days` -> `lt_180_days`, `>180 days`
+  -> `gt_180_days`, `+` plus, `%` pct, a lone `-` minus).
+* A switch or checkbox takes its name from a list tile's title
+  (SwitchListTile, CheckboxListTile) or from one caption stacked directly
+  above it, and the row title is now its primary handle
+  (`btn.cupertinoswitch_2` -> `btn.enable_overall_remark`). A keyed switch
+  keeps its key handle with the title as an alias.
+* Every control carries `instance`, one number per mounted element, so a
+  handle that moved to another control is a different target.
 * A brief scene shows up to `maxItems / 10` scrollables (3 to 8; six in an
   agent scene, was always three). When a brief list is cut, `omitted` counts
   it (`scrollables` added) and adds `recoverWith: {method: 'inspect', params:

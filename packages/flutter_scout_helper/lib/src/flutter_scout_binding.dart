@@ -2225,7 +2225,7 @@ class FlutterScoutRuntime {
     if ((node.label ?? '').trim().isNotEmpty) return true;
     if ((node.key ?? '').trim().isNotEmpty) return true;
     if (node.altIds.isNotEmpty) return true;
-    if (node.selected != null) return true;
+    if (node.selected != null || node.states.isNotEmpty) return true;
     if (node.enclosingTarget != null) return true;
     final id = node.id.toLowerCase();
     final baseId = node.baseId.toLowerCase();
@@ -2250,6 +2250,8 @@ class FlutterScoutRuntime {
       'kind': node.kind,
       if (node.label != null) 'label': node.label,
       if (node.selected != null) 'selected': node.selected,
+      ...node.states,
+      if (node.instance != null) 'instance': node.instance,
       if (node.altIds.isNotEmpty) 'altIds': node.altIds,
       if (node.enclosingTarget != null) 'enclosingTarget': node.enclosingTarget,
       if (withPositionHint && node.rect != null)

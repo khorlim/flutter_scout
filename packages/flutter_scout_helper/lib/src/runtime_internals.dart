@@ -711,6 +711,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
         ))
           if (beforeNodes[id]!.enabled != afterNodes[id]!.enabled ||
               beforeNodes[id]!.selected != afterNodes[id]!.selected ||
+              !mapEquals(beforeNodes[id]!.states, afterNodes[id]!.states) ||
               beforeNodes[id]!.hitTestable != afterNodes[id]!.hitTestable ||
               (beforeNodes[id]!.visibleFraction -
                           afterNodes[id]!.visibleFraction)
@@ -721,12 +722,14 @@ extension _RuntimeInternals on FlutterScoutRuntime {
               'before': <String, Object?>{
                 'enabled': beforeNodes[id]!.enabled,
                 'selected': beforeNodes[id]!.selected,
+                ...beforeNodes[id]!.states,
                 'hitTestable': beforeNodes[id]!.hitTestable,
                 'visibleFraction': beforeNodes[id]!.visibleFraction,
               },
               'after': <String, Object?>{
                 'enabled': afterNodes[id]!.enabled,
                 'selected': afterNodes[id]!.selected,
+                ...afterNodes[id]!.states,
                 'hitTestable': afterNodes[id]!.hitTestable,
                 'visibleFraction': afterNodes[id]!.visibleFraction,
               },
@@ -876,6 +879,7 @@ extension _RuntimeInternals on FlutterScoutRuntime {
         }
         if (previous.enabled != current.enabled ||
             previous.selected != current.selected ||
+            !mapEquals(previous.states, current.states) ||
             previous.hitTestable != current.hitTestable) {
           reasons.add('control_state');
         }

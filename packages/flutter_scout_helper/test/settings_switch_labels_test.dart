@@ -30,54 +30,55 @@ Future<void> showSettings(WidgetTester tester, List<Widget> rows) async {
 }
 
 void main() {
-  testWidgets('built offscreen rows retain aliases while taps remain hidden', (
-    tester,
-  ) async {
-    final scroll = ScrollController();
-    addTearDown(scroll.dispose);
-    await showSettings(tester, [
-      SizedBox(
-        height: 160,
-        child: SingleChildScrollView(
-          controller: scroll,
-          child: Column(
-            children: [
-              const SizedBox(height: 700),
-              settingsRow(
-                'Enable Overall Remark',
-                CupertinoSwitch(value: false, onChanged: (_) {}),
-              ),
-              const SizedBox(height: 200),
-            ],
+  testWidgets(
+    'built offscreen rows keep their title handle while taps remain hidden',
+    (tester) async {
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await showSettings(tester, [
+        SizedBox(
+          height: 160,
+          child: SingleChildScrollView(
+            controller: scroll,
+            child: Column(
+              children: [
+                const SizedBox(height: 700),
+                settingsRow(
+                  'Enable Overall Remark',
+                  CupertinoSwitch(value: false, onChanged: (_) {}),
+                ),
+                const SizedBox(height: 200),
+              ],
+            ),
           ),
         ),
-      ),
-    ]);
-    final runtime = FlutterScoutHelper.debugRuntime;
-    final before = runtime.debugSnapshot().interactables.singleWhere(
-      (node) => node.widgetType == 'CupertinoSwitch',
-    );
-    expect(before.altIds, contains('btn.enable_overall_remark'));
-    expect(before.visibleFraction, 0);
-    expect(
-      runtime.debugResolveTarget('btn.enable_overall_remark')['status'],
-      'hidden',
-    );
-    scroll.jumpTo(700);
-    await tester.pump();
-    final after = runtime.debugSnapshot().interactables.singleWhere(
-      (node) => node.widgetType == 'CupertinoSwitch',
-    );
-    expect(after.id, before.id);
-    expect(after.altIds, before.altIds);
-    expect(after.visibleFraction, 1);
-    expect(
-      runtime.debugResolveTarget('btn.enable_overall_remark')['status'],
-      'unique',
-    );
-  });
+      ]);
+      final runtime = FlutterScoutHelper.debugRuntime;
+      final before = runtime.debugSnapshot().interactables.singleWhere(
+        (node) => node.widgetType == 'CupertinoSwitch',
+      );
+      expect(before.id, 'btn.enable_overall_remark');
+      expect(before.visibleFraction, 0);
+      expect(
+        runtime.debugResolveTarget('btn.enable_overall_remark')['status'],
+        'hidden',
+      );
+      scroll.jumpTo(700);
+      await tester.pump();
+      final after = runtime.debugSnapshot().interactables.singleWhere(
+        (node) => node.widgetType == 'CupertinoSwitch',
+      );
+      expect(after.id, before.id);
+      expect(after.altIds, before.altIds);
+      expect(after.visibleFraction, 1);
+      expect(
+        runtime.debugResolveTarget('btn.enable_overall_remark')['status'],
+        'unique',
+      );
+    },
+  );
 
-  testWidgets('wide settings rows expose the title and preserve raw handles', (
+  testWidgets('wide settings rows name their switch after the row title', (
     tester,
   ) async {
     var changes = 0;
@@ -106,8 +107,8 @@ void main() {
       'Send notifications',
     ]);
     final remark = switches.elementAt(1);
-    expect(remark.id, 'btn.cupertinoswitch_2');
-    expect(remark.altIds, contains('btn.enable_overall_remark'));
+    // The title names the switch; the subtitle is not a second name.
+    expect(remark.id, 'btn.enable_overall_remark');
     expect(
       remark.altIds,
       isNot(contains('btn.allow_an_overall_note_on_this_form')),
@@ -192,42 +193,40 @@ void main() {
     }
   });
 
-  testWidgets('localized RTL labels remain aliases and duplicates abstain', (
-    tester,
-  ) async {
-    var changes = 0;
-    await showSettings(tester, [
-      Directionality(
-        textDirection: TextDirection.rtl,
-        child: settingsRow(
-          'تفعيل الملاحظات',
-          CupertinoSwitch(value: false, onChanged: (_) => changes++),
-          subtitle: 'أضف ملاحظة إلى النموذج',
+  testWidgets(
+    'localized RTL titles name switches and duplicates are numbered',
+    (tester) async {
+      var changes = 0;
+      await showSettings(tester, [
+        Directionality(
+          textDirection: TextDirection.rtl,
+          child: settingsRow(
+            'تفعيل الملاحظات',
+            CupertinoSwitch(value: false, onChanged: (_) => changes++),
+            subtitle: 'أضف ملاحظة إلى النموذج',
+          ),
         ),
-      ),
-      for (var index = 0; index < 2; index++)
-        settingsRow(
-          '启用备注',
-          CupertinoSwitch(value: false, onChanged: (_) => changes++),
-        ),
-    ]);
-    final runtime = FlutterScoutHelper.debugRuntime;
-    expect(
-      runtime.debugResolveTarget('btn.تفعيل_الملاحظات')['status'],
-      'unique',
-    );
-    expect(runtime.debugResolveTarget('btn.启用备注')['status'], 'ambiguous');
-    final duplicate = await tester.runAsync(
-      () => runtime.debugTapTarget('btn.启用备注'),
-    );
-    expect(duplicate?['ok'], isFalse);
-    expect(changes, 0);
-    final localized = await tester.runAsync(
-      () => runtime.debugTapTarget('btn.تفعيل_الملاحظات'),
-    );
-    expect(localized?['ok'], isTrue, reason: '$localized');
-    expect(changes, 1);
-  });
+        for (var index = 0; index < 2; index++)
+          settingsRow(
+            '启用备注',
+            CupertinoSwitch(value: false, onChanged: (_) => changes++),
+          ),
+      ]);
+      final runtime = FlutterScoutHelper.debugRuntime;
+      expect(
+        runtime.debugResolveTarget('btn.تفعيل_الملاحظات')['status'],
+        'unique',
+      );
+      // Two rows with one title are two exact handles, like any duplicate.
+      expect(runtime.debugResolveTarget('btn.启用备注')['status'], 'unique');
+      expect(runtime.debugResolveTarget('btn.启用备注_2')['status'], 'unique');
+      final localized = await tester.runAsync(
+        () => runtime.debugTapTarget('btn.تفعيل_الملاحظات'),
+      );
+      expect(localized?['ok'], isTrue, reason: '$localized');
+      expect(changes, 1);
+    },
+  );
 
   testWidgets('outside headings and hidden text are not switch labels', (
     tester,

@@ -441,6 +441,8 @@ class ScoutNode {
     required this.confidence,
     this.coordinateDevicePixelRatio,
     this.selected,
+    this.states = const {},
+    this.instance,
     this.altIds = const [],
     this.textColor,
     this.enclosingTarget,
@@ -485,6 +487,19 @@ class ScoutNode {
   /// determinable from the widget or its semantics; null when unknown. Lets
   /// agents tell "tap did nothing" from "already on that tab".
   final bool? selected;
+
+  /// The specific state facts behind [selected], when Flutter knows them:
+  /// `checked` (checkbox, radio), `toggled` (switch) and `expanded`
+  /// (expansion tile, Semantics `expanded`). [selected] stays the umbrella
+  /// "on" fact (selected, else toggled, else checked); `expanded` never
+  /// feeds it. Empty when unknown, such as a state shown only by paint.
+  final Map<String, bool> states;
+
+  /// One number per mounted control element: the same control keeps it
+  /// across snapshots, another control never shares it. A handle whose
+  /// instance changed names a different control (or a remounted one), so a
+  /// decision made on the old one must be refused as stale.
+  final int? instance;
 
   /// Effective ARGB color of the node's first text descendant, captured for
   /// segment-selection inference (see _inferSegmentSelection). Internal —
@@ -591,6 +606,8 @@ class ScoutNode {
       confidence: confidence ?? this.confidence,
       coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: selected,
+      states: states,
+      instance: instance,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
@@ -627,6 +644,8 @@ class ScoutNode {
       confidence: confidence,
       coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: value,
+      states: states,
+      instance: instance,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
@@ -662,6 +681,8 @@ class ScoutNode {
       confidence: confidence ?? this.confidence,
       coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: selected,
+      states: states,
+      instance: instance,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: enclosingTarget,
@@ -697,6 +718,8 @@ class ScoutNode {
       confidence: confidence,
       coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: selected,
+      states: states,
+      instance: instance,
       altIds: altIds,
       textColor: textColor,
       enclosingTarget: target,
@@ -737,6 +760,8 @@ class ScoutNode {
       confidence: confidence,
       coordinateDevicePixelRatio: coordinateDevicePixelRatio,
       selected: selected,
+      states: states,
+      instance: instance,
       altIds: merged.toList(growable: false),
       textColor: textColor,
       enclosingTarget: enclosingTarget,
@@ -836,6 +861,8 @@ class ScoutNode {
       'scoreKind': 'uncalibrated_heuristic',
       'heuristicMeaning': 'target_label_and_handle_quality',
       if (selected != null) 'selected': selected,
+      ...states,
+      if (instance != null) 'instance': instance,
       if (altIds.isNotEmpty) 'altIds': altIds,
       if (enclosingTarget != null) 'enclosingTarget': enclosingTarget,
     };
@@ -1338,6 +1365,19 @@ class _ActionSnapshotResult {
 // same empty slug.
 final RegExp _kSlugSeparators = RegExp(r'[^\p{L}\p{N}\p{M}]+', unicode: true);
 final RegExp _kSlugRepeatedUnderscores = RegExp(r'_+');
+const Map<String, String> _kSlugSymbolWords = {
+  '<': 'lt',
+  '>': 'gt',
+  '≤': 'le',
+  '≥': 'ge',
+  '=': 'eq',
+  '+': 'plus',
+  '−': 'minus',
+  '%': 'pct',
+};
+final RegExp _kSlugMeaningfulSymbols = RegExp('[<>≤≥=+−%]');
+// A lone "-" (a stepper's minus key) or a leading one before a number.
+final RegExp _kSlugStandaloneMinus = RegExp(r'^\s*-\s*$|^-(?=\d)');
 final RegExp _kSlugEdgeUnderscores = RegExp(r'^_|_$');
 
 // `runtimeType.toString()` is slow in debug builds and the snapshot asks it
@@ -1362,6 +1402,13 @@ String _scoutSlug(String value) {
   if (known != null) return known;
   final slug = value
       .toLowerCase()
+      // Symbols that carry meaning become words, so "<180 days" and
+      // ">180 days" stay distinct handles (lt_180_days, gt_180_days).
+      .replaceAllMapped(
+        _kSlugMeaningfulSymbols,
+        (match) => ' ${_kSlugSymbolWords[match[0]]} ',
+      )
+      .replaceAll(_kSlugStandaloneMinus, ' minus ')
       .replaceAll(_kSlugSeparators, '_')
       .replaceAll(_kSlugRepeatedUnderscores, '_')
       .replaceAll(_kSlugEdgeUnderscores, '');
