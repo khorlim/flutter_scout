@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -119,6 +121,65 @@ void main() {
     // The body row of the tile is not its header.
     expect(controls['Body row']?.containsKey('expanded'), isFalse);
     expect(controls['Redeem with points']?['selected'], isTrue);
+  });
+
+  testWidgets('a tap whose only effect is a control state reports the change '
+      'without the late wait', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    final runtime = FlutterScoutHelper.debugRuntime;
+    var range = '<180 days';
+    // Filter chips whose selection is stated in Semantics only: the text
+    // and layout stay the same when one is picked.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => Row(
+              children: [
+                for (final option in ['<180 days', '>180 days'])
+                  Semantics(
+                    button: true,
+                    selected: range == option,
+                    child: GestureDetector(
+                      onTap: () => setState(() => range = option),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text(option),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final chip = tester.getCenter(find.text('>180 days'));
+
+    final stopwatch = Stopwatch()..start();
+    final result = await tester.runAsync(() async {
+      // The engine's frames, as a running app would have them.
+      final frames = Timer.periodic(
+        const Duration(milliseconds: 16),
+        (_) => unawaited(tester.pump()),
+      );
+      try {
+        return await runtime.debugTapPoint(chip, waitMs: 600, lateWaitMs: 1500);
+      } finally {
+        frames.cancel();
+      }
+    });
+    stopwatch.stop();
+
+    expect(range, '>180 days');
+    expect(result!['result'], 'changed', reason: '$result');
+    expect(result['lateChangeObserved'], isNull);
+    final changes = ((result['delta']! as Map)['controlStateChanges']! as List)
+        .cast<Map>();
+    expect(changes, isNotEmpty);
+    // The 1.5 s late window was not waited out.
+    expect(stopwatch.elapsedMilliseconds, lessThan(1000));
   });
 }
 

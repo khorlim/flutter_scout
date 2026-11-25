@@ -526,7 +526,30 @@ extension _RuntimeInternals on FlutterScoutRuntime {
 
     return jsonEncode(comparable(before)) != jsonEncode(comparable(after)) ||
         _fieldValuesChanged(before, after) ||
+        _controlStateSignature(before) != _controlStateSignature(after) ||
         _geometryChanged(before, after);
+  }
+
+  /// The state facts Flutter knows for each control (`enabled`, `selected`,
+  /// `checked`, `toggled`, `expanded`), canonical and ordered by id. A tap
+  /// whose only effect is one of these (a filter chip becoming selected) is
+  /// an observed change, and a state that flips while an animation runs
+  /// keeps the stability wait from calling the view quiet. Hit-testability
+  /// and visible fraction are geometry, not state, and stay out. State an
+  /// app only paints has no such fact and cannot be seen here.
+  String _controlStateSignature(ScoutSnapshot snapshot) {
+    final nodes = [...snapshot.interactables, ...snapshot.fields]
+      ..sort((a, b) => a.id.compareTo(b.id));
+    return jsonEncode([
+      for (final node in nodes)
+        [
+          node.id,
+          node.enabled,
+          node.selected,
+          for (final key in node.states.keys.toList()..sort())
+            '$key=${node.states[key]}',
+        ],
+    ]);
   }
 
   bool _fieldValuesChanged(ScoutSnapshot before, ScoutSnapshot after) {

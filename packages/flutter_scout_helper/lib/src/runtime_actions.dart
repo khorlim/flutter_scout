@@ -2221,7 +2221,8 @@ extension _RuntimeActions on FlutterScoutRuntime {
       ..remove('idle')
       ..remove('stateGeneration')
       ..remove('stateDigest')
-      ..remove('snapshotId');
+      ..remove('snapshotId')
+      ..['controlState'] = _controlStateSignature(snapshot);
     return crypto.sha256
         .convert(utf8.encode(_canonicalJson(comparable)))
         .toString();

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A mutation whose only effect is a control state fact now has `result:
+  changed` (was `activated_no_observed_change`); its delta was already in
+  `controlStateChanges`. Helper wire protocol unchanged at 15.
 - Additive values, helper wire protocol unchanged at 15: the client's
   `settle.status` adds `unchanged` (the input changed nothing within one
   eyes interval); a mutation's `stability.stoppingReason` can be

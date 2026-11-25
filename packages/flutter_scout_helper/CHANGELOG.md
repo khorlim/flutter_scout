@@ -1,5 +1,13 @@
 ## Unreleased
 
+* A control's state facts (`enabled`, `selected`, `checked`, `toggled`,
+  `expanded`) now count as an observed change. A tap whose only effect is
+  one of them (a filter chip becoming selected) reports `changed` instead
+  of `activated_no_observed_change` and returns without waiting out the
+  late-change window (about 1 s). The stability wait also treats a state
+  flip as a semantic change, so a state that flickers during an animation
+  settles before the view is called quiet. State an app only paints is
+  still not seen.
 * After an input with no immediate change, each late-change round now ends
   as soon as a lasting change lands (`stoppingReason:
   late_change_observed`) instead of first waiting out its 250 ms stability
