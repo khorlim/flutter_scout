@@ -43,12 +43,13 @@ function inputFailure(result, scene) {
 
 /** Persistent JSONL client. No ports, screenshots, implicit retries or app logic. */
 export class ScoutAgent {
-  static async connect({ app, binary = 'flutter-scout', cwd, intervalMs = 250, maxItems = 60 } = {}) {
+  static async connect({ app, binary = 'flutter-scout', cwd, intervalMs = 250, maxItems = 60, overlay = true } = {}) {
     if (typeof app !== 'string' || !app || !Number.isInteger(intervalMs) ||
         intervalMs < 100 || intervalMs > 10000 || !Number.isInteger(maxItems) ||
         maxItems < 1 || maxItems > 100) throw new TypeError('A named app and bounded polling options are required');
     const child = spawn(binary, ['--app', app, 'agent', '--interval-ms', String(intervalMs),
-      '--max-items', String(maxItems)], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      '--max-items', String(maxItems), ...(overlay === false ? ['--no-overlay'] : [])],
+    { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     const client = new ScoutAgent(child);
     client.intervalMs = intervalMs;
     let ready;
@@ -827,6 +828,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--foreground') options.foreground = true;
     else if (arg === '--brief') options.brief = true;
+    else if (arg === '--no-overlay') options.overlay = false;
     else if (['--app', '--socket', '--binary', '--interval-ms', '--max-items'].includes(arg)) {
       if (i + 1 >= argv.length) throw agentError('usage', `${arg} needs a value`);
       options[arg.slice(2)] = argv[++i];
@@ -916,6 +918,7 @@ async function serveBridge(argv, options, paths) {
     ...(options.binary ? { binary: options.binary } : {}),
     ...(options['interval-ms'] ? { intervalMs: Number(options['interval-ms']) } : {}),
     ...(options['max-items'] ? { maxItems: Number(options['max-items']) } : {}),
+    ...(options.overlay === false ? { overlay: false } : {}),
   };
   if (options.foreground) {
     // Runs until close/idle/signal; reports readiness over IPC or stdout.

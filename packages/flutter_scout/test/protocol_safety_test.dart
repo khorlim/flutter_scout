@@ -63,6 +63,9 @@ void main() {
           expect(ready['agentProtocol'], 2);
           expect(ready['ok'], isTrue, reason: jsonEncode(ready));
           final revision = ready['viewRevision'] as int;
+          // The connection attaches the in-app driving overlay; it is not
+          // an input.
+          expect(fake.overlayActions, contains('attach'));
 
           process.stdin.writeln(
             jsonEncode(<String, Object?>{
@@ -1360,6 +1363,9 @@ class _FakeVmService {
   final bool scrollToFallback;
   final List<WebSocket> _sockets = <WebSocket>[];
   final List<String> extensionMethods = <String>[];
+  // The agent's driving-overlay presence calls, a read kept apart from
+  // input dispatch.
+  final List<String> overlayActions = <String>[];
   final List<Map<String, dynamic>> mutationParams = <Map<String, dynamic>>[];
   final Map<String, Map<String, Object?>> _mutationOutcomes =
       <String, Map<String, Object?>>{};
@@ -1430,6 +1436,14 @@ class _FakeVmService {
             'isSystemIsolate': false,
           },
         ],
+      });
+      return;
+    }
+    if (method == 'ext.flutter_scout.agentOverlay') {
+      overlayActions.add(params['action']?.toString() ?? 'status');
+      _reply(socket, id, <String, Object?>{
+        'ok': true,
+        'overlay': <String, Object?>{'attached': true},
       });
       return;
     }
