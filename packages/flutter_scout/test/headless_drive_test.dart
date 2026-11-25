@@ -228,7 +228,7 @@ void main() {
       expect(facts['lidCloseSleeps'], isTrue);
       final stops = facts['normalRunStoppedBy'] as Map;
       expect(stops['displaySleep'], startsWith('yes'));
-      expect(stops['screenLock'], contains('immediate'));
+      expect(stops['screenLock'], contains('as soon as the display sleeps'));
       expect(stops['systemSleep'], startsWith('not now'));
       expect(facts['headlessDriveCovers'], contains('Not system sleep'));
     });

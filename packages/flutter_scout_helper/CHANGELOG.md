@@ -1,5 +1,11 @@
 ## Unreleased
 
+* Opt-in headless drive (`headlessDriveV1`): a request with
+  `headlessDrive=true` keeps a hidden debug app rendering with Scout-driven
+  frames (one per request plus at most 20 fps while app work is pending),
+  reports `rendering.status: driven` with the reason, and holds an App Nap
+  activity through `dart:ffi` while an agent is attached. Off by default;
+  without the flag nothing changes.
 * A swipe that moves nothing on screen now fails with `swipe_no_effect`
   (dispatched, `observation: no_effect`) instead of `ok` with
   `result: unchanged`, naming the widget it landed on. Scroll is unchanged.

@@ -59,6 +59,19 @@ with `--app <name>`, stop it, or pass `--allow-parallel` deliberately. Without
 A stopped or failed session with the same name in another project no longer
 blocks a new session; only two live ones are ambiguous.
 
+`--headless-drive` on `launch`, `ensure` or `attach` (or
+`FLUTTER_SCOUT_HEADLESS_DRIVE=1` in their environment) opts a debug session
+into headless drive (agent-session.md); without it the session's record is
+removed. Their envelopes, `status` and `doctor` report `headlessDrive`
+(`enabled`, `source`, and in `status` whether the app is visible now, with a
+`HEADLESS:` notice when it is not). On macOS, `status` (macOS sessions) and
+`doctor` also report `hostPower`, read-only from `pmset`, `sysadminctl` and
+`ioreg`: display and system sleep minutes, whether idle system sleep is
+prevented now and by whom, the screen-lock delay, whether closing the lid
+sleeps, `normalRunStoppedBy` (what stops a visible-window run) and what
+headless drive does not cover (system sleep, closed lid). Scout never changes
+these settings.
+
 Useful commands:
 
 ```bash

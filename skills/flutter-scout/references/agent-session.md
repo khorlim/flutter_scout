@@ -40,6 +40,37 @@ input goes to Flutter, not to the user's mouse or keyboard.
   activation or sleeps. A frontmost `loginwindow` means the screen is locked
   or asleep, and no window can render until the user unlocks it.
 
+## Headless drive (opt-in)
+
+A session started with `--headless-drive` (or
+`FLUTTER_SCOUT_HEADLESS_DRIVE=1` on launch/ensure/attach) records the choice
+in its session directory; `agent` reads it when it connects. Its eyes, mutation
+preflight and captures then send `headlessDrive:"true"` to a helper that
+advertises `headlessDriveV1` (an older helper is never sent it, and the scene
+says the helper did not report it).
+
+In the helper, each such request renews a 5 s lease. While the lease holds and
+Flutter has stopped frames (lifecycle `hidden`/`paused`), the helper advances
+one frame before the request (so the observation, preflight or capture is
+current) and an event-driven loop builds pending `setState` calls and app
+animations between requests, at most 20 frames per second. The driving
+overlay's own animation never keeps that loop running. The loop stops when
+the lease lapses (`stoppedReason: lease_expired`, after disconnect) or the
+app renders again (`rendering_resumed`). Lifecycle is never faked. While
+attached, an `NSProcessInfo` activity (through `dart:ffi`, no plugin code)
+keeps macOS App Nap from throttling the hidden app; it still allows idle
+system sleep and ends with the lease.
+
+`rendering` then reports `status:'driven'`, `pixelFreshness:
+'scout_driven_frame'`, `scoutSchedulesFrames:true` and `headlessDrive:
+{driving, reason, notice, loop, stoppedReason, requestFrames, loopFrames,
+maxLoopFps, leaseMs, appNap, lifecycleFaked:false}`. `reason` is
+`screen_locked` or `display_asleep` (read from macOS) or `app_hidden`. Every
+scene adds `headless: {driving, reason, lifecycle, notice}`; a `driven` view is
+actionable only in an opted-in session. `foreground()` still needs real
+rendering (`ok:false`, `rendering_still_suspended`, while only driven).
+Native deeplinks still need a visible app.
+
 ## Client
 
 Import the shipped `scripts/agent_client.mjs` from this skill's directory in a

@@ -288,7 +288,8 @@ before opening another connection. Never suppress errors to keep navigating.
 Exact-handle taps, input and fill tolerate unrelated text ticks (clocks,
 countdowns); real screen, surface or target changes are still rejected.
 
-Rendering suspended means restore app visibility. Never pump frames or treat
+Rendering suspended means restore app visibility (or, only when the user
+asked for it, use headless drive below). Never pump frames yourself or treat
 an old semantic tree as current pixels. An active framework frame does not
 prove the native window is visible. Manual images are required for visual QA.
 When a scene has `actionable:false`, read `scene.blockedBy`: `reason` says
@@ -316,6 +317,34 @@ sleeps. It refuses during input or an unread/unknown receipt. A received known
 failure can restore visibility, but still needs explicit reconciliation;
 activation never clears its halt or acknowledges its receipt. Never treat
 activation as save success.
+
+### Headless drive (macOS debug apps, opt-in)
+
+When the user wants the agent to keep working while the app is hidden,
+covered, minimized, the display is asleep or the screen is locked, start the
+run with `ensure|launch|attach --headless-drive` (or
+`FLUTTER_SCOUT_HEADLESS_DRIVE=1`). Off is the default; the latest
+launch/ensure/attach decides, and the agent connection picks it up when it
+connects (reconnect after changing it). While Flutter has stopped frames
+because the app is not visible, the helper then drives bounded frames itself
+for as long as the agent stays connected: `rendering.status` is `driven`,
+input is accepted, and every scene carries `headless: {driving, reason,
+lifecycle, notice}` with `reason` `app_hidden`, `display_asleep` or
+`screen_locked`. Say so in your report. Costs and caveats:
+
+- CPU, battery and heat: one frame per observation plus up to 20 frames per
+  second while the app animates (a focused field's caret blinks). It stops
+  within 5 s of disconnecting and as soon as the window is visible again.
+- It is not a visible app: the lifecycle really is `hidden`, so app code
+  reacting to that (pausing video, sockets, timers) still runs; vsync-timed
+  behaviour and platform views differ.
+- You act on a live app nobody is watching. Keep to the user's task.
+- System sleep or a closed lid still suspends the app and Scout. Check
+  `status`/`doctor` `hostPower` and ask the user to keep the Mac awake
+  (for example `caffeinate -i -w <app pid>`).
+- Screenshots and crops use the in-app capture; `--native` is refused with
+  `native_capture_unavailable_headless` while the app is hidden or locked.
+- `foreground()` still succeeds only when the window really renders.
 
 For an authorized time-sensitive response, react can issue one exact observed
 tap or stop future input, bounded to 30 seconds. It cannot invent targets,

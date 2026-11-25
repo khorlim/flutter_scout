@@ -266,6 +266,8 @@ extension _CliHeadless on FlutterScoutCli {
             ? 'yes when locked (lock delay unknown)'
             : lockDelay == 'off'
             ? 'yes when locked by hand (no automatic lock after sleep)'
+            : lockDelay == 'immediate'
+            ? 'yes: the screen locks as soon as the display sleeps'
             : 'yes: the screen locks $lockDelay after the display sleeps',
         'systemSleep': idleSleepPrevented
             ? 'not now: idle system sleep is prevented'

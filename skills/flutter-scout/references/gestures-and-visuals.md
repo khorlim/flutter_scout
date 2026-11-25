@@ -94,6 +94,12 @@ image, including ones written to your own `-o` path. Evidence that must outlive
 the session (a QA or release report, a bug report) needs `--retention manual`
 (or `24h`/`7d`) when you capture it; copying files out afterwards is fragile.
 
+In a headless-drive session the in-app capture advances a frame first, so a
+hidden app is captured current. The macOS window capture (`screencapture`) is
+never run while the app is hidden, the screen is locked or visibility cannot
+be proven: a forced `--native` (or a platform-view fallback) fails with
+`native_capture_unavailable_headless` instead.
+
 Scout prefers in-app capture. A forced or required native full screenshot uses
 the exact recorded emulator: `xcrun simctl` on iOS Simulator or local-argv
 `adb exec-out screencap -p` on Android Emulator. Read `backend`, `provenance`,
