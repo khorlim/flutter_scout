@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Additive helper fields (helper wire protocol unchanged at 15): interactables
+  may carry `checked`, `toggled` and `expanded` beside `selected`, and an
+  `instance` number per mounted control; `delta.controlStateChanges` includes
+  them. `activeSurface.source` adds `appBarTitle`, `dialogTitle`, `header`,
+  `heading` and `widgetType`. A cut brief scene's `omitted` adds
+  `scrollables` and `recoverWith: {method, params}`.
+- `inspect` `maxItems` maximum is 500 (was 100) in the helper and CLI typed
+  method contracts (`helper-methods.json` regenerated). An older helper
+  rejects values above 100.
+- Stale-decision rejections (`agent_view_changed`, `live_view_changed`) add
+  `details.staleChanges: [{field, before, after, appeared?, disappeared?}]`.
+- Some handles change: controls are named from their own text or a list
+  tile/caption title instead of an icon, asset, GlobalKey hash or widget
+  type, and slugs keep `< > <= >= = + %` and a lone minus. Duplicate numbering
+  is sticky per mounted control.
+
 - Add stable error `expected_run_id_mismatch`: `attach`/`ensure --expect-run-id` was
   given, but the app's helper reported a different Scout run ID or none.
   Nothing was attached or persisted. `attach` and `ensure` responses add
