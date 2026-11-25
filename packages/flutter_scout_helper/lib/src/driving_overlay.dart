@@ -133,6 +133,12 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   static const double _observingGlow = 0.34;
   static const double _activeGlow = 0.8;
   static const Duration _idleAfter = Duration(milliseconds: 2400);
+
+  /// How long the session label keeps saying "controlling" after the last
+  /// input settles. Longer than a model's turn between acts (3 to 12 s), so
+  /// the label does not flip on every turn while the glow and cursor still
+  /// calm down after [_idleAfter].
+  static const Duration _labelIdleAfter = Duration(seconds: 15);
   static const int _maxEffects = 24;
 
   // ---- presence ---------------------------------------------------------
@@ -141,6 +147,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   int _leaseMs = 0;
   Timer? _leaseTimer;
   Timer? _idleTimer;
+  Timer? _labelIdleTimer;
   Timer? _tagTimer;
   int _captureHideDepth = 0;
   bool _active = false;
@@ -313,9 +320,10 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   // ---- drawn state ------------------------------------------------------
   final _DrivingFade glow = _DrivingFade(0);
 
-  /// Controlling (an input within the last few seconds) or observing. It
-  /// changes at those transitions only, so the session label can follow it
-  /// without rebuilding per frame.
+  /// The session label's word: controlling (an input within the last
+  /// [_labelIdleAfter]) or observing. It changes at those transitions only, so
+  /// the label can follow it without rebuilding per frame. The glow and cursor
+  /// follow [controlling] instead, which calms down after [_idleAfter].
   final ValueNotifier<bool> controllingNotifier = ValueNotifier<bool>(false);
   final _DrivingFade cursorAlpha = _DrivingFade(0);
   // Cursor path as keyframes (time, point), eased between neighbours. A new
@@ -381,6 +389,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     'motion': reducedMotion ? 'reduced' : 'full',
     'style': touchStyle ? 'touch_dot' : 'cursor',
     'controlling': _active,
+    'label': controllingNotifier.value ? 'controlling' : 'observing',
     'ticking': ticking,
     'effects': effects.length,
     'hiddenForCapture': hiddenForCapture,
@@ -415,6 +424,8 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     _leaseTimer = null;
     _idleTimer?.cancel();
     _idleTimer = null;
+    _labelIdleTimer?.cancel();
+    _labelIdleTimer = null;
     _tagTimer?.cancel();
     _tagTimer = null;
     if (!_attached) return;
@@ -586,15 +597,22 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   }
 
   /// After the last input, the cursor parks for a moment, then fades and the
-  /// session drops back to the calmer observing state.
+  /// glow drops back to the calmer observing state. The session label waits
+  /// longer before it says observing, so it does not flip between turns.
   void _armIdle() {
+    if (controllingNotifier.value && _labelIdleTimer == null) {
+      _labelIdleTimer = Timer(_labelIdleAfter, () {
+        _labelIdleTimer = null;
+        if (!_attached) return;
+        controllingNotifier.value = false;
+      });
+    }
     if (!_active || _idleTimer != null) return;
     _idleTimer = Timer(_idleAfter, () {
       _idleTimer = null;
       if (!_attached) return;
       _active = false;
       glow.to(_observingGlow, now, 600);
-      controllingNotifier.value = false;
       cursorAlpha.to(0, now, 450);
       _kick();
     });
@@ -616,13 +634,13 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   void _markActive() {
     _idleTimer?.cancel();
     _idleTimer = null;
+    _labelIdleTimer?.cancel();
+    _labelIdleTimer = null;
     _tagTimer?.cancel();
     _tagTimer = null;
     _tagUntil = now + _tagHold;
-    if (!_active) {
-      _active = true;
-      controllingNotifier.value = true;
-    }
+    _active = true;
+    controllingNotifier.value = true;
     glow.to(1, now, 90);
     _glowSettleAt = now + 90;
   }
@@ -772,6 +790,8 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     final point = _toLocal(globalPoint);
     _idleTimer?.cancel();
     _idleTimer = null;
+    _labelIdleTimer?.cancel();
+    _labelIdleTimer = null;
     final at = math.max(now, effect.pathTimes.last);
     final duration = reducedMotion ? 0.0 : 90.0;
     effect.path.add(point);
@@ -888,6 +908,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   void dispose() {
     _leaseTimer?.cancel();
     _idleTimer?.cancel();
+    _labelIdleTimer?.cancel();
     _tagTimer?.cancel();
     _teardown();
     super.dispose();

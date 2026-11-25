@@ -405,8 +405,10 @@ retry, cross surfaces, or cancel an already-started app operation.
 
 While the agent connection is attached, the app shows an "AI is driving"
 overlay for people watching: a calm edge glow; the session label in the
-lower-left corner reading "Scout · <name> · controlling" (or "observing"
-when idle); a cursor tagged "Scout" on desktop or a touch dot on
+lower-left corner reading "Scout · <name> · controlling" (it says
+"observing" once no input has arrived for about 15 s, so it holds steady
+between turns while the glow and cursor calm down after about 2.4 s); a
+cursor tagged "Scout" on desktop or a touch dot on
 iOS/Android that glides to each target; a ripple at the hit point (two for
 a double tap, a square one plus a "Right click" chip for a secondary
 click); a filling ring for a long press; a trail for drags and scrolls with

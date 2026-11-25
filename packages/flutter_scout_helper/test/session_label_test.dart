@@ -5,7 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// The session label is the chip people watch to see which agent session is
 /// running and what it is doing. It must not blink: captures keep it mounted
 /// and hide it only where a capture that excludes Scout's overlay covers it,
-///.
+/// and its state word does not flip between an agent's turns.
 void main() {
   final badge = find.byWidgetPredicate(
     (widget) => widget.runtimeType.toString() == '_ScoutInstanceBadge',
@@ -84,6 +84,54 @@ void main() {
     // An app-only screenshot that covers it hides it for those frames only.
     expect(await opacityDuring(tester, () => runtime.debugCaptureRegion()), 0);
 
+    runtime.debugSetLaunchBadgeVisible(null);
+    await tester.pump();
+  });
+
+  testWidgets('the label keeps controlling between turns at a fixed size', (
+    tester,
+  ) async {
+    final runtime = await labelled(tester);
+    // Real 16 ms frames, renewing the presence lease every 2 s as the agent's
+    // eyes do.
+    Future<void> wait(int ms) async {
+      for (var elapsed = 0; elapsed < ms; elapsed += 16) {
+        if (elapsed % 2000 == 0) await runtime.debugAgentOverlay('attach');
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+    }
+
+    String label() => runtime.debugDrivingOverlayStatus['label']! as String;
+
+    await wait(1000);
+    expect(label(), 'observing');
+    final size = tester.getSize(badge);
+
+    await tester.runAsync(() => runtime.debugTapTarget('tap.save'));
+    await wait(5000);
+    // The glow and cursor calm down after a moment; the label waits longer
+    // than a model's turn before it says observing.
+    final status = runtime.debugDrivingOverlayStatus;
+    expect(status['controlling'], isFalse);
+    expect(status['label'], 'controlling');
+    expect(tester.getSize(badge), size);
+
+    // The next input inside that window starts the wait again.
+    await wait(5000);
+    await tester.runAsync(() => runtime.debugTapTarget('tap.save'));
+    await wait(14000);
+    expect(label(), 'controlling');
+
+    await wait(4000);
+    expect(label(), 'observing');
+    await wait(500);
+    expect(tester.getSize(badge), size);
+
+    await runtime.debugAgentOverlay('detach');
+    for (var i = 0; i < 40; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(runtime.debugDrivingOverlayStatus['installed'], isFalse);
     runtime.debugSetLaunchBadgeVisible(null);
     await tester.pump();
   });

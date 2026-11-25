@@ -150,17 +150,26 @@ class _ScoutInstanceBadge extends StatelessWidget {
                           color: ScoutColors.inkDim.withValues(alpha: 0.6),
                         ),
                       ),
-                      AnimatedDefaultTextStyle(
-                        duration: ScoutMotion.base,
-                        style: _badgeName.copyWith(
-                          color: controlling
-                              ? ScoutColors.signal
-                              : ScoutColors.inkDim,
-                          fontWeight: controlling
-                              ? FontWeight.w600
-                              : FontWeight.w500,
-                        ),
-                        child: Text(controlling ? 'controlling' : 'observing'),
+                      // Both words share one slot as wide as the wider
+                      // one, so the chip never changes size; they
+                      // cross-fade when the state changes.
+                      Stack(
+                        alignment: Alignment.centerLeft,
+                        children: [
+                          _stateWord(
+                            'controlling',
+                            visible: controlling,
+                            style: _badgeName.copyWith(
+                              color: ScoutColors.signal,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          _stateWord(
+                            'observing',
+                            visible: !controlling,
+                            style: _badgeName,
+                          ),
+                        ],
                       ),
                     ],
                     if (interactive) ...[
@@ -183,6 +192,22 @@ class _ScoutInstanceBadge extends StatelessWidget {
             },
           ),
         ),
+      ),
+    );
+  }
+
+  static Widget _stateWord(
+    String word, {
+    required bool visible,
+    required TextStyle style,
+  }) {
+    return ExcludeSemantics(
+      excluding: !visible,
+      child: AnimatedOpacity(
+        opacity: visible ? 1 : 0,
+        duration: ScoutMotion.fast,
+        curve: ScoutMotion.enter,
+        child: Text(word, style: style),
       ),
     );
   }

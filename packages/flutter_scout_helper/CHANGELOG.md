@@ -5,6 +5,12 @@
   so those images show it, and other captures hide it, by opacity, only
   for the frames a captured region covers it, as they do the pins. Before,
   every in-app capture removed and rebuilt it.
+* The session label says "observing" only after about 15 s without input
+  (any input resets the wait), not 2.4 s, so it no longer flips between
+  "controlling" and "observing" on every agent turn. The glow and cursor
+  still calm down after 2.4 s. The state word has a fixed-width slot and
+  cross-fades, so the chip keeps its size. The overlay status adds `label`.
+
 * A small control that shows its own text no longer borrows the next
   control's text as an alias (a "Points" chip also answering to
   `tap.credit`); nearby-text aliases stay for icon-only controls.
