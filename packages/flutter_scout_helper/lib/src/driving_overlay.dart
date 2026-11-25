@@ -134,6 +134,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   int _leaseMs = 0;
   Timer? _leaseTimer;
   Timer? _idleTimer;
+  Timer? _tagTimer;
   int _captureHideDepth = 0;
   bool _active = false;
 
@@ -292,6 +293,8 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     _leaseTimer = null;
     _idleTimer?.cancel();
     _idleTimer = null;
+    _tagTimer?.cancel();
+    _tagTimer = null;
     if (!_attached) return;
     _attached = false;
     attachedNotifier.value = false;
@@ -432,7 +435,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
         pill.active(now) ||
         pillActive.active(now) ||
         cursorAlpha.active(now) ||
-        now < _tagUntil + _tagFade ||
+        (now > _tagUntil && now < _tagUntil + _tagFade) ||
         now < _keyTimes.last;
     if (!moving) {
       _ticker!.stop();
@@ -441,9 +444,23 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
         _teardown();
         return;
       }
+      _armTagFade();
       _armIdle();
     }
     notifyListeners();
+  }
+
+  /// The parked cursor's tag waits without frames; a timer starts its fade.
+  void _armTagFade() {
+    if (now >= _tagUntil || _tagTimer != null) return;
+    final wait = (_tagUntil - now).ceil();
+    _tagTimer = Timer(Duration(milliseconds: wait), () {
+      _tagTimer = null;
+      if (!_attached || ticking) return;
+      // The overlay clock stands still while stopped; move it to the fade.
+      _clockBase = now = _tagUntil;
+      _kick();
+    });
   }
 
   /// After the last input, the cursor parks for a moment, then fades and the
@@ -477,6 +494,8 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   void _markActive() {
     _idleTimer?.cancel();
     _idleTimer = null;
+    _tagTimer?.cancel();
+    _tagTimer = null;
     _tagUntil = now + _tagHold;
     if (!_active) {
       _active = true;
@@ -719,6 +738,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   void dispose() {
     _leaseTimer?.cancel();
     _idleTimer?.cancel();
+    _tagTimer?.cancel();
     _teardown();
     super.dispose();
   }
