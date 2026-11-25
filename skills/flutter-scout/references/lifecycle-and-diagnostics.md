@@ -40,6 +40,36 @@ If the app remains reachable after its Scout-owned Flutter runner exits,
 `status` reclassifies the session as attach-only and reports
 `ownershipLossReason: owner_process_exited`. The app remains available for
 inspection and actions, but Dart edits require a fresh Scout-owned launch.
+
+A Scout-built app keeps the run ID it was compiled with, and the helper accepts
+actions only for that run (`run_mismatch` otherwise). After a plain `stop`
+(which keeps the session record), the same installed build can be relaunched
+outside Scout, for example with `xcrun simctl launch`, and re-attached with
+`--app <name> attach --debug-url-file <file>` or `ensure --debug-url-file`.
+Scout adopts the helper's run only when this session's record names that run
+and descends from a Scout launch; the response reports
+`runIdentityRecovered: true` and `runIdentityProof: session_record`. The
+record keeps that lineage, so stop, relaunch and attach can repeat any number
+of times. An ordinary attach-only record never proves a run, and an explicit
+`--device` must match the recorded device.
+
+After `stop --clear-session`, or in a later session reusing a cached build,
+nothing in the record proves the run. Pass the `runId` that your own Scout
+`launch`/`ensure` reported when it built the app. A cleared session is no
+longer registered, so name it again with `ensure`:
+
+```bash
+flutter-scout --single-json ensure --device <id> --project <app> --name <task> \
+  --debug-url-file <0600-file> --expect-run-id <runId>
+```
+
+While the session is still registered, `--app <task> attach --debug-url-file
+<file> --expect-run-id <runId>` works too. Scout adopts the run only when the
+helper reports exactly that ID (`runIdentityProof: expected_run_id`);
+otherwise it fails with `expected_run_id_mismatch` and changes nothing. With
+`--expect-run-id`, `ensure` never builds: no ready app fails with
+`vm_service_uri_not_found` and `launch: not_attempted`. Never take the ID from
+a `run_mismatch` error: that app belongs to a run you did not start.
 When the URI file is missing but a verified Scout-owned run remains alive,
 `status` restores it from that run's scoped log. From the app project, commands
 also select the sole current named session automatically; multiple candidates

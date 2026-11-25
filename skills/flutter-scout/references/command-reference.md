@@ -70,6 +70,12 @@ Supply VM capability URLs using attach --debug-url-file <0600-file> or
 --debug-url-stdin. Only explicit loopback hosts with a port are supported.
 attach has no --name or --project; to attach a human-started app as a named
 session, use `ensure --project <app> --name <task> --debug-url-file <file>`.
+A stopped Scout build relaunched outside Scout re-attaches under its own run
+when the session record names it; after the record is cleared, pass the
+launch's recorded `runId` with `ensure --name <task> --debug-url-file <file>
+--expect-run-id <runId>` (or `attach --expect-run-id` while the session is
+still registered). Details:
+lifecycle-and-diagnostics.md.
 
 Global options go before the command, in any order: `--app <name>`,
 `--single-json`, `--idempotency-key <key>`. Use --single-json for one final

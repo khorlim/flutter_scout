@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add stable error `expected_run_id_mismatch`: `attach`/`ensure --expect-run-id` was
+  given, but the app's helper reported a different Scout run ID or none.
+  Nothing was attached or persisted. `attach` and `ensure` responses add
+  `runIdentityProof` (`session_record` or `expected_run_id`) beside
+  `runIdentityRecovered`. Helper wire protocol is unchanged.
+
 - Add stable error `swipe_no_effect`: a swipe was dispatched but nothing on
   screen moved. It is a known dispatched outcome (observe, then reconcile).
   Scroll keeps `ok` with `result: unchanged` at the end of its content.

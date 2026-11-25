@@ -56,15 +56,31 @@ extension VmTransportDebug on FlutterScoutCli {
   /// it only through a fresh VM-service `inspect` call after loopback transport
   /// validation.
   Map<String, Object?>? debugReconcileAttachRunIdentity({
-    required Map<String, Object?> previousMeta,
+    required Map<String, Object?>? previousMeta,
     required String helperRunId,
     required String runtimeInstanceId,
     String? requestedDevice,
+    String? expectedRunId,
   }) => _reconcileAttachRunIdentity(
     previousMeta: previousMeta,
     helperRunId: helperRunId,
     runtimeInstanceId: runtimeInstanceId,
     requestedDevice: requestedDevice,
+    expectedRunId: expectedRunId,
+  );
+
+  /// Test-only view of the record an adopted attach writes, so a later attach
+  /// of the same build can be checked against it.
+  Map<String, Object?> debugRecoveredAttachSessionMeta({
+    required Map<String, Object?>? previousMeta,
+    required Map<String, Object?> recovery,
+    String? device,
+  }) => _recoveredAttachSessionMeta(
+    previousMeta: previousMeta,
+    recovery: recovery,
+    vmServiceUri: 'ws://127.0.0.1:1/debug/ws',
+    device: device,
+    now: '2026-11-25T00:00:00.000Z',
   );
 }
 

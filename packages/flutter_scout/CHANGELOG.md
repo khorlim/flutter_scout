@@ -1,5 +1,13 @@
 ## Unreleased
 
+- Let the same installed Scout build be stopped, relaunched outside Scout and
+  re-attached any number of times. An adopted run keeps its Scout-launch
+  lineage in the session record, `ensure --debug-url-file` uses the same rule,
+  and responses report `runIdentityProof`. Add `--expect-run-id <id>` to
+  `attach` and `ensure` to adopt a cached build's run in a later session only
+  when the helper reports exactly that ID; otherwise fail with
+  `expected_run_id_mismatch` and change nothing. `ensure --expect-run-id`
+  never builds. An unproven helper run is still refused with `run_mismatch`.
 - Preserve the agent lease inode during session cleanup, recognizing it as a
   serialization control rather than unknown residue. Never unlink a live lock.
 - Add explicit macOS `foreground()` on the persistent agent connection. Activate

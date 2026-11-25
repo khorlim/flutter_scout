@@ -531,6 +531,104 @@ void main() {
 
       expect(recovered, isNull);
     });
+
+    test('a stopped, relaunched build re-attaches any number of times', () {
+      final cli = FlutterScoutCli();
+      Map<String, Object?> record = const <String, Object?>{
+        'mode': 'scout_owned_flutter_run',
+        'runId': 'launch-run',
+        'device': 'ipad-sim',
+      };
+      for (var attach = 0; attach < 3; attach++) {
+        final recovered = cli.debugReconcileAttachRunIdentity(
+          previousMeta: record,
+          helperRunId: 'launch-run',
+          runtimeInstanceId: 'runtime-$attach',
+        );
+        expect(recovered, isNotNull, reason: 'attach #${attach + 1}');
+        expect(recovered!['proof'], 'session_record');
+        record = cli.debugRecoveredAttachSessionMeta(
+          previousMeta: record,
+          recovery: recovered,
+        );
+        expect(record['mode'], 'attach_only');
+        expect(record['runId'], 'launch-run');
+        expect(record['previousMode'], 'scout_owned_flutter_run');
+        expect(record['device'], 'ipad-sim');
+        expect(record.containsKey('pid'), isFalse);
+      }
+    });
+
+    test('an ordinary attach-only record never proves a helper run', () {
+      final recovered = FlutterScoutCli().debugReconcileAttachRunIdentity(
+        previousMeta: const <String, Object?>{
+          'mode': 'attach_only',
+          'runId': 'launch-run',
+        },
+        helperRunId: 'launch-run',
+        runtimeInstanceId: 'runtime-verified',
+      );
+
+      expect(recovered, isNull);
+    });
+
+    test('a cleared session cannot adopt a helper run without proof', () {
+      final recovered = FlutterScoutCli().debugReconcileAttachRunIdentity(
+        previousMeta: null,
+        helperRunId: 'launch-run',
+        runtimeInstanceId: 'runtime-verified',
+        requestedDevice: null,
+      );
+
+      expect(recovered, isNull);
+    });
+
+    test('an expected run ID adopts only the exact helper run', () {
+      final cli = FlutterScoutCli();
+      final adopted = cli.debugReconcileAttachRunIdentity(
+        previousMeta: null,
+        helperRunId: 'cached-build-run',
+        runtimeInstanceId: 'runtime-verified',
+        expectedRunId: 'cached-build-run',
+      );
+      expect(adopted, isNotNull);
+      expect(adopted!['proof'], 'expected_run_id');
+
+      // A wrong expectation is refused even when the session record would
+      // otherwise have proven the helper run.
+      final refused = cli.debugReconcileAttachRunIdentity(
+        previousMeta: const <String, Object?>{
+          'mode': 'scout_owned_flutter_run',
+          'runId': 'cached-build-run',
+        },
+        helperRunId: 'cached-build-run',
+        runtimeInstanceId: 'runtime-verified',
+        expectedRunId: 'some-other-run',
+      );
+      expect(refused, isNull);
+
+      // The adopted record lets later plain attaches reconcile, but it does
+      // not claim a Scout launch lineage it never had.
+      final record = cli.debugRecoveredAttachSessionMeta(
+        previousMeta: null,
+        recovery: adopted,
+      );
+      expect(record.containsKey('previousMode'), isFalse);
+      final again = cli.debugReconcileAttachRunIdentity(
+        previousMeta: record,
+        helperRunId: 'cached-build-run',
+        runtimeInstanceId: 'runtime-2',
+      );
+      expect(again?['proof'], 'session_record');
+      expect(
+        cli.debugReconcileAttachRunIdentity(
+          previousMeta: record,
+          helperRunId: 'another-run',
+          runtimeInstanceId: 'runtime-3',
+        ),
+        isNull,
+      );
+    });
   });
 
   group('dedupeVmStdoutEcho', () {

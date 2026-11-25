@@ -80,8 +80,8 @@ int? _readFlutterToolSignalPid(String path) {
 /// A live helper retains the launch run ID compiled into the application. An
 /// attach command normally gets a new ID, which is correct for a third-party
 /// app, but would make a healthy Scout-owned app inspect-only after its launch
-/// worker exits. This record is produced only after a fresh local VM-helper
-/// inspection; it never trusts an ID supplied on the command line.
+/// worker exits. The helper's ID is read only through a fresh VM-helper
+/// inspection after loopback validation; a command line never supplies it.
 class _AttachedHelperIdentity {
   const _AttachedHelperIdentity({
     required this.runId,
@@ -92,25 +92,48 @@ class _AttachedHelperIdentity {
   final String runtimeInstanceId;
 }
 
+/// Run IDs Scout mints and helpers report share this shape.
+final RegExp _runIdPattern = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$');
+
+/// Decides whether attach may adopt the run ID a verified helper reports.
+///
+/// Adoption needs proof that the caller's own session started that run:
+/// - the session record names the same run ID and descends from a Scout-owned
+///   launch (live, stopped, or an earlier adoption of it), or
+/// - the caller passes [expectedRunId], the ID it recorded when Scout built
+///   the app, and the helper reports exactly that ID.
+///
+/// A helper bound to any other run is never adopted, so actions stay refused
+/// with `run_mismatch`. An adoption is written back with its provenance, so
+/// the same installed build can be stopped, relaunched and re-attached again.
 Map<String, Object?>? _reconcileAttachRunIdentity({
   required Map<String, Object?>? previousMeta,
   required String helperRunId,
   required String runtimeInstanceId,
   required String? requestedDevice,
+  String? expectedRunId,
 }) {
+  if (expectedRunId != null) {
+    if (expectedRunId != helperRunId) return null;
+    return <String, Object?>{
+      'runId': helperRunId,
+      'runtimeInstanceId': runtimeInstanceId,
+      'proof': 'expected_run_id',
+    };
+  }
   if (previousMeta == null) return null;
   final previousRunId = previousMeta['runId']?.toString();
-  final mode = previousMeta['mode']?.toString();
-  final previousMode = previousMeta['previousMode']?.toString();
-  final wasScoutOwned =
-      mode == 'scout_owned_flutter_run' ||
-      previousMode == 'scout_owned_flutter_run';
-  if (!wasScoutOwned ||
-      previousRunId == null ||
+  if (previousRunId == null ||
       previousRunId.isEmpty ||
       previousRunId != helperRunId) {
     return null;
   }
+  final priorRecovery = previousMeta['runIdentityRecovery'];
+  final descendsFromScoutLaunch =
+      previousMeta['mode'] == 'scout_owned_flutter_run' ||
+      previousMeta['previousMode'] == 'scout_owned_flutter_run' ||
+      (priorRecovery is Map && priorRecovery['runId'] == previousRunId);
+  if (!descendsFromScoutLaunch) return null;
 
   // A caller that names a device must not silently recover a launch that was
   // recorded for another device. If the old launch did not record one, VM
@@ -127,8 +150,45 @@ Map<String, Object?>? _reconcileAttachRunIdentity({
     'runId': helperRunId,
     'previousRunId': previousRunId,
     'runtimeInstanceId': runtimeInstanceId,
+    'proof': 'session_record',
     if (previousDevice != null && previousDevice.isNotEmpty)
       'previousDevice': previousDevice,
+  };
+}
+
+/// The attach-only record written after [_reconcileAttachRunIdentity] adopts
+/// a helper's run. It keeps the lineage the next attach needs to reconcile
+/// again; it never carries process ownership.
+Map<String, Object?> _recoveredAttachSessionMeta({
+  required Map<String, Object?>? previousMeta,
+  required Map<String, Object?> recovery,
+  required String vmServiceUri,
+  required String? device,
+  required String now,
+}) {
+  final scoutLaunchLineage =
+      previousMeta?['mode'] == 'scout_owned_flutter_run' ||
+      previousMeta?['previousMode'] == 'scout_owned_flutter_run';
+  var recordedDevice = device;
+  if ((recordedDevice == null || recordedDevice.isEmpty) &&
+      recovery['proof'] == 'session_record') {
+    recordedDevice = previousMeta?['device']?.toString();
+  }
+  return <String, Object?>{
+    'mode': 'attach_only',
+    'state': 'ready',
+    'runId': recovery['runId'],
+    'vmServiceUri': vmServiceUri,
+    if (scoutLaunchLineage) 'previousMode': 'scout_owned_flutter_run',
+    if (recordedDevice != null && recordedDevice.isNotEmpty)
+      'device': recordedDevice,
+    'createdAt': now,
+    'updatedAt': now,
+    'runIdentityRecovery': <String, Object?>{
+      ...recovery,
+      'source': 'verified_local_vm_helper',
+      'recoveredAt': now,
+    },
   };
 }
 
@@ -1551,9 +1611,11 @@ extension _CliSession on FlutterScoutCli {
       ..addOption('debug-url-file')
       ..addFlag('debug-url-stdin', defaultsTo: false, negatable: false)
       ..addOption('device')
+      ..addOption('expect-run-id')
       ..addFlag('json', defaultsTo: true);
     _addHeadlessDriveFlag(parser);
     final parsed = parser.parse(args);
+    final expectedRunId = _expectedRunIdOption(parsed);
     final explicit = _protectedVmUriInput(parsed);
     final discovered = await _discoverAttachVmUri(
       explicit: explicit,
@@ -1576,6 +1638,11 @@ extension _CliSession on FlutterScoutCli {
     }
 
     final wsUri = discovered.uri!;
+    // An expected run ID is checked before anything is persisted, so a
+    // refused attach leaves the session exactly as it was.
+    final expectedHelperIdentity = expectedRunId == null
+        ? null
+        : await _requireExpectedHelperRun(wsUri, expectedRunId);
     final previousVmUri = _readVmUri();
     _ensureSessionDir();
     final headlessDrive = _recordHeadlessDrive(parsed);
@@ -1596,7 +1663,7 @@ extension _CliSession on FlutterScoutCli {
     // already passed strict loopback validation in _discoverAttachVmUri.
     final helperIdentity = preservesOwnedRun
         ? null
-        : await _readAttachedHelperIdentity(wsUri);
+        : expectedHelperIdentity ?? await _readAttachedHelperIdentity(wsUri);
     final reconciledIdentity = helperIdentity == null
         ? null
         : _reconcileAttachRunIdentity(
@@ -1604,6 +1671,7 @@ extension _CliSession on FlutterScoutCli {
             helperRunId: helperIdentity.runId,
             runtimeInstanceId: helperIdentity.runtimeInstanceId,
             requestedDevice: parsed.option('device'),
+            expectedRunId: expectedRunId,
           );
     final reusesAttachedRun =
         previousMeta?['mode'] == 'attach_only' &&
@@ -1638,21 +1706,26 @@ extension _CliSession on FlutterScoutCli {
       // session occupied this directory previously.
       _deleteFileIfExists(_pidFile);
       _deleteFileIfExists(_vmLogListenerPidFile);
-      _writeSessionMeta({
-        'mode': 'attach_only',
-        'state': 'ready',
-        'runId': effectiveRunId,
-        'vmServiceUri': wsUri,
-        if (parsed.option('device') != null) 'device': parsed.option('device'),
-        'createdAt': now,
-        'updatedAt': now,
-        if (reconciledIdentity != null)
-          'runIdentityRecovery': <String, Object?>{
-            ...reconciledIdentity,
-            'source': 'verified_local_vm_helper',
-            'recoveredAt': now,
-          },
-      });
+      _writeSessionMeta(
+        reconciledIdentity != null
+            ? _recoveredAttachSessionMeta(
+                previousMeta: previousMeta,
+                recovery: reconciledIdentity,
+                vmServiceUri: wsUri,
+                device: parsed.option('device'),
+                now: now,
+              )
+            : {
+                'mode': 'attach_only',
+                'state': 'ready',
+                'runId': effectiveRunId,
+                'vmServiceUri': wsUri,
+                if (parsed.option('device') != null)
+                  'device': parsed.option('device'),
+                'createdAt': now,
+                'updatedAt': now,
+              },
+      );
     }
     final output = <String, Object?>{
       'attached': true,
@@ -1663,7 +1736,10 @@ extension _CliSession on FlutterScoutCli {
       'appStatePreserved': true,
       'attachOnly': !preservesOwnedRun,
       if (preservesOwnedRun) 'sessionOwnershipPreserved': true,
-      if (reconciledIdentity != null) 'runIdentityRecovered': true,
+      if (reconciledIdentity != null) ...<String, Object?>{
+        'runIdentityRecovered': true,
+        'runIdentityProof': reconciledIdentity['proof'],
+      },
     };
     final device = parsed.option('device');
     if (device != null && device.isNotEmpty) {
@@ -1700,6 +1776,43 @@ extension _CliSession on FlutterScoutCli {
     return ready.ready ? 0 : 1;
   }
 
+  String? _expectedRunIdOption(ArgResults parsed) {
+    final expectedRunId = parsed.option('expect-run-id');
+    if (expectedRunId != null && !_runIdPattern.hasMatch(expectedRunId)) {
+      throw const ScoutCliException(
+        'usage',
+        '--expect-run-id must be a Scout run ID (1-128 characters of '
+            'letters, digits, ".", "_" or "-").',
+      );
+    }
+    return expectedRunId;
+  }
+
+  /// Proves the app at [vmUri] is the build the caller recorded, before any
+  /// session state is written. The error never echoes the helper's actual ID:
+  /// a caller that did not record it has no business adopting that run.
+  Future<_AttachedHelperIdentity> _requireExpectedHelperRun(
+    String vmUri,
+    String expectedRunId,
+  ) async {
+    final identity = await _readAttachedHelperIdentity(vmUri);
+    if (identity != null && identity.runId == expectedRunId) return identity;
+    throw ScoutCliException(
+      'expected_run_id_mismatch',
+      identity == null
+          ? 'The app at this VM service did not report a Scout run ID, so it '
+                'cannot be proven to be the expected build. Nothing was '
+                'attached.'
+          : 'The app at this VM service belongs to a different Scout run '
+                'than --expect-run-id. Nothing was attached.',
+      details: <String, Object?>{
+        'expectedRunId': expectedRunId,
+        'helperRunIdReported': identity != null,
+        'sessionRecord': 'unchanged',
+      },
+    );
+  }
+
   /// Reads the helper's already-bound identity without sending a run ID. A
   /// read request cannot dispatch UI work, and omitting runId is important:
   /// an unbound helper remains free for the ordinary attach flow to bind to
@@ -1722,7 +1835,7 @@ extension _CliSession on FlutterScoutCli {
       final runtimeInstanceId = response['runtimeInstanceId']?.toString();
       if (response['ok'] != true ||
           runId == null ||
-          !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$').hasMatch(runId) ||
+          !_runIdPattern.hasMatch(runId) ||
           runtimeInstanceId == null ||
           !RegExp(r'^[A-Za-z0-9._-]{1,128}$').hasMatch(runtimeInstanceId)) {
         return null;
@@ -1745,6 +1858,7 @@ extension _CliSession on FlutterScoutCli {
       ..addOption('debug-url')
       ..addOption('debug-url-file')
       ..addFlag('debug-url-stdin', defaultsTo: false, negatable: false)
+      ..addOption('expect-run-id')
       ..addOption('device')
       ..addOption('project', defaultsTo: Directory.current.path)
       ..addOption('target')
@@ -1801,6 +1915,7 @@ extension _CliSession on FlutterScoutCli {
     final parsed = parser.parse(args);
     final requestedImpeller = _requestedImpeller(parsed);
     final device = parsed.option('device');
+    final expectedRunId = _expectedRunIdOption(parsed);
     void progress(String stage, [Map<String, Object?> extra = const {}]) {
       _writeHeartbeat(stage, extra, false);
     }
@@ -1841,6 +1956,9 @@ extension _CliSession on FlutterScoutCli {
         });
       }
       if (ready.ready) {
+        final expectedHelperIdentity = expectedRunId == null
+            ? null
+            : await _requireExpectedHelperRun(discovered.uri!, expectedRunId);
         _ensureSessionDir();
         final headlessDrive = _recordHeadlessDrive(parsed);
         _persistValidatedVmUri(discovered.uri!);
@@ -1864,6 +1982,21 @@ extension _CliSession on FlutterScoutCli {
           _deleteFileIfExists(_pidFile);
           _deleteFileIfExists(_vmLogListenerPidFile);
         }
+        // Same rule as attach: adopt the helper's run only when this
+        // session's record proves it started that run.
+        final helperIdentity = scoutOwned
+            ? null
+            : expectedHelperIdentity ??
+                  await _readAttachedHelperIdentity(discovered.uri!);
+        final reconciledIdentity = helperIdentity == null
+            ? null
+            : _reconcileAttachRunIdentity(
+                previousMeta: previousMeta,
+                helperRunId: helperIdentity.runId,
+                runtimeInstanceId: helperIdentity.runtimeInstanceId,
+                requestedDevice: device,
+                expectedRunId: expectedRunId,
+              );
         _writeSessionMeta(
           scoutOwned
               ? {
@@ -1879,6 +2012,14 @@ extension _CliSession on FlutterScoutCli {
                   'createdAt': previousMeta?['createdAt'] ?? now,
                   'updatedAt': now,
                 }
+              : reconciledIdentity != null
+              ? _recoveredAttachSessionMeta(
+                  previousMeta: previousMeta,
+                  recovery: reconciledIdentity,
+                  vmServiceUri: discovered.uri!,
+                  device: device,
+                  now: now,
+                )
               : ownershipLost
               ? {
                   ...?previousMeta,
@@ -1920,6 +2061,10 @@ extension _CliSession on FlutterScoutCli {
           'attachOnly': !scoutOwned,
           if (scoutOwned) 'rendererRequest': previousMeta?['rendererRequest'],
           if (ownershipLost) 'sessionOwnershipLost': true,
+          if (reconciledIdentity != null) ...<String, Object?>{
+            'runIdentityRecovered': true,
+            'runIdentityProof': reconciledIdentity['proof'],
+          },
           'hotUpdate': await _hotUpdateCapability(discovered.uri!),
           'helperPin': ?_helperPinAdvice(parsed.option('project')!),
         });
@@ -1927,6 +2072,22 @@ extension _CliSession on FlutterScoutCli {
       }
     } else {
       progress('no_reusable_session', {'reason': ?discovered.reason});
+    }
+
+    // An expected run names an existing build; building a new one would
+    // quietly replace what the caller asked to prove.
+    if (expectedRunId != null) {
+      throw ScoutCliException(
+        'vm_service_uri_not_found',
+        'No ready app was found for --expect-run-id, and ensure does not '
+            'build a new one when a run is expected. Relaunch the installed '
+            'build and pass its VM service URL with --debug-url-file.',
+        details: <String, Object?>{
+          'expectedRunId': expectedRunId,
+          'reason': ?discovered.reason,
+          'launch': 'not_attempted',
+        },
+      );
     }
 
     progress('fallback_launch', {'device': ?device});

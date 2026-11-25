@@ -396,6 +396,10 @@
       "meaning": "The bounded expected log operation did not complete before its deadline.",
       "family": "execution_or_reconciliation"
     },
+    "expected_run_id_mismatch": {
+      "meaning": "attach or ensure was given --expect-run-id, but the app's helper reported a different Scout run ID or none. Nothing was attached or persisted.",
+      "family": "compatibility_or_identity"
+    },
     "field_not_found": {
       "meaning": "The requested field could not be found.",
       "family": "resolution_or_observation"

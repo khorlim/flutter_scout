@@ -3081,6 +3081,20 @@ const List<(String, String)> _vmUrlOptions = <(String, String)>[
   ),
 ];
 
+const (String, String) _expectRunIdOption = (
+  '--expect-run-id <run-id>',
+  'Adopt the app\'s Scout run only if it is exactly this ID, the runId your '
+      'own Scout launch reported when it built the app. Otherwise refuse with '
+      'expected_run_id_mismatch and change nothing; ensure never builds.',
+);
+
+const String _runIdentityNotes =
+    'A Scout-built app keeps the run ID it was built with. After stop, attach '
+    'and ensure adopt that run again when this session\'s record names it '
+    '(runIdentityRecovered: true), any number of times. Once the record is '
+    'cleared, only --expect-run-id can prove the run. Never copy the ID from '
+    'a run_mismatch error: that app belongs to a run you did not start.';
+
 const String _launchNotes = '''
 Renderer selection:
   An explicit renderer option is forwarded to Flutter for this run only.
@@ -3169,14 +3183,21 @@ const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
     synopsis: <String>[
       'ensure --device <id> --project <app> --name <task> [options]',
       'ensure --project <app> --name <task> --debug-url-file <0600-file>',
+      'ensure --project <app> --name <task> --debug-url-file <0600-file> '
+          '--expect-run-id <run-id>',
     ],
-    options: <(String, String)>[..._launchBuildOptions, ..._vmUrlOptions],
-    notes: '$_launchNotes\n\n$_vmTransportNotes',
+    options: <(String, String)>[
+      ..._launchBuildOptions,
+      ..._vmUrlOptions,
+      _expectRunIdOption,
+    ],
+    notes: '$_launchNotes\n\n$_runIdentityNotes\n\n$_vmTransportNotes',
   ),
   'attach': _CommandHelp(
     summary: 'Attach the current session to a running debug app.',
     synopsis: <String>[
       'attach [--device <id>] [--debug-url-file <0600-file> | --debug-url-stdin]',
+      'attach --debug-url-file <0600-file> --expect-run-id <run-id>',
     ],
     options: <(String, String)>[
       ('--device <id>', 'Device to discover the VM service on.'),
@@ -3186,13 +3207,15 @@ const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
         'Keep driving the app while it is hidden (also '
             'FLUTTER_SCOUT_HEADLESS_DRIVE=1).',
       ),
+      _expectRunIdOption,
       ('--[no-]json', 'JSON output (default on).'),
     ],
     notes:
         'attach has no --name or --project. To attach a human-started app as a '
         'named session, run:\n'
         '  flutter-scout ensure --project <app> --name <task> '
-        '--debug-url-file <0600-file>\n\n$_vmTransportNotes',
+        '--debug-url-file <0600-file>\n\n'
+        '$_runIdentityNotes\n\n$_vmTransportNotes',
     optionHint:
         'To attach as a named session, use `flutter-scout ensure --project '
         '<app> --name <task> --debug-url-file <0600-file>`.',
