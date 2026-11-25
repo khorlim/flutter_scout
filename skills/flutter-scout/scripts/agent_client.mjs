@@ -257,10 +257,6 @@ export class ScoutAgent {
         { cause: this.failure?.code ?? null }));
     }
     if (this.pending.size >= 16) return Promise.reject(new Error('At most 16 concurrent requests'));
-    if (this.serial >= 9999) {
-      return Promise.reject(agentError('scout_agent_request_limit',
-        'This connection used its 10,000 request identities; close it and open a new connection.'));
-    }
     const id = `q${++this.serial}`;
     const line = JSON.stringify({ ...params, id, method }) + '\n';
     if (Buffer.byteLength(line) > 65536) return Promise.reject(new Error('Request exceeds 64 KiB'));

@@ -310,7 +310,9 @@ Scout envelope's `result` once. Methods: observe, status, start, watch, react,
 foreground (no parameters), next (`timeoutMs` 0–30,000), acknowledge (`actionId`), reconcile (`actionId`,
 `viewRevision`), query (`query: {method,args,params}`), cancel, close.
 Raw request lines are at most 64 KiB;
-at most 16 requests in flight and 10,000 request identities per connection.
+at most 16 requests in flight. Ids of the form `q<n>` (the shipped client's)
+must increase and have no count limit; other ids are limited to 10,000 per
+connection.
 Malformed/uncorrelated output, child exit or transport timeout invalidates the
 shipped client. Its error has a distinct `code` (`scout_agent_exited`,
 `scout_agent_protocol_error`, `scout_agent_request_timeout`, ...) plus

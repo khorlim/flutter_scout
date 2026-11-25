@@ -284,7 +284,11 @@ function run() {
       hand._headlessDrive = headless;
       final outputZone = Zone.current;
       final requests = <String, Future<void>>{};
+      // The shipped client numbers its requests q1, q2, ... in write order,
+      // so one high-water mark proves those ids unique for the life of the
+      // connection. Any other id is remembered exactly, up to 10,000.
       final seenIds = <String>{};
+      var highestSerialId = 0;
       late final AgentSession session;
       // The in-app "Scout is driving" layer: attached with a lease that the
       // eyes renew while this connection lives, so a lost agent never leaves
@@ -588,17 +592,29 @@ function run() {
               throw const FormatException('Object required');
             }
             final id = request['id'];
+            final serial = id is String
+                ? RegExp(r'^q([1-9][0-9]{0,14})$').firstMatch(id)
+                : null;
+            final serialNumber = serial == null ? null : int.parse(serial[1]!);
             if (id is! String ||
                 !RegExp(r'^[a-zA-Z0-9_-]{1,64}$').hasMatch(id) ||
-                seenIds.contains(id)) {
+                (serialNumber != null
+                    ? serialNumber <= highestSerialId
+                    : seenIds.contains(id))) {
               throw const FormatException(
-                'Unique id of 1..64 ASCII letters/digits/_/- required',
+                'Unique id of 1..64 ASCII letters/digits/_/- required '
+                '(q<n> ids must increase)',
               );
             }
-            if (requests.length >= 16 || seenIds.length >= 10000) {
+            if (requests.length >= 16 ||
+                (serialNumber == null && seenIds.length >= 10000)) {
               throw const FormatException('Session request limit reached');
             }
-            seenIds.add(id);
+            if (serialNumber != null) {
+              highestSerialId = serialNumber;
+            } else {
+              seenIds.add(id);
+            }
             if (request['method'] == 'close') {
               if (request.keys.any(
                 (key) => !const {'id', 'method'}.contains(key),
