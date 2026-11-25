@@ -20,7 +20,7 @@ function agentError(code, message, extra = {}) {
   return Object.assign(new Error(message), { code, dispatch: 'not_dispatched', ...extra });
 }
 
-// Bounds for taps() and for the settled scene after a navigating input.
+// Bounds for taps() and for the settled scene after an input.
 const maxTaps = 32;
 const settleBudgetMs = 3000;
 
@@ -39,6 +39,58 @@ function inputFailure(result, scene) {
     (receipt.ok === true ? scene?.error ?? scene?.blockedBy : null) ??
     { code: 'input_failed_without_reason', message: 'The input receipt reported ok:false without a reason; read result and scene.' };
   return { error, dispatch: receipt.dispatch ?? null };
+}
+
+/** Whether a canonical receipt's delta saw any change on the screen. */
+function deltaShowsChange(delta) {
+  if (!delta || typeof delta !== 'object') return false;
+  const nonEmpty = value => Array.isArray(value) && value.length > 0;
+  return delta.viewChanged === true || delta.viewport?.changed === true || delta.keyboard?.changed === true ||
+    ['newText', 'removedText', 'changedText', 'newFields', 'removedFields', 'changedFields',
+      'controlStateChanges', 'changedGeometry', 'newInteractables', 'removedInteractables']
+      .some(key => nonEmpty(delta[key])) ||
+    nonEmpty(delta.scroll?.changedRegions) || nonEmpty(delta.scroll?.newRegions) ||
+    nonEmpty(delta.scroll?.removedRegions);
+}
+
+const sinceInputLimit = 8;
+const controlStateKeys = ['enabled', 'selected', 'checked', 'toggled', 'expanded', 'label'];
+
+/** What the settled view shows that the view before the input did not
+ * (bounded): texts and controls that appeared or went, controls whose state
+ * changed, and changed field values. Null when nothing differs. */
+function viewDifference(before, after) {
+  if (!before || !after || typeof before !== 'object' || typeof after !== 'object') return null;
+  const strings = view => new Set((Array.isArray(view.visibleText) ? view.visibleText : []).filter(t => typeof t === 'string'));
+  const controls = view => new Map((Array.isArray(view.interactables) ? view.interactables : [])
+    .filter(c => c && typeof c.id === 'string').map(c => [c.id, c]));
+  const take = values => values.slice(0, sinceInputLimit);
+  const [textBefore, textAfter] = [strings(before), strings(after)];
+  const [controlsBefore, controlsAfter] = [controls(before), controls(after)];
+  const changedControls = [];
+  for (const [id, now] of controlsAfter) {
+    const was = controlsBefore.get(id);
+    if (!was) continue;
+    const changed = {};
+    for (const key of controlStateKeys) {
+      if (was[key] !== now[key]) changed[key] = { before: was[key] ?? null, after: now[key] ?? null };
+    }
+    if (Object.keys(changed).length) changedControls.push({ id, ...changed });
+  }
+  const fieldsBefore = before.fieldValues && typeof before.fieldValues === 'object' ? before.fieldValues : {};
+  const fieldsAfter = after.fieldValues && typeof after.fieldValues === 'object' ? after.fieldValues : {};
+  const changedFields = Object.keys(fieldsAfter)
+    .filter(id => JSON.stringify(fieldsBefore[id]) !== JSON.stringify(fieldsAfter[id]));
+  const difference = {
+    appearedText: take([...textAfter].filter(t => !textBefore.has(t))),
+    goneText: take([...textBefore].filter(t => !textAfter.has(t))),
+    appearedControls: take([...controlsAfter.keys()].filter(id => !controlsBefore.has(id))),
+    goneControls: take([...controlsBefore.keys()].filter(id => !controlsAfter.has(id))),
+    changedControls: take(changedControls),
+    changedFields: take(changedFields),
+  };
+  for (const key of Object.keys(difference)) if (!difference[key].length) delete difference[key];
+  return Object.keys(difference).length ? difference : null;
 }
 
 /** Persistent JSONL client. No ports, screenshots, implicit retries or app logic. */
@@ -282,8 +334,8 @@ export class ScoutAgent {
    * business completion. Returns all intervening events, including failures;
    * plain view updates are only counted (`viewEvents`), as the returned
    * scene is newer.
-   * After an input that changed the screen or surface, the returned scene is
-   * taken once the eyes saw the view settle (see settledScene).
+   * After an input that dispatched, the returned scene is taken once the
+   * eyes saw the view settle (see settledScene).
    * Do not run another next()/act() consumer concurrently. */
   async act(viewRevision, action, timeoutMs = 45000) {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new TypeError('act timeout must be 1..120000 ms');
@@ -391,19 +443,25 @@ export class ScoutAgent {
     }
   }
 
-  /** The scene after an input. When the receipt or the scene shows a new
-   * screen, route or surface (a page still loading its list), it waits until
-   * the passive eyes report no view change for two consecutive samples, at
-   * most settleBudgetMs, then observes, so the returned revision is usable
-   * for the next decision. No frames are pumped and nothing is retried;
-   * `settle` reports what happened. */
+  /** The scene after an input that dispatched successfully. The receipt is
+   * taken right after dispatch, so an effect the app applies a moment later
+   * (a cart total recomputed, a list loading on a new screen) may not be in
+   * it yet. act therefore waits until the passive eyes report no view change
+   * for two consecutive samples, at most settleBudgetMs, then observes, so
+   * the returned revision is usable for the next decision. No frames are
+   * pumped and nothing is retried. `settle` reports what happened: `trigger`
+   * says what the receipt saw (`screen` for a new screen, route or surface,
+   * `in_place` for a change on the same screen, `none` when the receipt saw
+   * no change yet), and `sinceInput` names what differs from the view before
+   * the input. A failed or not-dispatched input returns the scene at once. */
   async settledScene(result, before, deadline, log) {
     let scene = await this.observe();
-    const delta = result?.ok === true ? result.delta : null;
+    if (result?.ok !== true || scene.ok !== true) return { scene };
+    const delta = result.delta;
     const moved = delta?.screenChanged === true || delta?.route?.changed === true ||
       delta?.activeSurface?.changed === true ||
       (typeof before?.screen === 'string' && typeof scene.view?.screen === 'string' && before.screen !== scene.view.screen);
-    if (!moved || scene.ok !== true) return { scene };
+    const trigger = moved ? 'screen' : deltaShowsChange(delta) ? 'in_place' : 'none';
     const quietMs = Math.max(500, 2 * this.intervalMs);
     const started = Date.now();
     const budget = Math.min(settleBudgetMs, deadline - started);
@@ -424,7 +482,9 @@ export class ScoutAgent {
       if (event?.type === 'closed') { status = 'unavailable'; break; }
     }
     scene = await this.observe();
-    return { scene, settle: { status, waitedMs: Date.now() - started, viewChanges } };
+    const sinceInput = viewDifference(before, scene.view);
+    return { scene, settle: { status, trigger, waitedMs: Date.now() - started, viewChanges,
+      ...(sinceInput ? { sinceInput } : {}) } };
   }
   watch(condition, timeoutMs = 5000) { return this.request('watch', { condition, timeoutMs }); }
 

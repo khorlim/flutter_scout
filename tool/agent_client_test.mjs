@@ -12,6 +12,8 @@ async function connectFake(mode) {
   finally { delete process.env.FAKE_SCOUT_MODE; }
 }
 
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
 function fixture() {
   const child = new EventEmitter();
   child.stdout = new PassThrough();
@@ -97,23 +99,58 @@ test('a rejected start returns the current scene for one new decision', async ()
   client.abort();
 });
 
-test('act acknowledges a successful receipt before refreshing the scene', async () => {
+test('act acknowledges a successful receipt, then settles an in-place change before returning the scene', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  client.latest = { viewRevision: 1, view: { screen: 'Order', visibleText: ['Total RM 0.00'],
+    interactables: [{ id: 'btn.payment', kind: 'btn', enabled: false }] } };
+  const result = client.act(1, { method: 'tap', args: ['btn.add'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await tick();
+  // The receipt was taken before the app recomputed the total.
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched',
+    delta: { screenChanged: false, newText: [], removedText: [] } } } });
+  await tick();
+  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
+  await tick();
+  send({ id: requests[3].id, ok: true, viewRevision: 2, view: { screen: 'Order', visibleText: ['Total RM 0.00'] } });
+  await tick();
+  send({ id: requests[4].id, event: { type: 'view', viewRevision: 3, view: { screen: 'Order' } } });
+  await tick();
+  send({ id: requests[5].id, event: { type: 'timeout' } });
+  await tick();
+  send({ id: requests[6].id, ok: true, viewRevision: 3, view: { screen: 'Order', visibleText: ['Total RM 12.00'],
+    interactables: [{ id: 'btn.payment', kind: 'btn', label: 'Payment', enabled: true }] } });
+  const outcome = await result;
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.viewRevision, 3);
+  assert.deepEqual(outcome.settle.sinceInput, {
+    appearedText: ['Total RM 12.00'], goneText: ['Total RM 0.00'],
+    changedControls: [{ id: 'btn.payment', enabled: { before: false, after: true },
+      label: { before: null, after: 'Payment' } }],
+  });
+  assert.equal(outcome.settle.status, 'settled');
+  assert.equal(outcome.settle.trigger, 'none');
+  assert.equal(outcome.settle.viewChanges, 1);
+  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'acknowledge', 'observe', 'next', 'next', 'observe']);
+  client.abort();
+});
+
+test('a failed input returns its scene without settling', async () => {
   const { client, requests, send } = fixture();
   await client.ready;
   const result = client.act(1, { method: 'tap', args: ['btn.save'] });
   send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
-  await new Promise(resolve => setImmediate(resolve));
-  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched' } } });
-  await new Promise(resolve => setImmediate(resolve));
-  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
-  await new Promise(resolve => setImmediate(resolve));
-  send({ id: requests[3].id, ok: true, viewRevision: 2, view: { screen: 'Saved' } });
-  assert.equal((await result).ok, true);
-  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'acknowledge', 'observe']);
+  await tick();
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: false, dispatch: 'dispatched',
+    error: { code: 'target_occluded' }, delta: { newText: ['x'] } } } });
+  await tick();
+  send({ id: requests[2].id, ok: true, viewRevision: 2, view: { screen: 'Same' } });
+  const outcome = await result;
+  assert.equal(outcome.settle, undefined);
+  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'observe']);
   client.abort();
 });
-
-const tick = () => new Promise(resolve => setImmediate(resolve));
 
 test('taps sends observed handles in order, stops at the first failure, then one scene', async () => {
   const { client, requests, send } = fixture();

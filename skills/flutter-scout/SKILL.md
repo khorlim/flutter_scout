@@ -120,13 +120,21 @@ intervening alert in `events` and only count plain view updates
 `Semantics(enabled: false)`, a read-only field); a button whose handler is set
 but ignores taps (app-side validation) still reports `enabled:true`.
 
-When an input changed the screen, route or surface (opening a list that
-still loads), act waits until the passive eyes see no view change for two
-samples (at most 3 s) before taking the returned scene, and reports
-`settle: {status, waitedMs, viewChanges}`. `settled` means that revision is
+After every input that dispatched, act waits until the passive eyes see
+no view change for two samples (at most 3 s) before taking the returned
+scene, because the receipt is taken right after dispatch and an app often
+applies its effect a moment later (a cart total recomputed, a button
+enabled, a list loading on a new screen). It reports `settle: {status,
+trigger, waitedMs, viewChanges, sinceInput}`. `trigger` is what the receipt
+saw: `screen` (new screen, route or surface), `in_place` (a change on the
+same screen) or `none` (no change yet). `sinceInput` lists what differs
+from the view before the input: `appearedText`, `goneText`,
+`appearedControls`, `goneControls`, `changedControls` (with `before` and
+`after` of `enabled`, `selected`, `checked`, `toggled`, `expanded`, `label`)
+and `changedFields`, at most 8 each. `settled` means that revision is
 current for your next act; `still_changing` means the screen kept changing
-(observe again or watch for the content you need). Nothing is pumped or
-retried.
+(observe again or watch for the content you need). A failed or rejected
+input returns its scene at once. Nothing is pumped or retried.
 It never retries or waits for business completion. A start acceptance ticket
 is not dispatch or success. Use start/next/acknowledge directly when you need
 fine-grained concurrent control. Only one event consumer is allowed.

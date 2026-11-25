@@ -1,5 +1,19 @@
 ## Unreleased
 
+- `act` and `taps` (shipped client and bridge) now settle after every input
+  that dispatched, not only after a new screen, route or surface. The receipt
+  is taken right after dispatch, so an in-place effect the app applies a
+  moment later (a cart total, a Payment button becoming enabled) was missing
+  from the returned scene. `settle` adds `trigger` (`screen`, `in_place`,
+  `none`) and `sinceInput` (texts, controls, control state and field values
+  that differ from the view before the input, at most 8 each). Same budget:
+  two quiet samples, at most 3 s; nothing pumped or retried. A failed or
+  rejected input returns its scene at once.
+- A stale-decision rejection (`agent_view_changed`, `live_view_changed`) adds
+  `details.staleChanges`: each changed field with its observed and current
+  value (`rendering.lifecycle: resumed -> hidden`), and the texts or controls
+  that appeared or went, instead of only "rendering changed".
+
 - Let the same installed Scout build be stopped, relaunched outside Scout and
   re-attached any number of times. An adopted run keeps its Scout-launch
   lineage in the session record, `ensure --debug-url-file` uses the same rule,
