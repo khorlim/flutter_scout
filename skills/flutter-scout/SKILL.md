@@ -128,20 +128,25 @@ has no such field: read it from a screenshot or crop, and suggest the app
 add `Semantics(selected: ...)` to that control. `instance` is a number per
 mounted control; it only tells two controls with one handle apart.
 
-After every input that dispatched, act waits until the passive eyes see
-no view change for two samples (at most 3 s) before taking the returned
-scene, because the receipt is taken right after dispatch and an app often
-applies its effect a moment later (a cart total recomputed, a button
-enabled, a list loading on a new screen). It reports `settle: {status,
+After an input that dispatched and changed the view, act waits until the
+passive eyes see no view change for two samples (at most 3 s) before taking
+the returned scene, because the receipt is taken right after dispatch and
+an app often applies its effect a moment later (a cart total recomputed, a
+button enabled, a list loading on a new screen). When nothing changed (the
+receipt saw no change and the scene after it still has the revision from
+before the input), it waits one eyes interval (250 ms by default) for
+a change about to land and, if none comes, returns at once with `status:
+unchanged`. An effect slower than that (a server round trip) is for
+`watchUntil` on the content you expect. It reports `settle: {status,
 trigger, waitedMs, viewChanges, sinceInput}`. `trigger` is what the receipt
 saw: `screen` (new screen, route or surface), `in_place` (a change on the
 same screen) or `none` (no change yet). `sinceInput` lists what differs
 from the view before the input: `appearedText`, `goneText`,
 `appearedControls`, `goneControls`, `changedControls` (with `before` and
 `after` of `enabled`, `selected`, `checked`, `toggled`, `expanded`, `label`)
-and `changedFields`, at most 8 each. `settled` means that revision is
-current for your next act; `still_changing` means the screen kept changing
-(observe again or watch for the content you need). A failed or rejected
+and `changedFields`, at most 8 each. `settled` and `unchanged` mean that
+revision is current for your next act; `still_changing` means the screen
+kept changing (observe again or watch for the content you need). A failed or rejected
 input returns its scene at once. Nothing is pumped or retried.
 It never retries or waits for business completion. A start acceptance ticket
 is not dispatch or success. Use start/next/acknowledge directly when you need

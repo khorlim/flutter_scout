@@ -1,5 +1,12 @@
 ## Unreleased
 
+- `act` and `taps` (shipped client and bridge) keep the full settle (two
+  quiet eyes samples, at least 500 ms) only when the view changed. When the
+  receipt saw no change and the scene after it still has the view revision
+  from before the input, they wait one eyes interval (250 ms by default)
+  and, with no change, return that scene with `settle.status: unchanged`;
+  a change in that interval gets the full settle. An effect slower than
+  that is for `watchUntil`.
 - Read-only queries (`where`, `locate`, `drag-status`) no longer wait out
   the 150 ms log-settle window meant for inputs. They dispatch nothing, so
   they report the logs already written and return; a `locate` with a run

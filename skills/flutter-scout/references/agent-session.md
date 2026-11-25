@@ -155,7 +155,9 @@ top level (`viewRevision`, `view`, `actionable`, `hand`); `act` and `taps`
 return `{ok, viewRevision, error?, dispatch?, result | taps, settle?, scene,
 events, viewEvents}` with the scene under `scene` and the same top-level
 `viewRevision`. `settle` is present after every input that dispatched (see
-SKILL.md): `{status, trigger, waitedMs, viewChanges, sinceInput}`. `events` holds every intervening receipt, condition, reaction
+SKILL.md): `{status, trigger, waitedMs, viewChanges, sinceInput}`; `status`
+is `settled`, `unchanged` (nothing changed within one eyes interval),
+`still_changing` or `unavailable`. `events` holds every intervening receipt, condition, reaction
 or stop; plain view updates are only counted in `viewEvents`.
 Visible strings live in `view.visibleText` (or `scene.view.visibleText`).
 

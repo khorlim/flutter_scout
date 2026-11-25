@@ -344,10 +344,11 @@ export class ScoutAgent {
     const log = { events: [], viewEvents: 0 };
     const deadline = Date.now() + timeoutMs;
     const before = this.latest?.view;
+    const beforeRevision = this.latest?.viewRevision;
     try {
       const step = await this.inputOnce(viewRevision, action, deadline, log);
       if (step.stopped) return withRevision(step.stopped);
-      const { scene, settle } = await this.settledScene(step.result, before, deadline, log);
+      const { scene, settle } = await this.settledScene(step.result, before, beforeRevision, deadline, log);
       const ok = step.result?.ok === true && scene.ok === true;
       // A failed input keeps its reason in the receipt; lift it so a caller
       // reading only the top level never sees ok:false with no error.
@@ -378,6 +379,7 @@ export class ScoutAgent {
     const receipts = [];
     const deadline = Date.now() + timeoutMs;
     const before = this.latest?.view;
+    const beforeRevision = this.latest?.viewRevision;
     try {
       let last = null;
       for (const target of targets) {
@@ -400,7 +402,7 @@ export class ScoutAgent {
       // The last attempted tap keeps its whole canonical receipt; every
       // receipt stays in the private journal.
       receipts[receipts.length - 1].result = last;
-      const { scene, settle } = await this.settledScene(last, before, deadline, log);
+      const { scene, settle } = await this.settledScene(last, before, beforeRevision, deadline, log);
       const failed = receipts.find(receipt => !receipt.ok);
       const ok = !failed && scene.ok === true;
       const failure = ok ? null : inputFailure(last, scene);
@@ -446,15 +448,21 @@ export class ScoutAgent {
   /** The scene after an input that dispatched successfully. The receipt is
    * taken right after dispatch, so an effect the app applies a moment later
    * (a cart total recomputed, a list loading on a new screen) may not be in
-   * it yet. act therefore waits until the passive eyes report no view change
-   * for two consecutive samples, at most settleBudgetMs, then observes, so
-   * the returned revision is usable for the next decision. No frames are
-   * pumped and nothing is retried. `settle` reports what happened: `trigger`
-   * says what the receipt saw (`screen` for a new screen, route or surface,
-   * `in_place` for a change on the same screen, `none` when the receipt saw
-   * no change yet), and `sinceInput` names what differs from the view before
-   * the input. A failed or not-dispatched input returns the scene at once. */
-  async settledScene(result, before, deadline, log) {
+   * it yet. When the view changed, act therefore waits until the passive
+   * eyes report no view change for two consecutive samples, at most
+   * settleBudgetMs, then observes, so the returned revision is usable for
+   * the next decision. When nothing changed (the receipt saw no change and
+   * the scene after it has the revision from before the input; the eyes
+   * advance the revision only when the view changes), it waits one eyes
+   * interval for a change about to land and, if none
+   * comes, returns that scene (`unchanged`); a slower effect is for watch.
+   * No frames are pumped and nothing is retried. `settle` reports what
+   * happened: `trigger` says what the receipt saw (`screen` for a new
+   * screen, route or surface, `in_place` for a change on the same screen,
+   * `none` when the receipt saw no change yet), and `sinceInput` names what
+   * differs from the view before the input. A failed or not-dispatched input
+   * returns the scene at once. */
+  async settledScene(result, before, beforeRevision, deadline, log) {
     let scene = await this.observe();
     if (result?.ok !== true || scene.ok !== true) return { scene };
     const delta = result.delta;
@@ -462,24 +470,33 @@ export class ScoutAgent {
       delta?.activeSurface?.changed === true ||
       (typeof before?.screen === 'string' && typeof scene.view?.screen === 'string' && before.screen !== scene.view.screen);
     const trigger = moved ? 'screen' : deltaShowsChange(delta) ? 'in_place' : 'none';
+    const unchanged = trigger === 'none' && Number.isInteger(beforeRevision) &&
+      scene.viewRevision === beforeRevision;
     const quietMs = Math.max(500, 2 * this.intervalMs);
+    // Nothing changed yet: one eyes interval, widened to the full quiet
+    // window as soon as the eyes report a change.
+    let windowMs = unchanged ? this.intervalMs : quietMs;
     const started = Date.now();
     const budget = Math.min(settleBudgetMs, deadline - started);
     let viewChanges = 0;
     let status = 'still_changing';
     while (Date.now() - started < budget) {
-      const wait = Math.min(quietMs, budget - (Date.now() - started));
+      const wait = Math.min(windowMs, budget - (Date.now() - started));
       const response = await this.next(wait);
       if (!response.ok) { status = 'unavailable'; break; }
       const event = response.event;
       if (event?.type === 'timeout') {
-        // A full quiet window with no view event: two samples saw one state.
-        if (wait === quietMs) status = 'settled';
+        // A full window with no view event: the samples saw one state.
+        if (wait === windowMs) status = viewChanges === 0 && unchanged ? 'unchanged' : 'settled';
         break;
       }
-      if (event?.type === 'view') { viewChanges += 1; continue; }
+      if (event?.type === 'view') { viewChanges += 1; windowMs = quietMs; continue; }
       log.events.push(event);
       if (event?.type === 'closed') { status = 'unavailable'; break; }
+    }
+    // The scene taken after the receipt is still current.
+    if (status === 'unchanged') {
+      return { scene, settle: { status, trigger, waitedMs: Date.now() - started, viewChanges } };
     }
     scene = await this.observe();
     const sinceInput = viewDifference(before, scene.view);

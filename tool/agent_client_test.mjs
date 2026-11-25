@@ -136,6 +136,65 @@ test('act acknowledges a successful receipt, then settles an in-place change bef
   client.abort();
 });
 
+test('act returns after one eyes interval when the input changed nothing', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const view = { screen: 'Order', visibleText: ['Total RM 0.00'], interactables: [{ id: 'btn.add', kind: 'btn' }] };
+  client.latest = { viewRevision: 1, view };
+  const result = client.act(1, { method: 'tap', args: ['btn.add'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await tick();
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched',
+    delta: { screenChanged: false, newText: [], removedText: [] } } } });
+  await tick();
+  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
+  await tick();
+  send({ id: requests[3].id, ok: true, viewRevision: 1, view });
+  await tick();
+  // One eyes interval (not the 500 ms quiet window) passes with no change.
+  assert.equal(requests[4].method, 'next');
+  assert.equal(requests[4].timeoutMs, 250);
+  send({ id: requests[4].id, event: { type: 'timeout' } });
+  const outcome = await result;
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.viewRevision, 1);
+  assert.equal(outcome.settle.status, 'unchanged');
+  assert.equal(outcome.settle.trigger, 'none');
+  assert.equal(outcome.settle.viewChanges, 0);
+  // The scene taken after the receipt is returned; no second observe.
+  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'acknowledge', 'observe', 'next']);
+  client.abort();
+});
+
+test('a change that lands during the short sample gets the full settle', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const view = { screen: 'Order', visibleText: ['Total RM 0.00'] };
+  client.latest = { viewRevision: 1, view };
+  const result = client.act(1, { method: 'tap', args: ['btn.add'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await tick();
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched' } } });
+  await tick();
+  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
+  await tick();
+  send({ id: requests[3].id, ok: true, viewRevision: 1, view });
+  await tick();
+  assert.equal(requests[4].timeoutMs, 250);
+  send({ id: requests[4].id, event: { type: 'view', viewRevision: 2, view: { screen: 'Order' } } });
+  await tick();
+  assert.equal(requests[5].timeoutMs, 500);
+  send({ id: requests[5].id, event: { type: 'timeout' } });
+  await tick();
+  send({ id: requests[6].id, ok: true, viewRevision: 2, view: { screen: 'Order', visibleText: ['Total RM 12.00'] } });
+  const outcome = await result;
+  assert.equal(outcome.settle.status, 'settled');
+  assert.equal(outcome.settle.viewChanges, 1);
+  assert.equal(outcome.viewRevision, 2);
+  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'acknowledge', 'observe', 'next', 'next', 'observe']);
+  client.abort();
+});
+
 test('a failed input returns its scene without settling', async () => {
   const { client, requests, send } = fixture();
   await client.ready;
