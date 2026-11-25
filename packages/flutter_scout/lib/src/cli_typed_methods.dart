@@ -633,7 +633,7 @@ final Map<String, _TypedMethodContract> _typedMethodContracts =
           'maxItems': _TypedValueContract(
             kind: _TypedJsonKind.integer,
             minimum: 1,
-            maximum: 100,
+            maximum: 500,
             defaultValue: 20,
           ),
           'maxResponseBytes': _TypedValueContract(

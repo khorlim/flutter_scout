@@ -1917,6 +1917,42 @@ void main() {
     expect(scrollables.first['axis'], 'vertical');
   });
 
+  testWidgets('a cut scene names the cut lists and the query that reads '
+      'them', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              for (var index = 0; index < 7; index++)
+                SizedBox(
+                  height: 40,
+                  child: ListView(
+                    key: ValueKey('list-$index'),
+                    children: [Text('Row $index')],
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final scene = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+      maxItems: 60,
+    );
+    expect(scene['scrollables'], hasLength(6));
+    final omitted = (scene['omitted']! as Map).cast<String, Object?>();
+    expect(omitted['scrollables'], 1);
+    expect(omitted['recoverWith'], {
+      'method': 'inspect',
+      'params': {'sections': 'scrollables'},
+    });
+  });
+
   testWidgets('brief inspect bounds verbose routing diagnostics', (
     tester,
   ) async {

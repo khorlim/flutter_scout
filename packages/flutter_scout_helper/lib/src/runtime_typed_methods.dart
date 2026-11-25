@@ -585,7 +585,7 @@ final Map<String, _HelperMethodContract> _helperMethodContracts =
           'maxItems': _HelperParameterContract(
             kind: _HelperValueKind.integer,
             minimum: 1,
-            maximum: 100,
+            maximum: _maxInspectItems,
             defaultValue: '20',
           ),
           'maxResponseBytes': _HelperParameterContract(

@@ -129,7 +129,7 @@ void main() {
     });
 
     test('parses integer options and explains their existing bounds', () {
-      for (final count in [1, 12, 20, 100]) {
+      for (final count in [1, 12, 20, 100, 250, 500]) {
         expect(
           cli.debugValidatePersistentCliArguments([
             'inspect',
@@ -141,14 +141,14 @@ void main() {
           isTrue,
         );
       }
-      for (final count in ['0', '120', '12.5']) {
+      for (final count in ['0', '501', '12.5']) {
         final result = cli.debugValidatePersistentCliArguments([
           'inspect',
           '--max-items=$count',
         ]);
         expect(result['valid'], isFalse);
         expect(result['errorCode'], 'invalid_parameter_value');
-        expect(result['message'], contains('minimum 1, maximum 100'));
+        expect(result['message'], contains('minimum 1, maximum 500'));
         expect(result['handlerEntered'], isFalse);
       }
       expect(

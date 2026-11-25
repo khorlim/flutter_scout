@@ -210,8 +210,10 @@ interaction commands and alternate transports are removed, not fallback paths.
 
 Use query(method, params, args) for focused read-only inspect, where, locate,
 bounds, drag-status and system-dialog (a fresh native dialog probe). For example query('locate', {text: 'Save'}) or
-query('inspect', {sections: 'interactables,scrollables', maxItems: 100}). It
-returns a canonical read result, not fresh authorization for another input;
+query('inspect', {sections: 'interactables,scrollables'}). A scene shows up
+to six lists (`view.scrollables`); `view.omitted` counts what a scene cut,
+and its `recoverWith` is the query that reads it in full. A named section is
+never cut; `maxItems` accepts 1-500 and bounds only brief lists. It returns a canonical read result, not fresh authorization for another input;
 observe and decide again after using it. No arbitrary command is accepted.
 
 ## Local reactions: explicit, bounded authorization

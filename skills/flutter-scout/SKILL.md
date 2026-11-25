@@ -148,8 +148,12 @@ private journal. Close the connection before unrelated long coding work.
 ## Locate and act deliberately
 
 Use scout.query('where') for layout; scout.query('locate', {text: 'Name'})
-for a target; scout.query('inspect', {sections: 'interactables,scrollables',
-maxItems: 100}) for selected detail. Query is read-only, not permission to act
+for a target; scout.query('inspect', {sections: 'interactables,scrollables'})
+for selected detail. A named section is never cut; `maxItems` (1-500) only
+bounds brief lists. A scene that was cut says so in `view.omitted` (counts
+per list, such as `scrollables: 3`) with `recoverWith`, the exact query
+that reads the cut lists in full: `query(recoverWith.method,
+recoverWith.params)`. Query is read-only, not permission to act
 on stale geometry: observe again and decide from the current scene. A
 `locate` answer's `result` is only its status (`unique`, `ambiguous`,
 `notFound`, ...); the match, its rect and the candidates are in `resolution`.

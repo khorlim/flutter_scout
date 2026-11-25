@@ -1,5 +1,7 @@
 ## Unreleased
 
+- `inspect` accepts `maxItems` up to 500 (was 100, which made a larger
+  query fail); it bounds only brief lists, and named sections are never cut.
 - `act` and `taps` (shipped client and bridge) now settle after every input
   that dispatched, not only after a new screen, route or surface. The receipt
   is taken right after dispatch, so an in-place effect the app applies a

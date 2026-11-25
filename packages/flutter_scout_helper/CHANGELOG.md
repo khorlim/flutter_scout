@@ -1,5 +1,10 @@
 ## Unreleased
 
+* A brief scene shows up to `maxItems / 10` scrollables (3 to 8; six in an
+  agent scene, was always three). When a brief list is cut, `omitted` counts
+  it (`scrollables` added) and adds `recoverWith: {method: 'inspect', params:
+  {sections}}`, the query that reads exactly the cut lists. `inspect`
+  `maxItems` accepts 1-500.
 * The runtime tombstone filter for pruned mutation keys grows from 2^16 to
   2^20 bits, so long app runs no longer refuse fresh keys as
   `idempotency_outcome_pruned` filter collisions (about 1 in 25 after 10,000

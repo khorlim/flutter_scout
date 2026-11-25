@@ -134,7 +134,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption(
         'max-items',
         help:
-            'Maximum entries per brief list (1-100, default 12). Request '
+            'Maximum entries per brief list (1-500, default 12). Request '
             'full named data with --sections instead of raising this by default.',
       )
       ..addOption(
@@ -166,10 +166,10 @@ extension _CliActions on FlutterScoutCli {
     if (maxItems != null &&
         (int.tryParse(maxItems) == null ||
             int.parse(maxItems) < 1 ||
-            int.parse(maxItems) > 100)) {
+            int.parse(maxItems) > 500)) {
       throw const ScoutCliException(
         'usage',
-        '--max-items must be an integer from 1 to 100.',
+        '--max-items must be an integer from 1 to 500.',
       );
     }
     if (since != null &&

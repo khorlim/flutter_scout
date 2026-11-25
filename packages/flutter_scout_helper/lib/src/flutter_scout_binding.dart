@@ -50,6 +50,10 @@ const int scoutHelperMaxSupportedProtocolVersion = 15;
 const int scoutHelperSchemaVersion = 1;
 const String scoutHelperPackageVersion = '0.2.0-dev.1';
 
+/// Upper bound for inspect `maxItems`. Brief lists are cut to it; a full
+/// section is never cut, and the protocol response bound still fails closed.
+const int _maxInspectItems = 500;
+
 class FlutterScoutBinding {
   FlutterScoutBinding._();
 
@@ -1365,7 +1369,9 @@ class FlutterScoutRuntime {
     try {
       final brief = params['brief'] == 'true';
       final requestedMaxItems = int.tryParse(params['maxItems'] ?? '');
-      final maxItems = (requestedMaxItems ?? 20).clamp(1, 100).toInt();
+      final maxItems = (requestedMaxItems ?? 20)
+          .clamp(1, _maxInspectItems)
+          .toInt();
       final sections = (params['sections'] ?? '')
           .split(',')
           .map((section) => section.trim())
@@ -1626,6 +1632,23 @@ class FlutterScoutRuntime {
           .map(_compactStructuredRow)
           .toList(growable: false);
       final briefFields = fields.take(maxItems);
+      // An agent scene (maxItems 60) shows six lists; a short brief three.
+      final briefScrollableLimit = (maxItems ~/ 10).clamp(3, 8).toInt();
+      final omittedScrollables = scrollables.length > briefScrollableLimit
+          ? scrollables.length - briefScrollableLimit
+          : 0;
+      // The sections that recover exactly what this brief cut.
+      final truncatedSections = <String>{
+        if (visibleText.length > briefVisibleText.length ||
+            hitTestableText.length > briefHitTestableText.length ||
+            (!focusSurface &&
+                snapshot.offscreenText.length > briefOffscreenText.length))
+          'text',
+        if (briefInteractables.length > maxItems) 'interactables',
+        if (structuredRows.length > briefRows.length) 'rows',
+        if (fields.length > maxItems) 'fields',
+        if (omittedScrollables > 0) 'scrollables',
+      };
       payload.addAll({
         if (briefVisibleText.isNotEmpty) 'visibleText': briefVisibleText,
         if (briefHitTestableText.isNotEmpty &&
@@ -1651,7 +1674,7 @@ class FlutterScoutRuntime {
         if (structuredRows.isNotEmpty) 'structuredRows': briefRows,
         if (scrollables.isNotEmpty)
           'scrollables': [
-            for (final scrollable in scrollables.take(3))
+            for (final scrollable in scrollables.take(briefScrollableLimit))
               _compactBriefScrollable(scrollable),
           ],
         'omittedSections': <String, Object?>{
@@ -1663,17 +1686,11 @@ class FlutterScoutRuntime {
             'controlGroups',
             'annotations',
           ],
-          if (scrollables.length > 3) 'scrollableItems': scrollables.length - 3,
+          if (omittedScrollables > 0) 'scrollableItems': omittedScrollables,
           'recoverWith':
               'inspect --sections textTargets,scrollables,overlays,visualTree,controlGroups,annotations',
         },
-        if (visibleText.length > briefVisibleText.length ||
-            hitTestableText.length > briefHitTestableText.length ||
-            (!focusSurface &&
-                snapshot.offscreenText.length > briefOffscreenText.length) ||
-            briefInteractables.length > maxItems ||
-            structuredRows.length > briefRows.length ||
-            fields.length > maxItems)
+        if (truncatedSections.isNotEmpty)
           'omitted': {
             if (visibleText.length > briefVisibleText.length)
               'visibleText': visibleText.length - briefVisibleText.length,
@@ -1689,7 +1706,16 @@ class FlutterScoutRuntime {
             if (structuredRows.length > briefRows.length)
               'structuredRows': structuredRows.length - briefRows.length,
             if (fields.length > maxItems) 'fields': fields.length - maxItems,
-            'hint': 'Use inspect --sections <name> for full detail.',
+            if (omittedScrollables > 0) 'scrollables': omittedScrollables,
+            'hint':
+                'This scene is cut; read the full lists with the query in '
+                'recoverWith (agent: query(method, params)).',
+            'recoverWith': <String, Object?>{
+              'method': 'inspect',
+              'params': <String, Object?>{
+                'sections': (truncatedSections.toList()..sort()).join(','),
+              },
+            },
           },
         if (briefFields.isNotEmpty)
           'fieldValues': {
