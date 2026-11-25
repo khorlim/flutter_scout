@@ -347,7 +347,9 @@ extension _CliProtocol on FlutterScoutCli {
         (preflight['capabilities'] as Map?)?['liveRenderingGuardV1'] != true;
     // A headless-drive session also accepts a hidden app the helper drives.
     final driven =
-        _sendHeadlessDrive && rendering is Map && rendering['status'] == 'driven';
+        _sendHeadlessDrive &&
+        rendering is Map &&
+        rendering['status'] == 'driven';
     if (_agentRequiresLiveRendering &&
         (guardMissing ||
             rendering is! Map ||

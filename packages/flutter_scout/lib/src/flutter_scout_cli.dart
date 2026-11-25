@@ -3057,6 +3057,11 @@ const List<(String, String)> _launchBuildOptions = <(String, String)>[
         'same device.',
   ),
   (
+    '--headless-drive',
+    'Debug apps: keep driving the app while hidden, covered, asleep or '
+        'locked (also FLUTTER_SCOUT_HEADLESS_DRIVE=1).',
+  ),
+  (
     '--temporary-helper',
     'Inject flutter_scout_helper without tracked project changes.',
   ),
@@ -3176,6 +3181,11 @@ const Map<String, _CommandHelp> _commandHelp = <String, _CommandHelp>{
     options: <(String, String)>[
       ('--device <id>', 'Device to discover the VM service on.'),
       ..._vmUrlOptions,
+      (
+        '--headless-drive',
+        'Keep driving the app while it is hidden (also '
+            'FLUTTER_SCOUT_HEADLESS_DRIVE=1).',
+      ),
       ('--[no-]json', 'JSON output (default on).'),
     ],
     notes:

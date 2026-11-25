@@ -1880,6 +1880,7 @@ Map<String, Object?> _cleanupManagedSessionInternals({
     _launchLockInfoFile,
     p.join(sessionRoot, 'annotations.json'),
     p.join(sessionRoot, 'serve.credential'),
+    _headlessDriveFile,
   };
   if (temporaryHelperCleanupComplete) rootFiles.add(_sessionMetaFile);
   if (serveCredentialPath != null && serveCredentialPath.isNotEmpty) {

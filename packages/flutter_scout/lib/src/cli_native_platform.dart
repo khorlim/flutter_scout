@@ -332,6 +332,7 @@ extension _CliNativePlatform on FlutterScoutCli {
     }
     final macos = await _macosWindowTarget();
     if (macos != null) {
+      await _refuseNativeCaptureWhileHeadless();
       return _captureMacosWindowScreenshot(output, macos);
     }
     if (await _isMacosScreenshotSession()) {

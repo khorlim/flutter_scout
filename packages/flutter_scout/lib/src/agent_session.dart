@@ -858,7 +858,7 @@ class AgentSession {
       },
       'foregroundAvailable': foregroundAvailable,
       if (foregroundAvailable) 'platform': 'macos',
-      'headlessDrive': headlessDrive,
+      if (headlessDrive) 'headlessDrive': true,
       'safetyEvidenceStatus': view?['safetyEvidenceStatus'],
       'activeBlockingSignalCount': signals.length,
       'errorsSinceCursorCount': errors.length,

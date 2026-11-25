@@ -10,11 +10,9 @@ const String _headlessDriveEnvironment = 'FLUTTER_SCOUT_HEADLESS_DRIVE';
 String get _headlessDriveFile =>
     p.join(_sessionDir.path, 'headless_drive.json');
 
-bool _headlessDriveEnvRequested() => const {
-  '1',
-  'true',
-  'yes',
-}.contains(Platform.environment[_headlessDriveEnvironment]?.trim().toLowerCase());
+bool _headlessDriveEnvRequested() => const {'1', 'true', 'yes'}.contains(
+  Platform.environment[_headlessDriveEnvironment]?.trim().toLowerCase(),
+);
 
 void _addHeadlessDriveFlag(ArgParser parser) => parser.addFlag(
   'headless-drive',
@@ -71,7 +69,9 @@ extension _CliHeadless on FlutterScoutCli {
       };
     }
     final drive = rendering?['headlessDrive'] as Map?;
-    final hidden = rendering == null ? null : rendering['framesEnabled'] != true;
+    final hidden = rendering == null
+        ? null
+        : rendering['framesEnabled'] != true;
     return <String, Object?>{
       'enabled': true,
       'source': record!['source'],
@@ -133,7 +133,12 @@ extension _CliHeadless on FlutterScoutCli {
   Future<void> _refuseNativeCaptureWhileHeadless() async {
     if (!_sessionHeadlessDrive) return;
     _headlessDrive = true;
-    final rendering = await _headlessRenderingProbe();
+    _refuseNativeCaptureFor(await _headlessRenderingProbe());
+  }
+
+  /// Throws unless [rendering] proves the app visibly renders on its own.
+  /// Null [rendering] means Scout could not observe the app: fail closed.
+  void _refuseNativeCaptureFor(Map<String, dynamic>? rendering) {
     final reason = (rendering?['headlessDrive'] as Map?)?['reason'];
     if (rendering?['framesEnabled'] == true && reason != 'screen_locked') {
       return;
@@ -197,16 +202,18 @@ extension _CliHeadless on FlutterScoutCli {
       '1',
     ]);
     int? minutes(String key) => int.tryParse(
-      RegExp('^\\s*$key\\s+(\\d+)', multiLine: true)
-              .firstMatch(settings)
-              ?.group(1) ??
+      RegExp(
+            '^\\s*$key\\s+(\\d+)',
+            multiLine: true,
+          ).firstMatch(settings)?.group(1) ??
           '',
     );
     int assertionCount(String key) =>
         int.tryParse(
-          RegExp('^\\s*$key\\s+(\\d+)', multiLine: true)
-                  .firstMatch(assertions)
-                  ?.group(1) ??
+          RegExp(
+                '^\\s*$key\\s+(\\d+)',
+                multiLine: true,
+              ).firstMatch(assertions)?.group(1) ??
               '',
         ) ??
         0;
@@ -252,7 +259,9 @@ extension _CliHeadless on FlutterScoutCli {
         'hiddenOrCoveredWindow':
             'yes: a minimized, hidden, fully covered or other-Space window '
             'stops rendering',
-        'displaySleep': displaySleep == 0 ? 'no ($displayDetail)' : 'yes: $displayDetail',
+        'displaySleep': displaySleep == 0
+            ? 'no ($displayDetail)'
+            : 'yes: $displayDetail',
         'screenLock': lockDelay == null
             ? 'yes when locked (lock delay unknown)'
             : lockDelay == 'off'
@@ -277,4 +286,16 @@ extension _CliHeadless on FlutterScoutCli {
           'for example `caffeinate -i -w <app pid>`.',
     };
   }
+}
+
+/// Deterministic probes for headless-drive decisions without a running app.
+extension HeadlessDriveDebug on FlutterScoutCli {
+  /// The native-capture rule for a headless-drive session, given the
+  /// helper's rendering facts (null: the app could not be observed).
+  void debugRefuseNativeCaptureFor(Map<String, dynamic>? rendering) =>
+      _refuseNativeCaptureFor(rendering);
+
+  /// Host power facts, read through [FlutterScoutCli.debugNativeProcessRunner]
+  /// when it is set.
+  Future<Map<String, Object?>?> debugHostPowerFacts() => _hostPowerFacts();
 }

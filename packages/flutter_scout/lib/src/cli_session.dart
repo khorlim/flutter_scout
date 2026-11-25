@@ -205,6 +205,7 @@ extension _CliSession on FlutterScoutCli {
       )
       ..addFlag('verbose', defaultsTo: false);
     _addRendererOption(parser);
+    _addHeadlessDriveFlag(parser);
     final parsed = parser.parse(args);
     final requestedImpeller = _requestedImpeller(parsed);
     final launchTimeout = Duration(
@@ -310,6 +311,7 @@ extension _CliSession on FlutterScoutCli {
       launchProvenance['rendererRequest'] = _rendererRequest(requestedImpeller);
 
       _ensureSessionDir();
+      final headlessDrive = _recordHeadlessDrive(parsed);
       final runDirectory = p.join(_sessionDir.path, 'runs', launchLease.runId);
       final runLogFile = p.join(runDirectory, 'logs.txt');
       final flutterToolSignalPidFile = p.join(
@@ -803,6 +805,7 @@ extension _CliSession on FlutterScoutCli {
         'logFile': runLogFile,
         'timing': launchTiming.toJson(completedAt: launchTiming.readyAt),
         'helperPin': ?_helperPinAdvice(project),
+        'headlessDrive': headlessDrive,
       }, success: ready.ready);
       return ready.ready ? 0 : 1;
     } finally {
@@ -1549,6 +1552,7 @@ extension _CliSession on FlutterScoutCli {
       ..addFlag('debug-url-stdin', defaultsTo: false, negatable: false)
       ..addOption('device')
       ..addFlag('json', defaultsTo: true);
+    _addHeadlessDriveFlag(parser);
     final parsed = parser.parse(args);
     final explicit = _protectedVmUriInput(parsed);
     final discovered = await _discoverAttachVmUri(
@@ -1574,6 +1578,7 @@ extension _CliSession on FlutterScoutCli {
     final wsUri = discovered.uri!;
     final previousVmUri = _readVmUri();
     _ensureSessionDir();
+    final headlessDrive = _recordHeadlessDrive(parsed);
     _persistValidatedVmUri(wsUri);
     final previousMeta = _readSessionMeta();
     final previousPid =
@@ -1651,6 +1656,7 @@ extension _CliSession on FlutterScoutCli {
     }
     final output = <String, Object?>{
       'attached': true,
+      'headlessDrive': headlessDrive,
       'reusedRunningApp': true,
       'vmServiceUri': wsUri,
       'runId': effectiveRunId,
@@ -1791,6 +1797,7 @@ extension _CliSession on FlutterScoutCli {
       )
       ..addFlag('verbose', defaultsTo: false);
     _addRendererOption(parser);
+    _addHeadlessDriveFlag(parser);
     final parsed = parser.parse(args);
     final requestedImpeller = _requestedImpeller(parsed);
     final device = parsed.option('device');
@@ -1835,6 +1842,7 @@ extension _CliSession on FlutterScoutCli {
       }
       if (ready.ready) {
         _ensureSessionDir();
+        final headlessDrive = _recordHeadlessDrive(parsed);
         _persistValidatedVmUri(discovered.uri!);
         await _reconcileReachableSessionOwnership(discovered.uri!);
         final ownershipLost = _sessionOwnershipWasLost();
@@ -1902,6 +1910,7 @@ extension _CliSession on FlutterScoutCli {
         }
         _printJson({
           'ensured': true,
+          'headlessDrive': headlessDrive,
           'reusedRunningApp': true,
           'appStatePreserved': true,
           'ready': true,
@@ -1953,6 +1962,7 @@ extension _CliSession on FlutterScoutCli {
       ],
       if (parsed.flag('inherit-launch-context')) '--inherit-launch-context',
       if (parsed.flag('allow-parallel')) '--allow-parallel',
+      if (parsed.flag('headless-drive')) '--headless-drive',
       if (parsed.option('launch-timeout') != null) ...[
         '--launch-timeout',
         parsed.option('launch-timeout')!,
@@ -1979,9 +1989,19 @@ extension _CliSession on FlutterScoutCli {
     final temporaryHelper = Directory(project).existsSync()
         ? await _recoverTemporaryHelperProject(project, preserveLive: true)
         : const <String, Object?>{'status': 'not_applicable'};
+    final headless = _sessionHeadlessDrive;
+    if (headless) _headlessDrive = true;
+    final macos = _readDevice() == 'macos';
     _printJson(<String, Object?>{
       ...payload,
       'temporaryHelperRecovery': temporaryHelper,
+      // Whether the app is hidden right now, when headless drive is on.
+      'headlessDrive': _headlessDriveReport(
+        rendering: headless && payload['appReachable'] != false
+            ? await _headlessRenderingProbe()
+            : null,
+      ),
+      if (macos) 'hostPower': ?await _hostPowerFacts(),
     });
     return 0;
   }
@@ -2376,6 +2396,9 @@ extension _CliSession on FlutterScoutCli {
       'appReachable': runtimeObservation['appReachability'] == 'reachable',
       'runtimeObservation': runtimeObservation,
       'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
+      'headlessDrive': _headlessDriveReport(),
+      if (device == null || device.isEmpty || device == 'macos')
+        'hostPower': ?await _hostPowerFacts(),
     });
     return 0;
   }

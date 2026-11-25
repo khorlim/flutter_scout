@@ -596,6 +596,10 @@
       "meaning": "The supplied fill json is invalid.",
       "family": "request_rejected"
     },
+    "invalid_headless_drive": {
+      "meaning": "The optional headlessDrive request flag was not a strict boolean string; nothing was dispatched.",
+      "family": "request_rejected"
+    },
     "invalid_helper_envelope": {
       "meaning": "A required helper response field or outcome slot is absent or malformed.",
       "family": "request_rejected"
@@ -610,10 +614,6 @@
     },
     "invalid_live_action": {
       "meaning": "The requested live action is unsupported or has invalid fields; no action was dispatched.",
-      "family": "request_rejected"
-    },
-    "invalid_headless_drive": {
-      "meaning": "The optional headlessDrive request flag was not a strict boolean string; nothing was dispatched.",
       "family": "request_rejected"
     },
     "invalid_live_rendering_guard": {
@@ -883,6 +883,10 @@
     "mutation_transport_error": {
       "meaning": "Scout reports the stable mutation transport error failure condition.",
       "family": "execution_or_reconciliation"
+    },
+    "native_capture_unavailable_headless": {
+      "meaning": "Headless drive is on and the app is hidden, the screen locked or visibility unproven, so Scout did not run the OS screenshot tool; use the in-app capture.",
+      "family": "request_rejected"
     },
     "native_crop_coordinate_frame_mismatch": {
       "meaning": "The observed native crop coordinate frame does not match the required identity or value.",

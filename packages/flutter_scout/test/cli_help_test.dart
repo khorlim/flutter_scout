@@ -103,7 +103,7 @@ void main() {
     };
     final optionName = RegExp(r'--(?:\[no-\])?([a-z0-9][a-z0-9-]*)');
     final declared = RegExp(
-      r'''add(?:Option|Flag|MultiOption)\(\s*'([a-z0-9-]+)'|(_addRendererOption)\(''',
+      r'''add(?:Option|Flag|MultiOption)\(\s*'([a-z0-9-]+)'|(_addRendererOption|_addHeadlessDriveFlag)\(''',
     );
     var checked = 0;
     for (final entry in FlutterScoutCli.debugCommandHelpOptions.entries) {
@@ -115,7 +115,12 @@ void main() {
       final parsed = <String>{};
       if (end > 0 && (next < 0 || end < next)) {
         for (final match in declared.allMatches(source.substring(start, end))) {
-          parsed.add(match.group(1) ?? 'enable-impeller');
+          parsed.add(
+            match.group(1) ??
+                (match.group(2) == '_addHeadlessDriveFlag'
+                    ? 'headless-drive'
+                    : 'enable-impeller'),
+          );
         }
       }
       final documented = <String>{

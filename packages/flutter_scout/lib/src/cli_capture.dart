@@ -75,6 +75,7 @@ extension _CliCapture on FlutterScoutCli {
       ]);
     }
     _ensureSessionDir();
+    await _prepareHeadlessCapture();
     final output =
         parsed.option('output') ??
         p.join(
@@ -165,6 +166,7 @@ extension _CliCapture on FlutterScoutCli {
             'default Scout images show only the app.',
       );
     final parsed = parser.parse(args);
+    await _prepareHeadlessCapture();
     final native = parsed.flag('native');
     _captureWithOverlay = parsed.flag('with-overlay');
     final annotated = parsed.flag('annotated');
