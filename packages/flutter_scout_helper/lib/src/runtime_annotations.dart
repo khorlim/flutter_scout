@@ -406,6 +406,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
         (_annotationOverlayHost?.mounted ?? false);
     if (clearScoutChrome) {
       _captureClearRects.add(bounds);
+      if (!includeDrivingOverlay) _captureLabelClearRects.add(bounds);
       _bumpAnnotationRevision();
     }
     // The driving overlay is for people watching, not for Scout's own
@@ -429,6 +430,7 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
       if (hideDrivingOverlay) _drivingOverlay.endCaptureHide();
       if (clearScoutChrome) {
         _captureClearRects.remove(bounds);
+        if (!includeDrivingOverlay) _captureLabelClearRects.remove(bounds);
         _bumpAnnotationRevision();
       }
       if (clearScoutChrome || hideDrivingOverlay) {

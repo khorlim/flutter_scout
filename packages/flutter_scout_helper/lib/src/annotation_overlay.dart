@@ -36,8 +36,14 @@ Color _deriveScoutSessionHue(String label) {
 /// matching the edge glow and the "Scout is …" pill. Before an explicit
 /// annotation or recording opt-in it is a passive, hit-test-transparent label;
 /// afterwards it opens the Scout menu.
+///
+/// It stays mounted during in-app captures. [hidden] only turns its opacity
+/// to zero while a capture that excludes Scout's overlay covers it, so it
+/// never rebuilds its animations or blinks for captures elsewhere.
 class _ScoutInstanceBadge extends StatelessWidget {
   const _ScoutInstanceBadge({
+    super.key,
+    required this.hidden,
     required this.menuOpen,
     required this.interactive,
     required this.agentAttached,
@@ -45,6 +51,7 @@ class _ScoutInstanceBadge extends StatelessWidget {
     required this.onTap,
   });
 
+  final bool hidden;
   final bool menuOpen;
   final bool interactive;
   final ValueListenable<bool> agentAttached;
@@ -56,124 +63,124 @@ class _ScoutInstanceBadge extends StatelessWidget {
     return Positioned(
       left: ScoutSpace.s,
       bottom: ScoutSpace.s,
-      child: IgnorePointer(
-        ignoring: !interactive,
-        child: ExcludeSemantics(
-          excluding: !interactive,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: interactive ? onTap : null,
-            child: ListenableBuilder(
-              listenable: Listenable.merge([agentAttached, agentControlling]),
-              builder: (context, _) {
-                final attached = agentAttached.value;
-                final controlling = attached && agentControlling.value;
-                final dot = attached ? ScoutColors.signal : _scoutSessionHue;
-                return AnimatedContainer(
-                  duration: ScoutMotion.base,
-                  curve: ScoutMotion.enter,
-                  height: 26,
-                  padding: const EdgeInsets.only(left: 9, right: 11),
-                  decoration: BoxDecoration(
-                    color: const Color(0xE60B1211),
-                    borderRadius: BorderRadius.circular(13),
-                    border: Border.all(
-                      color: ScoutColors.signal.withValues(
-                        alpha: menuOpen ? 0.7 : (attached ? 0.4 : 0.2),
+      child: Opacity(opacity: hidden ? 0 : 1, child: _chip()),
+    );
+  }
+
+  Widget _chip() {
+    return IgnorePointer(
+      ignoring: !interactive,
+      child: ExcludeSemantics(
+        excluding: !interactive,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: interactive ? onTap : null,
+          child: ListenableBuilder(
+            listenable: Listenable.merge([agentAttached, agentControlling]),
+            builder: (context, _) {
+              final attached = agentAttached.value;
+              final controlling = attached && agentControlling.value;
+              final dot = attached ? ScoutColors.signal : _scoutSessionHue;
+              return AnimatedContainer(
+                duration: ScoutMotion.base,
+                curve: ScoutMotion.enter,
+                height: 26,
+                padding: const EdgeInsets.only(left: 9, right: 11),
+                decoration: BoxDecoration(
+                  color: const Color(0xE60B1211),
+                  borderRadius: BorderRadius.circular(13),
+                  border: Border.all(
+                    color: ScoutColors.signal.withValues(
+                      alpha: menuOpen ? 0.7 : (attached ? 0.4 : 0.2),
+                    ),
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 10,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AnimatedContainer(
+                      duration: ScoutMotion.base,
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: dot,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          if (attached)
+                            BoxShadow(
+                              color: ScoutColors.signal.withValues(alpha: 0.55),
+                              blurRadius: 6,
+                              spreadRadius: 1,
+                            ),
+                        ],
                       ),
                     ),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x33000000),
-                        blurRadius: 10,
-                        offset: Offset(0, 2),
+                    const SizedBox(width: 7),
+                    const Text('Scout', style: _badgeTitle),
+                    if (_scoutInstanceLabel.isNotEmpty) ...[
+                      Text(
+                        '  ·  ',
+                        style: _badgeName.copyWith(
+                          color: ScoutColors.inkDim.withValues(alpha: 0.6),
+                        ),
+                      ),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 180),
+                        child: const Text(
+                          _scoutInstanceLabel,
+                          style: _badgeName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      AnimatedContainer(
+                    // While an agent is attached the label is also the
+                    // session indicator: what Scout is doing right now.
+                    if (attached) ...[
+                      Text(
+                        '  ·  ',
+                        style: _badgeName.copyWith(
+                          color: ScoutColors.inkDim.withValues(alpha: 0.6),
+                        ),
+                      ),
+                      AnimatedDefaultTextStyle(
                         duration: ScoutMotion.base,
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          color: dot,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            if (attached)
-                              BoxShadow(
-                                color: ScoutColors.signal.withValues(
-                                  alpha: 0.55,
-                                ),
-                                blurRadius: 6,
-                                spreadRadius: 1,
-                              ),
-                          ],
+                        style: _badgeName.copyWith(
+                          color: controlling
+                              ? ScoutColors.signal
+                              : ScoutColors.inkDim,
+                          fontWeight: controlling
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                        ),
+                        child: Text(controlling ? 'controlling' : 'observing'),
+                      ),
+                    ],
+                    if (interactive) ...[
+                      const SizedBox(width: 4),
+                      // Chevron flips up→down to signal the menu's state.
+                      AnimatedRotation(
+                        turns: menuOpen ? 0.5 : 0.0,
+                        duration: ScoutMotion.base,
+                        curve: ScoutMotion.enter,
+                        child: const Icon(
+                          Icons.keyboard_arrow_up,
+                          size: 14,
+                          color: ScoutColors.inkDim,
                         ),
                       ),
-                      const SizedBox(width: 7),
-                      const Text('Scout', style: _badgeTitle),
-                      if (_scoutInstanceLabel.isNotEmpty) ...[
-                        Text(
-                          '  ·  ',
-                          style: _badgeName.copyWith(
-                            color: ScoutColors.inkDim.withValues(alpha: 0.6),
-                          ),
-                        ),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 180),
-                          child: const Text(
-                            _scoutInstanceLabel,
-                            style: _badgeName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                      // While an agent is attached the label is also the
-                      // session indicator: what Scout is doing right now.
-                      if (attached) ...[
-                        Text(
-                          '  ·  ',
-                          style: _badgeName.copyWith(
-                            color: ScoutColors.inkDim.withValues(alpha: 0.6),
-                          ),
-                        ),
-                        AnimatedDefaultTextStyle(
-                          duration: ScoutMotion.base,
-                          style: _badgeName.copyWith(
-                            color: controlling
-                                ? ScoutColors.signal
-                                : ScoutColors.inkDim,
-                            fontWeight: controlling
-                                ? FontWeight.w600
-                                : FontWeight.w500,
-                          ),
-                          child: Text(
-                            controlling ? 'controlling' : 'observing',
-                          ),
-                        ),
-                      ],
-                      if (interactive) ...[
-                        const SizedBox(width: 4),
-                        // Chevron flips up→down to signal the menu's state.
-                        AnimatedRotation(
-                          turns: menuOpen ? 0.5 : 0.0,
-                          duration: ScoutMotion.base,
-                          curve: ScoutMotion.enter,
-                          child: const Icon(
-                            Icons.keyboard_arrow_up,
-                            size: 14,
-                            color: ScoutColors.inkDim,
-                          ),
-                        ),
-                      ],
                     ],
-                  ),
-                );
-              },
-            ),
+                  ],
+                ),
+              );
+            },
           ),
         ),
       ),
@@ -647,6 +654,11 @@ class _FlutterScoutAnnotationOverlayState
   Offset? _lastTapPoint;
   int _candidateIndex = 0;
   int _lastCollectedRevision = -1;
+  // Keeps the session label mounted across captures and locates it for the
+  // overlap check in [_sessionLabelCovered].
+  final GlobalKey _sessionLabelKey = GlobalKey(
+    debugLabel: 'flutter_scout_session_label',
+  );
   bool _targetRefreshScheduled = false;
   // The pin whose delete popup is open (tapped an existing annotation pin).
   // Carries everything the exit ghost needs so it can always animate out even
@@ -778,6 +790,23 @@ class _FlutterScoutAnnotationOverlayState
       _selectedPin = null;
     });
     widget.runtime.removeAnnotation(pin.id);
+  }
+
+  /// Whether a capture that excludes Scout's overlay covers the session
+  /// label, as the pins check their own reticles. The label's box (plus its
+  /// shadow) comes from the last layout; it does not move during a capture.
+  /// Without a laid-out box the label hides, so it can never leak into such
+  /// a capture.
+  bool _sessionLabelCovered() {
+    final clearRects = widget.runtime._captureLabelClearRects;
+    if (clearRects.isEmpty) return false;
+    final box = _sessionLabelKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return true;
+    final rect = MatrixUtils.transformRect(
+      box.getTransformTo(null),
+      Offset.zero & box.size,
+    ).inflate(12);
+    return clearRects.any(rect.overlaps);
   }
 
   /// Live annotation pins (animated, keyed by id) plus any ghosts animating out.
@@ -997,23 +1026,24 @@ class _FlutterScoutAnnotationOverlayState
               // Launcher + its menu. The launcher sits above a tap-to-dismiss
               // barrier so it stays interactive (and reachable during
               // annotation mode) while the menu is open.
-              if (notCapturing) ...[
-                if (interactive && _menuOpen)
-                  Positioned.fill(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: _closeMenu,
-                    ),
+              if (notCapturing && interactive && _menuOpen)
+                Positioned.fill(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _closeMenu,
                   ),
-                _ScoutInstanceBadge(
-                  menuOpen: interactive && _menuOpen,
-                  interactive: interactive,
-                  agentAttached:
-                      widget.runtime._drivingOverlay.attachedNotifier,
-                  agentControlling:
-                      widget.runtime._drivingOverlay.controllingNotifier,
-                  onTap: _toggleMenu,
                 ),
+              _ScoutInstanceBadge(
+                key: _sessionLabelKey,
+                hidden: _sessionLabelCovered(),
+                menuOpen: interactive && _menuOpen,
+                interactive: interactive,
+                agentAttached: widget.runtime._drivingOverlay.attachedNotifier,
+                agentControlling:
+                    widget.runtime._drivingOverlay.controllingNotifier,
+                onTap: _toggleMenu,
+              ),
+              if (notCapturing) ...[
                 if (interactive && _menuOpen)
                   _ScoutMenu(
                     annotationActive: enabled,

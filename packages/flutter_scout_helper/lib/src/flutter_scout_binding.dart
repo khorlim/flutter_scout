@@ -161,6 +161,11 @@ class FlutterScoutRuntime {
   // blanking the whole overlay, which caused a visible flash on save. A list so
   // overlapping captures compose; entries are added/removed by _captureRegion.
   final List<Rect> _captureClearRects = <Rect>[];
+  // The subset of [_captureClearRects] whose capture excludes Scout's overlay.
+  // The session label belongs to that overlay, so it stays visible (and in
+  // the image) for `overlay: include` captures and hides only where one of
+  // these rects covers it.
+  final List<Rect> _captureLabelClearRects = <Rect>[];
   bool _annotationMode = false;
   // ---- Flow recorder (see runtime_recorder.dart) -------------------------
   // Whether a recording is in progress, and whether it is temporarily paused.
@@ -313,11 +318,13 @@ class FlutterScoutRuntime {
     Rect? rect,
     double padding = 12,
     List<({int n, Rect rect})>? marks,
+    bool includeDrivingOverlay = false,
   }) async {
     final result = await _captureRegion(
       rect: rect,
       padding: padding,
       marks: marks,
+      includeDrivingOverlay: includeDrivingOverlay,
     );
     return result.bytes;
   }

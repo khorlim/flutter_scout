@@ -133,6 +133,7 @@ proof of visual quality—inspect the produced image.
 Scout screenshots and crops (in-app and `--native`) hide the in-app driving
 overlay, so images show only the app. `flutter-scout --app <name> screenshot
 --with-overlay` (or `crop --with-overlay`) keeps it, for showing a person
-what the agent did. In-app captures also omit Scout's session label; a
-`--native --with-overlay` screenshot shows both.
+what the agent did, and keeps Scout's session label with it. Without
+`--with-overlay`, an in-app capture omits the session label only when the
+captured region covers it; the label stays on screen for crops elsewhere.
 

@@ -1,5 +1,10 @@
 ## Unreleased
 
+* The session label no longer blinks during in-app captures. It stays
+  mounted and visible for `overlay: include` captures (`--with-overlay`),
+  so those images show it, and other captures hide it, by opacity, only
+  for the frames a captured region covers it, as they do the pins. Before,
+  every in-app capture removed and rebuilt it.
 * A small control that shows its own text no longer borrows the next
   control's text as an alias (a "Points" chip also answering to
   `tap.credit`); nearby-text aliases stay for icon-only controls.
