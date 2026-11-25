@@ -135,8 +135,8 @@ void main() {
 
     await tester.runAsync(() => runtime.debugTapTarget('tap.save'));
     expect(runtime.debugDrivingOverlayStatus['ticking'], isTrue);
-    await frames(tester, 100);
-    await frames(tester, 900);
+    // The ripple ends first; the cursor's name tag fades about 1.4 s in.
+    await frames(tester, 1600);
     var status = runtime.debugDrivingOverlayStatus;
     expect(status['ticking'], isFalse);
     expect(status['effects'], 0);

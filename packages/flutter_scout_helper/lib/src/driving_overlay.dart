@@ -199,6 +199,17 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   final List<double> _keyTimes = <double>[0];
   final List<Offset> _keyPoints = <Offset>[Offset.zero];
   double _glowSettleAt = -1;
+  // The cursor's name tag shows while the cursor works, then steps aside so
+  // a parked cursor never hides what the input opened.
+  double _tagUntil = -1;
+  static const double _tagHold = 1100;
+  static const double _tagFade = 300;
+
+  double tagAlpha(double time) {
+    if (time <= _tagUntil) return 1;
+    return (1 - (time - _tagUntil) / _tagFade).clamp(0.0, 1.0);
+  }
+
   final List<_DrivingEffect> effects = <_DrivingEffect>[];
   _DrivingEffect? _heldDrag;
   double _typingFreeAt = 0;
@@ -293,6 +304,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
     glow.to(0, now, 320);
     pill.to(0, now, 260);
     cursorAlpha.to(0, now, 260);
+    _tagUntil = math.min(_tagUntil, now);
     _kick();
   }
 
@@ -420,6 +432,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
         pill.active(now) ||
         pillActive.active(now) ||
         cursorAlpha.active(now) ||
+        now < _tagUntil + _tagFade ||
         now < _keyTimes.last;
     if (!moving) {
       _ticker!.stop();
@@ -464,6 +477,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
   void _markActive() {
     _idleTimer?.cancel();
     _idleTimer = null;
+    _tagUntil = now + _tagHold;
     if (!_active) {
       _active = true;
       pillActive.to(1, now, 220);
@@ -543,7 +557,7 @@ class _ScoutDrivingOverlay extends ChangeNotifier {
       _DrivingEffect(
         kind: _DrivingEffectKind.press,
         start: start,
-        end: start + (taps - 1) * gap + 520,
+        end: start + (taps - 1) * gap + (secondary ? 1000 : 520),
         point: point,
         taps: taps,
         interval: gap,
@@ -819,7 +833,7 @@ class _ScoutDrivingPainter extends CustomPainter {
       }
     }
     final cursorAlpha = c.cursorAlpha.at(now);
-    if (cursorAlpha > 0.01) _paintCursor(canvas, now, cursorAlpha);
+    if (cursorAlpha > 0.01) _paintCursor(canvas, size, now, cursorAlpha);
     if (pill > 0.01) _paintPill(canvas, size, pill, c.pillActive.at(now));
   }
 
@@ -925,7 +939,7 @@ class _ScoutDrivingPainter extends CustomPainter {
     return depth;
   }
 
-  void _paintCursor(Canvas canvas, double now, double alpha) {
+  void _paintCursor(Canvas canvas, Size size, double now, double alpha) {
     final p = c.cursorPosition;
     final depth = c.reducedMotion ? 0.0 : _pressDepth(now);
     final tag = _tag ??= _label(
@@ -951,7 +965,10 @@ class _ScoutDrivingPainter extends CustomPainter {
         ..strokeWidth = 1
         ..color = _DrivingColors.rim.withValues(alpha: 0.5 * alpha);
       canvas.drawCircle(p, r + 1.6, _stroke);
-      _paintTag(canvas, tag, p + Offset(r + 4, r - 2), alpha);
+      final tagAlpha = alpha * c.tagAlpha(now);
+      if (tagAlpha > 0.01) {
+        _paintTag(canvas, size, tag, p, Offset(r + 4, r - 2), tagAlpha);
+      }
       return;
     }
     final scale = 1 - 0.12 * depth;
@@ -977,10 +994,31 @@ class _ScoutDrivingPainter extends CustomPainter {
       );
       canvas.drawCircle(p, 3.2, _fill);
     }
-    _paintTag(canvas, tag, p + const Offset(13, 19), alpha);
+    final tagAlpha = alpha * c.tagAlpha(now);
+    if (tagAlpha > 0.01) {
+      _paintTag(canvas, size, tag, p, const Offset(13, 19), tagAlpha);
+    }
   }
 
-  void _paintTag(Canvas canvas, TextPainter tag, Offset at, double alpha) {
+  /// The name tag beside the cursor; it flips to the cursor's left (and
+  /// above it) when it would leave the window.
+  void _paintTag(
+    Canvas canvas,
+    Size size,
+    TextPainter tag,
+    Offset cursor,
+    Offset offset,
+    double alpha,
+  ) {
+    final width = tag.width + 12;
+    final height = tag.height + 5;
+    var at = cursor + offset;
+    if (at.dx + width > size.width - 4) {
+      at = Offset(cursor.dx - 6 - width, at.dy);
+    }
+    if (at.dy + height > size.height - 4) {
+      at = Offset(at.dx, cursor.dy - 6 - height);
+    }
     final rect = Rect.fromLTWH(at.dx, at.dy, tag.width + 12, tag.height + 5);
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(7));
     _shadow.color = Color.fromRGBO(0, 0, 0, 0.22 * alpha);
