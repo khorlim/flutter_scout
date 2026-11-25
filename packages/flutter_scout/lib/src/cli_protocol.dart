@@ -374,21 +374,31 @@ extension _CliProtocol on FlutterScoutCli {
       );
     }
     final decisionTargets = _liveDecisionTargets;
-    final staleReason = decisionView == null
+    final runChanged =
+        decisionView != null &&
+        (decisionView['runtimeInstanceId'] != runtimeInstanceId ||
+            decisionView['runId'] != runId);
+    final stale =
+        decisionView == null ||
+            runChanged ||
+            decisionView['snapshotId'] == snapshotId ||
+            decisionTargets == null
         ? null
-        : decisionView['runtimeInstanceId'] != runtimeInstanceId ||
-              decisionView['runId'] != runId
-        ? 'the app run changed'
-        : decisionView['snapshotId'] == snapshotId
-        ? null
-        : decisionTargets == null
-        ? 'only an exact-handle action tolerates later screen changes'
-        : AgentSession.staleReason(
+        : AgentSession.staleChange(
             decisionView,
             _agentObservation(preflight),
             decisionTargets,
             allowUnrelatedChanges: _liveDecisionAllowsUnrelated,
           );
+    final staleReason = decisionView == null
+        ? null
+        : runChanged
+        ? 'the app run changed'
+        : decisionView['snapshotId'] == snapshotId
+        ? null
+        : decisionTargets == null
+        ? 'only an exact-handle action tolerates later screen changes'
+        : stale?.reason;
     if (staleReason != null) {
       return (
         invocation: null,
@@ -404,6 +414,8 @@ extension _CliProtocol on FlutterScoutCli {
               'observedSnapshotId': decisionView!['snapshotId'],
               'currentSnapshotId': snapshotId,
               'staleReason': staleReason,
+              if (stale != null && stale.changes.isNotEmpty)
+                'staleChanges': stale.changes,
             },
           ),
         ),

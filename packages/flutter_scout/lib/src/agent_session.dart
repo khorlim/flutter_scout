@@ -144,10 +144,30 @@ class AgentSession {
     AgentView current,
     Set<String> targets, {
     bool allowUnrelatedChanges = false,
+  }) => staleChange(
+    decision,
+    current,
+    targets,
+    allowUnrelatedChanges: allowUnrelatedChanges,
+  )?.reason;
+
+  /// [staleReason] with the facts behind it: `changes` names each changed
+  /// field with its observed (`before`) and current (`after`) value, bounded
+  /// in size, so a rejection says what changed and not only that it did.
+  static ({String reason, List<AgentView> changes})? staleChange(
+    AgentView decision,
+    AgentView current,
+    Set<String> targets, {
+    bool allowUnrelatedChanges = false,
   }) {
-    if (targets.isEmpty) return 'the action has no exact observed target';
+    if (targets.isEmpty) {
+      return (reason: 'the action has no exact observed target', changes: []);
+    }
     if (decision['ok'] != true || current['ok'] != true) {
-      return 'an observation was unavailable';
+      return (
+        reason: 'an observation was unavailable',
+        changes: _diff('ok', decision['ok'], current['ok']),
+      );
     }
     final shared = _sharedStateChange(decision, current);
     if (shared != null) return shared;
@@ -155,12 +175,64 @@ class AgentSession {
     if (target != null) return target;
     final layout = _layoutChange(decision, current, targets);
     if (layout == null || allowUnrelatedChanges) return null;
-    return '$layout (add "allowUnrelatedChanges": true if that change is '
-        'unrelated to this action)';
+    return (
+      reason:
+          '${layout.reason} (add "allowUnrelatedChanges": true if that '
+          'change is unrelated to this action)',
+      changes: layout.changes,
+    );
   }
 
+  /// At most this many changed fields are named per rejection.
+  static const _maxStaleChanges = 8;
+
+  /// One entry per changed field; maps are narrowed to their changed keys
+  /// (`rendering.lifecycle`), so the entry names the exact fact.
+  static List<AgentView> _diff(String field, Object? before, Object? after) {
+    if (before is Map && after is Map) {
+      return [
+        for (final key in {...before.keys, ...after.keys})
+          if (!_same(before[key], after[key]))
+            ..._diff('$field.$key', before[key], after[key]),
+      ].take(_maxStaleChanges).toList();
+    }
+    return [
+      {'field': field, 'before': _bounded(before), 'after': _bounded(after)},
+    ];
+  }
+
+  /// A value small enough to quote in a rejection: long text is cut, large
+  /// lists and maps are summarized.
+  static Object? _bounded(Object? value) {
+    if (value is String) {
+      return value.length <= 160 ? value : '${value.substring(0, 160)}…';
+    }
+    if (value is List) {
+      if (jsonEncode(value).length <= 240) return value;
+      return {
+        'count': value.length,
+        'first': [for (final item in value.take(3)) _bounded(item)],
+      };
+    }
+    if (value is Map) {
+      if (jsonEncode(value).length <= 240) return value;
+      return {'keys': value.keys.take(8).toList(), 'count': value.length};
+    }
+    return value;
+  }
+
+  static ({String reason, List<AgentView> changes}) _stale(
+    String reason,
+    String field,
+    Object? before,
+    Object? after,
+  ) => (reason: reason, changes: _diff(field, before, after));
+
   /// Changes that invalidate any decision on this screen.
-  static String? _sharedStateChange(AgentView decision, AgentView current) {
+  static ({String reason, List<AgentView> changes})? _sharedStateChange(
+    AgentView decision,
+    AgentView current,
+  ) {
     // A dialog's name is guessed from its text, which may be the display a
     // key press just changed; the same mounted surface keeps its instance.
     final before = decision['activeSurface'];
@@ -172,7 +244,12 @@ class AgentSession {
         before['instance'] == after['instance'] &&
         before['kind'] == after['kind'];
     if (!sameSurface && !_same(decision['screen'], current['screen'])) {
-      return 'screen changed';
+      return _stale(
+        'screen changed',
+        'screen',
+        decision['screen'],
+        current['screen'],
+      );
     }
     for (final key in const [
       'runId',
@@ -188,7 +265,9 @@ class AgentSession {
       'fieldValues',
       'annotationMode',
     ]) {
-      if (!_same(decision[key], current[key])) return '$key changed';
+      if (!_same(decision[key], current[key])) {
+        return _stale('$key changed', key, decision[key], current[key]);
+      }
     }
     Object? pick(Object? value, List<String> keys) => value is Map
         ? {
@@ -196,49 +275,51 @@ class AgentSession {
               if (value.containsKey(key)) key: value[key],
           }
         : value;
+    const surfaceKeys = ['kind', 'label', 'screen', 'source'];
     if (!sameSurface &&
         !_same(
-          pick(decision['activeSurface'], const [
-            'kind',
-            'label',
-            'screen',
-            'source',
-          ]),
-          pick(current['activeSurface'], const [
-            'kind',
-            'label',
-            'screen',
-            'source',
-          ]),
+          pick(decision['activeSurface'], surfaceKeys),
+          pick(current['activeSurface'], surfaceKeys),
         )) {
-      return 'the active surface changed';
+      return _stale(
+        'the active surface changed',
+        'activeSurface',
+        pick(decision['activeSurface'], surfaceKeys),
+        pick(current['activeSurface'], surfaceKeys),
+      );
     }
-    if (!_same(
-      pick(decision['rendering'], const [
-        'status',
-        'framesEnabled',
-        'lifecycle',
-      ]),
-      pick(current['rendering'], const [
-        'status',
-        'framesEnabled',
-        'lifecycle',
-      ]),
-    )) {
-      return 'rendering changed';
+    const renderingKeys = ['status', 'framesEnabled', 'lifecycle'];
+    final renderingBefore = pick(decision['rendering'], renderingKeys);
+    final renderingAfter = pick(current['rendering'], renderingKeys);
+    if (!_same(renderingBefore, renderingAfter)) {
+      return _stale(
+        'rendering changed',
+        'rendering',
+        renderingBefore,
+        renderingAfter,
+      );
     }
     return null;
   }
 
   /// Whether every target appears once, identical, enabled and hit-testable.
-  static String? _targetChange(
+  static ({String reason, List<AgentView> changes})? _targetChange(
     AgentView decision,
     AgentView current,
     Set<String> targets,
   ) {
     final before = decision['interactables'];
     final after = current['interactables'];
-    if (before is! List || after is! List) return 'controls are unavailable';
+    if (before is! List || after is! List) {
+      return (
+        reason: 'controls are unavailable',
+        changes: _diff(
+          'interactables',
+          before is List ? 'list' : before,
+          after is List ? 'list' : after,
+        ),
+      );
+    }
     List<Map> withId(List items, String id) => [
       for (final item in items)
         if (item is Map && item['id'] == id) item,
@@ -251,7 +332,7 @@ class AgentSession {
       final matches = [
         for (final item in regions)
           if (item is Map && (item['id'] == id || item['scopedId'] == id))
-            [
+            {
               for (final key in const [
                 'id',
                 'scopedId',
@@ -259,8 +340,8 @@ class AgentSession {
                 'axis',
                 'axisDirection',
               ])
-                item[key],
-            ],
+                key: item[key],
+            },
       ];
       return matches.length == 1 ? matches.single : null;
     }
@@ -270,25 +351,71 @@ class AgentSession {
       final b = withId(after, id);
       if (a.isEmpty && b.isEmpty) {
         final was = region(decision, id);
-        if (was == null) return 'target $id was not one observed control';
-        if (!_same(was, region(current, id))) return 'target $id changed';
+        if (was == null) {
+          return (
+            reason: 'target $id was not one observed control',
+            changes: [
+              {'field': 'interactables[$id]', 'before': 0, 'after': 0},
+            ],
+          );
+        }
+        final now = region(current, id);
+        if (!_same(was, now)) {
+          return _stale('target $id changed', 'scrollables[$id]', was, now);
+        }
         continue;
       }
-      if (a.length != 1) return 'target $id was not one observed control';
-      if (b.length != 1) return 'target $id is gone or no longer unique';
-      if (!_same(a.single, b.single)) return 'target $id changed';
+      if (a.length != 1) {
+        return (
+          reason: 'target $id was not one observed control',
+          changes: [
+            {
+              'field': 'interactables[$id]',
+              'before': a.length,
+              'after': b.length,
+            },
+          ],
+        );
+      }
+      if (b.length != 1) {
+        return (
+          reason: 'target $id is gone or no longer unique',
+          changes: [
+            {'field': 'interactables[$id]', 'before': 1, 'after': b.length},
+          ],
+        );
+      }
+      if (!_same(a.single, b.single)) {
+        return _stale(
+          'target $id changed',
+          'interactables[$id]',
+          a.single,
+          b.single,
+        );
+      }
       final target = b.single;
       if (target['enabled'] == false ||
           target['hitTestable'] == false ||
           target['offscreen'] == true) {
-        return 'target $id is not enabled, hit-testable and on screen';
+        return (
+          reason: 'target $id is not enabled, hit-testable and on screen',
+          changes: [
+            {
+              'field': 'interactables[$id]',
+              'after': {
+                for (final key in const ['enabled', 'hitTestable', 'offscreen'])
+                  if (target.containsKey(key)) key: target[key],
+              },
+            },
+          ],
+        );
       }
     }
     return null;
   }
 
   /// Changes outside the targets beyond in-place text updates.
-  static String? _layoutChange(
+  static ({String reason, List<AgentView> changes})? _layoutChange(
     AgentView decision,
     AgentView current,
     Set<String> targets,
@@ -305,7 +432,9 @@ class AgentSession {
       'degradedNodes',
       'inspectWarnings',
     ]) {
-      if (!_same(decision[key], current[key])) return '$key changed';
+      if (!_same(decision[key], current[key])) {
+        return _stale('$key changed', key, decision[key], current[key]);
+      }
     }
     int length(Object? value) =>
         value is List ? value.length : (value == null ? 0 : -1);
@@ -318,36 +447,101 @@ class AgentSession {
     ]) {
       if (length(decision[key]) != length(current[key]) ||
           length(current[key]) < 0) {
-        return 'text appeared or disappeared';
+        final was = decision[key] is List ? decision[key] as List : const [];
+        final now = current[key] is List ? current[key] as List : const [];
+        String text(Object? item) => item is String ? item : jsonEncode(item);
+        final wasText = was.map(text).toSet();
+        final nowText = now.map(text).toSet();
+        return (
+          reason: 'text appeared or disappeared',
+          changes: [
+            {
+              'field': key,
+              'before': length(decision[key]),
+              'after': length(current[key]),
+              'appeared': [
+                for (final item in nowText.difference(wasText).take(6))
+                  _bounded(item),
+              ],
+              'disappeared': [
+                for (final item in wasText.difference(nowText).take(6))
+                  _bounded(item),
+              ],
+            },
+          ],
+        );
       }
     }
     final before = decision['interactables'] as List;
     final after = current['interactables'] as List;
     if (before.length != after.length) {
-      return 'controls appeared or disappeared';
+      Set<Object?> ids(List items) => {
+        for (final item in items)
+          if (item is Map) item['id'],
+      };
+      return (
+        reason: 'controls appeared or disappeared',
+        changes: [
+          {
+            'field': 'interactables',
+            'before': before.length,
+            'after': after.length,
+            'appeared': ids(after).difference(ids(before)).take(8).toList(),
+            'disappeared': ids(before).difference(ids(after)).take(8).toList(),
+          },
+        ],
+      );
     }
     for (var i = 0; i < before.length; i++) {
       final a = before[i];
       final b = after[i];
-      if (a is! Map || b is! Map) return 'controls are unavailable';
+      if (a is! Map || b is! Map) {
+        return (
+          reason: 'controls are unavailable',
+          changes: [
+            {'field': 'interactables[$i]', 'before': 'map', 'after': 'map'},
+          ],
+        );
+      }
       if (targets.contains(a['id']) || targets.contains(b['id'])) {
-        if (a['id'] != b['id']) return 'controls moved around a target';
+        if (a['id'] != b['id']) {
+          return _stale(
+            'controls moved around a target',
+            'interactables[$i].id',
+            a['id'],
+            b['id'],
+          );
+        }
         continue;
       }
       // Unkeyed ids derive from labels, so a countdown button may change id
       // and label in place. Its kind and interaction state must not change.
-      for (final key in const [
-        'kind',
-        'enabled',
-        'hitTestable',
-        'offscreen',
-        'selected',
-      ]) {
-        if (!_same(a[key], b[key])) return 'control ${b['id']} changed state';
+      for (final key in _controlStateKeys) {
+        if (!_same(a[key], b[key])) {
+          return _stale(
+            'control ${b['id']} changed state',
+            'interactables[${b['id']}].$key',
+            a[key],
+            b[key],
+          );
+        }
       }
     }
     return null;
   }
+
+  /// A control's interaction state: a change to any of these outside the
+  /// targets is a real layout change, not an in-place text update.
+  static const _controlStateKeys = [
+    'kind',
+    'enabled',
+    'hitTestable',
+    'offscreen',
+    'selected',
+    'checked',
+    'toggled',
+    'expanded',
+  ];
 
   static bool _same(Object? a, Object? b) {
     if (a is Map && b is Map) {
@@ -749,17 +943,20 @@ class AgentSession {
     if (_closed || _halt != null) throw StateError(_stoppedMessage());
     final decision = revision == _revision ? _view : _history[revision];
     if (revision != _revision) {
-      final reason = targets == null
-          ? 'only an exact-handle tap, long-press, input or fill can use an '
-                'older revision'
-          : decision == null || _view == null
-          ? 'viewRevision $revision is no longer retained'
-          : staleReason(
+      final stale = targets == null || decision == null || _view == null
+          ? null
+          : staleChange(
               decision,
               _view!,
               targets,
               allowUnrelatedChanges: allowUnrelatedChanges,
             );
+      final reason = targets == null
+          ? 'only an exact-handle tap, long-press, input or fill can use an '
+                'older revision'
+          : decision == null || _view == null
+          ? 'viewRevision $revision is no longer retained'
+          : stale?.reason;
       if (reason != null) {
         throw AgentRejection(
           'agent_view_changed',
@@ -771,6 +968,8 @@ class AgentSession {
             'observedRevision': revision,
             'currentRevision': _revision,
             'staleReason': reason,
+            if (stale != null && stale.changes.isNotEmpty)
+              'staleChanges': stale.changes,
           },
         );
       }

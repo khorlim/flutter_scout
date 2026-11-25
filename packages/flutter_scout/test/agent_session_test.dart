@@ -1099,6 +1099,65 @@ void main() {
     }
   });
 
+  test('a stale rejection names each changed field with its old and new '
+      'value', () {
+    final decision = {
+      ...view(1, text: ['Cart']),
+      'rendering': {
+        'status': 'active',
+        'framesEnabled': true,
+        'lifecycle': 'resumed',
+      },
+    };
+    final hidden = {
+      ...decision,
+      'rendering': {
+        'status': 'suspended',
+        'framesEnabled': false,
+        'lifecycle': 'hidden',
+      },
+    };
+    final rendering = AgentSession.staleChange(decision, hidden, {'btn.pay'})!;
+    expect(rendering.reason, 'rendering changed');
+    expect(rendering.changes, [
+      {'field': 'rendering.status', 'before': 'active', 'after': 'suspended'},
+      {'field': 'rendering.framesEnabled', 'before': true, 'after': false},
+      {'field': 'rendering.lifecycle', 'before': 'resumed', 'after': 'hidden'},
+    ]);
+    final total = AgentSession.staleChange(
+      decision,
+      {
+        ...decision,
+        'visibleText': ['Cart', 'Total RM 12.00'],
+      },
+      {'btn.pause'},
+    )!;
+    expect(total.changes.single['field'], 'visibleText');
+    expect(total.changes.single['appeared'], ['Total RM 12.00']);
+    final retargeted = AgentSession.staleChange(
+      {
+        ...decision,
+        'interactables': [
+          {'id': 'btn.pay', 'kind': 'btn', 'enabled': false},
+        ],
+      },
+      {
+        ...decision,
+        'interactables': [
+          {'id': 'btn.pay', 'kind': 'btn', 'enabled': true},
+        ],
+      },
+      {'btn.pay'},
+    )!;
+    expect(retargeted.changes, [
+      {
+        'field': 'interactables[btn.pay].enabled',
+        'before': false,
+        'after': true,
+      },
+    ]);
+  });
+
   test('a keypad dialog stays the same surface while its display, its '
       'guessed name and a suggestion change', () {
     final keys = [
