@@ -58,7 +58,7 @@ void main() {
   // root before tear-downs run, and a live lease would schedule a frame.
   void finish(WidgetTester tester) {
     runtime.debugExpireHeadlessDrive();
-    runtime.debugHeadlessHostFacts = null;
+    runtime.debugMacosHostFacts = null;
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
   }
 
@@ -158,20 +158,130 @@ void main() {
     finish(tester);
   });
 
-  testWidgets('a locked screen or sleeping display is named as the reason', (
+  testWidgets('display sleep and an in-force lock are told apart', (
     tester,
   ) async {
     await pumpHidden(tester, _Counter(key: counter));
-    runtime.debugHeadlessHostFacts = (locked: true, asleep: true);
-    var drive = (await inspect(tester, headless: true))['rendering'] as Map;
-    expect((drive['headlessDrive'] as Map)['reason'], 'screen_locked');
-    expect(
-      (drive['headlessDrive'] as Map)['notice'],
-      startsWith('HEADLESS: the screen is locked'),
+    Future<Map> rendering() async =>
+        (await inspect(tester, headless: true))['rendering'] as Map;
+
+    // macOS sets the lock flag the moment the display sleeps, also inside
+    // the password grace period: that is display sleep, lock unknown.
+    runtime.debugMacosHostFacts = const ScoutMacosHostFacts(
+      displayAsleep: true,
+      sessionLockFlag: true,
+      loginWindowFrontmost: true,
     );
-    runtime.debugHeadlessHostFacts = (locked: false, asleep: true);
-    drive = (await inspect(tester, headless: true))['rendering'] as Map;
-    expect((drive['headlessDrive'] as Map)['reason'], 'display_asleep');
+    var view = await rendering();
+    expect((view['headlessDrive'] as Map)['reason'], 'display_asleep');
+    expect(
+      (view['headlessDrive'] as Map)['notice'],
+      startsWith('HEADLESS: macOS reports the display is asleep'),
+    );
+    var host = view['host'] as Map;
+    expect(host['displayAsleep'], true);
+    expect(host['screenLocked'], null);
+    expect(host['screenLockNote'], isA<String>());
+
+    // Display awake with the login window in front: the lock is in force.
+    runtime.debugMacosHostFacts = const ScoutMacosHostFacts(
+      displayAsleep: false,
+      sessionLockFlag: true,
+      loginWindowFrontmost: true,
+    );
+    view = await rendering();
+    expect((view['headlessDrive'] as Map)['reason'], 'screen_locked');
+    host = view['host'] as Map;
+    expect(host['screenLocked'], true);
+    expect(host['hiddenReason'], 'screen_locked');
+
+    // Nothing from macOS hides it: the lifecycle names the reason.
+    runtime.debugMacosHostFacts = const ScoutMacosHostFacts(
+      displayAsleep: false,
+      sessionLockFlag: false,
+      loginWindowFrontmost: false,
+      windowVisible: true,
+    );
+    view = await rendering();
+    expect((view['headlessDrive'] as Map)['reason'], 'app_hidden');
+    expect((view['host'] as Map)['screenLocked'], false);
+    finish(tester);
+  });
+
+  testWidgets('a window macOS hides is not active though Flutter renders', (
+    tester,
+  ) async {
+    FlutterScoutHelper.ensureRegistered();
+    runtime = FlutterScoutHelper.debugRuntime;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: _Counter(key: counter)),
+      ),
+    );
+    // Lifecycle stays resumed (frames enabled), as on 3 of 4 display sleeps
+    // and for an app launched behind the lock screen.
+    runtime.debugMacosHostFacts = const ScoutMacosHostFacts(
+      displayAsleep: true,
+      sessionLockFlag: true,
+    );
+
+    // Headless drive off: suspended, the cause named, input refused.
+    var view = await inspect(tester);
+    var rendering = view['rendering'] as Map;
+    expect(rendering['framesEnabled'], true);
+    expect(rendering['status'], 'suspended');
+    expect(rendering['notVisibleBecause'], contains('display is asleep'));
+    expect((rendering['host'] as Map)['hidden'], true);
+    var dispatched = false;
+    final refused = (await tester.runAsync(
+      () => runtime.debugProtocolMutation(
+        _mutation(
+          runtime,
+          runtime.debugSnapshot().stateGeneration,
+          key: 'asleep-off',
+        ),
+        () {
+          dispatched = true;
+          return runtime.debugTapTarget('btn.increment');
+        },
+      ),
+    ))!;
+    expect(dispatched, false);
+    expect(
+      (refused['structuredError'] as Map)['code'],
+      'agent_live_view_unavailable',
+    );
+
+    // A capture of that app says it may be stale.
+    final shot = (await tester.runAsync(runtime.debugCaptureScreen))!;
+    final freshness = shot['freshness'] as Map;
+    expect(freshness['renderingStatus'], 'suspended');
+    expect(freshness['capturedWhileSuspended'], true);
+    expect(freshness['lastFrameAgeMs'], isA<int>());
+
+    // Headless drive on: vsync stopped with the display, so Scout drives
+    // the frame a setState is waiting for.
+    await tester.runAsync(() async => counter.currentState!.increment());
+    view = await inspect(tester, headless: true);
+    rendering = view['rendering'] as Map;
+    expect(rendering['status'], 'driven');
+    expect((rendering['headlessDrive'] as Map)['reason'], 'display_asleep');
+    expect(view['visibleText'], contains('Count 1'));
+
+    // The display wakes: rendering is active again, and the loop says why
+    // it stopped even though it was idle.
+    runtime.debugMacosHostFacts = const ScoutMacosHostFacts(
+      displayAsleep: false,
+      sessionLockFlag: false,
+      loginWindowFrontmost: false,
+      windowVisible: true,
+    );
+    rendering = (await inspect(tester, headless: true))['rendering'] as Map;
+    expect(rendering['status'], 'active');
+    expect(runtime.debugHeadlessDrive['loop'], 'stopped');
+    expect(runtime.debugHeadlessDrive['stoppedReason'], 'rendering_resumed');
+    final visible = (await tester.runAsync(runtime.debugCaptureScreen))!;
+    expect((visible['freshness'] as Map)['capturedWhileSuspended'], false);
     finish(tester);
   });
 

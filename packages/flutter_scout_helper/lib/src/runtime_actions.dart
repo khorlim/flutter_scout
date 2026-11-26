@@ -2121,8 +2121,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
     // When frames are enabled the engine services its own frames; pumping on
     // top of that would fight in-flight animations (scroll ballistics, route
     // transitions) and corrupt their timing, so leave those entirely to the
-    // engine.
-    if (binding.framesEnabled) return;
+    // engine. macOS hiding the window (display asleep: no vsync) counts as
+    // stopped too; see `_appOnScreen`.
+    if (_appOnScreen) return;
     if (binding.schedulerPhase != SchedulerPhase.idle) return;
     _manualMutationFrameAdvanceCount += 1;
     binding.handleBeginFrame(null);
@@ -2149,14 +2150,14 @@ extension _RuntimeActions on FlutterScoutRuntime {
     Duration budget = const Duration(milliseconds: 1500),
   }) async {
     final binding = WidgetsBinding.instance;
-    if (binding.framesEnabled) return;
+    if (_appOnScreen) return;
     final base = binding.currentSystemFrameTimeStamp;
     final stopwatch = Stopwatch()..start();
     // `hasScheduledFrame` alone cannot gate this loop: scheduleFrame() is a
     // no-op while framesEnabled is false, so it stays false on a backgrounded
     // window even mid-animation. Active tickers (route transitions, flips)
     // are visible as transient callbacks instead.
-    while (!binding.framesEnabled &&
+    while (!_appOnScreen &&
         (binding.hasScheduledFrame || _appTransientCallbackCount > 0) &&
         binding.schedulerPhase == SchedulerPhase.idle &&
         stopwatch.elapsed < budget) {

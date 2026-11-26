@@ -1,5 +1,25 @@
 ## Unreleased
 
+* Rendering no longer trusts Flutter's lifecycle alone on macOS. Every
+  observation carries `rendering.host` (all displays asleep, session lock
+  flag, login window frontmost, console session, app occlusion, read with
+  `dart:ffi` at most once a second), and `status: active` needs Flutter
+  frames and no hiding fact. An app launched behind the lock screen, or a
+  display that sleeps while the window stays `resumed`, is now `suspended`
+  (with `notVisibleBecause`) or, under headless drive, `driven`: Scout then
+  drives the frames vsync no longer delivers. Before, it reported `active`.
+* A sleeping display is `display_asleep`, not `screen_locked`. macOS sets
+  `CGSSessionScreenIsLocked` the moment the display sleeps, also inside the
+  password grace period, so `screenLocked` is true only with the display
+  awake and the login window in front, and null while the flag alone is
+  set. New reasons: `session_inactive`, `window_occluded`.
+* The headless loop reports `stoppedReason: rendering_resumed` when the app
+  is on screen again while the loop was idle.
+* In-app captures carry `freshness {renderingStatus, lastFrameAgeMs,
+  capturedWhileSuspended}`.
+* Test hook `debugHeadlessHostFacts` is replaced by `debugMacosHostFacts`
+  (`ScoutMacosHostFacts`).
+
 * The late-change window after an input that changed nothing at once now
   ends as soon as the work the input started is done. Scout's pointer
   dispatch runs in a zone that only counts and delegates: timers,

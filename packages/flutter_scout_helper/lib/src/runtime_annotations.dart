@@ -648,10 +648,34 @@ extension RuntimeAnnotations on FlutterScoutRuntime {
         'height': result.height,
         'pixelRatio': result.pixelRatio,
         'rect': ?boundsJson,
+        'freshness': _captureFreshness(),
       });
     } catch (error) {
       return _fail('capture_failed', error.toString());
     }
+  }
+
+  /// How current an in-app image is. It rasterizes the last frame Flutter
+  /// painted; while rendering is suspended that frame can predate changes
+  /// the app already made.
+  Map<String, Object?> _captureFreshness() {
+    final status = _appOnScreen
+        ? 'active'
+        : _headlessDriving
+        ? 'driven'
+        : 'suspended';
+    final last = _lastFrameworkFrameAt;
+    return {
+      'renderingStatus': status,
+      'lastFrameAgeMs': last == null
+          ? null
+          : _renderingClock.elapsedMilliseconds - last,
+      'capturedWhileSuspended': status == 'suspended',
+      if (status == 'suspended')
+        'note':
+            'Rendering is suspended, so this image is the last frame painted '
+            'before it stopped; later app changes are not in it.',
+    };
   }
 
   Future<developer.ServiceExtensionResponse> _handleChangedRegionCapture(

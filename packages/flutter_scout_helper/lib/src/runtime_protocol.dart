@@ -757,7 +757,7 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
   _validateMutationImmediatelyBeforeDispatch(_RequestContext context) {
     final params = context.params;
     if (params['requireLiveRendering'] == 'true' &&
-        !WidgetsBinding.instance.framesEnabled &&
+        !_appOnScreen &&
         !_headlessDriving) {
       return _fail(
         'agent_live_view_unavailable',

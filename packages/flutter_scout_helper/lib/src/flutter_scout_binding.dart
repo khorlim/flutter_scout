@@ -28,6 +28,7 @@ part 'runtime_privacy.dart';
 part 'runtime_timings.dart';
 part 'runtime_rendering.dart';
 part 'runtime_headless.dart';
+part 'runtime_macos_host.dart';
 part 'runtime_typed_methods.dart';
 part 'runtime_protocol.dart';
 part 'runtime_resolution.dart';
@@ -128,10 +129,12 @@ class FlutterScoutRuntime {
   Object? _idleSnapshotInputs;
   bool _renderingProbeInstalled = false;
   final _HeadlessDrive _headless = _HeadlessDrive();
+  final _MacosHostFactsCache _hostFactsCache = _MacosHostFactsCache();
 
-  /// Replaces the macOS lock/display-sleep probe in tests.
+  /// Replaces the macOS visibility probe (display sleep, lock, login
+  /// window, console session, occlusion) in tests.
   @visibleForTesting
-  ({bool? locked, bool? asleep})? debugHeadlessHostFacts;
+  ScoutMacosHostFacts? debugMacosHostFacts;
   final LinkedHashMap<String, _MutationRecord> _mutationRecords =
       LinkedHashMap<String, _MutationRecord>();
   Future<void> _mutationTail = Future<void>.value();
@@ -556,6 +559,15 @@ class FlutterScoutRuntime {
       'mode': 'changed-region',
       'since': snapshotId,
       'padding': '$padding',
+    });
+    return jsonDecode(response.result!) as Map<String, Object?>;
+  }
+
+  /// The full-screen in-app capture `flutter-scout screenshot` requests.
+  @visibleForTesting
+  Future<Map<String, Object?>> debugCaptureScreen() async {
+    final response = await _handleCapture('debugCaptureScreen', {
+      'mode': 'screen',
     });
     return jsonDecode(response.result!) as Map<String, Object?>;
   }
