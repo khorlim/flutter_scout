@@ -50,13 +50,15 @@ advertises `headlessDriveV1` (an older helper is never sent it, and the scene
 says the helper did not report it).
 
 In the helper, each such request renews a 5 s lease. While the lease holds and
-Flutter has stopped frames (lifecycle `hidden`/`paused`), the helper advances
+the app is not on screen (lifecycle `hidden`/`paused`, or macOS reports the
+display asleep, the screen locked, the session switched away or the window
+occluded, read in-process each second at most), the helper advances
 one frame before the request (so the observation, preflight or capture is
 current) and an event-driven loop builds pending `setState` calls and app
 animations between requests, at most 20 frames per second. The driving
 overlay's own animation never keeps that loop running. The loop stops when
 the lease lapses (`stoppedReason: lease_expired`, after disconnect) or the
-app renders again (`rendering_resumed`). Lifecycle is never faked. While
+app is on screen again (`rendering_resumed`, also when the loop was idle). Lifecycle is never faked. While
 attached, an `NSProcessInfo` activity (through `dart:ffi`, no plugin code)
 keeps macOS App Nap from throttling the hidden app; it still allows idle
 system sleep and ends with the lease.
@@ -65,11 +67,25 @@ system sleep and ends with the lease.
 'scout_driven_frame'`, `scoutSchedulesFrames:true` and `headlessDrive:
 {driving, reason, notice, loop, stoppedReason, requestFrames, loopFrames,
 maxLoopFps, leaseMs, appNap, lifecycleFaked:false}`. `reason` is
-`screen_locked` or `display_asleep` (read from macOS) or `app_hidden`. Every
+`display_asleep`, `screen_locked`, `session_inactive` or `window_occluded`
+(read from macOS) or else `app_hidden`. Every
 scene adds `headless: {driving, reason, lifecycle, notice}`; a `driven` view is
 actionable only in an opted-in session. `foreground()` still needs real
 rendering (`ok:false`, `rendering_still_suspended`, while only driven).
 Native deeplinks still need a visible app.
+
+Every macOS observation, with or without headless drive, carries
+`rendering.host {hidden, hiddenReason, displayAsleep, screenLocked,
+sessionLockFlag, loginWindowFrontmost, onConsole, windowVisible}`;
+`status: active` needs Flutter frames and no hiding fact. `displayAsleep`
+is every online display asleep (`CGDisplayIsAsleep`). `screenLocked` is
+true only with the display awake and `com.apple.loginwindow` frontmost,
+false when `CGSSessionScreenIsLocked` is unset, and null otherwise: macOS
+sets that flag the moment the display sleeps, also inside the password
+grace period. A suspended view adds `notVisibleBecause`, and the refusal
+quotes it instead of guessing at a minimized window. `foreground()` also
+reads the frontmost app after rendering looks active and returns `ok:false`
+while the login window is in front.
 
 ## Client
 

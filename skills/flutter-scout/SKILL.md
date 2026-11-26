@@ -441,12 +441,15 @@ covered, minimized, the display is asleep or the screen is locked, start the
 run with `ensure|launch|attach --headless-drive` (or
 `FLUTTER_SCOUT_HEADLESS_DRIVE=1`). Off is the default; the latest
 launch/ensure/attach decides, and the agent connection picks it up when it
-connects (reconnect after changing it). While Flutter has stopped frames
-because the app is not visible, the helper then drives bounded frames itself
-for as long as the agent stays connected: `rendering.status` is `driven`,
-input is accepted, and every scene carries `headless: {driving, reason,
-lifecycle, notice}` with `reason` `app_hidden`, `display_asleep` or
-`screen_locked`. Say so in your report. Costs and caveats:
+connects (reconnect after changing it). While the app is not on screen, the
+helper then drives bounded frames itself for as long as the agent stays
+connected: `rendering.status` is `driven`, input is accepted, and every scene
+carries `headless: {driving, reason, lifecycle, notice}`. `reason` is what
+macOS reports (`display_asleep`, `screen_locked`, `session_inactive`,
+`window_occluded`) or else the lifecycle (`app_hidden`). Not on screen
+means Flutter stopped frames or macOS hides the window: an app launched
+behind the lock screen, or a display that sleeps, often leaves the lifecycle
+`resumed`. Say so in your report. Costs and caveats:
 
 - CPU, battery and heat: one frame per observation plus up to 20 frames per
   second while the app animates (a focused field's caret blinks). It stops
@@ -460,7 +463,18 @@ lifecycle, notice}` with `reason` `app_hidden`, `display_asleep` or
   (for example `caffeinate -i -w <app pid>`).
 - Screenshots and crops use the in-app capture; `--native` is refused with
   `native_capture_unavailable_headless` while the app is hidden or locked.
-- `foreground()` still succeeds only when the window really renders.
+- `foreground()` still succeeds only when the window really renders and
+  the login window is not in front.
+
+Without headless drive the same macOS facts make the app `suspended`, and
+the refusal names them (`rendering.notVisibleBecause`, `rendering.host`).
+`status` and `doctor` report `hostPower.now {displayAsleep, screenLocked}`
+live. macOS sets its lock flag as soon as the display sleeps, also inside
+the password grace period, so a sleeping display reads `display_asleep`
+with `screenLocked: null` until the login window shows. In-app screenshots
+and crops carry `freshness {renderingStatus, lastFrameAgeMs,
+capturedWhileSuspended}`: a suspended app's image is its last painted
+frame.
 
 For an authorized time-sensitive response, react can issue one exact observed
 tap or stop future input, bounded to 30 seconds. It cannot invent targets,
