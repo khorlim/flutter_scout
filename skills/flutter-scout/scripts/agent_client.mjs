@@ -20,9 +20,80 @@ function agentError(code, message, extra = {}) {
   return Object.assign(new Error(message), { code, dispatch: 'not_dispatched', ...extra });
 }
 
-// Bounds for taps() and for the settled scene after an input.
+// Bounds for taps() and steps() and for the settled scene after an input.
 const maxTaps = 32;
+const maxSteps = 16;
 const settleBudgetMs = 3000;
+
+// Options that keep a step on its exact observed handles.
+const tapStepParams = new Set(['button', 'taps', 'intervalMs', 'lateWaitMs']);
+const gestureStepParams = new Set(['target', 'distance']);
+
+/** The exact handles one steps() action presses, or why it is not an
+ * exact-handle action (tap, long-press, input, fill, scroll or swipe on
+ * observed handles; the same forms the agent's staleness guard scopes). */
+export function stepHandles(action) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) return 'an action object is required';
+  const extra = Object.keys(action).filter(key => !['method', 'args', 'params', 'allowUnrelatedChanges'].includes(key));
+  if (extra.length) return `unexpected ${extra.join(', ')}`;
+  if (action.allowUnrelatedChanges !== undefined && typeof action.allowUnrelatedChanges !== 'boolean') {
+    return 'allowUnrelatedChanges must be true or false';
+  }
+  const args = action.args ?? [];
+  const params = action.params ?? {};
+  if (!Array.isArray(args) || !params || typeof params !== 'object' || Array.isArray(params)) return 'args must be a list and params an object';
+  const keys = Object.keys(params);
+  const named = values => (values.length && values.every(value => typeof value === 'string' && value && value.trim() === value)
+    ? values : null);
+  let targets = null;
+  switch (action.method) {
+    case 'tap': if (args.length === 1 && keys.every(key => tapStepParams.has(key))) targets = named(args); break;
+    case 'long-press': if (args.length === 1 && !keys.length) targets = named(args); break;
+    case 'input': if (args.length === 1 && keys.length === 1 && keys[0] === 'target') targets = named([params.target]); break;
+    case 'fill':
+      if (!args.length && keys.length === 1 && params.json && typeof params.json === 'object' && !Array.isArray(params.json)) {
+        targets = named(Object.keys(params.json));
+      }
+      break;
+    case 'scroll': case 'swipe':
+      if (args.length <= 1 && typeof params.target === 'string' && keys.every(key => gestureStepParams.has(key))) {
+        targets = named([params.target]);
+      }
+      break;
+  }
+  return targets ?? 'steps take only exact-handle tap, long-press, input (params.target), fill, scroll or swipe (params.target); use act for text, coordinate and navigation input';
+}
+
+const controlOf = (view, id) => (Array.isArray(view?.interactables) ? view.interactables : []).find(control => control?.id === id);
+const viewHas = (view, id) => Boolean(controlOf(view, id)) ||
+  Boolean(view?.fieldValues && typeof view.fieldValues === 'object' && Object.hasOwn(view.fieldValues, id));
+const surfaceOf = view => JSON.stringify([view?.activeSurface?.kind ?? null, view?.activeSurface?.instance ?? null]);
+
+/** Why the next step must not be sent on [current] (the settled scene after
+ * the step before), or null: a different screen or surface, a scene that had
+ * not settled, or a step handle that now names another control. */
+export function stepDrift(decision, current, targets, settle) {
+  if (settle && !['settled', 'unchanged'].includes(settle.status)) {
+    return { code: 'steps_view_unsettled', message: `the view was ${settle.status} after the previous step; observe and decide again.` };
+  }
+  if (current?.screen !== decision?.screen || surfaceOf(current) !== surfaceOf(decision)) {
+    return { code: 'steps_screen_changed', message: `the previous step moved to ${current?.screen ?? 'another screen'}; observe and decide again.`,
+      staleChanges: [{ field: 'screen', before: decision?.screen ?? null, after: current?.screen ?? null }] };
+  }
+  const changes = [];
+  for (const target of targets) {
+    if (!viewHas(current, target)) { changes.push({ target, disappeared: true }); continue; }
+    const was = controlOf(decision, target);
+    const now = controlOf(current, target);
+    if (!was && !now) continue;
+    for (const key of ['instance', 'kind', 'label']) {
+      if (was?.[key] !== now?.[key]) changes.push({ target, field: key, before: was?.[key] ?? null, after: now?.[key] ?? null });
+    }
+  }
+  return changes.length
+    ? { code: 'steps_target_changed', message: `${changes[0].target} is no longer the control you decided on; observe and decide again.`, staleChanges: changes }
+    : null;
+}
 
 /** Every input outcome carries the next decision's revision at the top
  * level, as observe does; the screen itself stays in `scene.view`. */
@@ -412,6 +483,86 @@ export class ScoutAgent {
     } finally { this.acting = false; }
   }
 
+  /** Runs a short list of exact-handle inputs (1..maxSteps) the caller
+   * decided from `viewRevision`, in order, each with its own canonical
+   * receipt and settle, then returns one final scene. Every handle must be
+   * in that decision view. Before each later step, the settled scene from
+   * the step before must still show the same screen and surface and every
+   * handle of the step as the same control (`instance`, `kind`, `label`);
+   * the step is then sent against that scene's revision, so the normal
+   * staleness guard, hit test and receipt rules apply unchanged. It stops at
+   * the first step that fails, is rejected, leaves the view unsettled, or
+   * finds a changed screen or target; never retries, skips or reorders. */
+  async steps(viewRevision, actions, { timeoutMs = 45000 } = {}) {
+    if (!Array.isArray(actions) || actions.length < 1 || actions.length > maxSteps) {
+      throw new TypeError(`steps needs 1..${maxSteps} actions`);
+    }
+    const handles = actions.map(stepHandles);
+    const bad = handles.findIndex(entry => typeof entry === 'string');
+    if (bad >= 0) throw new TypeError(`steps[${bad}]: ${handles[bad]}`);
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 120000) throw new TypeError('steps timeout must be 1..120000 ms');
+    if (this.acting || this.consuming) throw new Error('Only one act/event consumer at a time');
+    const decision = this.latest;
+    const refuse = (code, message, extra = {}) => withRevision({ ok: false, completed: 0, requested: actions.length,
+      dispatch: 'not_dispatched', error: { code, message, ...extra }, steps: [], ...(decision?.view ? { scene: decision } : {}),
+      events: [], viewEvents: 0 });
+    if (!decision?.view || decision.viewRevision !== viewRevision) {
+      return refuse('steps_decision_stale', `The latest scene is revision ${decision?.viewRevision ?? 'none'}, not ${viewRevision}; observe and decide again. Nothing was sent.`);
+    }
+    for (const [index, targets] of handles.entries()) {
+      const missing = targets.filter(target => !viewHas(decision.view, target));
+      if (missing.length) {
+        return refuse('steps_target_not_observed', `steps[${index}] names ${missing.join(', ')}, which revision ${viewRevision} does not show; every step must use a handle from that scene. Nothing was sent.`);
+      }
+    }
+    this.acting = true;
+    const log = { events: [], viewEvents: 0 };
+    const receipts = [];
+    const deadline = Date.now() + timeoutMs;
+    let scene = decision;
+    let settle = null;
+    let last = null;
+    let stop = null;
+    try {
+      for (const [index, action] of actions.entries()) {
+        const targets = handles[index];
+        if (index > 0) {
+          stop = stepDrift(decision.view, scene.view, targets, settle);
+          if (stop) { stop = { ...stop, message: `steps[${index}] was not sent: ${stop.message}` }; break; }
+        }
+        const before = scene.view;
+        const beforeRevision = scene.viewRevision;
+        const step = await this.inputOnce(beforeRevision, action, deadline, log);
+        if (step.stopped) {
+          const { scene: rejectedScene, events: _events, viewEvents: _views, ...rest } = step.stopped;
+          receipts.push({ method: action.method, targets, ...rest });
+          if (rejectedScene?.view) scene = rejectedScene;
+          stop = rest.error ?? { code: 'step_rejected', message: `steps[${index}] was not accepted; nothing more was sent.` };
+          last = null;
+          break;
+        }
+        last = step.result;
+        const settled = await this.settledScene(step.result, before, beforeRevision, deadline, log);
+        scene = settled.scene;
+        settle = settled.settle ?? null;
+        const ok = step.result?.ok === true && scene.ok === true;
+        receipts.push({ method: action.method, targets, ok, actionId: step.actionId, dispatch: step.result?.dispatch ?? null,
+          ...(settle ? { settle } : {}), ...(step.result?.warnings ? { warnings: step.result.warnings } : {}),
+          ...(ok ? {} : { error: inputFailure(step.result, scene).error }) });
+        if (!ok) { stop = inputFailure(step.result, scene).error; break; }
+      }
+      // The last attempted step keeps its whole canonical receipt; every
+      // receipt stays in the private journal.
+      if (last && receipts.length) receipts[receipts.length - 1].result = last;
+      const completed = receipts.filter(receipt => receipt.ok).length;
+      const ok = !stop && completed === actions.length;
+      const failed = receipts.find(receipt => !receipt.ok);
+      return withRevision({ ok, completed, requested: actions.length,
+        ...(ok ? {} : { error: stop, dispatch: failed ? failed.dispatch ?? 'not_dispatched' : 'not_dispatched' }),
+        steps: receipts, scene, ...log });
+    } finally { this.acting = false; }
+  }
+
   /** start() one input and consume its receipt; acknowledges success.
    * Returns {actionId, result}, or {stopped} with the response to return. */
   async inputOnce(viewRevision, action, deadline, log) {
@@ -472,6 +623,12 @@ export class ScoutAgent {
     const trigger = moved ? 'screen' : deltaShowsChange(delta) ? 'in_place' : 'none';
     const unchanged = trigger === 'none' && Number.isInteger(beforeRevision) &&
       scene.viewRevision === beforeRevision;
+    // The helper already waited out the late-change window and saw that the
+    // input's own work had settled with Flutter idle: nothing is about to
+    // land, so the eyes interval below would only repeat that check.
+    if (unchanged && result.lateWindow?.ended === 'input_idle') {
+      return { scene, settle: { status: 'unchanged', trigger, waitedMs: 0, viewChanges: 0, basis: 'input_idle' } };
+    }
     const quietMs = Math.max(500, 2 * this.intervalMs);
     // Nothing changed yet: one eyes interval, widened to the full quiet
     // window as soon as the eyes report a change.
@@ -584,6 +741,7 @@ const bridgeParams = {
   observe: [], status: [], foreground: [], bridge: [], disconnect: [], close: [],
   act: ['viewRevision', 'action', 'timeoutMs', 'argv'],
   taps: ['viewRevision', 'targets', 'allowUnrelatedChanges', 'timeoutMs'],
+  steps: ['viewRevision', 'actions', 'timeoutMs', 'argv'],
   start: ['viewRevision', 'action', 'argv'],
   acknowledge: ['actionId'],
   reconcile: ['actionId', 'viewRevision'],
@@ -753,7 +911,10 @@ export class ScoutBridge {
     const p = params;
     // Typed values may come from the command line only for fields Scout
     // can see are not secret; secrets stay out of process arguments.
-    const refusal = p.argv ? argvTypedValueRefusal(p.action, agent.latest?.view?.fieldValues ?? {}) : null;
+    const typedActions = method === 'steps' ? (Array.isArray(p.actions) ? p.actions : []) : [p.action];
+    const refusal = p.argv
+      ? typedActions.map(action => argvTypedValueRefusal(action, agent.latest?.view?.fieldValues ?? {})).find(Boolean) ?? null
+      : null;
     if (refusal) {
       return tag(errorResponse(agentError('bridge_stdin_required',
         `${refusal}. Send this act JSON on stdin instead: act - <<'JSON' ... JSON. Nothing was sent.`)));
@@ -768,6 +929,7 @@ export class ScoutBridge {
         result = await agent.taps(p.viewRevision, p.targets,
           { allowUnrelatedChanges: p.allowUnrelatedChanges ?? false, timeoutMs: p.timeoutMs ?? 45000 });
         break;
+      case 'steps': result = await agent.steps(p.viewRevision, p.actions, { timeoutMs: p.timeoutMs ?? 45000 }); break;
       case 'start': result = await agent.start(p.viewRevision, p.action); break;
       case 'acknowledge': result = await agent.acknowledge(p.actionId); break;
       case 'reconcile': result = await agent.reconcile(p.actionId, p.viewRevision); break;
@@ -802,6 +964,26 @@ function sendBridge(socketPath, request, timeoutMs) {
       try { resolve(JSON.parse(data)); } catch { reject(agentError('bridge_protocol_error', 'Malformed bridge reply.')); }
     });
   });
+}
+
+/** A socket request is `{method, params}`; `brief: true` beside them asks
+ * for the brief reply (the shipped `scout-call` sends it, having no JSON
+ * parser of its own). Typed values from process arguments are marked inside
+ * params (`argv: true`), so a bridge that predates a field refuses it with
+ * nothing sent. */
+function bridgeRequest(request) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) return request;
+  const { brief: _brief, ...rest } = request;
+  return rest;
+}
+
+/** One reply line with `ok` first, so a shell client can read the outcome
+ * from its first bytes. */
+function bridgeReply(response, brief) {
+  const value = brief ? briefResponse(response) : response;
+  if (!value || typeof value !== 'object' || !Object.hasOwn(value, 'ok')) return JSON.stringify(value);
+  const { ok, ...rest } = value;
+  return JSON.stringify({ ok, ...rest });
 }
 
 async function serveForeground(options, paths, report) {
@@ -845,9 +1027,9 @@ async function serveForeground(options, paths, report) {
       let response;
       try {
         request = JSON.parse(data.slice(0, end));
-        response = await bridge.handle(request);
+        response = await bridge.handle(bridgeRequest(request));
       } catch (error) { response = errorResponse(error); }
-      socket.end(JSON.stringify(response) + '\n');
+      socket.end(bridgeReply(response, request?.brief === true) + '\n');
       if (request?.method === 'close' && response.ok) shutdown();
       else armIdle();
     });
@@ -925,10 +1107,12 @@ async function callBridge(command, options, paths, method, json) {
       print(errorResponse(agentError('usage', 'Arguments must be one JSON object (or - to read it from stdin).')));
       return 2;
     }
-    const typed = ['act', 'start'].includes(method) && ['input', 'fill'].includes(params?.action?.method);
+    const typedActions = method === 'steps' ? (Array.isArray(params?.actions) ? params.actions : [])
+      : ['act', 'start'].includes(method) ? [params?.action] : [];
+    const typed = typedActions.some(action => ['input', 'fill'].includes(action?.method));
     if (json !== '-' && typed) {
       // A credential-named target never needs the bridge to say no.
-      const refusal = argvTypedValueRefusal(params.action);
+      const refusal = typedActions.map(action => argvTypedValueRefusal(action)).find(Boolean) ?? null;
       if (refusal) {
         print(errorResponse(agentError('bridge_stdin_required',
           `${refusal}. Send this act JSON on stdin instead: act - <<'JSON' ... JSON. Nothing was sent.`)));
@@ -959,7 +1143,7 @@ async function callBridge(command, options, paths, method, json) {
         `No Scout bridge for ${options.app}. Start one: node agent_client.mjs serve --app ${options.app}`)));
       return 1;
     }
-    const unknown = error.code === 'bridge_call_timeout' && ['act', 'taps', 'start', 'react'].includes(request.method);
+    const unknown = error.code === 'bridge_call_timeout' && ['act', 'taps', 'steps', 'start', 'react'].includes(request.method);
     print(errorResponse(Object.assign(error, unknown ? { dispatch: 'dispatch_outcome_unknown' } : {})));
     return 1;
   }

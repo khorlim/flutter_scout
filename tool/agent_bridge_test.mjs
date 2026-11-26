@@ -9,6 +9,7 @@ import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const client = fileURLToPath(new URL('../skills/flutter-scout/scripts/agent_client.mjs', import.meta.url));
+const fastClient = fileURLToPath(new URL('../skills/flutter-scout/scripts/scout-call', import.meta.url));
 const fake = fileURLToPath(new URL('./fixtures/fake_flutter_scout.mjs', import.meta.url));
 const root = mkdtempSync(join(tmpdir(), 'scout-bridge-'));
 const sockets = [];
@@ -17,9 +18,10 @@ after(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function run(args, { env = {}, stdin } = {}) {
+function run(args, { env = {}, stdin, fast = false } = {}) {
   return new Promise(resolve => {
-    const child = spawn(process.execPath, [client, ...args], { env: { ...process.env, ...env } });
+    const child = fast ? spawn(fastClient, args, { env: { ...process.env, ...env } })
+      : spawn(process.execPath, [client, ...args], { env: { ...process.env, ...env } });
     let out = '';
     child.stdout.on('data', chunk => { out += chunk; });
     child.stderr.resume();
@@ -39,11 +41,15 @@ function bridge(name, mode = 'ok') {
   const env = { FAKE_SCOUT_MODE: mode, FAKE_SCOUT_LOG: log };
   const call = (method, json, options = {}) =>
     run(['call', '--app', 'demo', '--socket', socket, method, ...(json === undefined ? [] : [json])], options);
+  // The zsh client: same requests and replies without starting node.
+  const fast = (method, json, options = {}) =>
+    run(['--app', 'demo', '--socket', socket, ...(options.brief ? ['--brief'] : []), method,
+      ...(json === undefined ? [] : [json])], { ...options, fast: true });
   const requests = () => existsSync(log)
     ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
   const serve = () => run(['serve', '--app', 'demo', '--socket', socket, '--binary', fake], { env });
   sockets.push(socket);
-  return { dir, socket, call, requests, serve };
+  return { dir, socket, call, fast, requests, serve };
 }
 
 test('serve, a 20-step observe/act loop, reload reconnect and stop', async () => {
@@ -192,4 +198,65 @@ test('taps and act carry the next revision at the top level, like observe', asyn
     action: { method: 'tap', args: ['btn.save'] } }));
   assert.equal(act.json.viewRevision, act.json.scene.viewRevision);
   assert.deepEqual(b.requests().filter(r => r.method === 'start').map(r => r.args), [['btn.save'], ['btn.save']]);
+});
+
+test('scout-call drives the same bridge without node, with the same input checks', async () => {
+  const b = bridge('fast');
+  assert.equal((await b.serve()).code, 0);
+  const scene = await b.fast('observe', undefined, { brief: true });
+  assert.equal(scene.code, 0, JSON.stringify(scene.json));
+  // ok comes first; brief is applied by the bridge.
+  assert.equal(Object.keys(scene.json)[0], 'ok');
+  const acted = await b.fast('act', JSON.stringify({ viewRevision: scene.json.viewRevision,
+    action: { method: 'tap', args: ['btn.save'] } }));
+  assert.equal(acted.code, 0, JSON.stringify(acted.json));
+  assert.equal(acted.json.result.dispatch, 'dispatched');
+  const sent = b.requests().length;
+
+  // Typed values from argv get the bridge's stdin-only checks; nothing sent.
+  const revision = acted.json.viewRevision;
+  const secret = { viewRevision: revision, action: { method: 'input', args: ['6015 1234'],
+    params: { target: 'field.staff_code' } } };
+  for (const params of [secret, { viewRevision: revision, actions: [secret.action] }]) {
+    const refused = await b.fast(params.actions ? 'steps' : 'act', JSON.stringify(params));
+    assert.deepEqual([refused.code, refused.json.error.code], [1, 'bridge_stdin_required'], JSON.stringify(refused.json));
+  }
+  // A caller cannot unmark its own argv values.
+  const spoofed = await b.fast('act', JSON.stringify({ argv: false, ...secret }));
+  assert.equal(spoofed.json.error.code, 'bridge_invalid_request');
+  assert.equal(b.requests().length, sent, 'nothing sent');
+  // Pretty-printed JSON on stdin is one request.
+  const viaStdin = await b.fast('act', '-', { stdin: JSON.stringify(secret, null, 2) });
+  assert.equal(viaStdin.code, 0, JSON.stringify(viaStdin.json));
+
+  const steps = await b.fast('steps', JSON.stringify({ viewRevision: viaStdin.json.viewRevision, actions: [
+    { method: 'input', args: ['AI Smoke'], params: { target: 'field.customer_name' } },
+    { method: 'tap', args: ['btn.save'] }] }));
+  assert.equal(steps.code, 0, JSON.stringify(steps.json));
+  assert.equal(steps.json.completed, 2);
+  assert.deepEqual(b.requests().filter(r => r.method === 'start').slice(-2).map(r => r.args), [['AI Smoke'], ['btn.save']]);
+
+  const unknown = await b.fast('bogus');
+  assert.deepEqual([unknown.code, unknown.json.error.code], [1, 'bridge_invalid_request']);
+  const usage = await run(['observe'], { fast: true });
+  assert.deepEqual([usage.code, usage.json.error.code], [2, 'usage']);
+  assert.equal((await run(['stop', '--app', 'demo', '--socket', b.socket], { fast: true })).code, 0);
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const gone = await b.fast('observe');
+  assert.deepEqual([gone.code, gone.json.error.code, gone.json.dispatch], [1, 'bridge_not_running', 'not_dispatched']);
+  assert.equal((await run(['stop', '--app', 'demo', '--socket', b.socket], { fast: true })).json.running, false);
+});
+
+test('scout-call finds the default socket and falls back to node for hashed names', async () => {
+  const short = `fast-${process.pid}`;
+  const long = `bridge-test-${process.pid}-with-a-long-session-name`;
+  for (const app of [short, long]) {
+    const served = await run(['serve', '--app', app, '--binary', fake]);
+    assert.equal(served.code, 0, JSON.stringify(served.json));
+    const observed = await run(['--app', app, '--brief', 'observe'], { fast: true });
+    assert.equal(observed.code, 0, JSON.stringify(observed.json));
+    assert.equal(observed.json.view.screen, 'Home');
+    assert.equal((await run(['stop', '--app', app], { fast: true })).code, 0);
+    rmSync(served.json.log, { force: true });
+  }
 });

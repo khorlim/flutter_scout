@@ -1,0 +1,171 @@
+#!/bin/sh
+# scout-call: the shell bridge's `call` and `stop` without starting node.
+#
+#   scout-call --app <name> [--socket <path>] [--brief] <method> [json|-]
+#   scout-call stop --app <name>            # close Scout and the bridge
+#   scout-call serve --app <name> [...]     # same as agent_client.mjs serve
+#
+# It speaks the same one-line request/reply protocol to the bridge that
+# `node agent_client.mjs serve` started, so it has the same safety: the
+# bridge holds the one Scout connection, checks typed values from process
+# arguments (they are marked `argv` here exactly as node's `call` marks
+# them), and never retries. One JSON line goes to stdout; the exit code is 0
+# only for `ok:true`. It needs zsh (every macOS has it) and falls back to
+# node's `call` without it, and for an app name the socket path must hash.
+
+if [ -z "$ZSH_VERSION" ]; then
+  if command -v zsh >/dev/null 2>&1; then exec zsh -f "$0" "$@"; fi
+  case "$1" in serve|stop|call) ;; *) set -- call "$@" ;; esac
+  exec node "$(dirname "$0")/agent_client.mjs" "$@"
+  exit 127
+fi
+
+emulate -R zsh
+setopt extended_glob
+typeset here=${0:A:h}
+typeset -a original=("$@")
+
+fallback() {
+  # node's client hashes long socket names and covers platforms without
+  # zsh's socket module.
+  local -a args=("${original[@]}")
+  [[ ${args[1]-} == (serve|stop|call) ]] || args=(call "${args[@]}")
+  exec node "$here/agent_client.mjs" "${args[@]}"
+}
+
+zmodload zsh/net/socket 2>/dev/null && zmodload zsh/system 2>/dev/null &&
+  zmodload -F zsh/stat b:zstat 2>/dev/null || fallback
+
+json_string() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  print -rn -- "\"$s\""
+}
+
+# Same shape as the node client's errorResponse.
+fail() {
+  local code=$1 message=$2 dispatch=${3:-not_dispatched} exit_code=${4:-1}
+  print -r -- "{\"ok\":false,\"dispatch\":\"$dispatch\",\"error\":{\"code\":$(json_string $code),\"message\":$(json_string $message)},\"retry\":\"never_automatic\"}"
+  exit $exit_code
+}
+
+usage='Usage: scout-call --app <name> [--socket <path>] [--brief] <method> [json|-] | stop --app <name> | serve --app <name>'
+typeset app= socket= brief=
+typeset -a positional
+while (( $# )); do
+  case $1 in
+    --app|--socket)
+      (( $# >= 2 )) || fail usage "$1 needs a value" not_dispatched 2
+      if [[ $1 == --app ]]; then app=$2; else socket=$2; fi
+      shift 2 ;;
+    --brief) brief=1; shift ;;
+    --binary|--interval-ms|--max-items) (( $# >= 2 )) || fail usage "$1 needs a value" not_dispatched 2; shift 2 ;;
+    --no-overlay|--foreground) shift ;;
+    *) positional+=("$1"); shift ;;
+  esac
+done
+
+typeset command=call
+if [[ ${positional[1]-} == (call|stop|serve) ]]; then
+  command=${positional[1]}
+  shift positional
+fi
+[[ $command == serve ]] && fallback
+[[ -n $app ]] || fail usage $usage not_dispatched 2
+typeset method=${positional[1]-} json=${positional[2]-}
+if [[ $command == stop ]]; then
+  (( ${#positional} == 0 )) || fail usage $usage not_dispatched 2
+  method=close
+else
+  [[ -n $method ]] && (( ${#positional} <= 2 )) || fail usage $usage not_dispatched 2
+  [[ $method == [a-z]## ]] || fail bridge_invalid_request "Unknown method $method." not_dispatched 2
+fi
+
+if [[ -z $socket ]]; then
+  # Mirrors bridgePaths() in agent_client.mjs and node's os.tmpdir().
+  [[ $app =~ '^[A-Za-z0-9._-]{1,24}$' ]] || fallback
+  typeset tmp=${TMPDIR:-${TMP:-${TEMP:-/tmp}}}
+  (( ${#tmp} > 1 )) && tmp=${tmp%/}
+  socket=$tmp/flutter-scout-$UID/$app.sock
+fi
+typeset dir=${socket:h}
+if [[ -e $dir || -L $dir ]]; then
+  typeset -a mode
+  zstat -L -A mode +mode $dir 2>/dev/null
+  if [[ ! -d $dir || -L $dir || ! -O $dir ]] || (( ${mode[1]:-63} & 8#077 )); then
+    fail bridge_insecure_directory "$dir must be a 0700 directory owned by the current user."
+  fi
+fi
+
+typeset params
+if [[ $command == stop ]]; then
+  params='{}'
+elif [[ $json == - ]]; then
+  params=
+  typeset input
+  while sysread -i 0 -s 65536 input; do params+=$input; done
+elif [[ -n $json ]]; then
+  params=$json
+else
+  params='{}'
+fi
+# One request per line: JSON whitespace newlines become spaces (a newline
+# inside a JSON string is already escaped).
+params=${params//$'\n'/ }
+params=${params//$'\r'/ }
+if [[ $json != - && -n $json && $method == (act|start|steps) ]]; then
+  # Mark typed values from process arguments for the bridge's stdin-only
+  # checks, as node's `call` does. An older bridge without the field
+  # refuses the request with nothing sent.
+  if [[ $params == [[:space:]]#\{[[:space:]]#\}[[:space:]]# ]]; then
+    params='{"argv":true}'
+  elif [[ $params == [[:space:]]#\{* ]]; then
+    params="{\"argv\":true,${params#[[:space:]]#\{}"
+  fi
+fi
+# `method` and `brief` follow `params`, so nothing inside params can
+# replace them.
+typeset request="{\"params\":$params,\"method\":\"$method\"${brief:+,\"brief\":true}}"
+
+typeset -i timeout=150
+if [[ $method == watch && $params =~ '"wait"[[:space:]]*:[[:space:]]*true' &&
+      $params =~ '"timeoutMs"[[:space:]]*:[[:space:]]*([0-9]{1,7})' ]]; then
+  (( timeout = match[1] / 1000 + 31 ))
+  (( timeout < 150 )) && timeout=150
+fi
+
+if ! zsocket $socket 2>/dev/null; then
+  if [[ $command == stop ]]; then
+    print -r -- '{"ok":true,"type":"closed","running":false}'
+    exit 0
+  fi
+  fail bridge_not_running "No Scout bridge for $app. Start one: node $here/agent_client.mjs serve --app $app"
+fi
+typeset -i fd=$REPLY
+print -r -u $fd -- $request
+
+typeset reply= chunk
+typeset -i rc=0
+while true; do
+  chunk=
+  sysread -i $fd -s 65536 -t $timeout chunk
+  rc=$?
+  reply+=$chunk
+  (( rc == 0 )) || break
+done
+exec {fd}>&-
+
+if [[ -z $reply || $reply != *$'\n' ]]; then
+  typeset dispatch=not_dispatched
+  [[ $method == (act|taps|steps|start|react) ]] && dispatch=dispatch_outcome_unknown
+  if (( rc == 4 )); then
+    fail bridge_call_timeout 'The bridge did not answer in time.' $dispatch
+  fi
+  fail bridge_protocol_error 'The bridge closed without a complete reply.' $dispatch
+fi
+print -rn -- $reply
+[[ $reply == '{"ok":true'* ]]

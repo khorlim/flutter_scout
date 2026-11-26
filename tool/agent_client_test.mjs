@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ScoutAgent, briefResponse } from '../skills/flutter-scout/scripts/agent_client.mjs';
+import { ScoutAgent, briefResponse, stepDrift, stepHandles } from '../skills/flutter-scout/scripts/agent_client.mjs';
 
 const fakeBinary = fileURLToPath(new URL('./fixtures/fake_flutter_scout.mjs', import.meta.url));
 async function connectFake(mode) {
@@ -163,6 +163,48 @@ test('act returns after one eyes interval when the input changed nothing', async
   assert.equal(outcome.settle.viewChanges, 0);
   // The scene taken after the receipt is returned; no second observe.
   assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'acknowledge', 'observe', 'next']);
+  client.abort();
+});
+
+test('act skips the eyes interval when the helper saw the input go idle', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const view = { screen: 'Order', visibleText: ['Pay with cash'] };
+  client.latest = { viewRevision: 1, view };
+  const result = client.act(1, { method: 'tap', args: ['tap.lt_180_days'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await tick();
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched',
+    lateWindow: { ms: 1000, waitedMs: 0, ended: 'input_idle', inputWork: { tracked: true } } } } });
+  await tick();
+  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
+  await tick();
+  send({ id: requests[3].id, ok: true, viewRevision: 1, view });
+  const outcome = await result;
+  assert.deepEqual(outcome.settle, { status: 'unchanged', trigger: 'none', waitedMs: 0, viewChanges: 0, basis: 'input_idle' });
+  // No eyes interval after the scene: the helper already proved it.
+  assert.deepEqual(requests.map(r => r.method), ['start', 'next', 'acknowledge', 'observe']);
+  client.abort();
+});
+
+test('a window the helper did not see go idle still gets the eyes interval', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const view = { screen: 'Order' };
+  client.latest = { viewRevision: 1, view };
+  const result = client.act(1, { method: 'tap', args: ['btn.sync'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await tick();
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched',
+    lateWindow: { ms: 1000, waitedMs: 1010, ended: 'window_elapsed', inputWork: { busy: 'app_microtask' } } } } });
+  await tick();
+  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
+  await tick();
+  send({ id: requests[3].id, ok: true, viewRevision: 1, view });
+  await tick();
+  assert.equal(requests[4].timeoutMs, 250);
+  send({ id: requests[4].id, event: { type: 'timeout' } });
+  assert.equal((await result).settle.status, 'unchanged');
   client.abort();
 });
 
@@ -406,4 +448,61 @@ test('brief output drops protocol metadata but keeps outcome and safety fields',
       view: { screen: 'Chat', omittedSections: { reason: 'brief_mode' },
         safetyEvidenceStatus: 'complete', interactables: [{ id: 'btn.ok', label: 'OK', rect: [0, 0, 1, 1] }] } },
   });
+});
+
+test('steps accept only exact-handle actions', () => {
+  assert.deepEqual(stepHandles({ method: 'tap', args: ['btn.save'], params: { lateWaitMs: 200 } }), ['btn.save']);
+  assert.deepEqual(stepHandles({ method: 'input', args: ['Ali'], params: { target: 'field.name' } }), ['field.name']);
+  assert.deepEqual(stepHandles({ method: 'fill', params: { json: { 'field.a': '1', 'field.b': '2' } } }), ['field.a', 'field.b']);
+  assert.deepEqual(stepHandles({ method: 'scroll', params: { target: 'scroll.list', distance: 300 } }), ['scroll.list']);
+  for (const action of [
+    { method: 'tap-text', args: ['Save'] },
+    { method: 'tap', params: { x: 10, y: 20 } },
+    { method: 'tap', args: ['btn.save'], params: { expectText: 'Saved' } },
+    { method: 'input', args: ['Ali'] },
+    { method: 'back' },
+    { method: 'deeplink', args: ['app://x'] },
+    { method: 'tap', args: ['btn.save'], allowUnrelatedChanges: 'yes' },
+    { method: 'tap', args: ['btn.save'], viewRevision: 3 },
+  ]) assert.equal(typeof stepHandles(action), 'string', JSON.stringify(action));
+});
+
+test('a later step is not sent when its screen, surface, settle or target drifted', () => {
+  const decision = { screen: 'Order', activeSurface: { kind: 'route', instance: 1 },
+    interactables: [{ id: 'btn.save', kind: 'btn', label: 'Save', instance: 4 }], fieldValues: { 'field.name': '' } };
+  const same = { ...decision, visibleText: ['Total RM 120'], fieldValues: { 'field.name': 'Ali' } };
+  assert.equal(stepDrift(decision, same, ['btn.save'], { status: 'settled' }), null);
+  assert.equal(stepDrift(decision, same, ['field.name'], { status: 'unchanged' }), null);
+  assert.equal(stepDrift(decision, same, ['btn.save'], { status: 'still_changing' }).code, 'steps_view_unsettled');
+  assert.equal(stepDrift(decision, { ...same, screen: 'Payment' }, ['btn.save'], null).code, 'steps_screen_changed');
+  assert.equal(stepDrift(decision, { ...same, activeSurface: { kind: 'dialog', instance: 9 } }, ['btn.save'], null).code,
+    'steps_screen_changed');
+  const replaced = { ...same, interactables: [{ id: 'btn.save', kind: 'btn', label: 'Save', instance: 7 }] };
+  const drift = stepDrift(decision, replaced, ['btn.save'], null);
+  assert.equal(drift.code, 'steps_target_changed');
+  assert.deepEqual(drift.staleChanges, [{ target: 'btn.save', field: 'instance', before: 4, after: 7 }]);
+  assert.equal(stepDrift(decision, { ...same, interactables: [] }, ['btn.save'], null).code, 'steps_target_changed');
+});
+
+test('steps send observed inputs in order with one receipt each and refuse a stale decision', async () => {
+  const client = await connectFake('ok');
+  try {
+    const scene = await client.observe();
+    const stale = await client.steps(scene.viewRevision - 1, [{ method: 'tap', args: ['btn.save'] }]);
+    assert.deepEqual([stale.ok, stale.dispatch, stale.error.code, stale.completed], [false, 'not_dispatched', 'steps_decision_stale', 0]);
+    const unseen = await client.steps(scene.viewRevision, [{ method: 'tap', args: ['btn.other'] }]);
+    assert.equal(unseen.error.code, 'steps_target_not_observed');
+    await assert.rejects(client.steps(scene.viewRevision, [{ method: 'back' }]), /steps\[0\]: steps take only/);
+    const outcome = await client.steps(scene.viewRevision, [
+      { method: 'input', args: ['Ali'], params: { target: 'field.customer_name' } },
+      { method: 'tap', args: ['btn.save'] },
+    ]);
+    assert.equal(outcome.ok, true, JSON.stringify(outcome));
+    assert.deepEqual([outcome.completed, outcome.requested], [2, 2]);
+    assert.deepEqual(outcome.steps.map(step => [step.method, step.targets, step.ok, step.dispatch]),
+      [['input', ['field.customer_name'], true, 'dispatched'], ['tap', ['btn.save'], true, 'dispatched']]);
+    assert.equal(outcome.steps[1].result.dispatch, 'dispatched');
+    assert.equal(outcome.viewRevision, outcome.scene.viewRevision);
+    assert.equal(outcome.scene.viewRevision, scene.viewRevision + 2);
+  } finally { client.abort(); }
 });
