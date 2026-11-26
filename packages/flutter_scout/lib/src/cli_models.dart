@@ -100,12 +100,17 @@ class _AttachDiscovery {
     this.reason,
     this.staleUri,
     this.staleCleared = false,
+    this.ownedRunAlive = false,
   });
 
   final String? uri;
   final String? reason;
   final String? staleUri;
   final bool staleCleared;
+
+  /// The session's VM service did not answer, but its exact owned run is
+  /// still alive, so the record was kept instead of cleared.
+  final bool ownedRunAlive;
 }
 
 class _DiscoveredVmUri {

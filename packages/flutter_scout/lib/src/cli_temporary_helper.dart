@@ -920,7 +920,14 @@ Future<void> main() async {
     try {
       final decoded = jsonDecode(File(metaPath).readAsStringSync());
       if (decoded is! Map || decoded['runId'] != record['runId']) return false;
-      if (decoded['state'] != 'ready' && decoded['state'] != 'building') {
+      // `starting` and `helper_not_ready` are live owned runs too: a launch
+      // whose helper wait is running or ended without an answer.
+      if (!const {
+        'ready',
+        'building',
+        'starting',
+        'helper_not_ready',
+      }.contains(decoded['state'])) {
         return false;
       }
       final temporarySetup = decoded['temporarySetup'];

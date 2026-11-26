@@ -336,6 +336,15 @@ extension _CliResponse on FlutterScoutCli {
       success: success,
       commandName: commandName,
     );
+    if (_launchWarnings.isNotEmpty &&
+        _hostMemoryCheckedFor == _activeCommandId &&
+        envelope['messageType'] == 'response' &&
+        const {'launch', 'ensure'}.contains(envelope['commandName'])) {
+      envelope = {
+        ...envelope,
+        'warnings': [..._objectList(envelope['warnings']), ..._launchWarnings],
+      };
+    }
     final launchFailure = _launchFailureReport(envelope);
     if (launchFailure != null) {
       envelope = {...envelope, ...launchFailure.fields};

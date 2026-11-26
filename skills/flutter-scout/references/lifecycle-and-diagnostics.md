@@ -9,8 +9,13 @@ the obsolete session is explicitly stopped or cleared.
 
 `status` reports the session mode, owner PID, VM URI health, hot-update
 capability, and persistent transport. A stale VM URI is refreshed from owned
-logs when possible. If it cannot be refreshed, Scout marks the session stopped,
-terminates its verified VM log listener, and clears stale runtime files.
+logs when possible. If it cannot be refreshed and the exact owned run (or the
+macOS app it opened) is still alive, the address and record are kept
+(`vmServiceAnswering: false`, `sessionRecordKept: true`): a loaded machine can
+miss one check. Only when nothing owned is alive does Scout mark the session
+stopped, terminate its verified VM log listener, and clear stale runtime files.
+A `starting` or `helper_not_ready` record is promoted to `ready`
+(`promotedToReady: true`) once `status` sees the helper answer.
 For Scout-owned macOS launches, `status` also reports the per-run `launchd`
 supervisor, its current worker state, and the last recorded Flutter-tool exit.
 The supervisor survives terminal or agent cleanup and restarts an abnormally
@@ -216,9 +221,54 @@ line and a `hint`: `device_unavailable`, `install_failed_insufficient_storage`,
 shut-down iOS Simulator fails at once with `device_not_booted` and the boot
 command. Read these fields instead of repeating the same launch.
 
-If the app launched but the helper was not reachable, the result is `ok:false`
-with `launched:true`, `ready:false`, `reason` and `detail`. The run stays owned;
-check `status` before relaunching.
+## Helper readiness wait
+
+After the VM service is found, launch waits for the helper. The base window is
+20 s, or as long as the post-build phase (app start and file sync) took, up to
+120 s. Past it, the wait continues while the VM service answers and the app or
+runner makes progress: new run-log output, an isolate state or extension
+change, or process CPU. It never passes `--launch-timeout`. It ends early when
+Flutter's own extensions have been registered for one base window without
+Scout's (main() lacks the initializer), or when the owned runner exited and
+the VM service is silent. `ensure` and `attach` use the same rule with an 8 s
+base for an app that is already running. Scout only observes: it never resumes
+a paused isolate or retries. stderr gets `await_helper_ready`,
+`helper_wait_extended` and `helper_wait_heartbeat` records. On macOS, the
+LaunchServices wait for the app's VM service (120 s base) extends the same way
+while the opened app is alive and printing or using CPU.
+
+If the helper still did not answer, the result is `ok:false` with
+`launched:true`, `ready:false`, `failureMode: helper_not_ready` and
+`helperWait` (`stopReason`: `no_progress`, `vm_service_unresponsive`,
+`helper_absent_after_framework_ready`, `runner_exited` or `hard_timeout`;
+`waitedMs`, `baseWindowMs`, `isolateState`, `lastProgress`). `failureCause`
+and `error.message` say what was observed, how long Scout waited and why it
+stopped. While the VM service answers or the owned run is alive, the run stays
+owned and the record is kept as `helper_not_ready` (`sessionRecordKept:
+true`). Recover it without relaunching:
+
+```bash
+flutter-scout --app <task> status    # promotes to ready once the helper answers
+flutter-scout --single-json ensure --device <id> --project <app> --name <task>
+```
+
+An `ensure` that finds a launch in progress waits for that launch's final
+result (its lease), bounded by `--launch-timeout`, before it checks the app.
+`ensure` never falls back to a build while an app answers at the session or
+its exact owned run is alive: it fails with `helper_not_ready` or
+`vm_service_not_answering` and `launch: not_attempted`. A plain `launch`
+refuses the same session with `session_already_running`. Use
+`launch --replace` only to replace that app deliberately.
+
+## Memory on small machines
+
+Run one app at a time on small machines (16 GB): several simultaneous app
+runs crashed one. `doctor` reports `hostMemory` (`memory_pressure -Q` on
+macOS, `/proc/meminfo` on Linux). Below 20% free memory, `doctor`, `launch` and
+`ensure` add a `warnings` entry with `code: low_free_memory`,
+`freePercent`, `thresholdPercent` and `otherLiveScoutRuns`, and write one
+`low_free_memory` stderr record. Scout only warns; stop runs you no longer
+need yourself.
 
 `stop --clear-session` escalates to SIGKILL for an exact owned Flutter tool
 that ignores SIGTERM, including one orphaned after its worker died.

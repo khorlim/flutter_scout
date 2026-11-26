@@ -1608,6 +1608,10 @@
       "meaning": "The vm service connection operation failed.",
       "family": "operation"
     },
+    "vm_service_not_answering": {
+      "meaning": "The session VM service did not answer while its exact Scout-owned run is alive; the record was kept and nothing was relaunched.",
+      "family": "operation"
+    },
     "vm_service_uri_not_found": {
       "meaning": "The requested vm service uri could not be found.",
       "family": "operation"
@@ -1633,6 +1637,10 @@
     "insecure_secret_source": {
       "kind": "deprecation_warning",
       "meaning": "A sensitive value arrived through a legacy process-argument source."
+    },
+    "low_free_memory": {
+      "kind": "host_warning",
+      "meaning": "Host free memory is below the documented threshold; Scout warns and never refuses or stops a run."
     },
     "low_heuristic_score_targets": {
       "kind": "quality_issue",

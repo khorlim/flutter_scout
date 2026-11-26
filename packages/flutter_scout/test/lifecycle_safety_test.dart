@@ -1034,4 +1034,123 @@ while true; do sleep 1; done
       onPlatform: const {'windows': Skip('requires POSIX scripts and signals')},
     );
   });
+
+  group('reachable session records', () {
+    test(
+      'a live owned run keeps its VM address when the VM service misses a '
+      'check, and ensure does not relaunch it',
+      () async {
+        final temp = await Directory.systemTemp.createTemp('scout_keep_live_');
+        final previous = Directory.current;
+        Process? ownedRun;
+        FlutterScoutCli.debugHostMemorySource = () async => null;
+        FlutterScoutCli.debugRegistryPathOverride = p.join(
+          temp.path,
+          'registry.json',
+        );
+        addTearDown(() async {
+          Directory.current = previous;
+          FlutterScoutCli.debugHostMemorySource = null;
+          FlutterScoutCli.debugRegistryPathOverride = null;
+          final process = ownedRun;
+          if (process != null) {
+            process.kill(ProcessSignal.sigterm);
+            await process.exitCode.timeout(
+              const Duration(seconds: 2),
+              onTimeout: () => -1,
+            );
+          }
+          if (temp.existsSync()) temp.deleteSync(recursive: true);
+        });
+
+        final fakeFlutter = File(p.join(temp.path, 'flutter'));
+        fakeFlutter.writeAsStringSync('''#!/bin/sh
+trap 'exit 0' TERM INT
+while true; do sleep 1; done
+''');
+        expect(
+          (await Process.run('chmod', ['700', fakeFlutter.path])).exitCode,
+          0,
+        );
+        const runId = 'slow-run';
+        final project = Directory(p.join(temp.path, 'project'))..createSync();
+        final process = await Process.start(fakeFlutter.path, [
+          'run',
+          '-d',
+          'macos',
+          '--dart-define',
+          'FLUTTER_SCOUT_RUN_ID=$runId',
+          '--dart-define',
+          'FLUTTER_SCOUT_PROJECT=${project.absolute.path}',
+        ]);
+        ownedRun = process;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        final identity = await processIdentity(process.pid);
+
+        // A loopback port with nothing listening: the VM check fails at once.
+        final closed = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        final port = closed.port;
+        await closed.close();
+        final vmUri = 'ws://127.0.0.1:$port/token=/ws';
+
+        Directory.current = project;
+        final session = Directory('.flutter_scout')..createSync();
+        File(
+          p.join(session.path, 'flutter.pid'),
+        ).writeAsStringSync('${process.pid}');
+        File(p.join(session.path, 'device.txt')).writeAsStringSync('macos');
+        File(p.join(session.path, 'vm_uri.txt')).writeAsStringSync(vmUri);
+        final metaFile = File(p.join(session.path, 'session_meta.json'));
+        metaFile.writeAsStringSync(
+          jsonEncode({
+            'mode': 'scout_owned_flutter_run',
+            'state': 'helper_not_ready',
+            'runId': runId,
+            'project': project.absolute.path,
+            'device': 'macos',
+            'processIdentity': identity,
+          }),
+        );
+
+        expect(await FlutterScoutCli().run(['status']), 0);
+        expect(
+          File(p.join(session.path, 'vm_uri.txt')).readAsStringSync(),
+          vmUri,
+        );
+        expect(
+          (jsonDecode(metaFile.readAsStringSync()) as Map)['state'],
+          'helper_not_ready',
+        );
+
+        expect(
+          await FlutterScoutCli().run([
+            'ensure',
+            '--device',
+            'macos',
+            '--project',
+            project.path,
+          ]),
+          1,
+        );
+        expect(File(p.join(session.path, 'vm_uri.txt')).existsSync(), isTrue);
+        expect(
+          (jsonDecode(metaFile.readAsStringSync()) as Map)['runId'],
+          runId,
+          reason: 'ensure must not replace a live owned run',
+        );
+        expect(process.kill(ProcessSignal.sigterm), isTrue);
+        await process.exitCode.timeout(const Duration(seconds: 2));
+        ownedRun = null;
+
+        // Once nothing owned runs and the VM is silent, status clears it.
+        expect(await FlutterScoutCli().run(['status']), 0);
+        expect(File(p.join(session.path, 'vm_uri.txt')).existsSync(), isFalse);
+        expect(
+          (jsonDecode(metaFile.readAsStringSync()) as Map)['state'],
+          'stopped',
+        );
+      },
+      onPlatform: const {'windows': Skip('requires POSIX scripts and signals')},
+    );
+  });
 }
