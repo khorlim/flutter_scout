@@ -192,14 +192,15 @@ function run(argv) {
   }
 
   /// The frontmost macOS app after a foreground wait, read passively from
-  /// NSWorkspace, so a failure can say who holds focus. Best effort.
+  /// NSWorkspace: a failure can say who holds focus, and a frontmost login
+  /// window vetoes success. Best effort.
   Future<Map<String, dynamic>> _frontmostMacApp(int? targetPid) async {
     const script = r'''
 ObjC.import('AppKit');
 function run() {
   var app = $.NSWorkspace.sharedWorkspace.frontmostApplication;
   if (!app || app.isNil()) return '{}';
-  return JSON.stringify({pid: app.processIdentifier, name: ObjC.unwrap(app.localizedName)});
+  return JSON.stringify({pid: app.processIdentifier, name: ObjC.unwrap(app.localizedName), bundleId: ObjC.unwrap(app.bundleIdentifier)});
 }
 ''';
     final result = await _runBoundedNativeProcess(
@@ -217,8 +218,10 @@ function run() {
     }
     final pid = decoded is Map ? decoded['pid'] : null;
     final name = decoded is Map ? decoded['name'] : null;
+    final bundleId = decoded is Map ? decoded['bundleId'] : null;
     return {
       'frontmostApp': name is String ? name : null,
+      if (bundleId is String) 'frontmostBundleId': bundleId,
       if (pid is int && targetPid != null)
         'frontmostIsTarget': pid == targetPid,
     };

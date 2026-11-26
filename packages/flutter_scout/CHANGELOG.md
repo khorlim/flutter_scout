@@ -1,5 +1,21 @@
 ## Unreleased
 
+- `foreground()` reads the frontmost app even after rendering looks active
+  and returns `ok:false` (`rendering_still_suspended`, "screen is locked")
+  while `loginwindow` is in front; it no longer succeeds behind a lock
+  screen whose app never went hidden. A sleeping display is named as such.
+- status/doctor `hostPower.now {displayAsleep, screenLocked,
+  sessionLockFlag, loginWindowFrontmost, onConsole, hiddenReason}` are live
+  facts, not only settings. A set lock flag on a sleeping display is
+  `screenLocked: null` unless the lock delay is immediate.
+- status `headlessDrive.appVisible` and the native-capture refusal follow
+  the helper's combined verdict (`rendering.status` and `rendering.host`),
+  not `framesEnabled`.
+- A `rendering_suspended` refusal quotes what macOS reports (display asleep,
+  screen locked) instead of "probably minimized", and its next step asks
+  the user to wake and unlock the Mac.
+- In-app screenshots and crops print the helper's `freshness`.
+
 - `skills/flutter-scout/scripts/scout-call` sends the shell bridge's `call`
   and `stop` from zsh without starting node: about 5 ms per call against
   35 ms for `node agent_client.mjs call` on an idle M-series Mac, and no node

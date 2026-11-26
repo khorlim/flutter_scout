@@ -69,19 +69,25 @@ extension _CliHeadless on FlutterScoutCli {
       };
     }
     final drive = rendering?['headlessDrive'] as Map?;
+    final host = rendering?['host'] as Map?;
+    // `active` is the helper's combined verdict (Flutter lifecycle and what
+    // macOS reports); frames alone do not prove anyone can see the window.
     final hidden = rendering == null
         ? null
-        : rendering['framesEnabled'] != true;
+        : rendering['status'] != 'active' ||
+              rendering['framesEnabled'] != true ||
+              host?['hidden'] == true;
     return <String, Object?>{
       'enabled': true,
       'source': record!['source'],
       'setAt': record['setAt'],
       if (hidden != null) 'appVisible': !hidden,
       if (hidden == true) 'lifecycle': rendering!['lifecycle'],
-      if (drive?['reason'] != null) 'reason': drive!['reason'],
+      if (drive?['reason'] != null || host?['hiddenReason'] != null)
+        'reason': drive?['reason'] ?? host!['hiddenReason'],
       'notice': hidden == true
           ? 'HEADLESS: the app is not visible (lifecycle '
-                '${rendering!['lifecycle']}${drive?['reason'] == null ? '' : ', ${drive!['reason']}'}); '
+                '${rendering!['lifecycle']}${(drive?['reason'] ?? host?['hiddenReason']) == null ? '' : ', ${drive?['reason'] ?? host!['hiddenReason']}'}); '
                 'an attached Scout agent drives its frames and keeps acting '
                 'on it. Nobody can see this app.'
           : 'Headless drive is on: if the window is hidden or covered, the '
@@ -139,8 +145,12 @@ extension _CliHeadless on FlutterScoutCli {
   /// Throws unless [rendering] proves the app visibly renders on its own.
   /// Null [rendering] means Scout could not observe the app: fail closed.
   void _refuseNativeCaptureFor(Map<String, dynamic>? rendering) {
-    final reason = (rendering?['headlessDrive'] as Map?)?['reason'];
-    if (rendering?['framesEnabled'] == true && reason != 'screen_locked') {
+    final reason =
+        (rendering?['headlessDrive'] as Map?)?['reason'] ??
+        (rendering?['host'] as Map?)?['hiddenReason'];
+    if (rendering?['status'] == 'active' &&
+        rendering?['framesEnabled'] == true &&
+        reason == null) {
       return;
     }
     final cause = rendering == null
@@ -242,12 +252,18 @@ extension _CliHeadless on FlutterScoutCli {
                 r'"AppleClamshellCausesSleep" = (Yes|No)',
               ).firstMatch(clamshell)?.group(1) ==
               'Yes';
+    final now = _macHostVisibilityNow(
+      await _macHostVisibilityRaw(),
+      screenLockDelay: lockDelay,
+    );
     final displayDetail = displaySleep == null
         ? 'unknown'
         : displaySleep == 0
         ? 'display sleep is off'
         : 'the display sleeps after $displaySleep min idle';
     return <String, Object?>{
+      // Live, read when this command ran; the rest are configured settings.
+      'now': now,
       'displaySleepMinutes': displaySleep,
       'systemSleepMinutes': systemSleep,
       'idleSystemSleepPreventedNow': idleSleepPrevented,
@@ -290,12 +306,124 @@ extension _CliHeadless on FlutterScoutCli {
   }
 }
 
+extension _CliMacHostVisibility on FlutterScoutCli {
+  /// Raw live facts from CoreGraphics and AppKit through JavaScript for
+  /// Automation, so status and doctor report them without the app. Null
+  /// when they could not be read.
+  Future<Map<String, dynamic>?> _macHostVisibilityRaw() async {
+    const script = r'''
+ObjC.import('CoreGraphics');
+ObjC.import('AppKit');
+function run() {
+  var out = {};
+  try {
+    var d = $.CGSessionCopyCurrentDictionary();
+    var o = d ? ObjC.deepUnwrap(ObjC.castRefToObject(d)) : null;
+    if (o) {
+      var l = o.CGSSessionScreenIsLocked;
+      out.sessionLockFlag = l === true || l === 1;
+      var c = o.kCGSSessionOnConsoleKey;
+      out.onConsole = !(c === false || c === 0);
+    }
+  } catch (e) {}
+  try {
+    var ids = [$.CGMainDisplayID()];
+    var screens = $.NSScreen.screens;
+    for (var i = 0; i < screens.count; i++) {
+      var n = ObjC.unwrap(screens.objectAtIndex(i).deviceDescription.objectForKey('NSScreenNumber'));
+      if (ids.indexOf(n) < 0) ids.push(n);
+    }
+    out.displayAsleep = ids.every(function (id) { return $.CGDisplayIsAsleep(id) !== 0; });
+  } catch (e) {}
+  try {
+    var app = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+    out.loginWindowFrontmost = !!app && !app.isNil() &&
+      ObjC.unwrap(app.bundleIdentifier) === 'com.apple.loginwindow';
+  } catch (e) {}
+  return JSON.stringify(out);
+}
+''';
+    final result = await _runBoundedNativeProcess(
+      '/usr/bin/osascript',
+      const ['-l', 'JavaScript', '-e', script],
+      timeout: const Duration(seconds: 3),
+      maxStdoutBytes: 4096,
+      maxStderrBytes: 4096,
+    );
+    if (!result.started || result.timedOut || result.exitCode != 0) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(result.stdoutText);
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
+/// Whether macOS hides apps right now, from raw facts ([raw] null: not
+/// readable). The same rules as the helper's `rendering.host`: macOS sets
+/// its session lock flag the moment the display sleeps, also inside the
+/// password grace period, so the flag alone never means locked. Locked is
+/// the login window in front of an awake display, or a sleeping display
+/// with the flag set when the lock applies immediately.
+Map<String, Object?> _macHostVisibilityNow(
+  Map<String, dynamic>? raw, {
+  String? screenLockDelay,
+}) {
+  bool? fact(String key) => raw?[key] is bool ? raw![key] as bool : null;
+  final asleep = fact('displayAsleep');
+  final flag = fact('sessionLockFlag');
+  final loginWindow = fact('loginWindowFrontmost');
+  final onConsole = fact('onConsole');
+  final bool? locked;
+  if (asleep != true && loginWindow == true) {
+    locked = true;
+  } else if (flag == false) {
+    locked = false;
+  } else if (asleep == true && flag == true && screenLockDelay == 'immediate') {
+    locked = true;
+  } else {
+    locked = null;
+  }
+  final hiddenReason = asleep == true
+      ? 'display_asleep'
+      : locked == true
+      ? 'screen_locked'
+      : onConsole == false
+      ? 'session_inactive'
+      : null;
+  return <String, Object?>{
+    'observedAt': DateTime.now().toUtc().toIso8601String(),
+    'displayAsleep': asleep,
+    'screenLocked': locked,
+    'sessionLockFlag': flag,
+    'loginWindowFrontmost': loginWindow,
+    'onConsole': onConsole,
+    'appsHidden': hiddenReason != null,
+    'hiddenReason': ?hiddenReason,
+    if (flag == true && locked == null)
+      'screenLockNote':
+          'macOS sets its lock flag as soon as the display sleeps, also '
+          'inside the ${screenLockDelay ?? 'unknown'} password grace period; '
+          'the lock is in force once the login window shows.',
+  };
+}
+
 /// Deterministic probes for headless-drive decisions without a running app.
 extension HeadlessDriveDebug on FlutterScoutCli {
   /// The native-capture rule for a headless-drive session, given the
   /// helper's rendering facts (null: the app could not be observed).
   void debugRefuseNativeCaptureFor(Map<String, dynamic>? rendering) =>
       _refuseNativeCaptureFor(rendering);
+
+  /// The live display-sleep and lock classification status/doctor report
+  /// under `hostPower.now`, from raw macOS facts.
+  Map<String, Object?> debugMacHostVisibilityNow(
+    Map<String, dynamic>? raw, {
+    String? screenLockDelay,
+  }) => _macHostVisibilityNow(raw, screenLockDelay: screenLockDelay);
 
   /// Host power facts, read through [FlutterScoutCli.debugNativeProcessRunner]
   /// when it is set.

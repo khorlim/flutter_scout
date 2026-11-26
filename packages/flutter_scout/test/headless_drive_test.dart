@@ -138,6 +138,61 @@ void main() {
       // Still driven, so the agent can keep acting.
       expect(result['actionable'], isTrue);
     });
+
+    test('foreground is not ok while the login window is in front', () async {
+      // An app launched behind the lock never goes hidden: Flutter says
+      // active, macOS says loginwindow.
+      final s = AgentSession(
+        read: () async => view(1, status: 'active'),
+        act: (_, _) async => receipt,
+        validate: (_) {},
+        foregroundAvailable: true,
+      );
+      addTearDown(s.close);
+      await s.open();
+      final result = await s.foreground(
+        () async {},
+        diagnose: () async => {
+          'frontmostApp': 'loginwindow',
+          'frontmostBundleId': 'com.apple.loginwindow',
+          'frontmostIsTarget': false,
+        },
+        wait: const Duration(milliseconds: 300),
+      );
+      expect(result['ok'], isFalse);
+      final error = result['error'] as Map;
+      expect(error['reason'], 'rendering_still_suspended');
+      expect(error['message'], contains('Flutter reports rendering active'));
+      expect(error['message'], contains('screen is locked'));
+      expect(error['nextStep'], contains('unlock the Mac'));
+    });
+
+    test('a refusal names the lock macOS reports', () async {
+      final locked = view(1, status: 'suspended')
+        ..['rendering'] = {
+          'status': 'suspended',
+          'framesEnabled': true,
+          'lifecycle': 'resumed',
+          'notVisibleBecause':
+              'macOS reports the screen is locked (the login window is in '
+              'front)',
+          'host': {'hidden': true, 'hiddenReason': 'screen_locked'},
+        };
+      final s = AgentSession(
+        read: () async => locked,
+        act: (_, _) async => receipt,
+        validate: (_) {},
+        foregroundAvailable: true,
+      );
+      addTearDown(s.close);
+      final scene = await s.open();
+      final blocked = scene['blockedBy'] as Map;
+      expect(blocked['reason'], 'rendering_suspended');
+      expect(blocked['message'], contains('screen is locked'));
+      expect(blocked['message'], isNot(contains('probably minimized')));
+      expect(blocked['nextStep'], contains('unlock'));
+      expect(blocked['nextStep'], contains('--headless-drive'));
+    });
   });
 
   group('native capture', () {
@@ -180,9 +235,28 @@ void main() {
 
     test('is allowed while the app visibly renders', () {
       cli.debugRefuseNativeCaptureFor({
+        'status': 'active',
         'framesEnabled': true,
         'lifecycle': 'resumed',
       });
+    });
+
+    test('is refused when macOS hides a window Flutter still renders', () {
+      expect(
+        () => cli.debugRefuseNativeCaptureFor({
+          'status': 'suspended',
+          'framesEnabled': true,
+          'lifecycle': 'resumed',
+          'host': {'hidden': true, 'hiddenReason': 'screen_locked'},
+        }),
+        throwsA(
+          isA<ScoutCliException>().having(
+            (error) => error.message,
+            'message',
+            contains('screen_locked'),
+          ),
+        ),
+      );
     });
   });
 
@@ -213,6 +287,15 @@ void main() {
         if (executable.endsWith('sysadminctl')) {
           return ProcessResult(1, 0, '', 'screenLock delay is immediate\n');
         }
+        if (executable.endsWith('osascript')) {
+          return ProcessResult(
+            1,
+            0,
+            '{"sessionLockFlag":true,"onConsole":true,'
+                '"displayAsleep":true,"loginWindowFrontmost":true}',
+            '',
+          );
+        }
         return ProcessResult(1, 0, '"AppleClamshellCausesSleep" = Yes\n', '');
       };
       final facts = await FlutterScoutCli().debugHostPowerFacts();
@@ -231,6 +314,49 @@ void main() {
       expect(stops['screenLock'], contains('as soon as the display sleeps'));
       expect(stops['systemSleep'], startsWith('not now'));
       expect(facts['headlessDriveCovers'], contains('Not system sleep'));
+      // Live, not only settings: asleep now, and the immediate lock delay
+      // makes the flag mean locked.
+      final now = facts['now'] as Map;
+      expect(now['displayAsleep'], isTrue);
+      expect(now['screenLocked'], isTrue);
+      expect(now['hiddenReason'], 'display_asleep');
+    });
+
+    test('tell display sleep inside the grace period from a lock', () {
+      final cli = FlutterScoutCli();
+      // The flag is set the moment the display sleeps, even inside a 300 s
+      // grace period: asleep, lock not yet proven.
+      var now = cli.debugMacHostVisibilityNow({
+        'displayAsleep': true,
+        'sessionLockFlag': true,
+        'loginWindowFrontmost': true,
+        'onConsole': true,
+      }, screenLockDelay: '300 seconds');
+      expect(now['displayAsleep'], isTrue);
+      expect(now['screenLocked'], isNull);
+      expect(now['hiddenReason'], 'display_asleep');
+      expect(now['screenLockNote'], contains('grace period'));
+      // Awake with the login window in front: locked.
+      now = cli.debugMacHostVisibilityNow({
+        'displayAsleep': false,
+        'sessionLockFlag': true,
+        'loginWindowFrontmost': true,
+      }, screenLockDelay: '300 seconds');
+      expect(now['screenLocked'], isTrue);
+      expect(now['hiddenReason'], 'screen_locked');
+      // A leftover flag on an awake display without the login window does
+      // not hide a visible app.
+      now = cli.debugMacHostVisibilityNow({
+        'displayAsleep': false,
+        'sessionLockFlag': true,
+        'loginWindowFrontmost': false,
+      });
+      expect(now['screenLocked'], isNull);
+      expect(now['appsHidden'], isFalse);
+      // Unreadable facts claim nothing.
+      now = cli.debugMacHostVisibilityNow(null);
+      expect(now['displayAsleep'], isNull);
+      expect(now['appsHidden'], isFalse);
     });
   });
 }

@@ -93,6 +93,9 @@ extension _CliCapture on FlutterScoutCli {
           'ok': true,
           'path': output,
           'backend': 'in_app_capture',
+          // How current the image is (helper `freshness`): the last painted
+          // frame's age and whether rendering was suspended.
+          'freshness': ?capture.evidence['freshness'],
           'metadata': '$output.metadata.json',
           ...privacy,
           if (annotated) 'marks': capture.marks ?? const <Object?>[],
@@ -325,6 +328,9 @@ extension _CliCapture on FlutterScoutCli {
           'targetScope': ?targetScope,
           'coordinateFrame': targetCoordinateFrame,
           'backend': 'in_app_capture',
+          // How current the image is (helper `freshness`): the last painted
+          // frame's age and whether rendering was suspended.
+          'freshness': ?capture.evidence['freshness'],
           'metadata': '$output.metadata.json',
           ...privacy,
           if (annotated) 'marks': capture.marks ?? const <Object?>[],

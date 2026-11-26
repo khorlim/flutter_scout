@@ -780,6 +780,7 @@ class AgentSession {
           rendering?['framesEnabled'],
           rendering?['lifecycle'],
           (rendering?['headlessDrive'] as Map?)?['reason'],
+          (rendering?['host'] as Map?)?['hiddenReason'],
           value['activeBlockingSignals'],
           value['errorsSinceCursor'],
           value['recentErrors'],
@@ -1049,7 +1050,20 @@ class AgentSession {
   /// A window that is only partly visible keeps rendering without focus, so
   /// a person using the machine can leave it where they can see it rather
   /// than lose focus to foreground().
-  String get _restoreRendering => foregroundAvailable
+  String get _restoreRendering {
+    final hidden =
+        ((_view?['rendering'] as Map?)?['host'] as Map?)?['hiddenReason'];
+    if (hidden == 'screen_locked' || hidden == 'display_asleep') {
+      return 'ask the user to wake and unlock the Mac and leave part of the '
+          'app window visible, then observe() again; foreground() cannot '
+          'unlock or wake it${headlessDrive ? '' : ' (or reconnect a run '
+                    'started with --headless-drive to keep acting while it '
+                    'is locked)'}';
+    }
+    return _restoreRenderingWindow;
+  }
+
+  String get _restoreRenderingWindow => foregroundAvailable
       ? 'leave part of the app window visible (not minimized, fully covered '
             'or on another Space; it renders without focus), then observe() '
             'again; only when nobody is using this Mac, call await '
@@ -1075,6 +1089,8 @@ class AgentSession {
           'lastFrameworkFrameAgeMs',
         ])
           key: rendering?[key],
+        if ((rendering?['host'] as Map?)?['hiddenReason'] != null)
+          'hiddenByMacos': (rendering!['host'] as Map)['hiddenReason'],
       },
       'foregroundAvailable': foregroundAvailable,
       if (foregroundAvailable) 'platform': 'macos',
@@ -1138,13 +1154,20 @@ class AgentSession {
       };
     }
     if (!_live && !_driven) {
+      // The helper names what macOS reports (display asleep, screen locked);
+      // only without such a fact is the window guessed at.
+      final because = rendering?['notVisibleBecause'];
+      final hiddenBy = (rendering?['host'] as Map?)?['hiddenReason'];
+      final cause =
+          because is String && hiddenBy != null && hiddenBy != 'window_occluded'
+          ? 'because $because.'
+          : 'so the app window is probably minimized, hidden or fully covered.';
       return blocked(
         'rendering_suspended',
         'Rendering is not active (status ${rendering?['status']}, '
             'framesEnabled ${rendering?['framesEnabled']}, lifecycle '
             '${rendering?['lifecycle']}, last framework frame '
-            '${rendering?['lastFrameworkFrameAgeMs']} ms ago), so the app '
-            'window is probably minimized, hidden or fully covered.',
+            '${rendering?['lastFrameworkFrameAgeMs']} ms ago), $cause',
         _restoreRendering,
       );
     }
@@ -1255,7 +1278,9 @@ class AgentSession {
         }
         await Future<void>.delayed(const Duration(milliseconds: 200));
       }
-      if (!_live && !stopped() && diagnose != null) {
+      // Also after rendering looks active: Flutter's lifecycle can stay
+      // resumed behind a lock screen, so macOS has the last word.
+      if (!stopped() && diagnose != null) {
         try {
           facts = await diagnose();
         } catch (_) {
@@ -1266,9 +1291,10 @@ class AgentSession {
       _acting = null;
       done.complete();
     }
-    // Activation succeeded only if the app renders on its own again; a
-    // headless-driven scene is still a hidden window.
-    final ok = _live && _safe && !stopped();
+    // Activation succeeded only if the app renders on its own again and
+    // macOS does not keep the login window in front; a headless-driven
+    // scene is still a hidden window.
+    final ok = _live && _safe && !stopped() && !_loginWindowFront(facts);
     return {
       'ok': ok,
       'foregroundRequested': true,
@@ -1301,7 +1327,8 @@ class AgentSession {
       'waitedMs': waitedMs,
       ...facts,
     };
-    if (_live && unavailable != null) {
+    final loginWindow = _loginWindowFront(facts);
+    if (_live && !loginWindow && unavailable != null) {
       // Rendering resumed; safety, not visibility, still blocks input.
       return {
         'code': unavailable['code'],
@@ -1313,12 +1340,17 @@ class AgentSession {
     }
     final rendering = _view?['rendering'] as Map?;
     final frontmost = facts['frontmostApp'];
-    // macOS reports loginwindow while the screen is locked or asleep; no app
-    // can render then, and no activation will change that.
-    final locked = frontmost == 'loginwindow';
+    final hostHidden = (rendering?['host'] as Map?)?['hiddenReason'];
+    // macOS reports loginwindow while the screen is locked; no app can be
+    // seen then, and no activation will change that.
+    final locked = loginWindow || hostHidden == 'screen_locked';
+    final asleep = !locked && hostHidden == 'display_asleep';
     final cause = locked
         ? 'The Mac\'s screen is locked or at the login window ("loginwindow" '
-              'is frontmost), so no app window can render.'
+              'is frontmost), so no app window can be seen.'
+        : asleep
+        ? 'macOS reports the display is asleep, so no app window can be '
+              'seen; activation does not wake it.'
         : facts['frontmostIsTarget'] == false
         ? 'macOS kept "$frontmost" frontmost, so this app was not brought '
               'forward (macOS can decline activation requested by a '
@@ -1333,17 +1365,26 @@ class AgentSession {
       'reason': 'rendering_still_suspended',
       'message':
           'agent_live_view_unavailable: activation was requested, but after '
-          '$waitedMs ms rendering is still ${rendering?['status']} (lifecycle '
-          '${rendering?['lifecycle']}, framesEnabled '
+          '$waitedMs ms ${_live ? 'Flutter reports rendering active, yet' : 'rendering is still ${rendering?['status']}'} '
+          '(lifecycle ${rendering?['lifecycle']}, framesEnabled '
           '${rendering?['framesEnabled']}). $cause Nothing dispatched.',
-      'nextStep': locked
-          ? 'ask the user to unlock the Mac and leave part of the app window '
-                'visible, then observe() again; do not loop foreground()'
+      'nextStep': locked || asleep
+          ? 'ask the user to ${asleep ? 'wake the display, ' : ''}unlock the '
+                'Mac and leave part of the app window visible, then observe() '
+                'again; do not loop foreground()'
           : 'restore and uncover the app window by hand (Dock or Mission '
                 'Control), then observe() again; do not loop foreground()',
       'details': details,
     };
   }
+
+  /// The login window is in front, from the native probe or the helper.
+  bool _loginWindowFront(AgentView facts) =>
+      facts['frontmostApp'] == 'loginwindow' ||
+      facts['frontmostBundleId'] == 'com.apple.loginwindow' ||
+      ((_view?['rendering'] as Map?)?['host']
+              as Map?)?['loginWindowFrontmost'] ==
+          true;
 
   AgentView start(int revision, AgentView action, {String? reactionId}) {
     final decision = action['method'] == 'system-tap'
