@@ -29,9 +29,17 @@ and `failureCause` in its final envelope, and stderr gets one
 `stage:'launch_failed'` record whose `cause` is a one-line summary. Read them
 before retrying. Raise `--launch-idle-timeout <s>` or `--launch-timeout <s>`
 only when they say a limit ended a live build. `failureMode:
-'helper_not_ready'` means the app is running but its helper did not answer in
-20 s (a loaded machine): run `status` first, and do not `launch --replace`
-while it may still become ready.
+'helper_not_ready'` means the app started but its helper did not answer. The
+wait starts at 20 s (up to 120 s after a slow file sync) and continues while
+the app prints, uses CPU or changes isolate state, within `--launch-timeout`;
+`helperWait.stopReason` says why it ended. The session record is kept: run
+`status`, which promotes it to ready once the helper answers, then reuse it
+with `ensure` or `attach`. Do not `launch --replace` while it may still
+become ready.
+
+Run one app at a time on small machines (16 GB). `doctor`, `launch` and
+`ensure` warn (`warnings[].code: 'low_free_memory'` plus one stderr record)
+below 20% free memory, with the count of other live Scout-owned runs.
 
 Keep the launch process attached until its final envelope. Progress belongs
 on stderr; do not merge it into JSON stdout. While heartbeats continue, do

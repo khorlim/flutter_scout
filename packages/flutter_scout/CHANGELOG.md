@@ -1,5 +1,37 @@
 ## Unreleased
 
+- The helper-readiness wait after a launch is no longer a fixed 20 s. It
+  starts at 20 s, or as long as the post-build phase took (up to 120 s; one
+  loaded Mac needed 131 s to sync files), and continues while the VM service
+  answers and the app or runner prints, changes isolate state or uses CPU,
+  never past `--launch-timeout`. It stops early when Flutter's extensions are
+  up without Scout's, or the owned runner exited. `ensure` reuse and `attach`
+  use the same rule (8 s base), and the macOS LaunchServices wait for the
+  app's VM service (120 s base) extends while the opened app is busy. stderr
+  gets `await_helper_ready`, `helper_wait_extended` and
+  `helper_wait_heartbeat`; a failure carries `helperWait` (`stopReason`,
+  `waitedMs`, `isolateState`, `lastProgress`) and a `failureCause` naming what
+  was seen, how long Scout waited and why it stopped.
+- A failed launch no longer loses a reachable app. The record stays
+  `helper_not_ready` (written as `starting` during the wait) while the VM
+  service answers or the owned run is alive, and `status` promotes it to
+  `ready` (`promotedToReady`) once the helper answers. `status`, `ensure` and
+  `attach` keep the VM address of a live owned run whose VM service missed a
+  check (`sessionRecordKept`, and `vmServiceAnswering: false` in status)
+  instead of clearing it, and `ensure` no longer falls back to a build (which
+  stopped that run) while an app answers there or its owned run is alive: it
+  fails with `helper_not_ready` or `vm_service_not_answering` and
+  `launch: not_attempted`. A plain `launch` refuses such a session. An
+  `ensure` that joins a launch in progress now waits for its final result
+  (bounded by `--launch-timeout`, was a fixed 5 minutes), not only for a VM
+  address whose helper may not answer yet.
+- `flutter_runner_pid_not_found` is now a final launch envelope whose
+  `failureMode` names what ended the wait (idle, hard limit, runner exit).
+- `doctor` reports `hostMemory`, and `doctor`, `launch` and `ensure` add a
+  `low_free_memory` entry to `warnings` (plus one stderr record) below 20% free
+  memory (`memory_pressure -Q` on macOS, `/proc/meminfo` on Linux), with the
+  number of other live Scout-owned runs. Run one app at a time on a 16 GB
+  machine. Scout only warns.
 - `act` and `taps` (shipped client and bridge) keep the full settle (two
   quiet eyes samples, at least 500 ms) only when the view changed. When the
   receipt saw no change and the scene after it still has the view revision
