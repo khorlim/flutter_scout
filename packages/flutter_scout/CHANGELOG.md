@@ -1,5 +1,26 @@
 ## Unreleased
 
+- `skills/flutter-scout/scripts/scout-call` sends the shell bridge's `call`
+  and `stop` from zsh without starting node: about 5 ms per call against
+  35 ms for `node agent_client.mjs call` on an idle M-series Mac, and no node
+  page-in on a loaded one. It marks argv typed values inside params exactly
+  as node's call does, so the bridge's stdin-only checks are unchanged, and
+  falls back to node without zsh or for hashed socket names. The bridge
+  applies `brief` itself when asked and writes `ok` first in each reply.
+- `steps {viewRevision, actions}` (client `agent.steps`) runs 1-16
+  exact-handle inputs decided from one scene in one call, each with its own
+  receipt and settle. Every handle must be in that scene; before each later
+  step the settled scene must still show the same screen, surface and
+  controls (`steps_screen_changed`, `steps_target_changed`,
+  `steps_view_unsettled`), and it stops at the first failure. Nothing is
+  retried, skipped or reordered.
+- act skips its one-interval unchanged wait when the receipt's `lateWindow`
+  proved the input idle (`settle.basis: input_idle`) and lifts a receipt's
+  `paintOnlyChange` into `settle.paintOnlyChange`.
+- tap and tap-text take `params.lateWaitMs` / `--late-wait-ms` (0-1000) to
+  shorten the late-change window; compact receipts keep `lateWindow` and
+  `paintOnlyChange`, and brief scenes keep `stateHints`.
+
 - The helper-readiness wait after a launch is no longer a fixed 20 s. It
   starts at 20 s, or as long as the post-build phase took (up to 120 s; one
   loaded Mac needed 131 s to sync files), and continues while the VM service

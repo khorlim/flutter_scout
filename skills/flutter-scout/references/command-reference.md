@@ -47,6 +47,10 @@ taps at one point in one dispatch and one receipt) and `params.intervalMs`
 (0-1000, default 100) for the gap from the first up to the second down. The
 receipt's `activation.secondTap` reports `targetStillHit` (handle and text
 targets) and `sameHitPathAsFirstTap`, with the new `hitPath` when it changed.
+`tap` and `tap-text` take `params.lateWaitMs` (0-1000, default 1000) to
+shorten the late-change window after a tap that changed nothing at once; the
+receipt's `lateWindow` reports `ms`, `waitedMs`, `ended` (`input_idle`,
+`change_landed`, `window_elapsed`, ...) and `inputWork`.
 Action parameters remain typed; no expect*, waitMs, allowErrors, file/stdin
 source flags, verbose or automatic image capture. Text/input values travel in
 the JSON pipe, not shell argv. Native deep links remain capability-gated.

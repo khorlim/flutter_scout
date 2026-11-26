@@ -93,6 +93,12 @@ const outcome = await agent.act(scene.viewRevision, {
 // Several observed keys in order, one receipt each, one final scene:
 const keyed = await agent.taps(scene.viewRevision, ['btn.6', 'btn.0'],
   {allowUnrelatedChanges: true});
+// Inputs decided from one scene that need no scene in between, one receipt
+// and settle each; it stops at the first failure or drift and never retries:
+const filled = await agent.steps(scene.viewRevision, [
+  {method: 'input', args: ['AI Smoke'], params: {target: 'field.customer_name'}},
+  {method: 'tap', args: ['btn.save']},
+]);
 // When ok is false, outcome.error and outcome.dispatch carry the receipt's
 // reason (or the follow-up observation's), never null.
 // Low-level alternative for fine-grained concurrent control:
@@ -123,7 +129,7 @@ connect error, and reuses a live bridge for the same app. `call --app <name>
 and physical-pixel duplicates) and nothing else: outcomes, errors, dispatch,
 omissions and safety fields stay. Methods mirror the client with named fields: `act {viewRevision,
 action, timeoutMs}`, `taps {viewRevision, targets, allowUnrelatedChanges,
-timeoutMs}`, `start`, `acknowledge {actionId}`, `reconcile {actionId,
+timeoutMs}`, `steps {viewRevision, actions, timeoutMs}`, `start`, `acknowledge {actionId}`, `reconcile {actionId,
 viewRevision}`, `next {timeoutMs}`, `watch {condition, timeoutMs, wait}`, `react`,
 `cancel {scope, conditionId}`, `query {method, params, args}`, `observe`,
 `status`, `foreground`, plus `bridge` (bridge status), `disconnect` (close
@@ -134,6 +140,20 @@ redact and whose handle names no credential; otherwise the call returns
 `bridge_stdin_required` with nothing sent, and the same JSON goes on stdin.
 `watch` with `wait:true` is `watchUntil` (below); its call waits up to its
 `timeoutMs` plus 30 s.
+
+`scripts/scout-call --app <name> [--socket <path>] [--brief] <method>
+[json|-]` (and `scout-call stop --app <name>`) sends the same request
+without starting node: zsh opens the socket in-process. Its request line is
+`{"params":...,"method":...,"brief":true}`; the bridge applies `brief`
+itself and writes `ok` first in every reply. For act, start and steps it
+marks argv JSON inside params (`argv: true`), so typed values get the same
+stdin-only checks (`-` reads stdin and is not marked), and a bridge that
+predates a field refuses it with nothing sent. A missing bridge is
+`bridge_not_running`; no reply within 150 s (a blocking watch: its
+`timeoutMs` plus 30 s) is `bridge_call_timeout`, with
+`dispatch_outcome_unknown` for input methods. It execs node's `call` where
+zsh or its socket module is missing, or when the app name needs a hashed
+socket path.
 
 The bridge never retries or queues. When the agent process exits (or after
 `disconnect`), the next call opens a new connection and adds
@@ -151,13 +171,15 @@ receipt. New observations reach the agent through awaited tool results. This
 does not by itself wake or interrupt a model that is still reasoning.
 
 Shapes: `observe`, `status` and `watch` (with `wait`) return the scene at the
-top level (`viewRevision`, `view`, `actionable`, `hand`); `act` and `taps`
-return `{ok, viewRevision, error?, dispatch?, result | taps, settle?, scene,
-events, viewEvents}` with the scene under `scene` and the same top-level
+top level (`viewRevision`, `view`, `actionable`, `hand`); `act`, `taps` and
+`steps` return `{ok, viewRevision, error?, dispatch?, result | taps | steps,
+settle?, scene, events, viewEvents}` with the scene under `scene` and the same top-level
 `viewRevision`. `settle` is present after every input that dispatched (see
 SKILL.md): `{status, trigger, waitedMs, viewChanges, sinceInput}`; `status`
-is `settled`, `unchanged` (nothing changed within one eyes interval),
-`still_changing` or `unavailable`. `events` holds every intervening receipt, condition, reaction
+is `settled`, `unchanged` (nothing changed within one eyes interval, or
+`basis: input_idle` when the receipt's `lateWindow` proved the input's work
+done), `still_changing` or `unavailable`; `paintOnlyChange` names a target
+whose paint alone changed. `events` holds every intervening receipt, condition, reaction
 or stop; plain view updates are only counted in `viewEvents`.
 Visible strings live in `view.visibleText` (or `scene.view.visibleText`).
 

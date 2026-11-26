@@ -1,5 +1,29 @@
 ## Unreleased
 
+* The late-change window after an input that changed nothing at once now
+  ends as soon as the work the input started is done. Scout's pointer
+  dispatch runs in a zone that only counts and delegates: timers,
+  microtasks and Flutter's own continuations the input started are followed
+  until they fire, run or are cancelled, and the window ends when none is
+  pending and Flutter has no frame scheduled and no app ticker running
+  (`lateWindow.ended: input_idle`). An app `await`/`then`/listener, an app
+  microtask (a stream or bloc event) or a periodic timer keeps the whole
+  window (`lateWindow.inputWork.busy`, `busySource`). A no-change tap on the
+  order fixture went from 1.66 s to 0.32 s per act end to end; a Material
+  button ends after its ripple (about 0.4 s). Typed input is not tracked.
+  Tap and tap-text receipts carry `lateWindow {ms, waitedMs, ended,
+  inputWork}`, and a caller's shorter `lateWaitMs` is no longer overrun.
+* A tap or tap-text that changed nothing Scout reads but changed how its
+  target is painted (text style, decoration, opacity, physical model colour,
+  image tint) carries `paintOnlyChange {target, hint}` and that hint as its
+  warning. Brief scenes add `stateHints {controls, note}` for look-alike
+  controls in one row whose state Scout cannot read
+  (`siblings_report_state`, or `painted_differently` with `differs`).
+* Breaking: the odd-label-colour segment heuristic no longer sets
+  `selected`. It reported a guess as a fact (a border-painted chip read as
+  unselected whatever its border showed); such rows now get a
+  `painted_differently` hint instead.
+
 * A control's state facts (`enabled`, `selected`, `checked`, `toggled`,
   `expanded`) now count as an observed change. A tap whose only effect is
   one of them (a filter chip becoming selected) reports `changed` instead

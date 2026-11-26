@@ -77,29 +77,48 @@ const outcome = await scout.act(scene.viewRevision, {
 
 When each shell command is a fresh process, keep the one connection in the
 shipped bridge. `serve` returns once connected (with the first `scene`) and
-keeps a background process behind a private 0600 Unix socket. Each `call`
-prints one JSON line; exit code 0 means `ok:true`. Pass `--brief` on every
-call: it drops only repeated protocol metadata (capability tables, timings,
-versions, IDs, coordinate-frame boilerplate) and keeps every outcome,
-failure, omission and safety field, so a scene is read without a parsing
-script. `<client>` is this skill's absolute scripts/agent_client.mjs path;
-spell it out in every command because shell variables do not persist between
-tool calls.
+keeps a background process behind a private 0600 Unix socket. Then send each
+call with `<call>`, this skill's absolute scripts/scout-call path: it talks
+to that socket from zsh without starting node (about 5 ms a call against
+35 ms, and far less on a loaded Mac) and falls back to node by itself where
+zsh is missing. `node <client> call` (scripts/agent_client.mjs) takes the
+same arguments and gives the same replies. Each call prints one JSON line,
+`ok` first; exit code 0 means `ok:true`. Pass `--brief` on every call: it
+drops only repeated protocol metadata (capability tables, timings, versions,
+IDs, coordinate-frame boilerplate) and keeps every outcome, failure,
+omission and safety field, so a scene is read without a parsing script.
+Spell both paths out in every command because shell variables do not persist
+between tool calls.
 
 ```bash
 node <client> serve --app task
-node <client> call --app task --brief observe
-node <client> call --app task --brief act '{"viewRevision":7,"action":{"method":"tap","args":["btn.save"]}}'
-node <client> call --app task --brief taps '{"viewRevision":7,"targets":["btn.6","btn.0","btn.1","btn.5"],"allowUnrelatedChanges":true}'
-node <client> call --app task --brief query '{"method":"locate","params":{"text":"Save"}}'
-node <client> call --app task --brief act '{"viewRevision":8,"action":{"method":"input","args":["AI Smoke"],"params":{"target":"field.customer_name"}}}'
-node <client> call --app task --brief act - <<'JSON'
+<call> --app task --brief observe
+<call> --app task --brief act '{"viewRevision":7,"action":{"method":"tap","args":["btn.save"]}}'
+<call> --app task --brief taps '{"viewRevision":7,"targets":["btn.6","btn.0","btn.1","btn.5"],"allowUnrelatedChanges":true}'
+<call> --app task --brief steps '{"viewRevision":7,"actions":[{"method":"input","args":["AI Smoke"],"params":{"target":"field.customer_name"}},{"method":"tap","args":["btn.save"]}]}'
+<call> --app task --brief query '{"method":"locate","params":{"text":"Save"}}'
+<call> --app task --brief act '{"viewRevision":8,"action":{"method":"input","args":["AI Smoke"],"params":{"target":"field.customer_name"}}}'
+<call> --app task --brief act - <<'JSON'
 {"viewRevision":9,"action":{"method":"input","args":["<pin>"],"params":{"target":"field.staff_pin"}}}
 JSON
-node <client> call --app task --brief watch '{"condition":{"gone":"Data sync"},"timeoutMs":90000,"wait":true}'
-node <client> call --app task disconnect   # before reload/restart
-node <client> stop --app task              # closes Scout and the bridge
+<call> --app task --brief watch '{"condition":{"gone":"Data sync"},"timeoutMs":90000,"wait":true}'
+<call> --app task disconnect   # before reload/restart
+<call> stop --app task         # closes Scout and the bridge
 ```
+
+`steps` sends 1 to 16 inputs you decided from one scene, in one call, when
+none of them needs a scene you have not seen (fill a form, then tap Save;
+pick two filters). Each is an exact observed handle: tap, long-press,
+input or scroll/swipe with `params.target`, or fill. Each gets its own
+canonical receipt and settle. Before each later step, the settled scene
+must still show the same screen and surface and every handle of that step
+as the same control. Otherwise it stops with nothing more sent
+(`steps_screen_changed`, `steps_target_changed`, `steps_view_unsettled`).
+It also stops at the first failed or rejected step and never retries or
+skips. Read `completed`, `steps[]` (`targets`, `ok`, `actionId`,
+`dispatch`, `settle`; the last attempted step keeps its full `result`),
+`error`, then the final `scene`. A step that opens a dialog or a new screen
+ends the run: decide the next input from that scene with act.
 
 Typed values may go on the command line when every target is an observed
 field that is not secret. A password, PIN, OTP, card or other credential
@@ -130,11 +149,31 @@ but ignores taps (app-side validation) still reports `enabled:true`.
 State Flutter knows is on the control too: `selected` (tab, chip, segment,
 navigation destination, list tile, or the umbrella "on" fact), `checked`
 (checkbox, radio), `toggled` (switch) and `expanded` (expansion tile), from
-the widget or its `Semantics`. A state the app only paints (a coloured
-border around a "points" chip, a segment thumb drawn by a custom pill bar)
-has no such field: read it from a screenshot or crop, and suggest the app
-add `Semantics(selected: ...)` to that control. `instance` is a number per
-mounted control; it only tells two controls with one handle apart.
+the widget or its `Semantics`. Scout never guesses a state. A state the app
+only paints (a coloured border around a "points" chip, a filter whose text
+turns green, a segment thumb drawn by a custom pill bar) has no such field,
+and the scene says where that is likely: `view.stateHints.controls` lists
+look-alike controls in one row whose state Scout cannot read, with `reason`
+`siblings_report_state` (their siblings state theirs) or
+`painted_differently` (`differs` names the ones painted unlike the rest).
+A tap that changed only how its target is painted returns
+`settle.paintOnlyChange: <handle>` and a `result.paintOnlyChange.hint`
+instead of a plain no-change: its state probably did change, so read a crop
+before tapping it again, never tap it a second time to "make it work".
+Suggest the app expose the state (it also serves screen readers), exactly:
+
+```dart
+// A custom chip, filter, tab or segment:
+Semantics(selected: isSelected, button: true, child: MyChip(...))
+// A custom check box or radio, and a custom switch:
+Semantics(checked: isChecked, child: MyCheck(...))
+Semantics(toggled: isOn, child: MyToggle(...))
+// An icon-only or unlabelled control (also names its handle):
+Semantics(label: 'Delete item', button: true, child: MyIconButton(...))
+```
+
+`instance` is a number per mounted control; it only tells two controls with
+one handle apart.
 
 After an input that dispatched and changed the view, act waits until the
 passive eyes see no view change for two samples (at most 3 s) before taking
@@ -142,10 +181,23 @@ the returned scene, because the receipt is taken right after dispatch and
 an app often applies its effect a moment later (a cart total recomputed, a
 button enabled, a list loading on a new screen). When nothing changed (the
 receipt saw no change and the scene after it still has the revision from
-before the input), it waits one eyes interval (250 ms by default) for
-a change about to land and, if none comes, returns at once with `status:
-unchanged`. An effect slower than that (a server round trip) is for
-`watchUntil` on the content you expect. It reports `settle: {status,
+before the input), the helper has already waited for a late change: up to
+1 s, but after a tap, long-press, scroll or swipe only until the work it
+started is done (typed input keeps the whole second). It follows the
+timers, microtasks and Flutter callbacks the input started, and stops as soon
+as none is left and Flutter is idle (`result.lateWindow.ended:
+input_idle`, typically 0 to 400 ms; a Material button waits out its
+ripple). act then returns at once with `status: unchanged` and `basis:
+input_idle`. Work Scout cannot follow keeps the whole second and is named
+in `lateWindow.inputWork.busy`: an app `await`/`then`/listener
+(`app_async_callback`), an app microtask such as a stream or bloc event
+(`app_microtask`) or a periodic timer. A later change on that path is
+reported as `change_landed`. Without that proof act also waits one eyes
+interval (250 ms by default) for a change about to land. For a control you
+know acts at once, `params: {lateWaitMs: 0..1000}` on tap or tap-text
+shortens the window (only shorter); it does not help when Scout already
+proves the tap idle. An effect slower than that (a server round trip) is
+for `watchUntil` on the content you expect. It reports `settle: {status,
 trigger, waitedMs, viewChanges, sinceInput}`. `trigger` is what the receipt
 saw: `screen` (new screen, route or surface), `in_place` (a change on the
 same screen) or `none` (no change yet). `sinceInput` lists what differs
