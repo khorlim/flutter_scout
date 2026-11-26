@@ -2,6 +2,13 @@ part of 'flutter_scout_binding.dart';
 
 // part: node post-processing: compaction, label inference, disambiguation, visual tree, geometry helpers.
 
+/// Whether each observed control's name is one the app gave it (a Semantics
+/// label or tooltip, see `_labelSourceFor`), by render object. Set for every
+/// node built, so it follows a label that comes or goes.
+final Expando<bool> _appNamedControls = Expando<bool>(
+  'flutter_scout_app_named',
+);
+
 extension _RuntimeNodes on FlutterScoutRuntime {
   /// Orientation hints, not aliases accepted by the exact screen guard. Keep
   /// only the selected widget's own ancestry before an Overlay/Navigator so a
@@ -200,11 +207,15 @@ extension _RuntimeNodes on FlutterScoutRuntime {
     final editable = kind == 'field' ? _editableStateBelow(element) : null;
     final rawValue = editable?.widget.controller.text;
     final obscured = editable?.widget.obscureText ?? false;
-    final ownLabel = _labelFor(
+    final source = _labelSourceFor(
       element,
       widget,
       deepText: _usesDeepTextLabel(widget),
     );
+    final ownLabel = source.label;
+    if (element.renderObject case final RenderObject render) {
+      _appNamedControls[render] = source.byApp;
+    }
     final rowLabel = ownLabel == null ? _switchRowLabel(element) : null;
     final rawLabel = ownLabel ?? rowLabel;
     final rawKey = _keyLabel(widget.key);
@@ -677,34 +688,66 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         widget is Semantics;
   }
 
-  String? _labelFor(Element element, Widget widget, {bool deepText = false}) {
-    if (widget is Tooltip) return widget.message;
+  String? _labelFor(Element element, Widget widget, {bool deepText = false}) =>
+      _labelSourceFor(element, widget, deepText: deepText).label;
+
+  /// A control's name and whether the app chose it. The order:
+  ///
+  /// 1. The control's own Semantics label or tooltip.
+  /// 2. A Semantics label wrapping the control at its own extent (a
+  ///    press-effect pressable labels the Semantics just above the
+  ///    detector Scout reports).
+  /// 3. A tooltip below it, or a Semantics label below it that holds all of
+  ///    its visible text or covers it whole.
+  /// 4. The visible text it draws.
+  /// 5. A Semantics label on a part of it (a labelled icon).
+  /// 6. Its icon or asset name.
+  ///
+  /// Keys and feature keys name the handle before any of these (see
+  /// [_nodeFromElement]). `byApp` is true for 1-3 and 5: a name the app
+  /// gave, which nearby text must not add another name to.
+  ({String? label, bool byApp}) _labelSourceFor(
+    Element element,
+    Widget widget, {
+    bool deepText = false,
+  }) {
+    ({String? label, bool byApp}) app(String? label) =>
+        (label: label, byApp: label != null);
+    ({String? label, bool byApp}) drawn(String? label) =>
+        (label: label, byApp: false);
+    if (widget is Tooltip) return app(widget.message);
     if (widget is Semantics) {
       final semanticsLabel = widget.properties.label;
       if (semanticsLabel != null && semanticsLabel.trim().isNotEmpty) {
-        return semanticsLabel.trim();
+        return app(semanticsLabel.trim());
       }
     }
     if (widget is FloatingActionButton && widget.tooltip != null) {
-      return widget.tooltip;
+      return app(widget.tooltip);
     }
     if (widget is IconButton && widget.tooltip != null) {
-      return widget.tooltip;
+      return app(widget.tooltip);
+    }
+    if (deepText) {
+      final wrapping = _wrappingSemanticsLabel(element);
+      if (wrapping != null) return app(wrapping);
     }
     if (widget is IconButton) {
       final icon = _iconLabelForWidget(widget.icon);
-      if (icon != null && icon.isNotEmpty) return icon;
+      if (icon != null && icon.isNotEmpty) return drawn(icon);
     }
     if (widget is TextField) {
       for (final label in [
         widget.decoration?.labelText,
         widget.decoration?.hintText,
       ]) {
-        if (label != null && label.trim().isNotEmpty) return label.trim();
+        if (label != null && label.trim().isNotEmpty) {
+          return drawn(label.trim());
+        }
       }
       // A prefixIcon can be an app-owned text label, not necessarily an icon.
       // Prefer that exact decoration subtree over a neighbouring row's text.
-      return _fieldPrefixLabel(element, widget.decoration?.prefixIcon);
+      return drawn(_fieldPrefixLabel(element, widget.decoration?.prefixIcon));
     }
     final widgetType = _typeName(widget);
     if (widget is Switch ||
@@ -713,18 +756,22 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         widgetType == 'Switch' ||
         widgetType == 'CupertinoSwitch' ||
         widgetType == 'Checkbox') {
-      return null;
+      return drawn(null);
     }
     final tooltip = _tooltipBelow(element);
-    if (tooltip != null && tooltip.isNotEmpty) return tooltip;
+    if (tooltip != null && tooltip.isNotEmpty) return app(tooltip);
     final own = _ownText(widget);
     if (own != null && own.trim().isNotEmpty) {
       final iconText = _iconLabelForText(
         own,
         fontFamily: _textFontFamily(widget),
       );
-      if (iconText != null) return iconText;
-      if (_hasWord(own)) return own.trim();
+      if (iconText != null) return drawn(iconText);
+      if (_hasWord(own)) return drawn(own.trim());
+    }
+    if (deepText) {
+      final content = _contentSemanticsLabel(element);
+      if (content != null) return app(content);
     }
     final text = deepText && _labelSearchFitsControl(element)
         ? _controlTextBelow(element)
@@ -733,17 +780,123 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         text.isNotEmpty &&
         _hasWord(text) &&
         _iconLabelForText(text) == null) {
-      return text.trim();
+      return drawn(text.trim());
     }
     // Icon-only control from here on. An explicit accessibility label is a
     // deliberate name and wins over glyph naming.
     final semantics = _semanticsLabelBelow(element);
-    if (semantics != null && semantics.isNotEmpty) return semantics;
+    if (semantics != null && semantics.isNotEmpty) return app(semantics);
     // An Icon/glyph widget below knows its font family (resolving cross-font
     // codepoint collisions), so prefer it over interpreting bare glyph text.
     final icon = _iconLabelBelow(element);
-    if (icon != null && icon.isNotEmpty) return icon;
-    return null;
+    if (icon != null && icon.isNotEmpty) return drawn(icon);
+    return drawn(null);
+  }
+
+  /// The label of a Semantics just above [element] that wraps it at its own
+  /// extent, within the same semantics node: a pressable that names itself
+  /// on the Semantics around its GestureDetector, when Scout reports the
+  /// detector. The walk stops at the first labelled Semantics (a larger one
+  /// names a group, not this control), at a semantics boundary, at another
+  /// control, at a scrollable or after a few levels.
+  String? _wrappingSemanticsLabel(Element element) {
+    final rect = _rectFor(element);
+    if (rect == null) return null;
+    String? found;
+    var depth = 0;
+    element.visitAncestorElements((ancestor) {
+      final widget = ancestor.widget;
+      if (widget is Semantics) {
+        final label = _nameLabelOf(widget);
+        if (label != null) {
+          if (_sameExtent(rect, _rectFor(ancestor))) found = label;
+          return false;
+        }
+        if (widget.container || widget.explicitChildNodes) return false;
+      }
+      if (widget is MergeSemantics ||
+          widget is Scrollable ||
+          widget is Overlay ||
+          _isPressableControlWidget(widget)) {
+        return false;
+      }
+      return ++depth < 12;
+    });
+    return found;
+  }
+
+  /// The label of a Semantics inside the control that names all of it: it
+  /// covers the control whole, or holds every visible text the control
+  /// draws (`Semantics(label: 'Save draft', child: Text('Save'))`). A
+  /// label on one part beside other text (a labelled avatar next to the
+  /// name) names that part, and two labels name neither; both give null.
+  String? _contentSemanticsLabel(Element element) {
+    final outer = _rectFor(element);
+    String? label;
+    var namesAll = false;
+    var textOutside = false;
+    var budget = 600;
+    void visit(Element child, bool inside) {
+      if (textOutside || budget-- <= 0) return;
+      final widget = child.widget;
+      if (_isHiddenByAncestorWidget(widget) ||
+          _isInsideSensitiveEditable(child)) {
+        return;
+      }
+      var within = inside;
+      if (!inside && widget is Semantics) {
+        final own = _nameLabelOf(widget);
+        if (own != null) {
+          if (label != null) {
+            textOutside = true;
+            return;
+          }
+          label = own;
+          within = true;
+          if (_sameExtent(outer, _rectFor(child))) namesAll = true;
+        }
+      }
+      final text = _ownText(widget)?.trim();
+      if (text != null && text.isNotEmpty) {
+        final word =
+            _hasWord(text) &&
+            _iconLabelForText(text, fontFamily: _textFontFamily(widget)) ==
+                null;
+        if (word) {
+          if (within) {
+            namesAll = true;
+          } else {
+            textOutside = true;
+          }
+        }
+        return; // Text builds RichText; do not read the same text twice.
+      }
+      if (_isNestedOtherControl(outer, child)) return;
+      child.visitChildElements((next) => visit(next, within));
+    }
+
+    element.visitChildElements((child) => visit(child, false));
+    if (budget <= 0 || textOutside || !namesAll) return null;
+    return label;
+  }
+
+  /// A Semantics label that names something. A live region's label is an
+  /// announcement (an ExpansionTile says "Expanded" through one on
+  /// Android), not a name.
+  String? _nameLabelOf(Semantics widget) {
+    if (widget.properties.liveRegion == true) return null;
+    final label = widget.properties.label?.trim();
+    return label == null || label.isEmpty ? null : label;
+  }
+
+  /// Whether two rects are one control's extent: nearly the same box.
+  bool _sameExtent(Rect? a, Rect? b) {
+    if (a == null || b == null) return false;
+    final areaA = a.width * a.height;
+    final areaB = b.width * b.height;
+    if (areaA <= 0 || areaB <= 0) return false;
+    final ratio = areaA < areaB ? areaA / areaB : areaB / areaA;
+    return ratio >= 0.8 && _overlapRatio(a, b) >= 0.9;
   }
 
   /// A pressable's own name is the text it draws, however deep: a
@@ -870,13 +1023,35 @@ extension _RuntimeNodes on FlutterScoutRuntime {
   /// down (CupertinoButton alone contributes ~19). The correct boundary is
   /// semantic: never descend into a nested interactive control, because its
   /// content names that control, not the ancestor being labeled.
+  ///
+  /// A nested control is skipped before it is probed: its own Semantics
+  /// label names it, not the row around it. A blank label (an image's empty
+  /// Semantics) does not end the search.
   String? _labelInSubtree(
     Element element,
     String? Function(Element element) probe,
   ) {
-    final value = _probeSubtree(element, probe);
-    final trimmed = value?.trim();
-    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+    final outer = _rectFor(element);
+    String? result;
+    var budget = 400;
+    void visit(Element child) {
+      if (result != null || budget <= 0) return;
+      budget -= 1;
+      if (_isInsideSensitiveEditable(child) ||
+          _isNestedOtherControl(outer, child) ||
+          _isNestedSemanticButton(outer, child)) {
+        return;
+      }
+      final value = probe(child)?.trim();
+      if (value != null && value.isNotEmpty) {
+        result = value;
+        return;
+      }
+      child.visitChildElements(visit);
+    }
+
+    element.visitChildElements(visit);
+    return result;
   }
 
   /// Shared subtree walk behind [_labelInSubtree] and selection-state mining:
@@ -917,6 +1092,19 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         inner == null ||
         _overlapRatio(outer, inner) < 0.9 ||
         inner.width * inner.height < outer.width * outer.height * 0.8;
+  }
+
+  /// A smaller `Semantics(button: true)` or `Semantics(onTap:)` inside the
+  /// control at [outer]: an option of its own (a redeem capsule's button in
+  /// a tappable row), even where Scout reports the detector under it rather
+  /// than the Semantics.
+  bool _isNestedSemanticButton(Rect? outer, Element child) {
+    final widget = child.widget;
+    if (widget is! Semantics) return false;
+    if (widget.properties.button != true && widget.properties.onTap == null) {
+      return false;
+    }
+    return !_sameExtent(outer, _rectFor(child));
   }
 
   /// Selection/toggle state facts for a control: `selected`, `checked`,

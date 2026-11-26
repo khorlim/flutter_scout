@@ -198,4 +198,112 @@ void main() {
     await tester.pump();
     expect(named('btn.thai_yoga').instance, gridTile.instance);
   });
+
+  testWidgets('an app Semantics label names a control ahead of its text and '
+      'glyph, and lends no name to the controls around it', (tester) async {
+    FlutterScoutHelper.ensureRegistered();
+    // A press-effect pressable: the label is on the Semantics above the
+    // GestureDetector, the title is drawn only while picked.
+    Widget option(String title, IconData glyph) => Listener(
+      onPointerDown: (_) {},
+      child: Semantics(
+        button: true,
+        label: title,
+        child: GestureDetector(
+          onTap: () {},
+          child: SizedBox(
+            width: 36,
+            height: 32,
+            child: Row(
+              children: [
+                Icon(glyph, size: 18),
+                ClipRect(
+                  child: Align(
+                    widthFactor: 0,
+                    child: Opacity(opacity: 0, child: Text(title)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [
+              // A card that shows only a gender glyph.
+              Semantics(
+                label: 'Member Profile, Aisha Tan',
+                child: InkWell(onTap: () {}, child: const Icon(Icons.male)),
+              ),
+              // A tappable cart line holding a capsule of options.
+              InkWell(
+                onTap: () {},
+                child: Row(
+                  children: [
+                    const Expanded(child: Text('Thai Yoga')),
+                    option('Credit', CupertinoIcons.money_dollar),
+                    option('10 pts', CupertinoIcons.star_fill),
+                  ],
+                ),
+              ),
+              // A label that names content it holds whole.
+              GestureDetector(
+                onTap: () {},
+                child: Semantics(
+                  label: 'Open order history',
+                  excludeSemantics: true,
+                  child: const Row(
+                    children: [Icon(Icons.history), Text('History')],
+                  ),
+                ),
+              ),
+              // A placeholder glyph above the tile's name.
+              SizedBox(
+                height: 120,
+                child: GestureDetector(
+                  onTap: () {},
+                  child: const Column(
+                    children: [
+                      Expanded(child: Icon(CupertinoIcons.cube_box_fill)),
+                      Text('Foot Massage'),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final controls = {
+      for (final node
+          in FlutterScoutHelper.debugRuntime.debugSnapshot().interactables)
+        node.id: node,
+    };
+    expect(
+      controls.keys,
+      containsAll(<String>[
+        'tap.member_profile_aisha_tan',
+        'tap.thai_yoga',
+        'tap.credit',
+        'tap.10_pts',
+        'tap.open_order_history',
+        'tap.foot_massage',
+      ]),
+    );
+    // The glyph and the drawn text stay addresses of their own control.
+    expect(controls['tap.member_profile_aisha_tan']!.altIds, ['tap.male']);
+    expect(controls['tap.credit']!.altIds, ['tap.money_dollar']);
+    expect(controls['tap.open_order_history']!.altIds, ['tap.history']);
+    // An option is not also named after the next option's label, and the
+    // line is not named after an option inside it.
+    expect(controls['tap.credit']!.altIds, isNot(contains('tap.10_pts')));
+    expect(controls['tap.thai_yoga']!.altIds, isEmpty);
+  });
 }

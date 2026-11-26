@@ -1,5 +1,24 @@
 ## Unreleased
 
+* A control's handle takes the name the app gives it before its text or
+  glyph. Its own Semantics label or tooltip comes first, then a Semantics
+  label that wraps it at its own extent, then a tooltip or Semantics label
+  inside it that holds all of its text or covers it whole, then the text it
+  draws, then a labelled part (an icon's label), and its icon or asset name
+  last. Keys and feature keys still come before all of these. Before, a
+  press-effect pressable inside a tappable row (`Semantics(button: true,
+  label:)` above its `GestureDetector`) was named after its glyph
+  (`tap.money_dollar` for a redeem option labelled Credit), a card whose
+  Semantics label wraps an `InkWell` holding only a gender glyph was
+  `tap.male`, and `Semantics(label: 'Open order history', excludeSemantics:
+  true)` lost to the text it hides (`tap.history`). The glyph and the drawn
+  text stay alternate handles. A live region's label (Android's
+  ExpansionTile "Expanded") is an announcement, not a name.
+* A control is no longer given another control's name as an alias: a row
+  does not answer to the label of an option inside it, and a control the
+  app named does not take the text beside it (the next redeem option's
+  "10 pts") as an intent alias.
+
 * Rendering no longer trusts Flutter's lifecycle alone on macOS. Every
   observation carries `rendering.host` (all displays asleep, session lock
   flag, login window frontmost, console session, app occlusion, read with

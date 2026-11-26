@@ -1488,6 +1488,10 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
           rect.width > 96 ||
           rect.height > 96 ||
           node.id.contains('gesturedetector') ||
+          // The app named it (a Semantics label or tooltip): the text beside
+          // it is a neighbour's name, such as the next redeem option's.
+          (node._renderObject != null &&
+              _appNamedControls[node._renderObject] == true) ||
           // A control that shows its own text is named; a neighbour's text
           // (the next chip in a row) is not another name for it.
           textNodes.any(
