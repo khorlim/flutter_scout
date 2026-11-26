@@ -132,6 +132,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
           node: node,
         ),
         if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
+        'lateWindow': ?actionSnapshot.lateWindow,
         if (actionSnapshot.activityObserved) ...{
           'activityObserved': true,
           if (actionSnapshot.transientViewSignatures.isNotEmpty)
@@ -261,6 +262,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
           node: targetNode,
         ),
         if (actionSnapshot.lateChangeObserved) 'lateChangeObserved': true,
+        'lateWindow': ?actionSnapshot.lateWindow,
         if (actionSnapshot.activityObserved) ...{
           'activityObserved': true,
           if (actionSnapshot.transientViewSignatures.isNotEmpty)
@@ -2736,10 +2738,13 @@ extension _RuntimeActions on FlutterScoutRuntime {
   Future<_ActionSnapshotResult> _snapshotAfterAction(
     ScoutSnapshot before,
     Map<String, String> params,
-  ) => _inRequestPhaseAsync(
-    'settle',
-    () => _snapshotAfterActionWithoutPhaseTiming(before, params),
-  );
+  ) => _inRequestPhaseAsync('settle', () async {
+    try {
+      return await _snapshotAfterActionWithoutPhaseTiming(before, params);
+    } finally {
+      _endInputWorkTracking();
+    }
+  });
 
   Future<_ActionSnapshotResult> _snapshotAfterActionWithoutPhaseTiming(
     ScoutSnapshot before,
@@ -2835,6 +2840,15 @@ extension _RuntimeActions on FlutterScoutRuntime {
     }
 
     final lateWaitMs = int.tryParse(params['lateWaitMs'] ?? '') ?? 1000;
+    final lateStopwatch = Stopwatch()..start();
+    // What ended the late window, for the receipt: the caller's window
+    // (`lateWaitMs`), how long it ran and why it stopped.
+    Map<String, Object?> lateWindow(String ended) => <String, Object?>{
+      'ms': lateWaitMs,
+      'waitedMs': lateStopwatch.elapsedMilliseconds,
+      'ended': ended,
+      if (_inputWork case final work?) 'inputWork': work.toJson(),
+    };
     if (lateWaitMs <= 0) {
       sampler.cancel();
       return _ActionSnapshotResult(
@@ -2842,6 +2856,19 @@ extension _RuntimeActions on FlutterScoutRuntime {
         stability: stability,
         activityObserved: activityObserved,
         transientViewSignatures: transientViewSignatures,
+        lateWindow: lateWindow('disabled'),
+      );
+    }
+    // Nothing the input started is still running and Flutter is idle: no
+    // late change has anything left to come from.
+    if (_inputWorkSettled) {
+      sampler.cancel();
+      return _ActionSnapshotResult(
+        snapshot: after,
+        stability: stability,
+        activityObserved: activityObserved,
+        transientViewSignatures: transientViewSignatures,
+        lateWindow: lateWindow('input_idle'),
       );
     }
 
@@ -2850,8 +2877,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
     // Each round waits up to ~330 ms and re-snapshots: stop once another
     // round could not finish before the request's settle deadline. A round
     // ends as soon as a lasting change lands instead of waiting out its
-    // stability window first; whoever needs the settled result watches for
-    // it (the agent client settles after a changed view).
+    // stability window first, or as soon as the input's work has settled;
+    // whoever needs the settled result watches for it (the agent client
+    // settles after a changed view).
     bool lateRoundFits() {
       final now = DateTime.now();
       if (!now.isBefore(lateDeadline)) return false;
@@ -2859,16 +2887,25 @@ extension _RuntimeActions on FlutterScoutRuntime {
           now.millisecondsSinceEpoch + 330 + _lastSnapshotMs < settleDeadline;
     }
 
+    var ended = 'window_elapsed';
     while (lateRoundFits()) {
-      await Future<void>.delayed(const Duration(milliseconds: 80));
+      // The pause between rounds also ends once the input's work settles.
+      for (var waited = 0; waited < 80 && !_inputWorkSettled; waited += 16) {
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
       ScoutSnapshot? landed;
+      var idle = false;
       stability = await _waitStable(
         frameAdvancePolicy: _FrameAdvancePolicy.mutationSettling,
         timeout: const Duration(milliseconds: 250),
         initialSnapshot: after,
         stopReason: 'late_change_observed',
         stopWhen: (current) {
-          if (!_changed(before, current)) return false;
+          if (!_changed(before, current)) {
+            if (activityObserved || !_inputWorkSettled) return false;
+            idle = true;
+            return true;
+          }
           if (!completesExpectation(current) &&
               _looksTransientActionState(before, current)) {
             return false;
@@ -2889,6 +2926,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
             lateChangeObserved: true,
             activityObserved: true,
             transientViewSignatures: transientViewSignatures,
+            lateWindow: lateWindow('change_landed'),
           );
         }
       } else if (activityObserved) {
@@ -2899,8 +2937,15 @@ extension _RuntimeActions on FlutterScoutRuntime {
           lateChangeObserved: true,
           activityObserved: true,
           transientViewSignatures: transientViewSignatures,
+          lateWindow: lateWindow('change_reverted'),
         );
+      } else if (idle) {
+        ended = 'input_idle';
+        break;
       }
+    }
+    if (ended == 'window_elapsed' && DateTime.now().isBefore(lateDeadline)) {
+      ended = 'request_deadline';
     }
 
     sampler.cancel();
@@ -2910,6 +2955,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       activityObserved: activityObserved,
       transientViewSignatures: transientViewSignatures,
       waitTimedOut: !stability.actionable && stability.exhausted,
+      lateWindow: lateWindow(ended),
     );
   }
 

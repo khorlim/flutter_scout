@@ -1348,6 +1348,7 @@ class _ActionSnapshotResult {
     this.activityObserved = false,
     this.transientViewSignatures = const [],
     this.waitTimedOut = false,
+    this.lateWindow,
   });
 
   final ScoutSnapshot snapshot;
@@ -1356,6 +1357,11 @@ class _ActionSnapshotResult {
   final bool activityObserved;
   final List<String> transientViewSignatures;
   final bool waitTimedOut;
+
+  /// The late-change window after an input that changed nothing at once:
+  /// `ms` requested, `waitedMs`, what `ended` it (`input_idle`,
+  /// `change_landed`, `window_elapsed`, ...) and the input's tracked work.
+  final Map<String, Object?>? lateWindow;
 
   bool get stable => stability.stable;
 }

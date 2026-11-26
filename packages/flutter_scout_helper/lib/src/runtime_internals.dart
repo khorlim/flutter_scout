@@ -303,7 +303,9 @@ extension _RuntimeInternals on FlutterScoutRuntime {
     final deadline = DateTime.now().add(const Duration(milliseconds: 750));
     while (true) {
       try {
-        GestureBinding.instance.handlePointerEvent(event);
+        _runTrackedInput(
+          () => GestureBinding.instance.handlePointerEvent(event),
+        );
         return;
       } catch (error) {
         final locked = error.toString().contains('!locked');

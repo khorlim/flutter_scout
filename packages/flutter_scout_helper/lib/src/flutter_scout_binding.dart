@@ -35,6 +35,7 @@ part 'runtime_navigation.dart';
 part 'runtime_snapshot.dart';
 part 'runtime_nodes.dart';
 part 'runtime_switch_labels.dart';
+part 'runtime_input_work.dart';
 part 'runtime_internals.dart';
 part 'runtime_recorder.dart';
 
@@ -805,17 +806,36 @@ class FlutterScoutRuntime {
   /// Test-only: tap logical coordinates through the production handler, with
   /// its settling waits (unlike [debugTapTarget], which skips them).
   @visibleForTesting
+  ///
+  /// [trackInput] runs it inside a mutation request context, as the VM
+  /// extension does, so the input's work is tracked for the late window.
   Future<Map<String, Object?>> debugTapPoint(
     Offset point, {
     int waitMs = 0,
     int lateWaitMs = 0,
+    bool trackInput = false,
   }) async {
-    final response = await _handleTap('debugTapPoint', {
+    final params = {
       'x': '${point.dx}',
       'y': '${point.dy}',
       'waitMs': '$waitMs',
       'lateWaitMs': '$lateWaitMs',
-    });
+    };
+    Future<developer.ServiceExtensionResponse> tap() =>
+        _handleTap('debugTapPoint', params);
+    final response = trackInput
+        ? await runZoned(
+            tap,
+            zoneValues: {
+              _requestContextZoneKey: _RequestContext(
+                extensionName: 'ext.flutter_scout.tap',
+                method: 'debugTapPoint',
+                params: params,
+                mutating: true,
+              ),
+            },
+          )
+        : await tap();
     return jsonDecode(response.result!) as Map<String, Object?>;
   }
 

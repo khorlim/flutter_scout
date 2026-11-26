@@ -144,6 +144,8 @@ class _RequestContext {
   bool handlerEntered = false;
   // Set when a newer state generation was accepted for unchanged targets.
   Map<String, Object?>? targetFreshness;
+  // The work this mutation's pointer input started (runtime_input_work.dart).
+  _InputWorkTracker? inputWork;
 }
 
 class _MutationRecord {
@@ -326,6 +328,7 @@ extension _RuntimeProtocol on FlutterScoutRuntime {
       try {
         return await _dispatchMutation(context, callback);
       } finally {
+        context.inputWork?.active = false;
         _drivingOverlay.release();
       }
     }, zoneValues: zoneValues);
