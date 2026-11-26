@@ -11,7 +11,9 @@ import 'package:flutter_scout_helper/flutter_scout_helper.dart';
 /// Semantics; `<180 days`/`>180 days` filters; a "Roundup" caption over a
 /// switch; the cart sits above the grid and recomputes its total a moment
 /// after an item is added; item and member popups have app bar titles over
-/// bold labels; and there are more lists than a scene shows.
+/// bold labels; there are more lists than a scene shows; and a no-op Print
+/// button and a Check stock button whose result lands 400 ms later exercise
+/// the late-change window.
 void main() {
   FlutterScoutBinding.ensureInitialized();
   runApp(const MaterialApp(home: OrderScreen()));
@@ -43,6 +45,7 @@ class _OrderScreenState extends State<OrderScreen> {
   bool _roundup = false;
   String _range = '<180 days';
   String _sort = 'Name';
+  String _stock = 'Stock not checked';
 
   void _add(String product) {
     setState(() => _cart.add(product));
@@ -269,6 +272,19 @@ class _OrderScreenState extends State<OrderScreen> {
                     ),
                   ],
                 ),
+                // A Material button that does nothing, and one whose only
+                // effect lands 400 ms later (Scout's late-change window).
+                TextButton(onPressed: () {}, child: const Text('Print')),
+                TextButton(
+                  onPressed: () => Future<void>.delayed(
+                    const Duration(milliseconds: 400),
+                    () {
+                      if (mounted) setState(() => _stock = 'In stock: 5');
+                    },
+                  ),
+                  child: const Text('Check stock'),
+                ),
+                Text(_stock),
                 Text('Total $_total'),
                 FilledButton(
                   onPressed: _total == 'RM 0.00' ? null : () {},

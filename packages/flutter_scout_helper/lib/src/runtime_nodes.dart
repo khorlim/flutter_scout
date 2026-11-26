@@ -447,68 +447,6 @@ extension _RuntimeNodes on FlutterScoutRuntime {
         inner.bottom <= outer.bottom + slop;
   }
 
-  /// Heuristic selection for CUSTOM segments/chips that expose no Semantics:
-  /// in a horizontal run of >=3 adjacent same-kind tappables, when exactly
-  /// one label color differs from an otherwise uniform rest, that outlier is
-  /// the active segment. Applies only where nothing better is known
-  /// (selected == null), so real widget/semantics state always wins.
-  List<ScoutNode> _inferSegmentSelection(List<ScoutNode> nodes) {
-    final candidates = <int>[
-      for (var i = 0; i < nodes.length; i++)
-        if ((nodes[i].kind == 'btn' || nodes[i].kind == 'tap') &&
-            nodes[i].selected == null &&
-            nodes[i].rect != null &&
-            nodes[i].textColor != null)
-          i,
-    ];
-    if (candidates.length < 3) return nodes;
-    final result = [...nodes];
-    final used = <int>{};
-    for (final seed in candidates) {
-      if (used.contains(seed)) continue;
-      final group = <int>[
-        for (final other in candidates)
-          if (!used.contains(other) &&
-              nodes[other].kind == nodes[seed].kind &&
-              (nodes[other].rect!.top - nodes[seed].rect!.top).abs() <= 6 &&
-              (nodes[other].rect!.height - nodes[seed].rect!.height).abs() <= 6)
-            other,
-      ];
-      group.forEach(used.add);
-      if (group.length < 3) continue;
-      group.sort((a, b) => nodes[a].rect!.left.compareTo(nodes[b].rect!.left));
-      // Segments sit shoulder to shoulder; a spread-out row (toolbar corners)
-      // must not be treated as one control.
-      var adjacent = true;
-      for (var i = 1; i < group.length; i++) {
-        final previous = nodes[group[i - 1]].rect!;
-        final current = nodes[group[i]].rect!;
-        final gap = current.left - previous.right;
-        if (gap < -8 || gap > previous.height * 2) {
-          adjacent = false;
-          break;
-        }
-      }
-      if (!adjacent) continue;
-      final counts = <int, int>{};
-      for (final index in group) {
-        counts.update(nodes[index].textColor!, (n) => n + 1, ifAbsent: () => 1);
-      }
-      if (counts.length != 2) continue;
-      final outliers = [
-        for (final entry in counts.entries)
-          if (entry.value == 1) entry.key,
-      ];
-      if (outliers.length != 1) continue;
-      for (final index in group) {
-        result[index] = nodes[index].withSelected(
-          nodes[index].textColor == outliers.single,
-        );
-      }
-    }
-    return result;
-  }
-
   String? _kindFor(Widget widget, Element element) {
     // SelectableText shows text that can be selected, not typed into: it is
     // text to read and locate, and its inner read-only EditableText is not an

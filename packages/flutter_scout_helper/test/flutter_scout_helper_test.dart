@@ -2704,7 +2704,7 @@ void main() {
     expect(admin.summaryJson()['viewSignature'], admin.viewSignature);
   });
 
-  testWidgets('segment selection is inferred from the odd text color', (
+  testWidgets('an odd text color is a hint, never a guessed selection', (
     tester,
   ) async {
     FlutterScoutHelper.ensureRegistered();
@@ -2764,14 +2764,28 @@ void main() {
     final snapshot = FlutterScoutHelper.debugRuntime.debugSnapshot();
     bool? selectedOf(String id) =>
         snapshot.interactables.firstWhere((node) => node.id == id).selected;
-    expect(selectedOf('tap.activex'), isTrue);
-    expect(selectedOf('tap.allx'), isFalse);
-    expect(selectedOf('tap.inactivex'), isFalse);
-    // Spread-out row: no inference.
-    expect(selectedOf('tap.midx'), isNull);
-    expect(selectedOf('tap.leftx'), isNull);
-    // Uniform row: no inference.
-    expect(selectedOf('tap.oney'), isNull);
+    // Scout cannot know which one is on, so it states no selection.
+    for (final id in ['tap.activex', 'tap.allx', 'tap.midx', 'tap.oney']) {
+      expect(selectedOf(id), isNull, reason: id);
+    }
+    final brief = FlutterScoutHelper.debugRuntime.debugInspectPayload(
+      brief: true,
+      maxItems: 100,
+    );
+    final hints = [
+      for (final hint in ((brief['stateHints']! as Map)['controls']! as List))
+        (hint as Map).cast<String, Object?>(),
+    ];
+    // It names the rows painted unevenly and the control painted unlike the
+    // rest; the uniform row gets no hint.
+    expect(
+      hints.map((hint) => hint['reason']),
+      everyElement('painted_differently'),
+    );
+    expect(hints.map((hint) => hint['differs']), [
+      ['tap.activex'],
+      ['tap.midx'],
+    ]);
   });
 
   testWidgets('TickerMode-disabled content stays visible to inspect', (

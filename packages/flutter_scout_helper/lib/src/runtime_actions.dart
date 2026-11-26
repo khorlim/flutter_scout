@@ -2906,14 +2906,20 @@ extension _RuntimeActions on FlutterScoutRuntime {
     var ended = 'window_elapsed';
     while (lateRoundFits()) {
       // The pause between rounds also ends once the input's work settles.
-      for (var waited = 0; waited < 80 && !_inputWorkSettled; waited += 16) {
+      // Neither the pause nor the round runs past the caller's window.
+      int leftMs() => lateDeadline.difference(DateTime.now()).inMilliseconds;
+      for (
+        var waited = 0;
+        waited < 80 && leftMs() > 16 && !_inputWorkSettled;
+        waited += 16
+      ) {
         await Future<void>.delayed(const Duration(milliseconds: 16));
       }
       ScoutSnapshot? landed;
       var idle = false;
       stability = await _waitStable(
         frameAdvancePolicy: _FrameAdvancePolicy.mutationSettling,
-        timeout: const Duration(milliseconds: 250),
+        timeout: Duration(milliseconds: math.max(16, math.min(250, leftMs()))),
         initialSnapshot: after,
         stopReason: 'late_change_observed',
         stopWhen: (current) {

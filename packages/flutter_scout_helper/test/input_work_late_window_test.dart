@@ -153,6 +153,17 @@ void main() {
     expect((window['inputWork']! as Map)['busy'], 'app_microtask');
   });
 
+  testWidgets('a short window is not overrun', (tester) async {
+    final point = await pumpButton(tester, () async {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    });
+    final (result, _) = await tap(tester, point, lateWaitMs: 200);
+
+    final window = lateWindow(result);
+    expect(window['ended'], 'window_elapsed', reason: '$result');
+    expect(window['waitedMs'], lessThan(290));
+  });
+
   testWidgets('a periodic timer keeps the whole window', (tester) async {
     Timer? ticker;
     final point = await pumpButton(tester, () {

@@ -123,14 +123,30 @@ extension _RuntimePaintedState on FlutterScoutRuntime {
           )) {
         continue;
       }
-      final looks = {
+      final looks = [
         for (final node in members)
           _paintFacets(node._renderObject, budget: 40).join('|'),
-      };
-      if (looks.length < 2) continue;
+      ];
+      final counts = <String, int>{};
+      for (final look in looks) {
+        counts.update(look, (n) => n + 1, ifAbsent: () => 1);
+      }
+      if (counts.length < 2) continue;
+      // The controls painted unlike most of the group: a fact about paint,
+      // not a claim about which one is on.
+      final common = counts.entries.reduce(
+        (a, b) => a.value >= b.value ? a : b,
+      );
+      final majority =
+          counts.values.where((n) => n == common.value).length == 1;
       hints.add(<String, Object?>{
         'ids': [for (final node in members.take(6)) node.id],
         'reason': 'painted_differently',
+        if (majority)
+          'differs': [
+            for (var i = 0; i < members.length; i++)
+              if (looks[i] != common.key) members[i].id,
+          ],
       });
     }
     return hints;

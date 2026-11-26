@@ -794,24 +794,6 @@ extension _RuntimeSnapshot on FlutterScoutRuntime {
       compactNodes = nodes;
     }
     try {
-      compactNodes = _inferSegmentSelection(compactNodes);
-    } catch (_) {
-      // Inference is best-effort; never let it cost the snapshot.
-      _addPerceptionGap(
-        perceptionGaps,
-        perceptionGapFingerprints,
-        <String, Object?>{
-          'id': 'gap.selection_inference.${perceptionGaps.length + 1}',
-          'kind': 'selection_inference_failed',
-          'status': 'heuristic_inference_unavailable',
-          'evidenceKind': 'observed_failure',
-          'source': 'uncalibrated_segment_selection_heuristic',
-          'affectedEvidence': const <String>['inferred_selection_state'],
-          'isolation': 'observed_node_facts_retained',
-        },
-      );
-    }
-    try {
       compactNodes = _linkEnclosingTargets(compactNodes);
     } catch (_) {
       // Best-effort enrichment.
