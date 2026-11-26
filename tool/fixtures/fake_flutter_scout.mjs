@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Test double for `flutter-scout --app <name> agent` (agentProtocol 2).
 // FAKE_SCOUT_MODE selects a failure; FAKE_SCOUT_LOG appends received requests.
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const mode = process.env.FAKE_SCOUT_MODE ?? 'ok';
@@ -18,6 +18,34 @@ const scene = () => ({
     fieldValues: { 'field.customer_name': '', 'field.staff_code': { redacted: true, isEmpty: true, hasValue: false } } },
   hand: { pendingAction: null, unacknowledgedAction: unacknowledged, halted: null, closed: false },
 });
+
+// overflow / overflow_receipt: the first connection's first observe finds it
+// halted by event overflow (the latter with a receipt still unread); later
+// connections are healthy.
+const overflowMarker = log && `${log}.overflowed`;
+const overflowScene = () => {
+  const halted = { ...scene(), ok: false, actionable: false, inputBlockedReason: 'agent_event_overflow',
+    blockedBy: { code: 'agent_hand_unavailable', reason: 'connection_overflow', message: 'connection_overflow: fake',
+      nextStep: 'reconnect', details: { halted: 'agent_event_overflow', unreadAlerts: 65, maxEvents: 64,
+        renderingAffected: false } } };
+  halted.hand = { ...halted.hand, halted: 'agent_event_overflow',
+    unacknowledgedAction: mode === 'overflow_receipt' ? 'a1' : null };
+  return { ...halted, error: halted.blockedBy };
+};
+let overflowed = false;
+// Like the real agent lease, these modes hold the app until the process has
+// exited, a moment after its close reply.
+const lease = mode.startsWith('overflow') && log ? `${log}.lease` : null;
+if (lease && existsSync(lease)) {
+  emit({ messageType: 'response', ok: false, result: null,
+    structuredError: { code: 'agent_session_busy', message: 'This named app already has an agent connection.' } });
+  process.exit(1);
+}
+if (lease) {
+  writeFileSync(lease, '');
+  process.on('exit', () => rmSync(lease, { force: true }));
+}
+const exitSoon = () => (lease ? setTimeout(() => process.exit(0), 300) : process.exit(0));
 
 if (mode === 'not_registered') {
   process.stderr.write('flutter-scout: resolving session\nno session named demo\n');
@@ -47,7 +75,13 @@ input.on('line', line => {
   }
   const reply = value => emit({ id: request.id, ...value });
   switch (request.method) {
-    case 'observe': case 'status': return reply(scene());
+    case 'observe': case 'status':
+      if (mode.startsWith('overflow') && (overflowed || !existsSync(overflowMarker))) {
+        overflowed = true;
+        writeFileSync(overflowMarker, '');
+        return reply(overflowScene());
+      }
+      return reply(scene());
     case 'start':
       if (request.viewRevision !== revision || unacknowledged) {
         return reply({ ok: false, dispatch: 'not_dispatched', error: { code: 'agent_request_rejected', message: 'agent_view_changed' } });
@@ -74,9 +108,9 @@ input.on('line', line => {
     case 'query': return reply({ ok: true, queryResult: { ok: true, method: request.query.method, matches: 1 } });
     case 'close':
       reply({ ok: true, type: 'closed', inflightActionCancelled: false });
-      return process.exit(0);
+      return exitSoon();
     default:
       return reply({ ok: false, dispatch: 'not_dispatched', error: { code: 'agent_request_rejected', message: 'Unsupported method' } });
   }
 });
-input.on('close', () => process.exit(0));
+input.on('close', exitSoon);

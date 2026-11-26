@@ -852,6 +852,7 @@ export class ScoutBridge {
     this.connection = 0;
     this.fresh = false;
     this.disconnected = false;
+    this.recovered = null;
   }
 
   /** Opens the connection lazily; reports a reconnect, never resends input. */
@@ -859,15 +860,23 @@ export class ScoutBridge {
     if (this.agent && !this.agent.closed) return Promise.resolve(null);
     if (!this.opening) {
       const previous = this.agent;
-      this.opening = ScoutAgent.connect(this.options).then(agent => {
+      // The previous agent process holds the app's agent lease until it
+      // exits, so a connect straight after close would find it busy.
+      const released = previous?.exited
+        ? Promise.race([previous.exited, new Promise(resolve => setTimeout(resolve, 5000).unref?.())])
+        : Promise.resolve();
+      this.opening = released.then(() => ScoutAgent.connect(this.options)).then(agent => {
         this.agent = agent;
         this.connection += 1;
         if (this.connection === 1) return null;
         this.fresh = true;
+        const recovered = this.recovered;
         const info = { reconnected: true, connection: this.connection,
-          reason: this.disconnected ? 'disconnected' : 'transport_lost',
-          previousLoss: this.disconnected ? null : lossSummary(previous?.failure) };
+          reason: recovered ? recovered.reason : this.disconnected ? 'disconnected' : 'transport_lost',
+          previousLoss: recovered ? recovered.previousLoss
+            : this.disconnected ? null : lossSummary(previous?.failure) };
         this.disconnected = false;
+        this.recovered = null;
         return info;
       }).finally(() => { this.opening = null; });
     }
@@ -889,6 +898,26 @@ export class ScoutBridge {
     const closed = await agent.close();
     this.disconnected = true;
     return { ...closed, ok: closed.ok === true, type: 'disconnected', connected: false };
+  }
+
+  /** A connection that stopped taking input only because its unread event
+   * queue overflowed is replaced on the caller's next observe or status,
+   * like after disconnect, when nothing can be lost: no input is running,
+   * pending or awaiting its receipt or acknowledgement. Otherwise the halted
+   * scene is returned and its blockedBy names the next step. */
+  async recoverOverflow(scene) {
+    const hand = scene?.hand;
+    if (hand?.halted !== 'agent_event_overflow' || hand.closed || hand.pendingAction ||
+        hand.unacknowledgedAction || this.busy) return null;
+    const details = scene.blockedBy?.details ?? {};
+    await this.agent.close().catch(() => {});
+    if (!this.agent.closed) this.agent.abort();
+    this.recovered = { reason: 'connection_overflow', previousLoss: {
+      code: 'connection_overflow', dispatch: 'not_dispatched',
+      unreadAlerts: details.unreadAlerts ?? null, maxEvents: details.maxEvents ?? null,
+      message: 'Unread receipts, condition or reaction results passed the queue limit, so the old ' +
+        'connection stopped taking input. No input was outstanding; its unread events are gone.' } };
+    return this.ensureAgent();
   }
 
   async handle(request) {
@@ -928,9 +957,13 @@ export class ScoutBridge {
         `${refusal}. Send this act JSON on stdin instead: act - <<'JSON' ... JSON. Nothing was sent.`)));
     }
     let result;
+    let recovered = null;
     switch (method) {
-      case 'observe': result = await agent.observe(); break;
-      case 'status': result = await agent.status(); break;
+      case 'observe': case 'status':
+        result = await agent[method]();
+        recovered = await this.recoverOverflow(result);
+        if (recovered) result = await this.agent[method]();
+        break;
       case 'foreground': result = await agent.foreground(); break;
       case 'act': result = await agent.act(p.viewRevision, p.action, p.timeoutMs ?? 45000); break;
       case 'taps':
@@ -951,7 +984,7 @@ export class ScoutBridge {
       case 'query': result = await agent.query(p.method, p.params ?? {}, p.args ?? []); break;
     }
     if (method === 'observe' || method === 'status') this.fresh = false;
-    return tag(result);
+    return recovered ? { ...result, bridge: recovered } : tag(result);
   }
 }
 

@@ -163,6 +163,32 @@ test('loss during an input is reported once as unknown and never retried', async
   assert.equal(b.requests().filter(r => r.method === 'start').length, 1, 'no automatic retry');
 });
 
+test('an overflow-halted connection reconnects on the next observe', async () => {
+  const b = bridge('overflow', 'overflow');
+  assert.equal((await b.serve()).code, 0);
+  const scene = await b.call('observe');
+  assert.equal(scene.code, 0, JSON.stringify(scene.json));
+  assert.equal(scene.json.actionable, true);
+  assert.deepEqual([scene.json.bridge.reconnected, scene.json.bridge.reason], [true, 'connection_overflow']);
+  assert.deepEqual([scene.json.bridge.previousLoss.code, scene.json.bridge.previousLoss.dispatch],
+    ['connection_overflow', 'not_dispatched']);
+  assert.equal(new Set(b.requests().map(r => r.pid)).size, 2);
+  const acted = await b.call('act', JSON.stringify({
+    viewRevision: scene.json.viewRevision, action: { method: 'tap', args: ['btn.save'] } }));
+  assert.equal(acted.code, 0, JSON.stringify(acted.json));
+  assert.equal(acted.json.bridge, undefined, 'reported once');
+});
+
+test('an overflow halt with an unread receipt stays put and says why', async () => {
+  const b = bridge('overflow-receipt', 'overflow_receipt');
+  assert.equal((await b.serve()).code, 0);
+  const scene = await b.call('observe');
+  assert.equal(scene.code, 1);
+  assert.equal(scene.json.bridge, undefined);
+  assert.equal(scene.json.blockedBy.reason, 'connection_overflow');
+  assert.equal(new Set(b.requests().map(r => r.pid)).size, 1, 'no reconnect');
+});
+
 test('default socket lives in a private per-user directory', async () => {
   const app = `bridge-test-${process.pid}-with-a-long-session-name`;
   const served = await run(['serve', '--app', app, '--binary', fake]);
