@@ -58,7 +58,8 @@ class AgentSession {
   };
 
   /// `tap` options that change how it presses, never where.
-  static const _tapPointParams = {'button', 'taps', 'intervalMs'};
+  // A shorter late-change window does not change what is pressed.
+  static const _tapPointParams = {'button', 'taps', 'intervalMs', 'lateWaitMs'};
 
   /// `scroll`/`swipe` options that keep the gesture on its named target.
   static const _gestureParams = {'target', 'distance'};

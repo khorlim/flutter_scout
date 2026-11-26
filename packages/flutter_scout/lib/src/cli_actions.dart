@@ -318,11 +318,27 @@ extension _CliActions on FlutterScoutCli {
             'with --taps 2.',
       );
     }
+    final lateWait = parsed.option('late-wait-ms');
+    if (lateWait != null) {
+      final ms = int.tryParse(lateWait);
+      if (ms == null || ms < 0 || ms > 1000) {
+        throw const ScoutCliException(
+          'invalid_parameter_value',
+          '--late-wait-ms takes 0 to 1000 (ms); it only shortens the '
+              'default 1000 ms late-change window.',
+        );
+      }
+    }
     return {
       if (taps != null && taps != '1') 'taps': taps,
       'intervalMs': ?interval,
+      'lateWaitMs': ?lateWait,
     };
   }
+
+  static const _lateWaitHelp =
+      'Late-change window (0-1000 ms, default 1000) after a tap that '
+      'changed nothing at once; it also ends once the tap\'s work settles.';
 
   ArgParser _tapArgumentParser() {
     final parser = ArgParser()
@@ -332,6 +348,7 @@ extension _CliActions on FlutterScoutCli {
       ..addOption('button', allowed: const ['primary', 'secondary'])
       ..addOption('taps', allowed: const ['1', '2'], help: '2 = double tap.')
       ..addOption('interval-ms')
+      ..addOption('late-wait-ms', help: _lateWaitHelp)
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('verbose', defaultsTo: false);
     _addExpectOptions(parser);
@@ -481,6 +498,7 @@ extension _CliActions on FlutterScoutCli {
       )
       ..addOption('taps', allowed: const ['1', '2'], help: '2 = double tap.')
       ..addOption('interval-ms')
+      ..addOption('late-wait-ms', help: _lateWaitHelp)
       ..addOption('wait-ms', defaultsTo: '1500')
       ..addFlag('allow-mismatch', defaultsTo: false, negatable: false)
       ..addFlag(

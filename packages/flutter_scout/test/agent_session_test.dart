@@ -1329,6 +1329,14 @@ void main() {
     );
     expect(
       AgentSession.scopedTargets({
+        'method': 'tap',
+        'args': ['btn.pause'],
+        'params': {'lateWaitMs': 200},
+      }),
+      {'btn.pause'},
+    );
+    expect(
+      AgentSession.scopedTargets({
         'method': 'input',
         'args': ['value'],
         'params': {'target': 'field.code'},

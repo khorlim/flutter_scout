@@ -773,6 +773,7 @@ extension _CliResults on FlutterScoutCli {
         if (result['result'] != null) 'result': result['result'],
         if (result['lateChangeObserved'] != null)
           'lateChangeObserved': result['lateChangeObserved'],
+        if (result['lateWindow'] is Map) 'lateWindow': result['lateWindow'],
         if (result['waitTimedOut'] != null)
           'waitTimedOut': result['waitTimedOut'],
         if (result['activityObserved'] == true) 'activityObserved': true,
@@ -849,6 +850,7 @@ extension _CliResults on FlutterScoutCli {
       if (result['result'] != null) 'result': result['result'],
       if (result['lateChangeObserved'] != null)
         'lateChangeObserved': result['lateChangeObserved'],
+      if (result['lateWindow'] is Map) 'lateWindow': result['lateWindow'],
       if (result['waitTimedOut'] != null)
         'waitTimedOut': result['waitTimedOut'],
       if (result['activityObserved'] == true) 'activityObserved': true,

@@ -117,6 +117,33 @@ void main() {
       }
     });
 
+    test('bounds the late-change window before dispatch', () {
+      for (final method in ['tap', 'tap-text']) {
+        final target = method == 'tap' ? 'btn.pay' : 'Confirm Payment';
+        for (final ms in [0, 200, 1000]) {
+          expect(
+            cli.debugValidatePersistentTypedCall({
+              'method': method,
+              'args': [target],
+              'params': {'lateWaitMs': ms},
+            })['valid'],
+            isTrue,
+            reason: '$method $ms',
+          );
+        }
+        // Only a shorter window than the 1000 ms default can be asked for.
+        for (final value in <Object?>[1001, -1, '200', 1.5]) {
+          final result = cli.debugValidatePersistentTypedCall({
+            'method': method,
+            'args': [target],
+            'params': {'lateWaitMs': value},
+          });
+          expect(result['valid'], isFalse, reason: '$method $value');
+          expect(result['handlerEntered'], isFalse);
+        }
+      }
+    });
+
     test('leaves malformed options to typed validation without dispatch', () {
       for (final args in <List<String>>[
         ['tap', '110', '127', '--unsupported'],

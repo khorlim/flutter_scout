@@ -270,6 +270,14 @@ const _taps = _TypedValueContract(
   maximum: 2,
   defaultValue: 1,
 );
+// The late-change window after a tap that changed nothing at once. Only a
+// shorter window than the default can be asked for.
+const _lateWaitMs = _TypedValueContract(
+  kind: _TypedJsonKind.integer,
+  minimum: 0,
+  maximum: 1000,
+  defaultValue: 1000,
+);
 const _tapIntervalMs = _TypedValueContract(
   kind: _TypedJsonKind.integer,
   minimum: 0,
@@ -891,6 +899,7 @@ final Map<String, _TypedMethodContract> _typedMethodContracts =
             allowedValues: <String>['primary', 'secondary'],
           ),
           'intervalMs': _tapIntervalMs,
+          'lateWaitMs': _lateWaitMs,
           'taps': _taps,
           'verbose': _boolFalse,
           'waitMs': _waitMs,
@@ -920,6 +929,7 @@ final Map<String, _TypedMethodContract> _typedMethodContracts =
           'allowMismatch': _boolFalse,
           'contains': _boolFalse,
           'intervalMs': _tapIntervalMs,
+          'lateWaitMs': _lateWaitMs,
           'taps': _taps,
           'text': _optionalText,
           'verbose': _boolFalse,
