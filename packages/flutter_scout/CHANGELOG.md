@@ -1,5 +1,23 @@
 ## Unreleased
 
+- An agent connection that only observes or waits no longer halts with
+  `agent_event_overflow` on a busy screen: unread plain view updates
+  coalesce into the newest `view` event (`coalescedViews` counts the ones it
+  replaced). Only more than 64 unread receipts, condition or reaction
+  results halt input, and that halt has its own `blockedBy.reason:
+  'connection_overflow'` with a `nextStep` and `details {unreadAlerts,
+  maxEvents, renderingAffected: false}`; a rejected input names it too.
+  It previously read as a generic `agent_session_stopped`, and a real agent
+  waited an hour for a window that was never hidden.
+- The shell bridge replaces a `connection_overflow` connection on the next
+  `observe`/`status` when no input is outstanding, reporting `bridge:
+  {reconnected, reason: 'connection_overflow', previousLoss}`. Every bridge
+  reconnect now waits (up to 5 s) for the previous agent process to exit,
+  since it holds the app's agent lease until then; a reconnect straight
+  after close otherwise failed with `agent_session_busy`.
+- The skill says to wait with bounded `watch` `wait:true` chunks instead of a
+  tight observe loop, and to branch on `blockedBy.reason`, not `actionable`.
+
 - `foreground()` reads the frontmost app even after rendering looks active
   and returns `ok:false` (`rendering_still_suspended`, "screen is locked")
   while `loginwindow` is in front; it no longer succeeds behind a lock

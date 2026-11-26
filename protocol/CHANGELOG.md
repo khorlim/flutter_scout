@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Agent protocol 2 events: unread `view` events coalesce into the newest,
+  which adds `coalescedViews` (the unread ones it replaced); alerts are
+  unchanged and still halt input past 64 unread (`hand.halted:
+  agent_event_overflow`). That halt's `blockedBy` and rejections now carry
+  `reason: connection_overflow`, `nextStep` and `details {unreadAlerts,
+  maxEvents, renderingAffected: false}`. Additive; helper wire protocol
+  unchanged at 15.
 - A mutation whose only effect is a control state fact now has `result:
   changed` (was `activated_no_observed_change`); its delta was already in
   `controlStateChanges`. Helper wire protocol unchanged at 15.

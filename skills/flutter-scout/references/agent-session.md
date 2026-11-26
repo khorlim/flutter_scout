@@ -24,7 +24,10 @@ input goes to Flutter, not to the user's mouse or keyboard.
   `safety_evidence_incomplete` and `observation_unavailable`; details hold
   `rendering.status`, `framesEnabled`, `lifecycle`,
   `lastFrameworkFrameAgeMs`, `foregroundAvailable` and safety counts. A
-  stopped, busy or receipt-bound hand uses `code:'agent_hand_unavailable'`.
+  stopped, busy or receipt-bound hand uses `code:'agent_hand_unavailable'`;
+  its `reason` (`connection_overflow`, `agent_receipt_required`,
+  `agent_session_stopped`, ...) is about the connection, not the window.
+  Branch on `blockedBy.reason`, never on `actionable` alone.
 - When a person is using the Mac, ask them to leave part of the window
   visible instead of calling foreground(). Only when nobody is using it, call
   `await scout.foreground()` once before a burst of input and again only
@@ -177,8 +180,15 @@ The bridge never retries or queues. When the agent process exits (or after
 ids restart per connection, so only observe/status/query are served until the
 caller has observed; other calls return `bridge_reconnected` with nothing sent.
 `previousLoss.dispatch: dispatch_outcome_unknown` means the earlier input may
-have run: check the fresh scene before deciding. disconnect/close are refused
-while an input is running. An idle bridge stops after 30 minutes.
+have run: check the fresh scene before deciding. A connection halted by
+`connection_overflow` is replaced the same way on the next `observe` or
+`status` when no input is running, pending or awaiting its receipt or
+acknowledgement: that reply is the new connection's scene with
+`bridge: {reconnected: true, reason: 'connection_overflow', previousLoss:
+{code: 'connection_overflow', dispatch: 'not_dispatched', unreadAlerts}}`.
+With an input outstanding it stays halted: read its receipt with `next`,
+then `disconnect` and `observe`. disconnect/close are refused while an
+input is running. An idle bridge stops after 30 minutes.
 
 `next()` can remain pending while `observe`, `start`, `watch`, `react`, or
 `cancel` requests run. Use only one event consumer and route events by
@@ -306,12 +316,21 @@ dialog covers the app; `view.systemDialog`), `rendering_suspended`,
 `helper_capability_missing`, `receipt_unacknowledged` or a halt reason.
 
 Sampling defaults to 250 ms (configurable 100–10,000); reads are deduplicated,
-not piled up. Identical semantic/safety/rendering state is coalesced. Up to 64
-observed transitions/events are retained. Overflow halts further input and
-reserves terminal evidence, rather than silently losing alerts. Consume events
-continuously during a task; this is not indefinite unattended monitoring.
-Polling can miss transitions shorter than a sample, and an event is evidence
-of a past observation, not a reusable current action authorization.
+not piled up. Identical semantic/safety/rendering state is coalesced. Unread
+plain view updates are coalesced too: the queue keeps only the newest `view`
+event, whose `coalescedViews` counts the unread ones it replaced (conditions,
+reactions, `transientText` and revision history saw every sample), so an
+agent that only observes or waits, however long and however busy the screen,
+never overflows it. Alerts (receipts, condition and reaction results) are
+retained up to 64 unread. Past that, input halts and terminal evidence is
+reserved rather than silently losing one: `inputBlockedReason` and
+`hand.halted` are `agent_event_overflow`, and `blockedBy`/rejections carry
+`reason: 'connection_overflow'` with a `nextStep` and `details {unreadAlerts,
+maxEvents, renderingAffected: false}`. It is never a rendering or visibility
+state. Read the receipts you need, then close and reconnect (the shell bridge
+does this by itself, below). Polling can miss transitions shorter than a
+sample, and an event is evidence of a past observation, not a reusable
+current action authorization.
 A caller's `observe()` adds `transientText` (`text`, `shownMs`, `goneAgoMs`):
 visible texts that samples saw appear and vanish since the caller's previous
 observe, at most 12 (`transientTextOmitted` counts older ones). A truncated

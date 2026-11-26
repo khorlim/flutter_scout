@@ -377,7 +377,10 @@ with `status` (`timeout`, `observation_unavailable`, ...). Other events it
 read are in `events`; plain view updates are only counted (`viewEvents`). It
 is the event consumer meanwhile, so do not run act or next alongside it.
 Keep one blocking call under your shell tool's time limit (about 90,000 ms
-for a 2-minute limit) and repeat it while it times out. Plain
+for a 2-minute limit) and repeat it while it times out. This is how to wait
+for anything (a sync to finish, a window to come back, a screen to load):
+bounded `watch` chunks with `wait:true`, not a tight `observe` loop with
+sleeps, which spends calls and still misses short states. Plain
 `watch(condition, timeoutMs)` still returns a ticket at once; then consume
 `next` events (each waits at most 30,000 ms) until that condition's event.
 A plain watch may run up to 600,000 ms (a first data sync); one with a
@@ -412,7 +415,15 @@ When a scene has `actionable:false`, read `scene.blockedBy`: `reason` says
 whether rendering (`rendering_suspended`) or safety blocks input, `details`
 holds the rendering facts, and `nextStep` is the literal recovery. A rejected
 input carries the same fields in `error.reason`, `error.nextStep` and
-`error.details`.
+`error.details`. Branch on `blockedBy.reason`, never on `actionable` alone:
+`code: 'agent_hand_unavailable'` is the connection, not the app or its
+window. `reason: 'connection_overflow'` means more than 64 receipts,
+condition or reaction results went unread (plain view updates never count),
+so that connection stopped taking input; the app and its window are fine.
+The shell bridge reconnects by itself on the next observe when no input is
+outstanding (`bridge.reconnected`, `reason: 'connection_overflow'`);
+otherwise follow `nextStep`: read the receipt with `next`, then
+`disconnect` and `observe`. Do not wait for the window in that state.
 
 On macOS, keep the app window visible (not covered, minimized or on another
 Space) while sending input; a covered window stops rendering and every input

@@ -67,5 +67,6 @@ The implementation removes a model round trip for the explicitly preauthorized
 response and keeps business waits independent from input. It does not prove a
 universal speed winner: model decision time, sampling gaps, rendering
 suspension, complex target discovery and pixel-only content still matter.
-Active continuous sampling is bounded; consumer overflow stops further input.
+Active continuous sampling is bounded; unread view updates coalesce, and
+only unread alert overflow stops further input (`connection_overflow`).
 Use manual screenshots for appearance and native/custom-paint content.
