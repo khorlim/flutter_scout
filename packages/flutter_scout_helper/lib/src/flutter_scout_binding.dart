@@ -36,6 +36,7 @@ part 'runtime_snapshot.dart';
 part 'runtime_nodes.dart';
 part 'runtime_switch_labels.dart';
 part 'runtime_input_work.dart';
+part 'runtime_painted_state.dart';
 part 'runtime_internals.dart';
 part 'runtime_recorder.dart';
 
@@ -809,15 +810,21 @@ class FlutterScoutRuntime {
   ///
   /// [trackInput] runs it inside a mutation request context, as the VM
   /// extension does, so the input's work is tracked for the late window.
+  /// [target] taps that observed handle instead of [point].
   Future<Map<String, Object?>> debugTapPoint(
     Offset point, {
     int waitMs = 0,
     int lateWaitMs = 0,
     bool trackInput = false,
+    String? target,
   }) async {
     final params = {
-      'x': '${point.dx}',
-      'y': '${point.dy}',
+      if (target != null)
+        'target': target
+      else ...{
+        'x': '${point.dx}',
+        'y': '${point.dy}',
+      },
       'waitMs': '$waitMs',
       'lateWaitMs': '$lateWaitMs',
     };
@@ -1698,6 +1705,9 @@ class FlutterScoutRuntime {
                 'Use inspect --sections interactables when these low-label controls matter.',
           },
         if (inspectWarnings.isNotEmpty) 'inspectWarnings': inspectWarnings,
+        'stateHints': ?_stateHintsPayload(
+          briefInteractables.take(maxItems).toList(growable: false),
+        ),
         if (structuredRows.isNotEmpty) 'structuredRows': briefRows,
         if (scrollables.isNotEmpty)
           'scrollables': [

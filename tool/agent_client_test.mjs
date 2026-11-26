@@ -187,6 +187,27 @@ test('act skips the eyes interval when the helper saw the input go idle', async 
   client.abort();
 });
 
+test('a tap that only repainted its target names it in settle', async () => {
+  const { client, requests, send } = fixture();
+  await client.ready;
+  const view = { screen: 'Order' };
+  client.latest = { viewRevision: 1, view };
+  const result = client.act(1, { method: 'tap', args: ['tap.points'] });
+  send({ id: requests[0].id, actionId: 'a1', phase: 'accepted' });
+  await tick();
+  send({ id: requests[1].id, event: { type: 'action', actionId: 'a1', result: { ok: true, dispatch: 'dispatched',
+    paintOnlyChange: { target: 'tap.points', hint: 'crop' },
+    lateWindow: { ms: 1000, waitedMs: 0, ended: 'input_idle' } } } });
+  await tick();
+  send({ id: requests[2].id, ok: true, hand: { unacknowledgedAction: null } });
+  await tick();
+  send({ id: requests[3].id, ok: true, viewRevision: 1, view });
+  const outcome = await result;
+  assert.equal(outcome.settle.status, 'unchanged');
+  assert.equal(outcome.settle.paintOnlyChange, 'tap.points');
+  client.abort();
+});
+
 test('a window the helper did not see go idle still gets the eyes interval', async () => {
   const { client, requests, send } = fixture();
   await client.ready;

@@ -614,6 +614,14 @@ export class ScoutAgent {
    * differs from the view before the input. A failed or not-dispatched input
    * returns the scene at once. */
   async settledScene(result, before, beforeRevision, deadline, log) {
+    const settled = await this.settleAfterInput(result, before, beforeRevision, deadline, log);
+    // A tap that changed only how its target is painted: its state likely
+    // changed where Scout cannot read it. Say so where the outcome is read.
+    const painted = result?.paintOnlyChange?.target;
+    return painted && settled.settle ? { ...settled, settle: { ...settled.settle, paintOnlyChange: painted } } : settled;
+  }
+
+  async settleAfterInput(result, before, beforeRevision, deadline, log) {
     let scene = await this.observe();
     if (result?.ok !== true || scene.ok !== true) return { scene };
     const delta = result.delta;

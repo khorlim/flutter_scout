@@ -774,6 +774,8 @@ extension _CliResults on FlutterScoutCli {
         if (result['lateChangeObserved'] != null)
           'lateChangeObserved': result['lateChangeObserved'],
         if (result['lateWindow'] is Map) 'lateWindow': result['lateWindow'],
+        if (result['paintOnlyChange'] is Map)
+          'paintOnlyChange': result['paintOnlyChange'],
         if (result['waitTimedOut'] != null)
           'waitTimedOut': result['waitTimedOut'],
         if (result['activityObserved'] == true) 'activityObserved': true,
@@ -851,6 +853,8 @@ extension _CliResults on FlutterScoutCli {
       if (result['lateChangeObserved'] != null)
         'lateChangeObserved': result['lateChangeObserved'],
       if (result['lateWindow'] is Map) 'lateWindow': result['lateWindow'],
+      if (result['paintOnlyChange'] is Map)
+        'paintOnlyChange': result['paintOnlyChange'],
       if (result['waitTimedOut'] != null)
         'waitTimedOut': result['waitTimedOut'],
       if (result['activityObserved'] == true) 'activityObserved': true,
@@ -1166,6 +1170,7 @@ extension _CliResults on FlutterScoutCli {
         'interactablesOmitted': payload['interactablesOmitted'],
       if (_isNonEmptyList(payload['inspectWarnings']))
         'inspectWarnings': payload['inspectWarnings'],
+      if (payload['stateHints'] is Map) 'stateHints': payload['stateHints'],
       // The helper bounds these lists (at most 6 rows and 8 lists) and counts
       // what it cut in `omitted`. The same bounds hold an older helper's
       // payload, and anything cut here is counted there too.

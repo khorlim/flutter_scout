@@ -108,6 +108,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
 
       final secondary = params['button'] == 'secondary';
       final taps = _tapCount(params);
+      final paintBefore = node == null
+          ? null
+          : _paintFacets(node._renderObject);
       final secondTap = await _dispatchTaps(
         point,
         taps: taps,
@@ -119,6 +122,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
+      final paintOnly = activityObserved
+          ? null
+          : _paintOnlyChange(node, paintBefore, changed: changed);
       return await _respondWithExpectation(params, {
         'action':
             '${taps == 2 ? 'double ' : ''}'
@@ -155,10 +161,13 @@ extension _RuntimeActions on FlutterScoutRuntime {
         },
         if (resolution != null) 'resolution': resolution.toJson(),
         'coordinateEvidence': ?coordinateEvidence,
+        'paintOnlyChange': ?paintOnly,
         if ((!activityObserved && node?.selected != true) ||
             _secondTapMovedWarning(secondTap) != null)
           'warnings': [
-            if (!activityObserved && node?.selected != true)
+            if (paintOnly != null)
+              paintOnly['hint']! as String
+            else if (!activityObserved && node?.selected != true)
               'Tap dispatched without an observed synchronous UI change; check recentErrors, overlays, logs, or increase --wait-ms if the action is async.',
             ?_secondTapMovedWarning(secondTap),
           ],
@@ -242,6 +251,7 @@ extension _RuntimeActions on FlutterScoutRuntime {
       }
       final activationRisk = _tapTextActivationRisk(match);
       final taps = _tapCount(params);
+      final paintBefore = _paintFacets(targetNode._renderObject);
       final secondTap = await _dispatchTaps(
         point,
         taps: taps,
@@ -253,6 +263,9 @@ extension _RuntimeActions on FlutterScoutRuntime {
       final after = actionSnapshot.snapshot;
       final changed = _changed(before, after);
       final activityObserved = changed || actionSnapshot.activityObserved;
+      final paintOnly = activityObserved
+          ? null
+          : _paintOnlyChange(targetNode, paintBefore, changed: changed);
       return await _respondWithExpectation(params, {
         'action': '${taps == 2 ? 'double ' : ''}tap-text $text',
         ..._stabilityResponseFields(actionSnapshot.stability),
@@ -280,11 +293,14 @@ extension _RuntimeActions on FlutterScoutRuntime {
           'risk': activationRisk,
           ..._multiTapActivation(params, secondTap),
         },
+        'paintOnlyChange': ?paintOnly,
         if ((!activityObserved && targetNode.selected != true) ||
             activationRisk['level'] != 'low' ||
             _secondTapMovedWarning(secondTap) != null)
           'warnings': [
-            if (!activityObserved && targetNode.selected != true)
+            if (paintOnly != null)
+              paintOnly['hint']! as String
+            else if (!activityObserved && targetNode.selected != true)
               'tap-text activated the nearest actionable target, but no synchronous UI change was observed before the wait timeout.',
             if (activationRisk['level'] != 'low')
               'tap-text used a higher-risk activation path; prefer a concrete handle from inspect when repeating this action.',
