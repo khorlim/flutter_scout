@@ -11,6 +11,39 @@ import 'package:test/test.dart';
 void main() {
   final packageRoot = Directory.current.absolute.path;
 
+  test('status promotes a kept helper_not_ready record once the helper '
+      'answers', () async {
+    final fake = await _FakeVmService.start();
+    addTearDown(fake.close);
+    final previous = Directory.current;
+    final temporary = await Directory.systemTemp.createTemp('scout_promote_');
+    addTearDown(() {
+      Directory.current = previous;
+      if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+    });
+    Directory.current = temporary;
+    final session = Directory(p.join(temporary.path, '.flutter_scout'))
+      ..createSync();
+    File(p.join(session.path, 'vm_uri.txt')).writeAsStringSync('${fake.uri}');
+    final metaFile = File(p.join(session.path, 'session_meta.json'))
+      ..writeAsStringSync(
+        jsonEncode(<String, Object?>{
+          'mode': 'attach_only',
+          'state': 'helper_not_ready',
+          'runId': 'test-run',
+          'vmServiceUri': '${fake.uri}',
+          'helperWait': {'stopReason': 'no_progress'},
+        }),
+      );
+
+    expect(await FlutterScoutCli().run(['status']), 0);
+    final meta = jsonDecode(metaFile.readAsStringSync()) as Map;
+    expect(meta['state'], 'ready');
+    expect(meta['promotedFrom'], 'helper_not_ready');
+    expect(meta.containsKey('helperWait'), isFalse);
+    expect(meta['runId'], 'test-run');
+  });
+
   group('v15 mutation protocol', () {
     test(
       'public agent JSONL dispatches once and requires its receipt acknowledgement',

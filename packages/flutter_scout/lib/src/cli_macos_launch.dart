@@ -248,6 +248,11 @@ extension _CliMacosLaunch on FlutterScoutCli {
   /// Opens the built bundle as a new LaunchServices instance, streams its
   /// stdout/stderr into the run log, and returns once the app reported its VM
   /// service. [isCancelled] stops waiting when the worker is asked to stop.
+  ///
+  /// After [timeout], the wait continues only while the opened app process
+  /// is alive and printing or using CPU (the readiness rule in
+  /// cli_launch_readiness.dart), and never past [hardLimit] (the launch's
+  /// `--launch-timeout`).
   Future<_MacosLaunchedApp> _openMacosAppForAttach({
     required String appPath,
     required _MacosLaunchPlan plan,
@@ -256,6 +261,7 @@ extension _CliMacosLaunch on FlutterScoutCli {
     required bool Function() isCancelled,
     required bool Function() isStopped,
     Duration timeout = const Duration(seconds: 120),
+    Duration hardLimit = _defaultLaunchTimeout,
   }) async {
     final executable = await _macosBundleExecutable(appPath);
     if (executable == null) {
@@ -287,7 +293,16 @@ extension _CliMacosLaunch on FlutterScoutCli {
     var offset = 0;
     var pending = '';
     String? vmServiceUri;
-    final deadline = DateTime.now().add(timeout);
+    final startedAt = DateTime.now();
+    final baseDeadline = startedAt.add(timeout);
+    final hardDeadline = startedAt.add(
+      hardLimit > timeout ? hardLimit : timeout,
+    );
+    var lastProgressAt = startedAt;
+    DateTime? lastSampleAt;
+    DateTime? lastNoteAt;
+    double? lastCpu;
+    var appAlive = true;
     while (vmServiceUri == null) {
       if (isCancelled()) {
         throw const ScoutCliException(
@@ -295,15 +310,66 @@ extension _CliMacosLaunch on FlutterScoutCli {
           'The macOS app launch was cancelled before its VM service started.',
         );
       }
-      if (DateTime.now().isAfter(deadline)) {
-        final hint = await _macosLaunchStallHint(appPath, executable, existing);
-        throw ScoutCliException(
-          'macos_app_vm_service_not_found',
-          'The macOS app opened but did not report a Dart VM service within '
-              '${timeout.inSeconds}s. $hint',
-        );
+      final now = DateTime.now();
+      if (!now.isBefore(baseDeadline)) {
+        if (lastSampleAt == null ||
+            now.difference(lastSampleAt) >= _helperCpuSampleInterval) {
+          lastSampleAt = now;
+          final launched = (await _pidsForExecutable(
+            executable,
+          )).difference(existing);
+          appAlive = launched.isNotEmpty;
+          double? cpu;
+          for (final pid in launched) {
+            final seconds = await _processTreeCpuSeconds(pid);
+            if (seconds != null) cpu = (cpu ?? 0) + seconds;
+          }
+          final previous = lastCpu;
+          if (cpu != null &&
+              previous != null &&
+              cpu - previous >= _helperBusyCpuSeconds) {
+            lastProgressAt = now;
+          }
+          lastCpu = cpu ?? lastCpu;
+        }
+        // CPU needs two samples, so the idle clock starts at the base
+        // deadline at the earliest.
+        final idleSince = lastProgressAt.isAfter(baseDeadline)
+            ? lastProgressAt
+            : baseDeadline;
+        final idle = now.difference(idleSince) >= _helperProgressWindow;
+        if (!appAlive || idle || !now.isBefore(hardDeadline)) {
+          final hint = await _macosLaunchStallHint(
+            appPath,
+            executable,
+            existing,
+          );
+          final why = !appAlive
+              ? 'the app process is no longer running'
+              : idle
+              ? 'no app output or CPU for ${_helperProgressWindow.inSeconds}s'
+              : 'reached --launch-timeout';
+          throw ScoutCliException(
+            'macos_app_vm_service_not_found',
+            'The macOS app opened but did not report a Dart VM service within '
+                '${now.difference(startedAt).inSeconds}s (base window '
+                '${timeout.inSeconds}s; stopped because $why). $hint',
+          );
+        }
+        // Run-log lines are the launch's progress signal, and the app is
+        // not in the runner's process tree: say that it is still working.
+        if (lastNoteAt == null ||
+            now.difference(lastNoteAt) >= const Duration(seconds: 30)) {
+          lastNoteAt = now;
+          await writeAppLine(
+            '[flutter_scout] The macOS app is still starting after '
+            '${now.difference(startedAt).inSeconds}s (output or CPU '
+            'continues); waiting for its Dart VM service.',
+          );
+        }
       }
       final chunk = _readFileFrom(outputFile, offset);
+      if (chunk.isNotEmpty) lastProgressAt = DateTime.now();
       offset += chunk.length;
       pending += utf8.decode(chunk, allowMalformed: true);
       final lines = pending.split('\n');

@@ -47,6 +47,7 @@ part 'cli_event_journal.dart';
 part 'cli_log_storage.dart';
 part 'cli_macos_launch.dart';
 part 'cli_launch_diagnostics.dart';
+part 'cli_launch_readiness.dart';
 part 'cli_helper_pin.dart';
 part 'cli_headless.dart';
 part 'cli_system_dialog.dart';
@@ -1489,6 +1490,15 @@ class FlutterScoutCli {
       final uri = _normalizeVmUri(fromSession);
       final validation = await _validateVmUri(uri);
       if (validation.ok) return _AttachDiscovery(uri: uri);
+      // A loaded machine can miss one VM check. Never delete the address of
+      // an owned run that is still alive (cli_session_recovery.dart).
+      if (await _ownedRunAlive()) {
+        return _AttachDiscovery(
+          reason: 'vm_service_not_answering',
+          staleUri: uri,
+          ownedRunAlive: true,
+        );
+      }
       _clearVmUriFile();
       return _AttachDiscovery(
         reason: 'stale_vm_service_uri',
@@ -1514,70 +1524,6 @@ class FlutterScoutCli {
     } finally {
       await service?.dispose();
     }
-  }
-
-  Future<_ScoutReady> _checkScoutReady(String uri) async {
-    try {
-      final service = await _connect(uri);
-      try {
-        final isolateId = await _findMainIsolate(service);
-        final isolate = await service
-            .getIsolate(isolateId)
-            .timeout(const Duration(seconds: 5));
-        final extensions = isolate.extensionRPCs ?? const <String>[];
-        if (extensions.contains('ext.flutter_scout.inspect')) {
-          return const _ScoutReady(ready: true);
-        }
-        return const _ScoutReady(
-          ready: false,
-          reason: 'helper_extension_missing',
-          expected: 'FlutterScoutBinding.ensureInitialized()',
-        );
-      } finally {
-        await service.dispose();
-      }
-    } catch (error) {
-      return _ScoutReady(
-        ready: false,
-        reason: 'helper_extension_check_failed',
-        expected: 'FlutterScoutBinding.ensureInitialized()',
-        detail: error.toString(),
-      );
-    }
-  }
-
-  Future<_ScoutReady> _waitScoutReady(
-    String uri, {
-    Duration timeout = const Duration(seconds: 8),
-  }) async {
-    final deadline = DateTime.now().add(timeout);
-    _ScoutReady? last;
-    while (DateTime.now().isBefore(deadline)) {
-      // Bound each attempt by the remaining budget. The deadline is only
-      // re-checked between attempts, so an unbounded attempt (e.g. an RPC to an
-      // unresponsive VM service) would otherwise defeat it and hang forever.
-      final remaining = deadline.difference(DateTime.now());
-      final attemptBudget = remaining < const Duration(seconds: 1)
-          ? const Duration(seconds: 1)
-          : remaining;
-      try {
-        last = await _checkScoutReady(uri).timeout(attemptBudget);
-      } on TimeoutException {
-        return const _ScoutReady(
-          ready: false,
-          reason: 'helper_extension_check_timeout',
-          expected: 'FlutterScoutBinding.ensureInitialized()',
-        );
-      }
-      if (last.ready) return last;
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    }
-    return last ??
-        const _ScoutReady(
-          ready: false,
-          reason: 'helper_extension_check_timeout',
-          expected: 'FlutterScoutBinding.ensureInitialized()',
-        );
   }
 
   Future<_MacosWindowTarget?> _macosWindowTarget() async {

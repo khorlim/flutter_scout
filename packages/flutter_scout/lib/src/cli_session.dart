@@ -199,6 +199,12 @@ bool _shouldAwaitPostBuildVmService({
     buildDoneAt != null &&
     now.isBefore(buildDoneAt.add(_postBuildVmServiceGrace));
 
+const String _ownedRunUnresponsiveMessage =
+    'The session VM service did not answer, but its exact Scout-owned run is '
+    'still alive (a loaded machine can miss a check). The VM address and '
+    'session record were kept and nothing was relaunched. Run `status` '
+    'again; use `launch --replace` only to end that run deliberately.';
+
 extension _CliSession on FlutterScoutCli {
   Future<int> _launch(List<String> args) async {
     final parser = ArgParser()
@@ -269,7 +275,9 @@ extension _CliSession on FlutterScoutCli {
     final parsed = parser.parse(args);
     final requestedImpeller = _requestedImpeller(parsed);
     final launchTimeout = Duration(
-      seconds: int.tryParse(parsed.option('launch-timeout') ?? '') ?? 1200,
+      seconds:
+          int.tryParse(parsed.option('launch-timeout') ?? '') ??
+          _defaultLaunchTimeout.inSeconds,
     );
     final launchIdleTimeout = Duration(
       seconds: int.tryParse(parsed.option('launch-idle-timeout') ?? '') ?? 180,
@@ -296,11 +304,19 @@ extension _CliSession on FlutterScoutCli {
       if (!parsed.flag('replace')) {
         throw const ScoutCliException(
           'session_already_running',
-          'This Scout session is already ready. Use `ensure` to reuse it or '
-              '`launch --replace` for an explicit fresh run.',
+          'This Scout session already has a reachable app (its VM service '
+              'answers). Use `ensure` to reuse it, `status` to check its '
+              'helper, or `launch --replace` for an explicit fresh run.',
         );
       }
       await _stop(const ['--quiet']);
+    } else if (!parsed.flag('replace') && await _ownedRunAlive()) {
+      throw const ScoutCliException(
+        'session_already_running',
+        'This Scout session still owns a live run whose VM service did not '
+            'answer. Run `status` to re-check it; use `launch --replace` only '
+            'to end it and build a fresh run.',
+      );
     }
     final launchLease = await _acquireLaunchLease(
       project: project,
@@ -494,6 +510,7 @@ extension _CliSession on FlutterScoutCli {
         'stateFile': supervisorStateFile,
         'persistentConfig': Platform.isMacOS,
         'supervised': Platform.isMacOS,
+        'launchTimeoutSeconds': launchTimeout.inSeconds,
         'macosLaunchServices': _shouldLaunchMacosAppThroughLaunchServices(
           isMacOS: Platform.isMacOS,
           deviceId: resolvedDevice.id,
@@ -749,16 +766,64 @@ extension _CliSession on FlutterScoutCli {
       }
 
       final wsUri = _normalizeVmUri(vmUri);
-      _persistValidatedVmUri(wsUri);
       if (flutterToolPid == null) {
+        // The wait ended (stopReason) after the app reported its VM service
+        // but before Flutter confirmed its signal handlers. Scout stops the
+        // exact owned run. The address the worker wrote stays: status clears
+        // it only once nothing owned answers or runs (_ownedRunAlive).
         await _stopRunnerSupervisor(supervisorOwnershipMeta);
-        throw const ScoutCliException(
-          'flutter_runner_pid_not_found',
-          'The supervised Flutter runner became ready, but Flutter did not '
-              'confirm that its SIGUSR1/SIGUSR2 hot-update handlers were '
-              'installed.',
-        );
+        _writeSessionMeta({
+          ...?_readSessionMeta(),
+          'state': 'failed',
+          'updatedAt': DateTime.now().toIso8601String(),
+        });
+        final ended = switch (stopReason) {
+          'idle_timeout' =>
+            'the runner printed nothing and used no CPU for '
+                '${launchIdleTimeout.inSeconds}s (--launch-idle-timeout)',
+          'hard_timeout' =>
+            'the launch reached --launch-timeout ${launchTimeout.inSeconds}s',
+          'runner_probe_failed' =>
+            'Scout could not confirm its runner process for '
+                '${_runnerProbeGrace.inSeconds}s',
+          _ => 'the runner exited',
+        };
+        _printJson({
+          'ok': false,
+          'launched': false,
+          'reason': 'flutter_runner_pid_not_found',
+          'error': <String, Object?>{
+            'code': 'flutter_runner_pid_not_found',
+            'message':
+                'Launch failed ($stopReason, flutter_runner_pid_not_found): '
+                'the app reported its VM service, but Flutter never confirmed '
+                'its hot-update signal handlers before $ended. Scout stopped '
+                'the owned run. See tailLogLines.',
+          },
+          'failureMode': stopReason,
+          'failureCause': <String, Object?>{
+            'cause': 'flutter_runner_pid_not_found',
+            'evidence':
+                'VM service found; Flutter signal-handler PID file never '
+                'written; wait ended because $ended.',
+            'hint': stopReason == 'idle_timeout' || stopReason == 'hard_timeout'
+                ? 'If the file sync was still running, rerun with a larger '
+                      '--launch-idle-timeout or --launch-timeout.'
+                : 'Read tailLogLines for why the runner stopped.',
+          },
+          if (lastOutputAt != null)
+            'lastOutputAt': lastOutputAt.toUtc().toIso8601String(),
+          'launchTimeoutSeconds': launchTimeout.inSeconds,
+          'launchIdleTimeoutSeconds': launchIdleTimeout.inSeconds,
+          'supervisor': supervisor.toJson(),
+          'timing': launchTiming.toJson(completedAt: DateTime.now()),
+          'tailLogLines': lines.length > 20
+              ? lines.sublist(lines.length - 20)
+              : lines,
+        }, success: false);
+        return 1;
       }
+      _persistValidatedVmUri(wsUri);
       final flutterProcessIdentity = await _readProcessOwnershipIdentity(
         flutterToolPid,
         role: _flutterRunProcessRole,
@@ -777,7 +842,9 @@ extension _CliSession on FlutterScoutCli {
             );
       _writeSessionMeta({
         'mode': 'scout_owned_flutter_run',
-        'state': 'ready',
+        // Reachable but not yet proven usable: status, ensure and attach can
+        // recover this record whatever the helper wait below concludes.
+        'state': 'starting',
         'runId': launchLease.runId,
         'name': ?instanceName,
         'pid': flutterToolPid,
@@ -808,13 +875,45 @@ extension _CliSession on FlutterScoutCli {
       });
       preserveTemporarySetupForOwnedRun = temporarySetup != null;
       _writeProgress('verify_vm_service', {'vmServiceUri': wsUri});
-      // A fresh Android port forward or a loaded machine can take longer than
-      // an attach check, so a new launch gets a wider readiness window.
-      final ready = await _waitScoutReady(
+      final helperConfirmedAt = DateTime.now();
+      final wait = await _waitHelperReady(
         wsUri,
-        timeout: const Duration(seconds: 20),
+        baseWindow: _launchHelperReadyBaseWindow(
+          buildDoneAt: launchTiming.buildDoneAt,
+          vmServiceFoundAt: launchTiming.vmServiceFoundAt,
+          confirmedAt: helperConfirmedAt,
+        ),
+        hardDeadline: hardDeadline,
+        logFile: runLogFile,
+        cpuRootPids: () {
+          final state = _readSessionConfiguredJson('supervisorStateFile');
+          final sameRun = state?['runId'] == launchLease.runId;
+          return <int>[
+            ?(sameRun ? int.tryParse('${state?['workerPid'] ?? ''}') : null) ??
+                supervisor.workerPid,
+            ?(sameRun ? int.tryParse('${state?['macosAppPid'] ?? ''}') : null),
+          ];
+        },
+        ownerPid: flutterToolPid,
       );
+      final ready = wait.ready;
       launchTiming.readyAt = DateTime.now();
+      // A failed wait never deletes the VM address: while the app or its
+      // owned runner is reachable the record stays `helper_not_ready`, and
+      // `status` promotes it to ready once the helper answers.
+      _writeSessionMeta({
+        ...?_readSessionMeta(),
+        'state': ready.ready
+            ? 'ready'
+            : wait.reachable
+            ? 'helper_not_ready'
+            : 'failed',
+        if (!ready.ready) 'helperWait': wait.toJson(),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+      final failureMode = wait.stopReason == 'runner_exited'
+          ? 'runner_exited'
+          : 'helper_not_ready';
       _printJson({
         'launched': true,
         'ready': ready.ready,
@@ -829,25 +928,23 @@ extension _CliSession on FlutterScoutCli {
           'error': <String, Object?>{
             'code': ready.reason,
             'message':
-                'Launch failed (helper_not_ready): the app is running and '
-                'its VM service is up, but the Scout helper did not answer '
-                'within 20s (${ready.reason}). On a loaded machine it may '
-                'still be starting: run `flutter-scout --app '
-                '${instanceName ?? '<name>'} status` before relaunching; '
-                'continue if it reports ready. If it never does, check that '
-                'main() calls ${ready.expected}.',
+                'Launch failed ($failureMode, ${wait.stopReason}): the app '
+                'started and its VM service was found, but the Scout helper '
+                'did not answer (${ready.reason}). ${wait.evidence} '
+                '${wait.reachable ? 'The session record was kept: run '
+                          '`flutter-scout --app ${instanceName ?? '<name>'} '
+                          'status`, which promotes it to ready when the '
+                          'helper answers. ' : ''}${wait.hint}',
           },
-          // The run stays owned and reachable; a relaunch rebuilds it.
-          'failureMode': 'helper_not_ready',
+          'failureMode': failureMode,
           'failureCause': <String, Object?>{
             'cause': ready.reason,
-            'evidence':
-                'The VM service answered, but the helper check still '
-                'reported ${ready.reason} after 20s.',
-            'hint':
-                'Run status before launch --replace; the app may only be slow '
-                'to start.',
+            'evidence': wait.evidence,
+            'hint': wait.hint,
+            ...wait.toJson(),
           },
+          'helperWait': wait.toJson(),
+          'sessionRecordKept': wait.reachable,
         },
         'device': resolvedDevice.id,
         'deviceName': resolvedDevice.name,
@@ -1203,6 +1300,11 @@ extension _CliSession on FlutterScoutCli {
             writeAppLine: (line) => writeLine('STDOUT', line),
             isCancelled: () => preLaunchSignal != null,
             isStopped: () => macosOutputStopped,
+            hardLimit: Duration(
+              seconds:
+                  (config['launchTimeoutSeconds'] as num?)?.toInt() ??
+                  _defaultLaunchTimeout.inSeconds,
+            ),
           );
           macosApp = launched;
           supervisorState = {
@@ -1582,9 +1684,13 @@ extension _CliSession on FlutterScoutCli {
     }
   }
 
+  /// Joins an in-progress launch by waiting for its lease, which the launch
+  /// releases only after its final result (including its own helper wait).
+  /// A VM address alone is not enough: the helper may not answer yet.
   Future<void> _joinLaunchIfNeeded(
-    void Function(String stage, [Map<String, Object?> extra]) progress,
-  ) async {
+    void Function(String stage, [Map<String, Object?> extra]) progress, {
+    Duration timeout = _defaultLaunchTimeout,
+  }) async {
     if (!await _launchLeaseIsHeld()) return;
     final info = _readLaunchInfo();
     progress('join_launch', {
@@ -1592,16 +1698,16 @@ extension _CliSession on FlutterScoutCli {
       'ownerPid': info?['ownerPid'],
       'startedAt': info?['startedAt'],
     });
-    final deadline = DateTime.now().add(const Duration(minutes: 5));
+    final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
-      final uri = _readVmUri();
-      if (uri != null && (await _validateVmUri(uri)).ok) return;
       if (!await _launchLeaseIsHeld()) return;
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
-    throw const ScoutCliException(
+    throw ScoutCliException(
       'launch_join_timeout',
-      'The existing Flutter Scout launch did not become ready within 5 minutes.',
+      'The existing Flutter Scout launch (run ${info?['runId'] ?? 'unknown'}) '
+          'still held its lease after ${timeout.inSeconds}s '
+          '(--launch-timeout). It was not stopped; check `status`.',
     );
   }
 
@@ -1625,6 +1731,13 @@ extension _CliSession on FlutterScoutCli {
       _printJson({
         'attached': false,
         'reason': discovered.reason ?? 'vm_service_uri_not_found',
+        if (discovered.ownedRunAlive) ...<String, Object?>{
+          'error': <String, Object?>{
+            'code': 'vm_service_not_answering',
+            'message': _ownedRunUnresponsiveMessage,
+          },
+          'sessionRecordKept': true,
+        },
         if (discovered.staleUri != null)
           'staleVmServiceUri': discovered.staleUri,
         if (discovered.staleCleared) 'staleCleared': true,
@@ -1754,9 +1867,21 @@ extension _CliSession on FlutterScoutCli {
         _deleteFileIfExists(_deviceInfoFile);
       }
     }
-    final ready = await _waitScoutReady(wsUri);
+    final wait = await _waitExistingAppHelperReady(
+      wsUri,
+      hardLimit: _defaultLaunchTimeout,
+    );
+    final ready = wait.ready;
     output['ready'] = ready.ready;
     if (!ready.ready) {
+      // The attach record (VM address and run identity) stays, marked as
+      // not ready; status promotes it once the helper answers.
+      _writeSessionMeta({
+        ...?_readSessionMeta(),
+        'state': 'helper_not_ready',
+        'helperWait': wait.toJson(),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
       output['reason'] = ready.reason;
       output['expected'] = ready.expected;
       if (ready.detail != null) {
@@ -1765,9 +1890,19 @@ extension _CliSession on FlutterScoutCli {
       output['error'] = <String, Object?>{
         'code': ready.reason,
         'message':
-            'Attached, but the Scout helper is not reachable '
-            '(${ready.reason}). Check that main() calls ${ready.expected}.',
+            'Attached, but the Scout helper did not answer '
+            '(${ready.reason}, ${wait.stopReason}). ${wait.evidence} '
+            '${wait.hint}',
       };
+      output['failureMode'] = 'helper_not_ready';
+      output['failureCause'] = <String, Object?>{
+        'cause': ready.reason,
+        'evidence': wait.evidence,
+        'hint': wait.hint,
+        ...wait.toJson(),
+      };
+      output['helperWait'] = wait.toJson();
+      output['sessionRecordKept'] = true;
     }
     if (device != null) {
       output['device'] = device;
@@ -1916,6 +2051,11 @@ extension _CliSession on FlutterScoutCli {
     final requestedImpeller = _requestedImpeller(parsed);
     final device = parsed.option('device');
     final expectedRunId = _expectedRunIdOption(parsed);
+    final ensureLaunchTimeout = Duration(
+      seconds:
+          int.tryParse(parsed.option('launch-timeout') ?? '') ??
+          _defaultLaunchTimeout.inSeconds,
+    );
     void progress(String stage, [Map<String, Object?> extra = const {}]) {
       _writeHeartbeat(stage, extra, false);
     }
@@ -1928,7 +2068,7 @@ extension _CliSession on FlutterScoutCli {
         project: _canonicalProjectDirectory(parsed.option('project')!),
       );
     }
-    await _joinLaunchIfNeeded(progress);
+    await _joinLaunchIfNeeded(progress, timeout: ensureLaunchTimeout);
     progress('discover_vm_service', {'device': ?device});
     // Every step inside discovery is individually bounded, but a hard phase
     // ceiling guarantees ensure can never sit silent for minutes — fail with
@@ -1946,14 +2086,78 @@ extension _CliSession on FlutterScoutCli {
                 'persists, launch directly with flutter-scout launch.',
           ),
         );
+    if (discovered.ownedRunAlive) {
+      // Falling back to a launch here would stop this live owned run and
+      // build a new one: an implicit relaunch. Report it instead.
+      _printJson({
+        'ok': false,
+        'ensured': false,
+        'reason': discovered.reason,
+        'error': <String, Object?>{
+          'code': 'vm_service_not_answering',
+          'message': 'Ensure failed: $_ownedRunUnresponsiveMessage',
+        },
+        'failureMode': 'vm_service_unresponsive',
+        'failureCause': <String, Object?>{
+          'cause': 'vm_service_not_answering',
+          'evidence':
+              'The session VM service did not answer one check while its '
+              'exact Scout-owned run is alive.',
+          'hint':
+              'Run status again; use launch --replace only to end that run '
+              'deliberately.',
+        },
+        'launch': 'not_attempted',
+        'sessionRecordKept': true,
+      }, success: false);
+      return 1;
+    }
     if (discovered.uri != null && discovered.uri!.isNotEmpty) {
       progress('reuse_check', {'vmServiceUri': discovered.uri});
-      final ready = await _waitScoutReady(discovered.uri!);
+      final wait = await _waitExistingAppHelperReady(
+        discovered.uri!,
+        hardLimit: ensureLaunchTimeout,
+      );
+      final ready = wait.ready;
       if (!ready.ready) {
         progress('reuse_not_ready', {
           'reason': ?ready.reason,
+          'stopReason': wait.stopReason,
           'detail': ?ready.detail,
         });
+        // An app still answers here, or its owned run is alive. Building a
+        // new one would replace it implicitly; report it and keep its record.
+        if (wait.reachable) {
+          _printJson({
+            'ok': false,
+            'ensured': false,
+            'ready': false,
+            'vmServiceUri': discovered.uri,
+            'reason': ready.reason,
+            'expected': ready.expected,
+            'error': <String, Object?>{
+              'code': ready.reason,
+              'message':
+                  'Ensure failed (helper_not_ready, ${wait.stopReason}): an '
+                  'app is reachable at this session, but the Scout helper '
+                  'did not answer (${ready.reason}). ${wait.evidence} Nothing '
+                  'was relaunched and the session record was kept. '
+                  '${wait.hint} Use launch --replace only to replace that app '
+                  'deliberately.',
+            },
+            'failureMode': 'helper_not_ready',
+            'failureCause': <String, Object?>{
+              'cause': ready.reason,
+              'evidence': wait.evidence,
+              'hint': wait.hint,
+              ...wait.toJson(),
+            },
+            'helperWait': wait.toJson(),
+            'launch': 'not_attempted',
+            'sessionRecordKept': true,
+          }, success: false);
+          return 1;
+        }
       }
       if (ready.ready) {
         final expectedHelperIdentity = expectedRunId == null
@@ -2340,9 +2544,13 @@ extension _CliSession on FlutterScoutCli {
       final recovered = await _recoverMissingOwnedVmUri();
       if (recovered != null) {
         final runtimeObservation = await _observeRuntimeOperability();
+        final promoted = _promoteRecoveredRecord(
+          helperAnswered: runtimeObservation['appReachability'] == 'reachable',
+        );
         return {
           'running': true,
           'appReachable': runtimeObservation['appReachability'] == 'reachable',
+          if (promoted) 'promotedToReady': true,
           'vmServiceUri': recovered.uri,
           'missingVmServiceUriRestored': true,
           'refreshSource': recovered.source,
@@ -2357,7 +2565,7 @@ extension _CliSession on FlutterScoutCli {
       final meta = _readSessionMeta();
       final recordedOwner = int.tryParse('${meta?['pid'] ?? ''}');
       if (meta?['mode'] == 'scout_owned_flutter_run' &&
-          meta?['state'] == 'ready' &&
+          _CliSessionRecovery._reachableRecordStates.contains(meta?['state']) &&
           (recordedOwner == null ||
               !await _matchesOwnedFlutterRun(recordedOwner, meta))) {
         await _markSessionStopped('owner_process_exited');
@@ -2390,9 +2598,13 @@ extension _CliSession on FlutterScoutCli {
       final ownershipLost = _sessionOwnershipWasLost();
       await _ensureVmLogListenerForCurrentSession(vmUri);
       final runtimeObservation = await _observeRuntimeOperability();
+      final promoted = _promoteRecoveredRecord(
+        helperAnswered: runtimeObservation['appReachability'] == 'reachable',
+      );
       return {
         'running': true,
         'appReachable': runtimeObservation['appReachability'] == 'reachable',
+        if (promoted) 'promotedToReady': true,
         'vmServiceUri': vmUri,
         if (ownershipLost) 'sessionOwnershipLost': true,
         if (_readDevice() != null) 'device': _readDevice(),
@@ -2408,9 +2620,13 @@ extension _CliSession on FlutterScoutCli {
       await _reconcileReachableSessionOwnership(refreshed.uri);
       final ownershipLost = _sessionOwnershipWasLost();
       final runtimeObservation = await _observeRuntimeOperability();
+      final promoted = _promoteRecoveredRecord(
+        helperAnswered: runtimeObservation['appReachability'] == 'reachable',
+      );
       return {
         'running': true,
         'appReachable': runtimeObservation['appReachability'] == 'reachable',
+        if (promoted) 'promotedToReady': true,
         'vmServiceUri': refreshed.uri,
         'staleVmServiceUri': vmUri,
         'staleRefreshed': true,
@@ -2422,6 +2638,29 @@ extension _CliSession on FlutterScoutCli {
         'hotUpdate': await _hotUpdateCapability(refreshed.uri),
         'runtimeObservation': runtimeObservation,
         'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
+      };
+    }
+    // The VM service missed this check, but the exact owned run (or the
+    // macOS app it opened) is alive: a loaded machine, not a stale record.
+    // Keep the address so the next status, ensure or attach can recover it.
+    if (await _ownedRunAlive()) {
+      return {
+        'running': true,
+        'appReachable': false,
+        'vmServiceUri': vmUri,
+        'vmServiceAnswering': false,
+        'sessionRecordKept': true,
+        'session': _sessionModeInfo(),
+        if (_readDevice() != null) 'device': _readDevice(),
+        if (_readDeviceInfo() != null) 'deviceInfo': _readDeviceInfo(),
+        'runtimeObservation': _unavailableRuntimeOperability(
+          'vm_service_not_answering',
+        ),
+        'lastHotUpdate': _readSessionMeta()?['lastHotUpdate'],
+        if (stale.error != null) 'reason': stale.error,
+        'recovery':
+            'The owned run is alive but its VM service did not answer. Run '
+            'status again; use stop or launch --replace only to end it.',
       };
     }
     _clearVmUriFile();

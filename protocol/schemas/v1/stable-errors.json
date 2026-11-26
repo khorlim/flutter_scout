@@ -1608,6 +1608,10 @@
       "meaning": "The vm service connection operation failed.",
       "family": "operation"
     },
+    "vm_service_not_answering": {
+      "meaning": "The session VM service did not answer while its exact Scout-owned run is alive; the record was kept and nothing was relaunched.",
+      "family": "operation"
+    },
     "vm_service_uri_not_found": {
       "meaning": "The requested vm service uri could not be found.",
       "family": "operation"

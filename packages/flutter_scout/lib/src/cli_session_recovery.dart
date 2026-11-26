@@ -342,10 +342,17 @@ extension _CliSessionRecovery on FlutterScoutCli {
     _writePrivateSessionString(_pidFile, '$ownerPid');
     _persistValidatedVmUri(uri);
     final now = DateTime.now().toUtc().toIso8601String();
+    final recordedState = meta?['state']?.toString();
     _writeSessionMeta({
       ...?meta,
       'mode': 'scout_owned_flutter_run',
-      'state': 'ready',
+      // Restoring the address proves the VM, not the helper: a record that
+      // was still waiting for its helper keeps that state until status sees
+      // the helper answer (_promoteRecoveredRecord).
+      'state':
+          recordedState == 'starting' || recordedState == 'helper_not_ready'
+          ? recordedState
+          : 'ready',
       'pid': ownerPid,
       'vmServiceUri': uri,
       'updatedAt': now,
@@ -402,6 +409,67 @@ extension _CliSessionRecovery on FlutterScoutCli {
           ..remove('vmLogListener')
           ..remove('processIdentity');
     _writeSessionMeta(reconciled);
+    return true;
+  }
+
+  /// Session states written while a Scout-owned app is, or may still be,
+  /// reachable. `starting` covers the helper wait; `helper_not_ready` is a
+  /// launch whose helper had not answered when it gave up.
+  static const Set<String> _reachableRecordStates = {
+    'ready',
+    'starting',
+    'helper_not_ready',
+  };
+
+  /// The exact LaunchServices app PID this session's worker recorded.
+  int? _recordedMacosAppPid() {
+    final state = _readSessionConfiguredJson('supervisorStateFile');
+    if (state == null || state['runId'] != _readSessionMeta()?['runId']) {
+      return null;
+    }
+    return int.tryParse('${state['macosAppPid'] ?? ''}');
+  }
+
+  /// Whether this session's exact owned Flutter tool, or the exact macOS app
+  /// it opened, is still alive. A VM service that misses a check under load
+  /// does not make such a run stale.
+  Future<bool> _ownedRunAlive() async {
+    final meta = _readSessionMeta();
+    if (meta?['mode'] != 'scout_owned_flutter_run') return false;
+    final pid = _readPid() ?? int.tryParse('${meta?['pid'] ?? ''}');
+    if (pid != null && await _matchesOwnedFlutterRun(pid, meta)) return true;
+    final appPid = _recordedMacosAppPid();
+    final expected = _readSessionConfiguredJson(
+      'supervisorStateFile',
+    )?['macosAppProcessIdentity'];
+    if (appPid == null || expected is! Map) return false;
+    final current = await _readProcessOwnershipIdentity(
+      appPid,
+      role: _macosAppProcessRole,
+    );
+    return current != null && _sameProcessOwnershipIdentity(expected, current);
+  }
+
+  /// Promotes a `starting` or `helper_not_ready` record once its helper has
+  /// answered a status observation. Returns whether it promoted.
+  bool _promoteRecoveredRecord({required bool helperAnswered}) {
+    final meta = _readSessionMeta();
+    final state = meta?['state']?.toString();
+    if (meta == null ||
+        !helperAnswered ||
+        (state != 'starting' && state != 'helper_not_ready')) {
+      return false;
+    }
+    final now = DateTime.now().toUtc().toIso8601String();
+    _writeSessionMeta(
+      <String, Object?>{
+        ...meta,
+        'state': 'ready',
+        'promotedFrom': state,
+        'promotedAt': now,
+        'updatedAt': now,
+      }..remove('helperWait'),
+    );
     return true;
   }
 
