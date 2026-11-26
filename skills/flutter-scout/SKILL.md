@@ -285,15 +285,19 @@ Prefer exact observed handles, then unique visible text. Ambiguity requires
 focused discovery, not another guess. When duplicates match but only one can
 take input (the others sit behind the open sheet or dialog, or are off
 screen), that one is used and the resolution's `reason` says so.
-A control is named from its own visible text, however deep the app draws
-it (`btn.thai_yoga`, `btn.advanced_edit`), or its `Semantics` label; a
-switch or checkbox from its list tile title or the caption stacked above
-it (`btn.roundup`). Symbols that change meaning stay in the handle
-(`<180 days` is `tap.lt_180_days`, `>180 days` is `tap.gt_180_days`). Only
-an app-chosen string key replaces the name (`ValueKey('save_button')` is
-`btn.save_button`); GlobalKeys and numeric keys never do. Icon-only
-controls are named from their icon (`btn.cart`): Material/Cupertino
-glyphs, and bundled PNG or SVG asset file names.
+A control's handle comes from, in order: an app-chosen string key
+(`ValueKey('save_button')` is `btn.save_button`; GlobalKeys and numeric
+keys never name it); the name the app gave it, which is its `Semantics`
+label or tooltip, or a `Semantics` label wrapping it or holding all its
+text (`Semantics(label: 'Credit')` around a glyph button is `btn.credit`);
+its own visible text, however deep it is drawn (`btn.thai_yoga`,
+`btn.advanced_edit`); a labelled part such as an icon's `semanticLabel`;
+and last its icon (`btn.cart`): Material/Cupertino glyphs, and bundled PNG
+or SVG asset file names. The drawn text and the glyph stay alternate
+handles. A switch or checkbox is named from its list tile title or the
+caption stacked above it (`btn.roundup`). Symbols that change meaning stay
+in the handle (`<180 days` is `tap.lt_180_days`, `>180 days` is
+`tap.gt_180_days`).
 Equal names are numbered in screen order (`btn.save`, `btn.save_2`), and a
 number stays with its control while that control is mounted: a cart row
 that appears above a grid tile of the same name becomes `btn.thai_yoga_2`
