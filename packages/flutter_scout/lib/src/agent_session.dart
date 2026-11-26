@@ -942,7 +942,7 @@ class AgentSession {
     Set<String>? targets,
     bool allowUnrelatedChanges = false,
   ]) {
-    if (_closed || _halt != null) throw StateError(_stoppedMessage());
+    if (_closed || _halt != null) throw _stoppedError();
     final decision = revision == _revision ? _view : _history[revision];
     if (revision != _revision) {
       final stale = targets == null || decision == null || _view == null
@@ -1043,8 +1043,40 @@ class AgentSession {
     'code': 'agent_hand_unavailable',
     'reason': message.substring(0, message.indexOf(':')),
     'message': message,
-    if (_halt != null) 'details': {'halted': _halt},
+    if (_overflowed) 'nextStep': _overflowNextStep,
+    if (_halt != null) 'details': _haltDetails,
   };
+
+  bool get _overflowed => !_closed && _halt == 'agent_event_overflow';
+
+  AgentView get _haltDetails => {
+    'halted': _halt,
+    if (_overflowed) ...{
+      'unreadAlerts': _events.where((e) => e['type'] != 'view').length,
+      'maxEvents': maxEvents,
+      // The connection, not the app: rendering and visibility are as the
+      // view reports them.
+      'renderingAffected': false,
+    },
+  };
+
+  static const _overflowNextStep =
+      'read any receipt you still need with next(), then close() and '
+      'reconnect (shell bridge: the next observe reconnects by itself when '
+      'no input is outstanding; otherwise run disconnect, then observe). '
+      'Read condition and reaction results with watch wait:true or next() '
+      'instead of leaving them unread.';
+
+  /// The rejection for a hand request on a stopped connection. An overflow
+  /// names its own reason and next step.
+  StateError _stoppedError() => _overflowed
+      ? AgentRejection(
+          'connection_overflow',
+          _stoppedMessage().substring('connection_overflow: '.length),
+          nextStep: _overflowNextStep,
+          details: _haltDetails,
+        )
+      : StateError(_stoppedMessage());
 
   /// The literal next step when rendering, not safety, blocks input.
   /// A window that is only partly visible keeps rendering without focus, so
@@ -1226,6 +1258,13 @@ class AgentSession {
           'app and cannot be reconciled on this connection. Check app state, '
           'then close() and reconnect. Nothing dispatched now.';
     }
+    if (_overflowed) {
+      return 'connection_overflow: more than $maxEvents unread receipts, '
+          'condition or reaction results piled up without next(), so this '
+          'connection stopped taking input rather than lose one. The app and '
+          'its window are unaffected: this is not rendering or visibility. '
+          'Nothing dispatched.';
+    }
     return 'agent_session_stopped: $_halt; this connection accepts no more '
         'input. Check app state, then close() and reconnect. Nothing '
         'dispatched.';
@@ -1316,7 +1355,7 @@ class AgentSession {
       final error = _handUnavailable(_stoppedMessage());
       return {
         ...error,
-        'details': {'halted': _halt, 'activationRequested': true},
+        'details': {..._haltDetails, 'activationRequested': true},
       };
     }
     // Null while a headless-driven scene is safe but still not visible.
@@ -1470,7 +1509,7 @@ class AgentSession {
     AgentView action, {
     String? reactionId,
   }) {
-    if (_closed || _halt != null) throw StateError(_stoppedMessage());
+    if (_closed || _halt != null) throw _stoppedError();
     if (reactionId != null) {
       throw AgentRejection(
         'agent_system_tap_not_reactive',
@@ -1667,7 +1706,7 @@ class AgentSession {
     int? revision,
     AgentView? reaction,
   }) {
-    if (_closed || _halt != null) throw StateError(_stoppedMessage());
+    if (_closed || _halt != null) throw _stoppedError();
     if (_jobs.length >= 8) throw StateError('agent_condition_limit');
     // A reaction acts on the agent's behalf, so it stays short. A plain
     // condition only observes; long business waits (a first data sync) would
@@ -1935,11 +1974,18 @@ class AgentSession {
   }
 
   void _emit(String type, AgentView data) {
-    // Reserve terminal evidence rather than silently dropping alerts. There
-    // can be at most one in-flight hand receipt after an overflow halt.
+    // An unread view update is only the latest state: conditions, reactions,
+    // transientText and the revision history already saw every sample. The
+    // queue keeps the newest one (`coalescedViews` counts those it replaced),
+    // so a caller that only observes or waits never overflows it.
+    // Alerts (receipts, conditions, reactions) are bounded by the caller's
+    // own requests; past [maxEvents] unread ones input halts rather than
+    // silently lose one. There can be at most one in-flight hand receipt
+    // after an overflow halt.
     if (_eventWaiter == null &&
-        _events.length >= maxEvents &&
-        !const {'stopped', 'closed'}.contains(type)) {
+        type != 'view' &&
+        !const {'stopped', 'closed'}.contains(type) &&
+        _events.where((e) => e['type'] != 'view').length >= maxEvents) {
       _stop('agent_event_overflow');
       if (type != 'action') return;
     }
@@ -1956,6 +2002,13 @@ class AgentSession {
       _markDelivered(event);
       waiter.complete(event);
       return;
+    }
+    if (type == 'view') {
+      final index = _events.indexWhere((e) => e['type'] == 'view');
+      if (index >= 0) {
+        final replaced = _events.removeAt(index);
+        event['coalescedViews'] = 1 + (replaced['coalescedViews'] as int? ?? 0);
+      }
     }
     _events.add(event);
   }

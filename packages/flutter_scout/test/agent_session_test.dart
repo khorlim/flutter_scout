@@ -636,11 +636,15 @@ void main() {
     await session.observe();
     current = view(3);
     await session.observe();
-    final seen = <AgentView>[];
-    for (var i = 0; i < 3; i++) {
-      seen.add(await event(session, 'view'));
-    }
-    expect((seen[1]['view'] as Map)['visibleText'], ['Pause requested']);
+    // Unread view updates coalesce into the newest; the caller's own
+    // observation still names the text that came and went.
+    final latest = await event(session, 'view');
+    expect((latest['view'] as Map)['visibleText'], ['Working']);
+    expect(latest['coalescedViews'], 2);
+    final observed = await session.observeForCaller();
+    expect((observed['transientText'] as List).map((e) => (e as Map)['text']), [
+      'Pause requested',
+    ]);
     expect(session.scene['hand']['pendingAction'], ticket['actionId']);
     pending.complete(receipt);
     expect((await event(session, 'action'))['result'], receipt);
@@ -857,23 +861,73 @@ void main() {
   });
 
   test(
-    'backpressure is explicit and bounded rather than losing transitions silently',
+    'a long pause on a churning screen coalesces view updates and keeps input',
     () async {
       var generation = 0;
       final s = AgentSession(
-        read: () async => view(++generation),
+        read: () async => view(++generation, text: ['Clock $generation']),
         act: (_, _) async => receipt,
         validate: (_) {},
         maxEvents: 4,
       );
       addTearDown(s.close);
       await s.open();
-      for (var i = 0; i < 10; i++) {
+      // Far past the old limit with nobody reading events.
+      for (var i = 0; i < 200; i++) {
         await s.observe();
       }
-      expect(s.scene['hand']['halted'], 'agent_event_overflow');
-      expect(s.scene['metrics']['queuedEvents'], lessThanOrEqualTo(6));
-      expect(() => s.start(s.scene['viewRevision'], tap), throwsStateError);
+      final scene = s.scene;
+      expect(scene['actionable'], isTrue);
+      expect(scene['hand']['halted'], isNull);
+      expect(scene['metrics']['queuedEvents'], 1);
+      final latest = await s.nextEvent(0);
+      expect(latest['type'], 'view');
+      expect(latest['viewRevision'], scene['viewRevision']);
+      // open() queued the first view; 200 later samples replaced it.
+      expect(latest['coalescedViews'], 200);
+      s.start(scene['viewRevision'], tap);
+      expect((await event(s, 'action'))['result'], receipt);
+    },
+  );
+
+  test(
+    'unread alerts past the limit halt input with their own reason',
+    () async {
+      final s = AgentSession(
+        read: () async => view(1),
+        act: (_, _) async => receipt,
+        validate: (_) {},
+        maxEvents: 4,
+      );
+      addTearDown(s.close);
+      await s.open();
+      // Each met condition is an alert the caller never reads; the fifth
+      // halts input (four conditions plus the stop stay queued).
+      for (var i = 0; i < 5; i++) {
+        s.watch({'text': 'Working'}, 1000);
+        await s.observe();
+      }
+      final scene = s.scene;
+      expect(scene['hand']['halted'], 'agent_event_overflow');
+      final blocked = scene['blockedBy'] as Map;
+      expect(blocked['reason'], 'connection_overflow');
+      expect(blocked['message'], contains('not rendering or visibility'));
+      expect(blocked['nextStep'], contains('reconnect'));
+      expect(blocked['details'], containsPair('renderingAffected', false));
+      expect(blocked['details'], containsPair('unreadAlerts', 5));
+      // The view itself still says the app renders.
+      expect(scene['view']['rendering']['status'], 'active');
+      expect(
+        () => s.start(scene['viewRevision'], tap),
+        throwsA(
+          isA<AgentRejection>().having(
+            (e) => e.code,
+            'code',
+            'connection_overflow',
+          ),
+        ),
+      );
+      expect(s.actions, 0);
     },
   );
 
