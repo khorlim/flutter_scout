@@ -1043,12 +1043,14 @@ while true; do sleep 1; done
         final temp = await Directory.systemTemp.createTemp('scout_keep_live_');
         final previous = Directory.current;
         Process? ownedRun;
+        FlutterScoutCli.debugHostMemorySource = () async => null;
         FlutterScoutCli.debugRegistryPathOverride = p.join(
           temp.path,
           'registry.json',
         );
         addTearDown(() async {
           Directory.current = previous;
+          FlutterScoutCli.debugHostMemorySource = null;
           FlutterScoutCli.debugRegistryPathOverride = null;
           final process = ownedRun;
           if (process != null) {

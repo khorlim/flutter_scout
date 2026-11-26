@@ -1638,6 +1638,10 @@
       "kind": "deprecation_warning",
       "meaning": "A sensitive value arrived through a legacy process-argument source."
     },
+    "low_free_memory": {
+      "kind": "host_warning",
+      "meaning": "Host free memory is below the documented threshold; Scout warns and never refuses or stops a run."
+    },
     "low_heuristic_score_targets": {
       "kind": "quality_issue",
       "meaning": "One or more inferred targets have weak semantic evidence."

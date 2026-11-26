@@ -48,6 +48,7 @@ part 'cli_log_storage.dart';
 part 'cli_macos_launch.dart';
 part 'cli_launch_diagnostics.dart';
 part 'cli_launch_readiness.dart';
+part 'cli_host_memory.dart';
 part 'cli_helper_pin.dart';
 part 'cli_headless.dart';
 part 'cli_system_dialog.dart';
@@ -83,6 +84,15 @@ class FlutterScoutCli {
   String? _eventProjectionCacheSession;
   int? _eventProjectionCacheSequence;
   List<Map<String, Object?>>? _eventProjectionCacheRows;
+  // Host warnings (low free memory) for the active launch or ensure command,
+  // added to its final envelope (cli_host_memory.dart).
+  String? _hostMemoryCheckedFor;
+  final List<Map<String, Object?>> _launchWarnings = <Map<String, Object?>>[];
+
+  /// Test-only source of raw host memory text (`memory_pressure -Q` output,
+  /// or /proc/meminfo with source `proc_meminfo`). Null text means unknown.
+  static Future<({String source, String text})?> Function()?
+  debugHostMemorySource;
 
   /// Test-only override for the session registry path, so tests never touch
   /// the real `~/.flutter_scout/registry.json`.

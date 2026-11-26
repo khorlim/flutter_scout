@@ -295,6 +295,7 @@ extension _CliSession on FlutterScoutCli {
     if (!projectDir.existsSync()) {
       throw ScoutCliException('project_missing', 'Project not found: $project');
     }
+    await _checkHostMemoryForLaunch();
     if (!parsed.flag('allow-parallel')) {
       await _requireProjectDeviceAvailable(project: project, device: device);
     }
@@ -2068,6 +2069,7 @@ extension _CliSession on FlutterScoutCli {
         project: _canonicalProjectDirectory(parsed.option('project')!),
       );
     }
+    await _checkHostMemoryForLaunch();
     await _joinLaunchIfNeeded(progress, timeout: ensureLaunchTimeout);
     progress('discover_vm_service', {'device': ?device});
     // Every step inside discovery is individually bounded, but a hard phase
@@ -2724,6 +2726,7 @@ extension _CliSession on FlutterScoutCli {
     final session = vmUri == null
         ? const _VmUriValidation(ok: false, error: 'no_session_vm_uri')
         : await _validateVmUri(vmUri);
+    final hostMemory = await _checkHostMemory();
 
     var runtimeObservation = _unavailableRuntimeOperability(
       session.error ?? 'vm_service_unavailable',
@@ -2800,6 +2803,8 @@ extension _CliSession on FlutterScoutCli {
       'systemDialogs': ?await _systemDialogDoctor(),
       if (device == null || device.isEmpty || device == 'macos')
         'hostPower': ?await _hostPowerFacts(),
+      'hostMemory': ?hostMemory.memory,
+      if (hostMemory.warning != null) 'warnings': [hostMemory.warning],
     });
     return 0;
   }
